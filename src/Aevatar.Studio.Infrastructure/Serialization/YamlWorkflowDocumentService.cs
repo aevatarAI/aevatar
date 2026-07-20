@@ -436,11 +436,11 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         if (allowedToolsNode is YamlScalarNode scalar)
         {
             return (scalar.Value ?? string.Empty)
-                .Split([',', ';', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToList();
         }
 
-        findings.Add(ValidationFinding.Error($"{path}/allowed_tools", "`allowed_tools` must be a list or delimited string."));
+        findings.Add(ValidationFinding.Error($"{path}/allowed_tools", "`allowed_tools` must be a list or comma-delimited string."));
         return [];
     }
 

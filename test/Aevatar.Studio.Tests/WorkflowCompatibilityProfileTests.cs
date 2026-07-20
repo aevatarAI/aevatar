@@ -128,6 +128,40 @@ public sealed class WorkflowCompatibilityProfileTests
         runtimeRoundTrip.Steps[2].AgentToolScope.Should().BeNull();
     }
 
+    [Fact]
+    public void Parse_WhenAllowedToolsScalarContainsNonRuntimeDelimiters_ShouldPreserveRuntimeTokenization()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        var yaml = """
+            name: tool_scope_scalar
+            roles:
+              - id: planner
+                allowed_tools: "search;calendar"
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: planner
+                allowed_tools: |-
+                  calendar
+                  email
+            """;
+
+        var studioParse = service.Parse(yaml);
+
+        studioParse.Document.Should().NotBeNull();
+        var document = studioParse.Document!;
+        document.Roles[0].AllowedTools.Should().Equal("search;calendar");
+        document.Steps[0].AllowedTools.Should().Equal("calendar\nemail");
+
+        var runtimeParse = new WorkflowParser().Parse(yaml);
+        runtimeParse.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search;calendar");
+        runtimeParse.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar\nemail");
+
+        var runtimeRoundTrip = new WorkflowParser().Parse(service.Serialize(document));
+        runtimeRoundTrip.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search;calendar");
+        runtimeRoundTrip.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar\nemail");
+    }
+
     [Theory]
     [InlineData("version")]
     [InlineData("inputs")]
