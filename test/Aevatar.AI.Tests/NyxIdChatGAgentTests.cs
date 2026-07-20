@@ -24,6 +24,11 @@ namespace Aevatar.AI.Tests;
 
 public class NyxIdChatGAgentTests
 {
+    private const string ExactSkillGuid = "11111111-1111-1111-1111-111111111111";
+    private const string ExactSkillVersion = "1.2";
+    private const string ExactSkillName = "skill-alpha";
+    private const string ExactSkillPublisher = "publisher-alpha";
+
     [Fact]
     public async Task CreateTargetResolver_ShouldCopySelectedProfileForMatchingDirectRoute()
     {
@@ -507,6 +512,87 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_BoundTurn_ShouldPropagateTokenCatalogPromptAndAdmission()
+    {
+        const string turnToken = "turn-token-alpha";
+        var hiddenExecuteCount = 0;
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+            new DelegateTool("hidden", _ =>
+            {
+                hiddenExecuteCount++;
+                return "must not execute";
+            }),
+        };
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "forged-hidden-call",
+                    Name = "hidden",
+                    ArgumentsJson = "{}",
+                },
+            }],
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        var registry = new StaticProfileToolSetRegistry("profile.route", tools);
+        var fetcher = new RecordingExactFetcher(ExactRemoteSkillFetchResult.Success(
+            ExactSkillGuid,
+            ExactSkillVersion,
+            ExactSkillName,
+            ExactSkillPublisher,
+            "hash-alpha",
+            "---\nname: skill-alpha\n---\nSelected turn instructions."));
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            registry,
+            new NoMatchClassifier(),
+            fetcher);
+        const string actorId = "nyxid-chat-catalog-success";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedEnforcedProfile() });
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            [new StaticToolSource(tools)],
+            turnCatalogMaterializer: materializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "/alpha run",
+            SessionId = "catalog-success-session",
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload { NyxIdAccessToken = turnToken },
+            },
+        });
+
+        registry.ResolveCount.Should().Be(1);
+        fetcher.CallCount.Should().Be(1);
+        fetcher.AccessToken.Should().Be(turnToken);
+        fetcher.SkillRef.Should().BeEquivalentTo(new ExactRemoteSkillRef
+        {
+            Guid = ExactSkillGuid,
+            LiteralVersion = ExactSkillVersion,
+        });
+        llm.StreamRequests.Should().HaveCount(2);
+        var firstRequest = llm.StreamRequests[0];
+        firstRequest.Tools!.Select(static tool => tool.Name).Should().BeEquivalentTo("recovery", "task");
+        firstRequest.ToolContext!.ToolVisibility.Allows("hidden").Should().BeFalse();
+        firstRequest.Messages.Single(static message => message.Role == "system").Content
+            .Should().Contain("Selected turn instructions.");
+        hiddenExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task HandleChatRequest_UnboundTurn_ShouldNotMaterializeCatalog()
     {
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
@@ -853,6 +939,45 @@ public class NyxIdChatGAgentTests
             RouteToolSetRef = routeToolSetRef,
         });
 
+    private static AgentProfileSnapshot BuildSealedEnforcedProfile()
+    {
+        var member = new AgentProfileSkillMember
+        {
+            IntentId = "intent-alpha",
+            RoutingDescription = "Route alpha requests.",
+            SkillRef = new ExactRemoteSkillRef
+            {
+                Guid = ExactSkillGuid,
+                LiteralVersion = ExactSkillVersion,
+            },
+            TaskToolPolicy = new AgentProfileToolPolicy(),
+            SideEffectClass = AgentProfileSideEffectClass.ReadOnly,
+            ExpectedSkillName = ExactSkillName,
+            ReviewedPublisherId = ExactSkillPublisher,
+        };
+        member.ExplicitTriggerAliases.Add("/alpha");
+        member.TaskToolPolicy.ToolNames.Add("task");
+
+        var profile = new AgentProfileSnapshot
+        {
+            ProfileId = "profile-alpha",
+            ProfileVersion = "profile-v1",
+            AgentKind = "nyxid.chat",
+            PolicyRevision = "policy-v1",
+            RouteToolSetRef = "profile.route",
+            MaximumToolPolicy = new AgentProfileToolPolicy(),
+            RecoveryToolPolicy = new AgentProfileToolPolicy(),
+            ClassifierTimeoutMs = 600,
+            ExactSkillFetchTimeoutMs = 1_500,
+            MaxSelectedSkillBytes = 256,
+            ActivationMode = AgentProfileActivationMode.Enforced,
+        };
+        profile.MaximumToolPolicy.ToolNames.Add(["recovery", "task", "hidden"]);
+        profile.RecoveryToolPolicy.ToolNames.Add("recovery");
+        profile.Members.Add(member);
+        return AgentProfileSnapshotCodec.Seal(profile);
+    }
+
     private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
     {
         public ChatRouteDecision GetFallbackDecision() => new()
@@ -1102,12 +1227,51 @@ public class NyxIdChatGAgentTests
         }
     }
 
+    private sealed class StaticProfileToolSetRegistry(
+        string name,
+        IReadOnlyList<IAgentTool> tools) : IToolSetRegistry
+    {
+        public int ResolveCount { get; private set; }
+
+        public IReadOnlyList<string> GetRegisteredNames() => [name];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef)
+        {
+            ResolveCount++;
+            return string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(name, [new StaticToolSource(tools)])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    toolSetRef?.Name ?? string.Empty,
+                    "missing",
+                    GetRegisteredNames()));
+        }
+    }
+
     private sealed class NoMatchClassifier : IAgentProfileTurnClassifier
     {
         public Task<AgentProfileTurnClassificationResult> ClassifyAsync(
             AgentProfileTurnClassificationRequest request,
             CancellationToken ct = default) =>
             Task.FromResult(AgentProfileTurnClassificationResult.NoMatch());
+    }
+
+    private sealed class RecordingExactFetcher(ExactRemoteSkillFetchResult result) : IExactRemoteSkillFetcher
+    {
+        public int CallCount { get; private set; }
+        public string? AccessToken { get; private set; }
+        public ExactRemoteSkillRef? SkillRef { get; private set; }
+
+        public Task<ExactRemoteSkillFetchResult> FetchAsync(
+            string accessToken,
+            ExactRemoteSkillRef skillRef,
+            CancellationToken ct = default)
+        {
+            CallCount++;
+            AccessToken = accessToken;
+            SkillRef = skillRef.Clone();
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool

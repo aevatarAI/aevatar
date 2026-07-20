@@ -181,6 +181,102 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_ExactFetcherUnavailable_ShouldUseRecoveryOnly()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher: null)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed &&
+            diagnostic.Detail == "exact_fetch_unavailable");
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_ExactFetchTimeout_ShouldUseRecoveryOnly()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var profile = BuildProfile(withAlias: true);
+        profile.ExactSkillFetchTimeoutMs = 20;
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new CancellationBlockingFetcher())
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed &&
+            diagnostic.Detail == "timeout");
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_ExactFetcherException_ShouldUseRecoveryOnly()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new ThrowingFetcher(new InvalidOperationException("fetch failed")))
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed &&
+            diagnostic.Detail == "fetch_exception");
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_CallerCancellationDuringExactFetch_ShouldPropagate()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        using var callerCts = new CancellationTokenSource();
+        callerCts.Cancel();
+
+        var act = async () => await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new CancellationBlockingFetcher())
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                callerCts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task MaterializeAsync_InvalidSnapshot_ShouldReturnRestrictedEmpty()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -315,7 +411,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     private static AgentProfileTurnCatalogMaterializer NewMaterializer(
         IToolSetRegistry registry,
         IAgentProfileTurnClassifier classifier,
-        IExactRemoteSkillFetcher fetcher) =>
+        IExactRemoteSkillFetcher? fetcher) =>
         new(registry, classifier, fetcher);
 
     private static AgentProfileSnapshot BuildProfile(bool withAlias = false)
@@ -417,6 +513,31 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             CallCount++;
             return Task.FromResult(result);
         }
+    }
+
+    private sealed class CancellationBlockingFetcher : IExactRemoteSkillFetcher
+    {
+        public async Task<ExactRemoteSkillFetchResult> FetchAsync(
+            string accessToken,
+            ExactRemoteSkillRef skillRef,
+            CancellationToken ct = default)
+        {
+            var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(
+                static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
+                canceled);
+            await canceled.Task;
+            return SuccessfulFetch();
+        }
+    }
+
+    private sealed class ThrowingFetcher(Exception exception) : IExactRemoteSkillFetcher
+    {
+        public Task<ExactRemoteSkillFetchResult> FetchAsync(
+            string accessToken,
+            ExactRemoteSkillRef skillRef,
+            CancellationToken ct = default) =>
+            Task.FromException<ExactRemoteSkillFetchResult>(exception);
     }
 
     private sealed class RecordingToolSetRegistry : IToolSetRegistry
