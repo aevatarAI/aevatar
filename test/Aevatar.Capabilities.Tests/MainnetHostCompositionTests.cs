@@ -448,6 +448,7 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
         workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
         workspace.Sources.Should().Contain(source => source is ProvisionWorkflowScheduleToolSource);
+        workspace.Sources.Should().Contain(source => source is ListStudioTeamsToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
         workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);

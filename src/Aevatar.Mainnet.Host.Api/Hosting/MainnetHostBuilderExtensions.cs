@@ -356,6 +356,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                     CreateToolSource<ProvisionWorkflowScheduleToolSource>,
+                    CreateToolSource<ListStudioTeamsToolSource>,
                     CreateToolSource<CreateStudioTeamToolSource>,
                     CreateToolSource<CreateStudioMemberToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
