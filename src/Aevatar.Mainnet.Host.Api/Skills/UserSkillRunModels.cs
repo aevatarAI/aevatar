@@ -26,14 +26,17 @@ internal sealed record SkillScheduleHttpRequest(
     string? Prompt = null,
     string? CronExpression = null,
     string? Timezone = null,
-    string? DisplayName = null);
+    string? DisplayName = null,
+    string? TeamId = null);
 
 // Returned after a schedule is provisioned; ObservatoryUrl shows the schedule's recurring runs.
 public sealed record SkillScheduleReceipt(
     string ScheduleId,
     string MemberId,
+    string TeamId,
     string Status,
-    string ObservatoryUrl);
+    string ObservatoryUrl,
+    string StudioUrl);
 
 internal sealed record SkillScheduleOutcome(
     bool Succeeded,
@@ -67,5 +70,6 @@ internal interface IUserSkillRunService
         string cronExpression,
         string timezone,
         string displayName,
+        string teamId,
         CancellationToken ct = default);
 }

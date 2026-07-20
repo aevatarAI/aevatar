@@ -12,6 +12,7 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning.Tests;
 public sealed class ProvisionWorkflowScheduleToolTests
 {
     private const string ScheduleToolName = "aevatar_provision_workflow_schedule";
+    private const string ListTeamsToolName = "aevatar_list_teams";
     private const string CreateTeamToolName = "aevatar_create_team";
     private const string CreateMemberToolName = "aevatar_create_member";
     private const string BindMemberWorkflowToolName = "aevatar_bind_member_workflow";
@@ -56,6 +57,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowScheduleProvisioningPort, RecordingProvisioningPort>();
+        services.AddSingleton<IStudioTeamQueryProvisioningPort, RecordingTeamQueryProvisioningPort>();
         services.AddSingleton<IStudioTeamProvisioningPort, RecordingTeamProvisioningPort>();
         services.AddSingleton<IStudioMemberProvisioningPort, RecordingMemberProvisioningPort>();
         services.AddSingleton<IStudioMemberWorkflowBindingPort, RecordingMemberWorkflowBindingPort>();
@@ -72,10 +74,87 @@ public sealed class ProvisionWorkflowScheduleToolTests
         }
 
         toolNames.Should().Contain(ScheduleToolName);
+        toolNames.Should().Contain(ListTeamsToolName);
         toolNames.Should().Contain(CreateTeamToolName);
         toolNames.Should().Contain(CreateMemberToolName);
         toolNames.Should().Contain(BindMemberWorkflowToolName);
         toolNames.Should().Contain(ScheduleMemberWorkflowToolName);
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenTeamQueryPortRegistered_ShouldDiscoverListTeamsTool()
+    {
+        var source = new ListStudioTeamsToolSource(new RecordingTeamQueryProvisioningPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle();
+        tools[0].Name.Should().Be(ListTeamsToolName);
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenTeamQueryPortMissing_ShouldNotDiscoverListTeamsTool()
+    {
+        var source = new ListStudioTeamsToolSource();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ListTeams_ShouldCallTeamQueryPortWithCallerScope()
+    {
+        var teamPort = new RecordingTeamQueryProvisioningPort();
+        var tool = await DiscoverListTeamsToolAsync(teamPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"page_size":10}""");
+
+        teamPort.LastRequest.Should().NotBeNull();
+        teamPort.LastRequest!.ScopeId.Should().Be("scope-current");
+        teamPort.LastRequest.PageSize.Should().Be(10);
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("success").GetBoolean().Should().BeTrue();
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        var teams = root.GetProperty("teams").EnumerateArray().ToList();
+        teams.Should().ContainSingle();
+        teams[0].GetProperty("team_id").GetString().Should().Be("team-alpha");
+        teams[0].GetProperty("display_name").GetString().Should().Be("Alpha Team");
+        teams[0].GetProperty("team_url").GetString().Should()
+            .Be("/api/scopes/scope-current/teams/team-alpha");
+    }
+
+    [Fact]
+    public async Task ListTeams_WhenArgumentsEmpty_ShouldCallTeamQueryPortWithCallerScope()
+    {
+        var teamPort = new RecordingTeamQueryProvisioningPort();
+        var tool = await DiscoverListTeamsToolAsync(teamPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("");
+
+        teamPort.LastRequest.Should().NotBeNull();
+        teamPort.LastRequest!.ScopeId.Should().Be("scope-current");
+        teamPort.LastRequest.PageSize.Should().BeNull();
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ListTeams_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
+    {
+        var teamPort = new RecordingTeamQueryProvisioningPort();
+        var tool = await DiscoverListTeamsToolAsync(teamPort);
+
+        using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("{}");
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        teamPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -222,6 +301,25 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("member_id").GetString().Should().Be("member-alpha");
         root.GetProperty("team_id").GetString().Should().Be("team-alpha");
         root.GetProperty("member_url").GetString().Should().Be("/api/scopes/scope-current/members/member-alpha");
+    }
+
+    [Fact]
+    public async Task CreateMember_WhenWorkflowTeamIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "display_name": "Alpha Member",
+              "implementation_kind": "workflow"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("team_id is required for workflow members.");
+        memberPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -684,8 +782,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
             ScopeId: "scope-1",
+            TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory")
+            ObservatoryUrl: "/workflow/observatory",
+            StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
             BindingRunId = "bind-run-1",
@@ -695,6 +795,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: daily-tech-news\nroles: []\n",
               "display_name": "Daily Tech News",
               "prompt": "summarize today's tech news",
@@ -707,6 +808,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         port.LastRequest.Should().NotBeNull();
         var request = port.LastRequest!;
         request.ScopeId.Should().Be("scope-1");
+        request.GetType().GetProperty("TeamId")!.GetValue(request).Should().Be("team-alpha");
         request.DisplayName.Should().Be("Daily Tech News");
         request.WorkflowYaml.Should().Contain("name: daily-tech-news");
         request.Prompt.Should().Be("summarize today's tech news");
@@ -721,7 +823,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var root = document.RootElement;
         root.GetProperty("status").GetString().Should().Be("accepted");
         root.GetProperty("member_id").GetString().Should().Be("member-1");
+        root.GetProperty("team_id").GetString().Should().Be("team-alpha");
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-1");
+        root.GetProperty("studio_url").GetString().Should()
+            .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
     }
 
@@ -734,6 +839,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -741,6 +847,25 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         port.LastRequest!.RunImmediately.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Execute_WhenTeamIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    {
+        var port = new RecordingProvisioningPort();
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("team_id is required.");
+        port.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -752,6 +877,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -770,6 +896,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "display_name": "Demo"
             }
             """);
@@ -791,6 +918,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -809,8 +937,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
             ScopeId: "scope-1",
+            TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory")
+            ObservatoryUrl: "/workflow/observatory",
+            StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
         });
@@ -819,6 +949,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -838,6 +969,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var source = new ProvisionWorkflowScheduleToolSource(port);
         var tools = await source.DiscoverToolsAsync();
         return tools.Single(tool => tool.Name == ScheduleToolName);
+    }
+
+    private static async Task<IAgentTool> DiscoverListTeamsToolAsync(IStudioTeamQueryProvisioningPort teamPort)
+    {
+        var source = new ListStudioTeamsToolSource(teamPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == ListTeamsToolName);
     }
 
     private static async Task<IAgentTool> DiscoverCreateTeamToolAsync(IStudioTeamProvisioningPort teamPort)
@@ -943,8 +1081,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
             _result = result ?? new WorkflowScheduleProvisioningResult(
                 MemberId: "member-default",
                 ScopeId: "scope-default",
+                TeamId: "team-alpha",
                 BindingStatus: "accepted",
-                ObservatoryUrl: "/workflow/observatory");
+                ObservatoryUrl: "/workflow/observatory",
+                StudioUrl: "/scopes/scope-default/teams/team-alpha/members/member-default/workflow");
         }
 
         public WorkflowScheduleProvisioningRequest? LastRequest { get; private set; }
@@ -982,6 +1122,35 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 MemberCount: 0,
                 CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
                 UpdatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
+        }
+    }
+
+    private sealed class RecordingTeamQueryProvisioningPort : IStudioTeamQueryProvisioningPort
+    {
+        public StudioTeamListProvisioningRequest? LastRequest { get; private set; }
+
+        public Task<StudioTeamListProvisioningResult> ListAsync(
+            StudioTeamListProvisioningRequest request,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new StudioTeamListProvisioningResult(
+                Success: true,
+                ScopeId: request.ScopeId,
+                Teams:
+                [
+                    new StudioTeamProvisioningResult(
+                        Success: true,
+                        ScopeId: request.ScopeId,
+                        TeamId: "team-alpha",
+                        DisplayName: "Alpha Team",
+                        Description: "Operations team",
+                        LifecycleStage: "active",
+                        MemberCount: 2,
+                        CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
+                        UpdatedAt: DateTimeOffset.Parse("2026-07-02T00:00:00Z")),
+                ],
+                NextPageToken: null));
         }
     }
 

@@ -56,9 +56,10 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
     /// <para>
     /// Unlike <see cref="BuiltInDirectYaml"/> (a zero-bias "helpful assistant" used by every channel-less
     /// <c>Direct</c> caller — Lark/Telegram/bare), this workflow steers the agent to be <b>workflow-first</b>
-    /// and <b>Observatory-delivered</b>: author the workflow as inline YAML, then persist + schedule it as a
-    /// real <c>member</c> via the channel-free <c>aevatar_provision_workflow_schedule</c> tool (member create →
-    /// bind inline YAML → <c>ScheduleKind=Workflow</c> dispatch) so its runs surface in
+    /// and <b>Observatory-delivered</b>: author the workflow as inline YAML, then resolve a Team owner before
+    /// persisting + scheduling it as a real <c>member</c> via the channel-free
+    /// <c>aevatar_provision_workflow_schedule</c> tool (Team-owned member create → bind inline YAML →
+    /// <c>ScheduleKind=Workflow</c> dispatch) so its runs surface in
     /// <c>/workflow/observatory</c> — never a chat/bot, never a prose ornn skill as the deliverable.
     /// </para>
     ///
@@ -128,17 +129,24 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                          target_role: analyst
                          parameters:
                            prompt_prefix: "Summarize:"
-              3. If the user already has or just created a Studio member for the workflow, bind the YAML to that
+              3. Before creating, binding, provisioning, or scheduling any workflow resources, resolve the owning Team.
+                 If the user named a Team or the current page context already provides a Team, show that target Team in
+                 the response and use its `team_id`. If no Team is clear, call `aevatar_list_teams`; when Teams are
+                 returned, ask the user which Team should own the workflow. If no suitable Team exists, ask whether to
+                 create a new Team and confirm its name before calling `aevatar_create_team`. If the user cancels or does
+                 not choose a Team, stop; do not create a member, bind workflow YAML, or schedule anything.
+              4. If the user already has or just created a Studio member for the workflow, bind the YAML to that
                  member by calling `aevatar_bind_member_workflow` with `member_id`, `workflow_yaml`, and optional
                  `workflow_id`. This is what makes the workflow visible on the member's Studio workflow page.
-              4. If the user asks to schedule an existing or just-bound Studio member workflow, call
+              5. If the user asks to schedule an existing or just-bound Studio member workflow, call
                  `aevatar_schedule_member_workflow` with the existing `member_id`, `schedule_cron`, and
                  `schedule_timezone`. This schedules that same member's published workflow service; it does
                  NOT create a separate `wf-...` member and does not bind YAML again.
-              5. If the user asks for a standalone scheduled/Observatory automation rather than a workflow on an
-                 existing Team/Member page, call `aevatar_provision_workflow_schedule` with `workflow_yaml`
-                 and a `display_name`. This creates its own persisted workflow member whose runs land in
-                 /workflow/observatory.
+              6. If the user asks Chat to create or schedule a workflow and there is no existing member to bind,
+                 call `aevatar_provision_workflow_schedule` only after Team ownership is confirmed. Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created; pass that confirmed `team_id`
+                 with `workflow_yaml` and `display_name`. This creates its own persisted workflow member
+                 inside the Team whose runs land in /workflow/observatory and whose workflow is editable from the
+                 returned Studio URL.
                  Scheduling rules:
                  - If the request is recurring — it says 每天, 每周, 每月, 每隔, 定时, daily, weekly, monthly, hourly,
                    "each", "every", "monitor", "keep watching" or any repeating cadence — you MUST pass BOTH
@@ -152,7 +160,7 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                    state the cron + timezone you set so the user can confirm.
                  - `run_immediately` defaults true so a demo run fires shortly after the bind; a demo fire is fine
                    alongside the cron, but it does not replace the cron for a recurring request.
-              6. If `aevatar_bind_member_workflow` or `aevatar_provision_workflow_schedule` returns an error,
+              7. If `aevatar_bind_member_workflow` or `aevatar_provision_workflow_schedule` returns an error,
                  fix the `workflow_yaml` per the error message and call the same tool again. For schedule
                  provisioning, use the SAME `display_name` — provisioning is idempotent
                  per display name (retries re-use the same member and schedule; they do not create
@@ -160,27 +168,29 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  existing `display_name` REPLACES that workflow and re-enables its schedule, so only reuse a
                  name to retry or update the same automation — give a different automation a fresh, specific
                  `display_name`.
-              7. `aevatar_bind_member_workflow`, `aevatar_schedule_member_workflow`, and `aevatar_provision_workflow_schedule` return Accepted receipts
+              8. `aevatar_bind_member_workflow`, `aevatar_schedule_member_workflow`, and `aevatar_provision_workflow_schedule` return Accepted receipts
                  (binding/scheduling/run are asynchronous) — do NOT claim the workflow "ran successfully" from
                  those receipts. Use `aevatar_observe_run` (and `aevatar_read_workflow_run_artifact` for outputs)
                  to watch demo/scheduled runs, and tell the user to open /workflow/observatory to see runs. Report
                  honestly: state that the workflow was accepted/bound or provisioned, then report any observed run
                  status — never optimistically assume success.
-              8. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
+              9. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
                  non-deterministic, language-driven subtasks inside the workflow — but the deliverable for an
                  automation request is a runnable workflow, not a separately published skill.
 
               Hard rules:
-              - The deliverable is a runnable workflow bound to the requested Studio member, or a standalone
-                provisioned workflow whose runs are visible in /workflow/observatory. Do NOT publish a prose skill
-                as the answer to "build/automate/schedule X".
+              - The deliverable is a runnable workflow bound to the requested Studio member, or a Team-owned
+                provisioned workflow whose runs are visible in /workflow/observatory and whose workflow is reachable
+                from the returned Studio URL. Do NOT publish a prose skill as the answer to "build/automate/schedule X".
               - For an existing Team/Member workflow page, binding goes through `aevatar_bind_member_workflow`.
                 Scheduling that existing member's workflow goes through `aevatar_schedule_member_workflow`.
-                `aevatar_provision_workflow_schedule` is only for standalone Observatory automations that create
-                their own `wf-...` member. Never deliver results to Lark/Telegram or any chat/bot, and never schedule a bot delivery.
+                `aevatar_provision_workflow_schedule` is only for Team-owned Chat provisioning that creates its own
+                member after the user selects or creates a Team. Never deliver results to Lark/Telegram or any chat/bot,
+                and never schedule a bot delivery.
               - The owning scope and your credentials come from the session; do not ask the user for scope,
                 channel, owner, or tokens.
             allowed_tools:
+              - aevatar_list_teams
               - aevatar_create_team
               - aevatar_create_member
               - aevatar_bind_member_workflow

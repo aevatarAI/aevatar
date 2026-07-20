@@ -214,11 +214,14 @@ public class WorkflowDefinitionCatalogTests
         // and NOT the loose-definition author-then-run-by-name path that hangs.
         role.SystemPrompt.Should().Contain("Studio agent");
         role.SystemPrompt.Should().Contain("aevatar_create_team");
+        role.SystemPrompt.Should().Contain("aevatar_list_teams");
         role.SystemPrompt.Should().Contain("aevatar_create_member");
         role.SystemPrompt.Should().Contain("aevatar_bind_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_schedule_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
         role.SystemPrompt.Should().Contain("NOT create a separate `wf-...` member");
+        role.SystemPrompt.Should().Contain("Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created");
+        role.SystemPrompt.Should().Contain("pass that confirmed `team_id`");
         role.SystemPrompt.Should().Contain("/workflow/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
         // Honesty: the receipt is Accepted (async), not a success claim.
@@ -244,6 +247,7 @@ public class WorkflowDefinitionCatalogTests
         // tools out of the studio surface, and brings the channel-free provision tool in.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("aevatar_list_teams");
         allowed.Should().Contain("aevatar_create_team");
         allowed.Should().Contain("aevatar_create_member");
         allowed.Should().Contain("aevatar_bind_member_workflow");

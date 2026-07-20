@@ -11,3 +11,15 @@ public interface IStudioTeamProvisioningPort
         StudioTeamProvisioningRequest request,
         CancellationToken ct = default);
 }
+
+/// <summary>
+/// Narrow, tool-facing port for local Studio team discovery.
+/// Agent tool providers depend on this abstraction instead of reading the
+/// Studio application implementation or calling HTTP endpoints.
+/// </summary>
+public interface IStudioTeamQueryProvisioningPort
+{
+    Task<StudioTeamListProvisioningResult> ListAsync(
+        StudioTeamListProvisioningRequest request,
+        CancellationToken ct = default);
+}
