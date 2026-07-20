@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
@@ -134,28 +135,30 @@ internal static class ChatRuntimeRequestBuilder
             IEnumerable<string> schemaToolNames,
             AgentToolVisibilityScope toolVisibility)
         {
-            _schemaToolNames = new HashSet<string>(
-                schemaToolNames
-                    .Where(static name => !string.IsNullOrWhiteSpace(name))
-                    .Select(static name => name.Trim()),
-                StringComparer.OrdinalIgnoreCase);
-            _toolVisibility = toolVisibility.IsRestricted
-                ? AgentToolVisibilityScope.FromAllowedToolNames(toolVisibility.AllowedToolNames)
-                : AgentToolVisibilityScope.Unrestricted;
+            _schemaToolNames = schemaToolNames
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Select(static name => name.Trim())
+                .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+            _toolVisibility = FreezeVisibility(toolVisibility);
         }
 
-        public LLMRequest Apply(LLMRequest request)
+        public LLMRequest Apply(LLMRequest request, bool forceCopy = false)
         {
             ArgumentNullException.ThrowIfNull(request);
             var toolContext = request.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(request);
-            var visibility = IntersectVisibility(toolContext.ToolVisibility, _toolVisibility);
+            var visibility = CopyVisibility(IntersectVisibility(toolContext.ToolVisibility, _toolVisibility));
             var tools = request.Tools?
                 .Where(tool => _schemaToolNames.Contains(tool.Name.Trim()) && visibility.Allows(tool.Name))
                 .ToList();
             var toolsWereAttenuated = (request.Tools?.Count ?? 0) != (tools?.Count ?? 0);
             var visibilityWasAttenuated = !HasSameVisibility(toolContext.ToolVisibility, visibility);
-            if (!toolsWereAttenuated && !visibilityWasAttenuated && ReferenceEquals(request.ToolContext, toolContext))
+            if (!forceCopy &&
+                !toolsWereAttenuated &&
+                !visibilityWasAttenuated &&
+                ReferenceEquals(request.ToolContext, toolContext))
+            {
                 return request;
+            }
 
             return new LLMRequest
             {
@@ -173,6 +176,17 @@ internal static class ChatRuntimeRequestBuilder
                 ResponseFormat = request.ResponseFormat,
             };
         }
+
+        private static AgentToolVisibilityScope FreezeVisibility(AgentToolVisibilityScope visibility) =>
+            visibility.IsRestricted
+                ? new AgentToolVisibilityScope(
+                    visibility.AllowedToolNames!.ToFrozenSet(StringComparer.OrdinalIgnoreCase))
+                : AgentToolVisibilityScope.Unrestricted;
+
+        private static AgentToolVisibilityScope CopyVisibility(AgentToolVisibilityScope visibility) =>
+            visibility.IsRestricted
+                ? AgentToolVisibilityScope.FromAllowedToolNames(visibility.AllowedToolNames)
+                : AgentToolVisibilityScope.Unrestricted;
 
         private static bool HasSameVisibility(
             AgentToolVisibilityScope left,
