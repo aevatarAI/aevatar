@@ -89,14 +89,21 @@ public sealed class ChatRuntimeStepExecutor
         Func<LLMStreamChunk, CancellationToken, Task>? onChunkAsync,
         CancellationToken ct)
     {
+        var catalogBoundRequest = ChatRuntimeRequestBuilder.Build(
+            request,
+            request.RequestId,
+            request.Metadata,
+            request.ToolContext,
+            request.LlmControl,
+            _turnCatalog);
         var runtime = new ChatRuntime(
             () => provider,
             new ChatHistory(),
             _toolLoop,
             _hooks,
-            _ => request,
+            _ => catalogBoundRequest,
             llmMiddlewares: _llmMiddlewares);
-        return ExecuteAsync(runtime, provider, request, onChunkAsync, ct);
+        return ExecuteAsync(runtime, provider, catalogBoundRequest, onChunkAsync, ct);
 
         static async Task<ChatRuntimeStepLlmResult> ExecuteAsync(
             ChatRuntime runtime,

@@ -835,14 +835,14 @@ public sealed class ChatRuntime
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
         //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity
         //   New principle: ChatStreamAsync owns the stream flow directly; the Task.Run + Channel owned-stream loop and stream_buffer_capacity config were removed; middleware wrapping stays inside private bridge adapters.
+        var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
         var llmHookContext = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmHookContext, ct);
         var llmStartedAt = Stopwatch.GetTimestamp();
-        var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
 
         var llmCallContext = new LLMCallContext
         {
-            Request = request,
+            Request = authorizationFence.Apply(request),
             Provider = provider,
             CancellationToken = ct,
             IsStreaming = true,

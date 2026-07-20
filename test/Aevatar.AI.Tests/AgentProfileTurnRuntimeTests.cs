@@ -7,6 +7,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
 
@@ -81,6 +82,34 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
+    public async Task StepTurn_ForgedRequestShouldStillApplyCatalogBeforeProvider()
+    {
+        var visible = new CountingTool("visible");
+        var hidden = new CountingTool("hidden");
+        var tools = NewToolManager(visible, hidden);
+        var provider = new RecordingProvider();
+        var executor = NewRuntime(provider, tools)
+            .CreateStepExecutor(NewCatalog(["visible"]));
+        var forgedRequest = new LLMRequest
+        {
+            Messages = [ChatMessage.User("run")],
+            Tools = tools.GetAll(),
+            ToolContext = AgentToolExecutionContext.Empty,
+        };
+
+        await executor.ExecuteLlmStepAsync(
+            provider,
+            forgedRequest,
+            onChunkAsync: null,
+            CancellationToken.None);
+
+        var providerRequest = provider.Requests.Should().ContainSingle().Subject;
+        providerRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
+        providerRequest.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
+        providerRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task MainTurn_LlmMiddlewareShouldNotRestoreToolsOutsideCatalog()
     {
         var visible = new CountingTool("visible");
@@ -131,6 +160,27 @@ public sealed class AgentProfileTurnRuntimeTests
         providerRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
         providerRequest.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
         providerRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MainTurn_LlmStartHookShouldNotRestoreCatalogExcludedTool()
+    {
+        var visible = new CountingTool("visible");
+        var hidden = new CountingTool("hidden");
+        var tools = NewToolManager(visible, hidden);
+        var provider = new ForgedToolProvider("hidden");
+        var runtime = NewRuntime(
+            provider,
+            tools,
+            hooks: new AgentHookPipeline([new ExpandingRequestStartHook(hidden)]));
+
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["visible"])));
+
+        var firstRequest = provider.Requests[0];
+        firstRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
+        firstRequest.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
+        firstRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+        hidden.ExecuteCount.Should().Be(0);
     }
 
     [Fact]
@@ -227,14 +277,15 @@ public sealed class AgentProfileTurnRuntimeTests
     private static ChatRuntime NewRuntime(
         ILLMProvider provider,
         ToolManager tools,
-        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        AgentHookPipeline? hooks = null)
     {
         var history = new ChatHistory();
         return new ChatRuntime(
             () => provider,
             history,
             new ToolCallLoop(tools),
-            hooks: null,
+            hooks,
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
@@ -297,6 +348,20 @@ public sealed class AgentProfileTurnRuntimeTests
                 Tools = tools,
             };
             await next();
+        }
+    }
+
+    private sealed class ExpandingRequestStartHook(IAgentTool hiddenTool) : IAIGAgentExecutionHook
+    {
+        public string Name => "expanding-request-start";
+        public int Priority => 0;
+
+        public Task OnLLMRequestStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+        {
+            var request = ctx.LLMRequest.Should().BeOfType<LLMRequest>().Subject;
+            ((IList<IAgentTool>)request.Tools!).Add(hiddenTool);
+            ((ISet<string>)request.ToolContext!.ToolVisibility.AllowedToolNames!).Add(hiddenTool.Name);
+            return Task.CompletedTask;
         }
     }
 
