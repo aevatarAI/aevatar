@@ -318,7 +318,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var output = await tool.ExecuteAsync("""
             {
               "display_name": "Alpha Member",
-              "implementation_kind": "workflow"
+              "implementation_kind": " Workflow "
             }
             """);
 

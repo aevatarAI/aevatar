@@ -101,7 +101,7 @@ internal sealed class CreateStudioMemberTool : IAgentTool
             return ErrorJson("invalid_arguments", "implementation_kind is required.");
 
         var teamId = Normalize(args.TeamId);
-        if (string.Equals(implementationKind, "workflow", StringComparison.Ordinal) && teamId is null)
+        if (string.Equals(implementationKind, "workflow", StringComparison.OrdinalIgnoreCase) && teamId is null)
             return ErrorJson("invalid_arguments", "team_id is required for workflow members.");
 
         var request = new StudioMemberProvisioningRequest(scopeId, displayName, implementationKind)
