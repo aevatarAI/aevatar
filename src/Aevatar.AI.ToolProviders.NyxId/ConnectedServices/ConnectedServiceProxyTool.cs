@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Microsoft.Extensions.Logging;
@@ -60,6 +61,22 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
     public bool IsReadOnly { get; }
 
     public bool IsDestructive { get; }
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var resourceUri = ResolveResourceUri(argumentsJson);
+        return NyxIdAuthorizationReceiptFactory.TryCreate(
+            callId,
+            toolName,
+            _serviceSlug,
+            serviceLabel: null,
+            resourceUri,
+            resultJson);
+    }
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -123,6 +140,17 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         }
 
         return true;
+    }
+
+    private string? ResolveResourceUri(string argumentsJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError || !TryBuildPath(args, out var path, out _))
+            return null;
+        if (!TryBuildQuery(args, out var query, out _))
+            return path;
+
+        return query.Count == 0 ? path : $"{path}?{string.Join("&", query)}";
     }
 
     private bool TryBuildQuery(ToolArgs args, out List<string> query, out string? error)

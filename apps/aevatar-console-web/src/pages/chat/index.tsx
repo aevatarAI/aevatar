@@ -54,7 +54,6 @@ import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
-import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import { t } from "@/shared/i18n/messages";
 
 type ConversationState = {
@@ -296,7 +295,7 @@ function resolveStudioJump(target: ChatStudioTarget | undefined): StudioJump | n
     return {
       href: buildTeamDetailHref({
         scopeId: target.scopeId,
-        tab: builtInTeamDetailTabIds.members,
+        tab: "members",
         teamId: target.teamId,
       }),
       label: t("pages.chat.index.openTeam", "Open Team"),

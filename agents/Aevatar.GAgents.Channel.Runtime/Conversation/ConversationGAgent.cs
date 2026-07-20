@@ -292,6 +292,23 @@ public sealed partial class ConversationGAgent :
                 activity.ReplyToActivityId),
         };
         var result = await runner.RunInboundAsync(activity, inboundContext, CancellationToken.None);
+        var runnerResultKind = result.LlmReplyRequest is not null
+            ? "llm_reply_requested"
+            : result.WorkflowDraftRunRequest is not null
+                ? "workflow_draft_run_requested"
+                : result.Success && result.SentActivityId.StartsWith("ignored:", StringComparison.Ordinal)
+                    ? "ignored"
+                    : result.Success
+                        ? "sent"
+                        : "failed";
+        Logger.LogInformation(
+            "Conversation inbound runner result: activity={ActivityId}, kind={ResultKind}, sent={SentId}, failureKind={FailureKind}, errorCode={ErrorCode}, retainedHistoryClear={RetainedHistoryClear}",
+            activity.Id,
+            runnerResultKind,
+            result.SentActivityId,
+            result.FailureKind,
+            result.ErrorCode,
+            result.RetainedHistoryClearRequested);
 
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (result.RetainedHistoryClearRequested)

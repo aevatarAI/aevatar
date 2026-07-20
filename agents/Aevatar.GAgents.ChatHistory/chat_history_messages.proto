@@ -14,6 +14,7 @@ message StoredChatMessageProto {
   string status = 5;
   string error = 6;
   string thinking = 7;
+  string turn_id = 8;
 }
 
 message ConversationMetaProto {
@@ -33,6 +34,7 @@ enum ChatTurnTerminalStatus {
   CHAT_TURN_TERMINAL_STATUS_COMPLETED = 1;
   CHAT_TURN_TERMINAL_STATUS_FAILED = 2;
   CHAT_TURN_TERMINAL_STATUS_STOPPED = 3;
+  CHAT_TURN_TERMINAL_STATUS_BLOCKED = 4;
 }
 
 enum ChatTurnAppendRejectionReason {

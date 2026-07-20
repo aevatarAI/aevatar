@@ -1,7 +1,6 @@
 import {
   AppstoreOutlined,
   BarsOutlined,
-  EditOutlined,
   PlusOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
@@ -25,7 +24,6 @@ import {
   buildTeamDetailHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
-import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import { studioApi } from "@/shared/studio/api";
 import type { ScopeServiceRunSummary } from "@/shared/models/runtime/scopeServices";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
@@ -75,7 +73,7 @@ type TeamRosterPreview = {
   readonly detailHref: string;
   readonly latestRun: ScopeServiceRunSummary | null;
   readonly membersHref: string;
-  readonly memberQuickAction: TeamMemberQuickAction;
+  readonly memberQuickAction: TeamMemberQuickAction | null;
   readonly memberPreviewLabel: string;
   readonly memberPreviewTooltip?: string;
   readonly serviceLabel: string;
@@ -88,8 +86,6 @@ type TeamRosterPreview = {
 
 type TeamMemberQuickActionKind =
   | "create-member"
-  | "edit-entry-member"
-  | "edit-member"
   | "manage-members";
 
 type TeamMemberQuickAction = {
@@ -771,34 +767,11 @@ function buildTeamRosterPreview(input: {
         parseTimestamp(right.updatedAt) - parseTimestamp(left.updatedAt) ||
         right.memberId.localeCompare(left.memberId),
     )[0];
-  const entryMember = entryMemberId
-    ? input.members.find((member) => trimOptional(member.memberId) === entryMemberId)
-    : undefined;
   const runtimeSignalPreview = entryMemberPreview ?? mostImportantMemberPreview;
   const latestRun = runtimeSignalPreview?.latestRun ?? null;
-  // Deferred P2: keep the current workflow-member fallback when the entry is non-workflow.
-  // A later pass should surface an explicit entry-unsupported/manage-members state.
-  const preferredWorkflowMember =
-    (entryMember && isWorkflowMember(entryMember) ? entryMember : undefined) ??
-    sortedMembers.find(isWorkflowMember);
-  const preferredWorkflowMemberId = trimOptional(preferredWorkflowMember?.memberId);
-  const memberQuickAction: TeamMemberQuickAction = preferredWorkflowMemberId
-    ? {
-        href: buildTeamMemberWorkflowStudioHref({
-          memberId: preferredWorkflowMemberId,
-          mode: "edit-member",
-          scopeId: input.scopeId,
-          teamId: input.team.teamId,
-        }),
-        kind:
-          preferredWorkflowMemberId === entryMemberId
-            ? "edit-entry-member"
-            : "edit-member",
-        label:
-          preferredWorkflowMemberId === entryMemberId
-            ? t("teams.home.actions.debugEntryWorkflow", "Debug entry workflow")
-            : t("teams.home.actions.debugWorkflow", "Debug workflow"),
-      }
+  const hasWorkflowMember = sortedMembers.some(isWorkflowMember);
+  const memberQuickAction: TeamMemberQuickAction | null = hasWorkflowMember
+    ? null
     : memberCount === 0
       ? {
           href: buildTeamMemberWorkflowStudioHref({
@@ -812,7 +785,7 @@ function buildTeamRosterPreview(input: {
       : {
           href: buildTeamDetailHref({
             scopeId: input.scopeId,
-            tab: builtInTeamDetailTabIds.members,
+            tab: "members",
             teamId: input.team.teamId,
           }),
           kind: "manage-members",
@@ -858,7 +831,7 @@ function buildTeamRosterPreview(input: {
   });
   const membersHref = buildTeamDetailHref({
     scopeId: input.scopeId,
-    tab: builtInTeamDetailTabIds.members,
+    tab: "members",
     teamId: input.team.teamId,
   });
 
@@ -905,9 +878,6 @@ function renderMemberQuickActionIcon(
       return <PlusOutlined />;
     case "manage-members":
       return <BarsOutlined />;
-    case "edit-entry-member":
-    case "edit-member":
-      return <EditOutlined />;
   }
 }
 
@@ -916,9 +886,10 @@ const TeamRosterActionGroup: React.FC<{
   readonly preview: TeamRosterPreview;
 }> = ({ large = false, preview }) => {
   const buttonSize = "middle";
+  const memberQuickAction = preview.memberQuickAction;
   const { token } = theme.useToken();
   const showViewMembersAction =
-    preview.memberQuickAction.href !== preview.membersHref;
+    !memberQuickAction || memberQuickAction.href !== preview.membersHref;
   const buttonStyle: React.CSSProperties = {
     borderRadius: 999,
     fontSize: large ? 13 : 12,
@@ -953,15 +924,17 @@ const TeamRosterActionGroup: React.FC<{
       }}
       wrap
     >
-      <Button
-        icon={renderMemberQuickActionIcon(preview.memberQuickAction.kind)}
-        onClick={() => history.push(preview.memberQuickAction.href)}
-        size={buttonSize}
-        style={buttonStyle}
-        type="text"
-      >
-        {preview.memberQuickAction.label}
-      </Button>
+      {memberQuickAction ? (
+        <Button
+          icon={renderMemberQuickActionIcon(memberQuickAction.kind)}
+          onClick={() => history.push(memberQuickAction.href)}
+          size={buttonSize}
+          style={buttonStyle}
+          type="text"
+        >
+          {memberQuickAction.label}
+        </Button>
+      ) : null}
       <Button
         icon={<TeamOutlined />}
         onClick={() => history.push(preview.detailHref)}

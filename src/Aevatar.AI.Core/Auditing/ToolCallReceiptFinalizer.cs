@@ -37,7 +37,8 @@ public static class ToolCallReceiptFinalizer
             context.Tool,
             context.ToolCallId,
             context.ToolName,
-            context.Result ?? string.Empty);
+            context.Result ?? string.Empty,
+            context.ArgumentsJson);
 
         return new FinalizedToolCallReceipt(
             successReceipt == null

@@ -49,9 +49,9 @@ internal sealed class ElasticsearchProjectionIndexReconcileHostedService : IHost
                 // drifted until the next deploy/restart or a manual reindex+repoint.
                 failed++;
                 _logger.LogError(
-                    ex,
-                    "Projection index startup reconcile failed for alias={Alias}; continuing.",
-                    target.IndexAlias);
+                    "Projection index startup reconcile failed. alias={Alias} errorType={ErrorType}; continuing.",
+                    target.IndexAlias,
+                    ex.GetType().Name);
             }
         }
 

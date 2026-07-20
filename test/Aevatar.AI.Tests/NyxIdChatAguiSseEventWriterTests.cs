@@ -139,14 +139,23 @@ public class NyxIdChatAguiSseEventWriterTests
 
         var status = await sink.WriteAsync(new AGUIEvent
         {
-            RunError = new RunErrorEvent { Message = "tool approval denied by user" },
-        }, "message-1");
+            RunError = new RunErrorEvent
+            {
+                Message = "tool approval denied by user bearer-secret",
+                RunId = "turn-1",
+                Code = "TOOL_APPROVAL_FAILED",
+            },
+        }, "fallback-turn");
 
         status.Should().Be("RUN_ERROR");
         var frame = sink.ReadFrames().Should().ContainSingle().Subject;
         frame.GetProperty("type").GetString().Should().Be("RUN_ERROR");
+        frame.GetProperty("turnId").GetString().Should().Be("turn-1");
+        frame.GetProperty("runError").GetProperty("runId").GetString().Should().Be("turn-1");
+        frame.GetProperty("runError").GetProperty("code").GetString().Should().Be("TOOL_APPROVAL_FAILED");
         frame.GetProperty("runError").GetProperty("message").GetString().Should().Be(
             "Sorry, something went wrong while generating a response.");
+        frame.GetRawText().Should().NotContain("bearer-secret");
     }
 
     [Fact]
@@ -159,6 +168,47 @@ public class NyxIdChatAguiSseEventWriterTests
         status.Should().Be("RUN_FINISHED");
         var frame = sink.ReadFrames().Should().ContainSingle().Subject;
         frame.GetProperty("type").GetString().Should().Be("RUN_FINISHED");
+    }
+
+    [Fact]
+    public async Task WriteAsync_ShouldMapAuthorizationRequiredAndBlockedTerminal()
+    {
+        var sink = new SseFrameSink();
+        var blocker = new NyxIdAuthorizationRequiredEvent
+        {
+            ServiceSlug = "api-github",
+            ResourceUri = "/repos/private",
+            ReasonCode = "NYXID_FORBIDDEN",
+            SafeMessage = "Connect or reauthorize api-github to continue.",
+        };
+
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Custom = new CustomEvent
+            {
+                Name = "nyxid.authorization.required",
+                Payload = Any.Pack(blocker),
+            },
+        }, "turn-blocked");
+        await sink.WriteAsync(new AGUIEvent
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                RunId = "turn-blocked",
+                Status = RunCompletionStatus.Blocked,
+            },
+        }, "turn-blocked");
+
+        var frames = sink.ReadFrames();
+        frames.Select(frame => frame.GetProperty("type").GetString()).Should().Equal("CUSTOM", "RUN_FINISHED");
+        frames[0].GetProperty("custom").GetProperty("name").GetString()
+            .Should().Be("nyxid.authorization.required");
+        var payload = frames[0].GetProperty("custom").GetProperty("payload");
+        payload.GetProperty("serviceSlug").GetString().Should().Be("api-github");
+        payload.GetProperty("resourceUri").GetString().Should().Be("/repos/private");
+        payload.GetProperty("reasonCode").GetString().Should().Be("NYXID_FORBIDDEN");
+        frames[1].GetProperty("turnId").GetString().Should().Be("turn-blocked");
+        frames[1].GetProperty("runFinished").GetProperty("status").GetString().Should().Be("blocked");
     }
 
     [Fact]
@@ -194,7 +244,7 @@ public class NyxIdChatAguiSseEventWriterTests
     {
         var sink = new SseFrameSink();
 
-        await sink.WriteKeepAliveAsync("actor-1", "session-1");
+        await sink.WriteKeepAliveAsync("actor-1", "turn-1");
 
         var frame = sink.ReadFrames().Should().ContainSingle().Subject;
         frame.GetProperty("type").GetString().Should().Be("CUSTOM");
@@ -202,7 +252,8 @@ public class NyxIdChatAguiSseEventWriterTests
         custom.GetProperty("name").GetString().Should().Be("aevatar.nyxid_chat.keepalive");
         var payload = custom.GetProperty("payload");
         payload.GetProperty("actorId").GetString().Should().Be("actor-1");
-        payload.GetProperty("sessionId").GetString().Should().Be("session-1");
+        payload.GetProperty("turnId").GetString().Should().Be("turn-1");
+        payload.TryGetProperty("sessionId", out _).Should().BeFalse();
         payload.GetProperty("status").GetString().Should().Be("running");
     }
 

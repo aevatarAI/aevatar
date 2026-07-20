@@ -34,10 +34,18 @@ message RunStartedEvent {
   string run_id = 2;
 }
 
+enum RunCompletionStatus {
+  RUN_COMPLETION_STATUS_UNSPECIFIED = 0;
+  RUN_COMPLETION_STATUS_COMPLETED = 1;
+  RUN_COMPLETION_STATUS_FAILED = 2;
+  RUN_COMPLETION_STATUS_BLOCKED = 3;
+}
+
 message RunFinishedEvent {
   string thread_id = 1;
   string run_id = 2;
   google.protobuf.Any result = 3;
+  RunCompletionStatus status = 4;
 }
 
 message GAgentDraftRunResultPayload {

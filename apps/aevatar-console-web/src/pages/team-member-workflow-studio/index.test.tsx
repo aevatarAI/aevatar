@@ -5150,7 +5150,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
   });
 
-  it("blocks an unchanged YAML buffer after the draft revision advances", async () => {
+  it("refreshes an unchanged YAML buffer after the draft revision advances", async () => {
     window.history.replaceState(
       {},
       "",
@@ -5162,7 +5162,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
     const titleInput = await screen.findByLabelText("Workflow title");
     clickYamlAction("Edit YAML");
     const editor = await screen.findByLabelText("Workflow YAML editor");
-    const originalYaml = (editor as HTMLTextAreaElement).value;
     const applyButton = screen.getByRole("button", { name: "Apply to draft" });
     await waitFor(() => {
       expect(applyButton).toBeEnabled();
@@ -5173,7 +5172,45 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(editor).toHaveValue(originalYaml);
+      expect((editor as HTMLTextAreaElement).value).toContain(
+        "name: Renamed member",
+      );
+      expect(applyButton).toBeEnabled();
+      expect(
+        screen.queryByText(
+          "This YAML buffer is stale because the canvas or source draft changed.",
+        ),
+      ).toBeNull();
+    });
+    expect(titleInput).toHaveValue("Renamed member");
+  });
+
+  it("blocks edited YAML after the draft revision advances", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const titleInput = await screen.findByLabelText("Workflow title");
+    clickYamlAction("Edit YAML");
+    const editor = await screen.findByLabelText("Workflow YAML editor");
+    fireEvent.change(editor, {
+      target: { value: "name: YAML title\nsteps:\n" },
+    });
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
+    await waitFor(() => {
+      expect(applyButton).toBeEnabled();
+    });
+
+    fireEvent.change(titleInput, {
+      target: { value: "Canvas title" },
+    });
+
+    await waitFor(() => {
+      expect(editor).toHaveValue("name: YAML title\nsteps:\n");
       expect(applyButton).toBeDisabled();
       expect(
         screen.getByText(
@@ -5181,7 +5218,6 @@ describe("TeamMemberWorkflowStudioPage", () => {
         ),
       ).toBeTruthy();
     });
-    expect(titleInput).toHaveValue("Renamed member");
   });
 
   it("keeps a declined source refresh pending until YAML edits are discarded", async () => {

@@ -197,7 +197,24 @@ public static class AuditTrailEndpoints
             CorrelationId = NormalizeOptional(correlationId),
             Take = NormalizeTake(take),
         };
-        var result = await queryPort.QueryAsync(query, ct);
+        AuditTrailPage result;
+        try
+        {
+            result = await queryPort.QueryAsync(query, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                "Audit trail query unavailable. errorType={ErrorType} correlationId={CorrelationId}",
+                exception.GetType().Name,
+                http.TraceIdentifier);
+            return QueryExecutionUnavailable();
+        }
+
         if (!exportCloudEvents)
             return Results.Json(AuditTrailResponseMapper.ToResponse(result));
 
@@ -291,6 +308,11 @@ public static class AuditTrailEndpoints
     private static IResult QueryUnavailable() =>
         Results.Json(
             new { code = "AUDIT_QUERY_UNAVAILABLE", message = "Audit trail query port is not configured." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    private static IResult QueryExecutionUnavailable() =>
+        Results.Json(
+            new { code = "AUDIT_QUERY_UNAVAILABLE", message = "Audit trail query is temporarily unavailable." },
             statusCode: StatusCodes.Status503ServiceUnavailable);
 
     private static IResult AdminAuthorizationUnavailable() =>

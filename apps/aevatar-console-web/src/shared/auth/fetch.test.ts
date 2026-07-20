@@ -91,15 +91,6 @@ describe('authFetch', () => {
         ok: true,
         status: 200,
         json: async () => ({
-          baseUrl: "https://nyx-ui.example",
-          clientId: "broker-client-1",
-          scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-        }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: async () => ({
           access_token: "access-token-2",
           refresh_token: "refresh-token-2",
           token_type: "Bearer",
@@ -111,10 +102,9 @@ describe('authFetch', () => {
 
     await authFetch('/api/agents');
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[0][0]).toBe("/api/auth/nyxid/config");
-    expect(fetchMock.mock.calls[1][0]).toBe("https://nyx-ui.example/oauth/token");
-    const [input, init] = fetchMock.mock.calls[2] as [
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://nyx.test/oauth/token");
+    const [input, init] = fetchMock.mock.calls[1] as [
       string,
       RequestInit | undefined,
     ];

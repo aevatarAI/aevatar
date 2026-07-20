@@ -68,7 +68,7 @@ public sealed class GAgentApprovalInteractionTests
         var context = new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>());
 
         var result = await lifecycle.BindAsync(
-            new GAgentApprovalCommand("actor-1", "req-1"),
+            new GAgentApprovalCommand("actor-1", "req-1", SessionId: "legacy-session"),
             CreateExecution(target, context),
             CancellationToken.None);
 
@@ -76,6 +76,7 @@ public sealed class GAgentApprovalInteractionTests
         target.ProjectionLease.Should().BeSameAs(projectionPort.LeaseToReturn);
         target.LiveSinkLease.Should().BeSameAs(projectionPort.LiveSinkLeaseToReturn);
         target.LiveSink.Should().NotBeNull();
+        target.ContinuationTurnId.Should().StartWith("turn-").And.NotBe("legacy-session");
         projectionPort.AttachCalls.Should().ContainSingle();
         terminalPort.Calls.Should().ContainSingle(x =>
             x.actorId == "actor-1" &&
@@ -141,7 +142,7 @@ public sealed class GAgentApprovalInteractionTests
             GAgentRunTerminalInteractionKind.Approval);
         target.BindTerminalProjection(terminalLease);
         var liveSinkLease = new RecordingLiveSinkLease();
-        target.BindLiveObservation(lease, liveSinkLease, sink, "session-1");
+        target.BindLiveObservation(lease, liveSinkLease, sink);
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
 
@@ -171,7 +172,7 @@ public sealed class GAgentApprovalInteractionTests
             "corr-1",
             GAgentRunTerminalInteractionKind.Approval);
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(new ApprovalProjectionLease("actor-1", "cmd-1"), new RecordingLiveSinkLease(), sink, "session-1");
+        target.BindLiveObservation(new ApprovalProjectionLease("actor-1", "cmd-1"), new RecordingLiveSinkLease(), sink);
         SetProperty(target, nameof(GAgentApprovalCommandTarget.ProjectionLease), null);
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
@@ -200,7 +201,7 @@ public sealed class GAgentApprovalInteractionTests
             "corr-1",
             GAgentRunTerminalInteractionKind.Approval);
         target.BindTerminalProjection(terminalLease);
-        target.BindLiveObservation(lease, new RecordingLiveSinkLease(), new RecordingAguiEventSink(), "session-1");
+        target.BindLiveObservation(lease, new RecordingLiveSinkLease(), new RecordingAguiEventSink());
         SetProperty(target, nameof(GAgentApprovalCommandTarget.LiveSink), null);
 
         await target.CleanupAfterDispatchFailureAsync(CancellationToken.None);
@@ -230,14 +231,20 @@ public sealed class GAgentApprovalInteractionTests
     public void EnvelopeFactory_ShouldBuildDecisionEnvelope()
     {
         var factory = new GAgentApprovalCommandEnvelopeFactory();
+        var target = new GAgentApprovalCommandTarget(
+            new ApprovalStubActor("actor-1", new ApprovalStubAgent()),
+            new ApprovalProjectionPort(),
+            new ApprovalTerminalProjectionPort());
 
         var envelope = factory.CreateEnvelope(
             new GAgentApprovalCommand("actor-1", "req-1", Approved: false, Reason: " deny ", SessionId: " session-1 "),
+            target,
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
         var payload = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
+        target.ContinuationTurnId.Should().StartWith("turn-").And.NotBe("session-1");
         payload.RequestId.Should().Be("req-1");
-        payload.SessionId.Should().Be("session-1");
+        payload.ContinuationTurnId.Should().Be(target.ContinuationTurnId);
         payload.Approved.Should().BeFalse();
         payload.Reason.Should().Be("deny");
         envelope.Route.GetTargetActorId().Should().Be("actor-1");
@@ -257,7 +264,8 @@ public sealed class GAgentApprovalInteractionTests
             target,
             new CommandContext("actor-1", "cmd-1", "corr-1", new Dictionary<string, string>()));
 
-        receipt.Should().Be(new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", string.Empty));
+        target.ContinuationTurnId.Should().StartWith("turn-");
+        receipt.Should().Be(new GAgentApprovalAcceptedReceipt("actor-1", "cmd-1", "corr-1", target.ContinuationTurnId));
     }
 
     [Fact]

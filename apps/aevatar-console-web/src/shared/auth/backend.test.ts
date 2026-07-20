@@ -1,6 +1,5 @@
 import {
   finalizeBackendNyxIDLogin,
-  loadBackendNyxIDLoginConfig,
   refreshNyxIDTokenSet,
 } from "./backend";
 
@@ -14,52 +13,6 @@ describe("NyxID backend auth API", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
-  });
-
-  it("loads the broker OAuth client config used by backend finalization", async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        baseUrl: "https://nyx.example/",
-        clientId: "broker-client-1",
-        scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-      }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
-      baseUrl: "https://nyx.example",
-      clientId: "broker-client-1",
-      scope: "openid profile email offline_access urn:nyxid:scope:broker_binding proxy",
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith("/api/auth/nyxid/config", {
-      headers: {
-        Accept: "application/json",
-      },
-    });
-  });
-
-  it("ignores redirect URI fields on the backend login config boundary", async () => {
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        baseUrl: "https://nyx.example/",
-        clientId: "broker-client-1",
-        scope: "openid urn:nyxid:scope:broker_binding proxy",
-        redirectUri: "https://backend.example/auth/callback",
-        RedirectUri: "https://backend.example/AuthCallback",
-      }),
-    } as Response);
-    global.fetch = fetchMock as typeof global.fetch;
-
-    await expect(loadBackendNyxIDLoginConfig()).resolves.toEqual({
-      baseUrl: "https://nyx.example",
-      clientId: "broker-client-1",
-      scope: "openid urn:nyxid:scope:broker_binding proxy",
-    });
   });
 
   it("finalizes an authorization code through the backend and preserves accepted-dispatch semantics", async () => {
@@ -127,29 +80,75 @@ describe("NyxID backend auth API", () => {
     });
   });
 
-  it("surfaces actionable login detail instead of the backend error code", async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: false,
-      status: 409,
-      statusText: "Conflict",
-      text: async () =>
-        JSON.stringify({
-          error: "required_service_access_missing",
-          detail:
-            "Return to login and allow access to the Aevatar service in NyxID.",
-        }),
-    } as Response) as typeof global.fetch;
-
-    await expect(
-      finalizeBackendNyxIDLogin({
-        code: "auth-code",
-        codeVerifier: "pkce-verifier",
-        redirectUri: "http://localhost:8000/auth/callback",
+  it("sends the service access review finalization flag only when requested", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        tokens: {
+          accessToken: "access-token",
+          tokenType: "Bearer",
+          expiresIn: 1800,
+        },
+        user: {
+          sub: "owner-user-1",
+        },
+        bindingDispatchAccepted: true,
       }),
-    ).rejects.toThrow(
-      "Return to login and allow access to the Aevatar service in NyxID.",
-    );
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await finalizeBackendNyxIDLogin({
+      code: "auth-code",
+      codeVerifier: "pkce-verifier",
+      redirectUri: "http://localhost:8000/auth/callback",
+      serviceAccessReview: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      code: "auth-code",
+      codeVerifier: "pkce-verifier",
+      redirectUri: "http://localhost:8000/auth/callback",
+      serviceAccessReview: true,
+    });
   });
+
+  it.each([
+    [409, "required_service_access_missing", "Keep required services selected."],
+    [502, "issued_binding_invalid", "The issued binding was unavailable."],
+    [503, "issued_binding_probe_failed", "The issued binding could not be verified."],
+    [503, "binding_probe_failed", "The current binding could not be verified."],
+  ])(
+    "preserves typed service access review backend error %s %s",
+    async (status, code, detail) => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status,
+        statusText: status === 409 ? "Conflict" : "Service Unavailable",
+        text: async () =>
+          JSON.stringify({
+            error: code,
+            detail,
+          }),
+      } as Response);
+      global.fetch = fetchMock as typeof global.fetch;
+
+      await expect(
+        finalizeBackendNyxIDLogin({
+          code: "auth-code",
+          codeVerifier: "pkce-verifier",
+          redirectUri: "http://localhost:8000/auth/callback",
+          serviceAccessReview: true,
+        }),
+      ).rejects.toMatchObject({
+        code,
+        message: code,
+        name: "NyxIDLoginFinalizationError",
+        status,
+      });
+    },
+  );
 
   it("refreshes a NyxID token set through the OAuth refresh grant", async () => {
     const fetchMock = jest.fn().mockResolvedValue({

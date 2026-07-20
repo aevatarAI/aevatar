@@ -6,9 +6,9 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.GAgents.NyxidChat;
 
 /// <summary>
-/// Maps NyxID chat committed state events to chat-session observation scopes.
+/// Maps NyxID chat committed state events to per-turn observation scopes.
 /// Session activation stays projection-owned: whenever the chat actor commits a
-/// session-bearing fact, the matching session-observation scope is (re)ensured so
+/// turn-bearing fact, the matching session-observation scope is (re)ensured so
 /// attach-existing observers can bind without request-path priming.
 /// </summary>
 public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
@@ -24,8 +24,8 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
         if (eventData == null)
             yield break;
 
-        var sessionId = TryResolveSessionId(eventData);
-        if (string.IsNullOrWhiteSpace(sessionId))
+        var turnId = TryResolveTurnId(eventData);
+        if (string.IsNullOrWhiteSpace(turnId))
             yield break;
 
         yield return new ProjectionActivationPlan
@@ -36,18 +36,21 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
                 RootActorId = context.ActorId,
                 ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
                 Mode = ProjectionRuntimeMode.SessionObservation,
-                SessionId = sessionId.Trim(),
+                SessionId = turnId.Trim(),
             },
         };
     }
 
-    private static string? TryResolveSessionId(Any eventData)
+    private static string? TryResolveTurnId(Any eventData)
     {
         if (eventData.Is(RoleChatSessionStartedEvent.Descriptor))
             return eventData.Unpack<RoleChatSessionStartedEvent>().SessionId;
 
         if (eventData.Is(RoleChatSessionCompletedEvent.Descriptor))
             return eventData.Unpack<RoleChatSessionCompletedEvent>().SessionId;
+
+        if (eventData.Is(RoleChatSessionConflictEvent.Descriptor))
+            return eventData.Unpack<RoleChatSessionConflictEvent>().SessionId;
 
         if (eventData.Is(PendingToolApprovalPersistedEvent.Descriptor))
             return eventData.Unpack<PendingToolApprovalPersistedEvent>().Pending?.SessionId;

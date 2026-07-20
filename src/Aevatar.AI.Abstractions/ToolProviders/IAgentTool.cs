@@ -29,6 +29,13 @@ public interface IAgentTool
     /// <summary>Optional provider-owned typed success receipt; return null to use the generic receipt.</summary>
     AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson) => null;
 
+    /// <summary>Optional provider-owned typed result receipt; may classify a returned result as non-success.</summary>
+    AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) => CreateSuccessReceipt(callId, toolName, resultJson);
+
     /// <summary>
     /// Runtime approval check: given the actual call arguments, does this specific
     /// invocation require approval? Returns null to fall back to the static

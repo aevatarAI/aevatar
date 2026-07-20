@@ -193,6 +193,8 @@ public static class MainnetHostBuilderExtensions
             ServiceDescriptor.Singleton<IReadmodelFreshnessSource, ChannelBotRegistrationFreshnessSource>());
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHealthProbeExecutor, AevatarCoreLoopStatusProbeExecutor>());
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHealthProbeExecutor, AuditQueryIndexStatusProbeExecutor>());
         // Self-issued scope service token source for credentialed orchestration/observatory probes.
         // IScopeServiceTokenIssuer is only registered when scope service tokens are enabled, so it is
         // resolved optionally — absent it the provider returns null and those probes read "unknown".
@@ -357,7 +359,10 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                     CreateToolSource<ProvisionWorkflowScheduleToolSource>,
                     CreateToolSource<CreateStudioTeamToolSource>,
+                    CreateToolSource<StudioTeamQueryToolSource>,
                     CreateToolSource<CreateStudioMemberToolSource>,
+                    CreateToolSource<StudioMemberQueryToolSource>,
+                    CreateToolSource<StudioScheduleQueryToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
                     CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,

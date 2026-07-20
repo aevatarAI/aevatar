@@ -22,7 +22,6 @@ import {
   buildTeamMemberWorkflowStudioHref,
   buildTeamsHref,
 } from "@/shared/navigation/teamRoutes";
-import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import {
   applyStepInspectorDraft,
   connectStepToTarget,
@@ -1292,7 +1291,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const teamMembersReturnHref = buildTeamDetailHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
-    tab: builtInTeamDetailTabIds.members,
+    tab: "members",
     teamId: route.teamId,
     workflowId: activeDraftWorkflowId || undefined,
   });
@@ -1370,10 +1369,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? `missing:${route.scopeId}:${route.memberId}`
           : "";
   latestSourceKeyRef.current = sourceKey;
+  const yamlEditBaseIsCurrent =
+    yamlEditBaseRevision === draftRevision &&
+    yamlEditBaseSourceKey === sourceKey;
   const yamlEditHasConflict = Boolean(
     yamlPanelOpen &&
-      (yamlEditBaseRevision !== draftRevision ||
-        yamlEditBaseSourceKey !== sourceKey),
+      yamlEditHasUnappliedChanges &&
+      !yamlEditBaseIsCurrent,
   );
 
   React.useEffect(() => {
@@ -1394,6 +1396,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     ) {
       suppressedSourceSignatureRef.current = null;
       appliedSourceKeyRef.current = sourceKey;
+      if (yamlPanelOpen && !yamlEditHasUnappliedChanges) {
+        setYamlEditBaseSourceKey(sourceKey);
+      }
       return;
     }
 
@@ -1430,6 +1435,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     workflowDraftTitle,
     workflowQuery.data?.layout,
     closeDraftRunPanel,
+    yamlPanelOpen,
     yamlEditHasUnappliedChanges,
   ]);
 
@@ -1957,6 +1963,29 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     editableDocument,
     routeFallbackTitle,
     workflowTitle,
+  ]);
+  React.useEffect(() => {
+    if (
+      !yamlPanelOpen ||
+      yamlEditHasUnappliedChanges ||
+      yamlEditPending ||
+      yamlEditApplying ||
+      yamlEditBaseIsCurrent ||
+      yamlEditBaseSourceKey !== sourceKey
+    ) {
+      return;
+    }
+
+    void openYamlEditor();
+  }, [
+    openYamlEditor,
+    sourceKey,
+    yamlEditApplying,
+    yamlEditBaseIsCurrent,
+    yamlEditBaseSourceKey,
+    yamlEditHasUnappliedChanges,
+    yamlEditPending,
+    yamlPanelOpen,
   ]);
   const applyYamlEdit = React.useCallback(async () => {
     if (yamlEditApplyingRef.current) {

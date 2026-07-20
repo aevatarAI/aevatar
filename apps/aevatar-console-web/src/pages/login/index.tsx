@@ -100,7 +100,7 @@ const LoginPage: React.FC = () => {
             subTitle={
               config.configurationError
                 ? config.configurationError
-                : 'Ensure the Studio backend exposes NyxID login configuration at /api/auth/nyxid/config before starting the console.'
+                : 'Configure NYXID_BASE_URL, NYXID_CLIENT_ID, NYXID_SCOPE, and NYXID_REDIRECT_URI before building the console.'
             }
           />
         </Card>

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import React from 'react';
 import CallbackPage from './index';
 import { NyxIDAuthClient } from '@/shared/auth/client';
@@ -7,9 +7,11 @@ import { persistAuthSession } from '@/shared/auth/session';
 
 const replaceLocation = jest.fn();
 const handleRedirectCallback = jest.fn();
+const loginWithRedirect = jest.fn();
 
 jest.mock('@/shared/auth/client', () => ({
   NyxIDAuthClient: jest.fn(),
+  SERVICE_ACCESS_REVIEW_RETURN_TO: '/settings?section=account',
 }));
 
 function mockLocationReplace(path = '/auth/callback?code=auth-code&state=state-1') {
@@ -50,8 +52,11 @@ describe('NyxID callback page', () => {
     );
     replaceLocation.mockReset();
     handleRedirectCallback.mockReset();
+    loginWithRedirect.mockReset();
+    loginWithRedirect.mockResolvedValue(undefined);
     (NyxIDAuthClient as jest.Mock).mockImplementation(() => ({
       handleRedirectCallback,
+      loginWithRedirect,
     }));
     mockLocationReplace();
   });
@@ -99,6 +104,86 @@ describe('NyxID callback page', () => {
     expect(replaceLocation).toHaveBeenCalledWith('/runtime/runs');
   });
 
+  it('returns to Account settings after service access review succeeds', async () => {
+    handleRedirectCallback.mockResolvedValue({
+      flow: 'serviceAccessReview',
+      returnTo: '/settings?section=account',
+      session: {
+        tokens: {
+          accessToken: 'review-access-token',
+          expiresAt: Date.now() + 60_000,
+          expiresIn: 60,
+          tokenType: 'Bearer',
+        },
+        user: {
+          sub: 'user-1',
+        },
+      },
+    });
+
+    render(React.createElement(CallbackPage));
+
+    await waitFor(() => {
+      expect(replaceLocation).toHaveBeenCalledWith('/settings?section=account');
+    });
+  });
+
+  it('shows retryable service access review cancellation without replacing the session route', async () => {
+    handleRedirectCallback.mockRejectedValue(
+      Object.assign(
+        new Error('OAuth error: access_denied'),
+        {
+          flow: 'serviceAccessReview',
+          reason: 'oauthDenied',
+          returnTo: '/settings?section=account',
+        },
+      ),
+    );
+
+    const { findByRole, findByText } = render(React.createElement(CallbackPage));
+
+    expect(
+      await findByText(
+        'NyxID service access review was cancelled or denied. Your current Studio session is still active.',
+      ),
+    ).toBeTruthy();
+    const retryButton = await findByRole('button', { name: 'Retry service access review' });
+    fireEvent.click(retryButton);
+    expect(loginWithRedirect).toHaveBeenCalledWith({
+      flow: 'serviceAccessReview', returnTo: '/settings?section=account',
+    });
+    expect(
+      await findByRole('link', { name: 'Back to Account settings' }),
+    ).toHaveAttribute('href', '/settings?section=account');
+    expect(replaceLocation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['requiredServiceAccessMissing', 'Required service access is still missing. Return to NyxID and keep every service marked as required by Aevatar selected.'],
+    ['issuedBindingInvalid', 'The new NyxID authorization expired before Aevatar could use it. Start the review again.'],
+    ['issuedBindingProbeFailed', 'NyxID could not verify the new service authorization. Try again in a moment.'],
+    ['bindingProbeFailed', 'NyxID could not verify the current service authorization. Try again in a moment.'],
+  ])('shows localized review guidance for %s', async (reason, message) => {
+    handleRedirectCallback.mockRejectedValue(Object.assign(new Error('raw'), {
+      flow: 'serviceAccessReview', reason, returnTo: '/settings?section=account',
+    }));
+    const { findByRole } = render(React.createElement(CallbackPage));
+    expect(await findByRole('alert')).toHaveTextContent(message);
+  });
+
+  it('keeps service access review retryable when authorization restart fails', async () => {
+    handleRedirectCallback.mockRejectedValue(Object.assign(new Error('raw'), {
+      flow: 'serviceAccessReview', reason: 'serviceAccessReviewUnavailable',
+      returnTo: '/settings?section=account',
+    }));
+    loginWithRedirect.mockRejectedValueOnce(new Error('config unavailable'));
+    const { findByRole } = render(React.createElement(CallbackPage));
+    const retryButton = await findByRole('button', { name: 'Retry service access review' });
+    fireEvent.click(retryButton);
+    expect(await findByRole('alert')).toHaveTextContent('Could not restart service access review. Try again.');
+    await waitFor(() => expect(retryButton).not.toHaveClass('ant-btn-loading'));
+  });
+
   it('skips callback finalization when no callback payload is present and a session exists', async () => {
     mockLocationReplace('/auth/callback');
     persistAuthSession({
@@ -119,26 +204,5 @@ describe('NyxID callback page', () => {
       expect(replaceLocation).toHaveBeenCalledWith(CONSOLE_HOME_ROUTE);
     });
     expect(handleRedirectCallback).not.toHaveBeenCalled();
-  });
-
-  it('shows an actionable authorization error without exposing the machine code', async () => {
-    handleRedirectCallback.mockRejectedValue(
-      new Error(
-        'Return to login and allow access to the Aevatar service in NyxID.',
-      ),
-    );
-
-    render(React.createElement(CallbackPage));
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(
-          'Return to login and allow access to the Aevatar service in NyxID.',
-        ),
-      ).toBeInTheDocument();
-    });
-    expect(
-      screen.queryByText('required_service_access_missing'),
-    ).not.toBeInTheDocument();
   });
 });
