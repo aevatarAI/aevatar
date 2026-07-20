@@ -94,7 +94,7 @@ public sealed class OrnnSkillClient
 
         var path = $"/api/v1/skill-search?query={Uri.EscapeDataString(query)}&mode={normalizedMode}&scope={Uri.EscapeDataString(normalizedScope)}&page={page}&pageSize={pageSize}";
 
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         try
@@ -170,7 +170,7 @@ public sealed class OrnnSkillClient
         CancellationToken ct)
         where T : class
     {
-        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
         try
         {
