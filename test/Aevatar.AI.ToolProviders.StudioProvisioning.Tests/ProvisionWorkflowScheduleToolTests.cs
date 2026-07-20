@@ -233,6 +233,31 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateTeam_WhenOwnerScopePresent_ShouldCallPortWithOwnerScope()
+    {
+        var teamPort = new RecordingTeamProvisioningPort();
+        var tool = await DiscoverCreateTeamToolAsync(teamPort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "display_name": "Alpha Team",
+              "team_id": "team-alpha"
+            }
+            """);
+
+        teamPort.LastRequest.Should().NotBeNull();
+        teamPort.LastRequest!.ScopeId.Should().Be("owner-scope");
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
+    }
+
+    [Fact]
     public async Task CreateTeam_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
     {
         var teamPort = new RecordingTeamProvisioningPort();
@@ -309,6 +334,32 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task CreateMember_WhenOwnerScopePresent_ShouldCallPortWithOwnerScope()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "display_name": "Alpha Member",
+              "implementation_kind": "workflow",
+              "member_id": "member-alpha"
+            }
+            """);
+
+        memberPort.LastRequest.Should().NotBeNull();
+        memberPort.LastRequest!.ScopeId.Should().Be("owner-scope");
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
+    }
+
+    [Fact]
     public async Task CreateMember_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
     {
         var memberPort = new RecordingMemberProvisioningPort();
@@ -375,6 +426,25 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("teams")[0].GetProperty("team_url").GetString()
             .Should().Be("/api/scopes/scope-current/teams/team-alpha");
         root.GetProperty("next_page_token").GetString().Should().Be("next-page");
+    }
+
+    [Fact]
+    public async Task ListTeams_WhenOwnerScopePresent_ShouldCallReadPortWithOwnerScope()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort();
+        var tool = await DiscoverListTeamsToolAsync(teamQueryPort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope");
+        var output = await tool.ExecuteAsync("{}");
+
+        teamQueryPort.LastListScopeId.Should().Be("owner-scope");
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
     }
 
     [Fact]
@@ -681,6 +751,31 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task BindMemberWorkflow_WhenOwnerScopePresent_ShouldCallPortWithOwnerScope()
+    {
+        var bindingPort = new RecordingMemberWorkflowBindingPort();
+        var tool = await DiscoverBindMemberWorkflowToolAsync(bindingPort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "workflow_yaml": "name: demo\n"
+            }
+            """);
+
+        bindingPort.LastRequest.Should().NotBeNull();
+        bindingPort.LastRequest!.ScopeId.Should().Be("owner-scope");
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
+    }
+
+    [Fact]
     public async Task BindMemberWorkflow_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
     {
         var bindingPort = new RecordingMemberWorkflowBindingPort();
@@ -768,6 +863,32 @@ public sealed class ProvisionWorkflowScheduleToolTests
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-member-1");
         root.GetProperty("published_service_id").GetString().Should().Be("published-member-1");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenOwnerScopePresent_ShouldCallPortWithOwnerScope()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        schedulePort.LastRequest.Should().NotBeNull();
+        schedulePort.LastRequest!.ScopeId.Should().Be("owner-scope");
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
     }
 
     [Fact]
@@ -1078,6 +1199,35 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task Execute_WhenOwnerScopePresent_ShouldCallPortWithOwnerScope()
+    {
+        var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
+            MemberId: "member-1",
+            ScopeId: "owner-scope",
+            BindingStatus: "accepted",
+            ObservatoryUrl: "/workflow/observatory"));
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+
+        port.LastRequest.Should().NotBeNull();
+        port.LastRequest!.ScopeId.Should().Be("owner-scope");
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
+    }
+
+    [Fact]
     public async Task Execute_WhenRunImmediatelyAbsent_ShouldDefaultToTrue()
     {
         var port = new RecordingProvisioningPort();
@@ -1298,12 +1448,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? accessToken,
         string? requestId = "request-1",
         string? callId = "call-1",
-        string? idempotencyKey = null)
+        string? idempotencyKey = null,
+        string? ownerScopeId = null)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
-            new AgentToolCallerContext(scopeId, ownerSubject, "response-1"),
+            new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
             AgentToolChannelContext.Empty,
             AgentToolSenderBindingContext.Empty,
             LLMRequestRoutingContext.Empty,
