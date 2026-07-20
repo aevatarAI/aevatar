@@ -171,6 +171,35 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_ClassifierReturnsUnknownIntent_ShouldUseRecoveryWithoutFetching()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-outside-profile")),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile()),
+                "classify",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.FinalAllowedToolNames.Should().NotContain("task");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().BeNull();
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Detail == "unknown_intent");
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_Shadow_ShouldKeepCandidateDiagnosticWithoutFetchingOrResolvingTaskPolicy()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -236,6 +265,48 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                 diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch ||
                 diagnostic.Code == AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid);
         }
+    }
+
+    [Theory]
+    [InlineData("22222222-2222-2222-2222-222222222222", SkillVersion, PublisherId, "hash-alpha")]
+    [InlineData(SkillGuid, "9.9", PublisherId, "hash-alpha")]
+    [InlineData(SkillGuid, SkillVersion, "publisher-beta", "hash-alpha")]
+    [InlineData(SkillGuid, SkillVersion, PublisherId, " ")]
+    public async Task MaterializeAsync_ExactFetchIdentityMismatch_ShouldUseRecoveryOnly(
+        string fetchedGuid,
+        string fetchedVersion,
+        string fetchedPublisherId,
+        string fetchedSkillHash)
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var fetcher = new RecordingFetcher(ExactRemoteSkillFetchResult.Success(
+            fetchedGuid,
+            fetchedVersion,
+            SkillName,
+            fetchedPublisherId,
+            fetchedSkillHash,
+            SkillMarkdown));
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-alpha")),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile()),
+                "select",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.FinalAllowedToolNames.Should().NotContain("task");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().Be("intent-alpha");
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch);
+        fetcher.CallCount.Should().Be(1);
     }
 
     [Fact]
@@ -439,6 +510,37 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.FinalAllowedToolNames.Should().BeEmpty();
         catalog.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_RouteToolSetResolveThrows_ShouldReturnRestrictedEmptyWithoutFetching()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-alpha"));
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(
+                new ThrowingToolSetRegistry(),
+                classifier,
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile()),
+                "classify",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.ToolVisibility.IsRestricted.Should().BeTrue();
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().BeNull();
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable &&
+            diagnostic.Detail == "profile.route");
+        classifier.CallCount.Should().Be(0);
+        fetcher.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -759,6 +861,14 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
                     "missing",
                     GetRegisteredNames()));
         }
+    }
+
+    private sealed class ThrowingToolSetRegistry : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => [];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+            throw new InvalidOperationException("resolve failed");
     }
 
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
