@@ -53,30 +53,6 @@ public sealed class CreateStudioTeamToolSource : IAgentToolSource
     }
 }
 
-/// <summary>
-/// Tool source for local, read-only Studio team discovery. The port is optional
-/// so hosts can register the source generically while only exposing the tool
-/// when Studio team query services are composed.
-/// </summary>
-public sealed class ListStudioTeamsToolSource : IAgentToolSource
-{
-    private readonly IStudioTeamQueryProvisioningPort? _teamQueryPort;
-
-    public ListStudioTeamsToolSource(IStudioTeamQueryProvisioningPort? teamQueryPort = null)
-    {
-        _teamQueryPort = teamQueryPort;
-    }
-
-    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        return Task.FromResult<IReadOnlyList<IAgentTool>>(
-            _teamQueryPort is null
-                ? []
-                : [new ListStudioTeamsTool(_teamQueryPort)]);
-    }
-}
-
 public sealed class CreateStudioMemberToolSource : IAgentToolSource
 {
     private readonly IStudioMemberProvisioningPort? _memberProvisioningPort;

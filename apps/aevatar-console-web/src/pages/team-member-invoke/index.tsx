@@ -14,7 +14,6 @@ import {
   buildTeamMemberPublishedRunsHref,
   buildTeamMemberWorkflowStudioHref,
 } from "@/shared/navigation/teamRoutes";
-import { builtInTeamDetailTabIds } from "@/shared/teams/teamDetailTabs";
 import {
   buildScopeConsoleServiceOptions,
   scopeServiceAppId,
@@ -101,7 +100,7 @@ const TeamMemberInvokePage: React.FC = () => {
   const backHref = buildTeamDetailHref({
     memberId: route.memberId || undefined,
     scopeId: route.scopeId,
-    tab: builtInTeamDetailTabIds.members,
+    tab: "members",
     teamId: route.teamId,
   });
   const workflowStudioHref = buildTeamMemberWorkflowStudioHref({

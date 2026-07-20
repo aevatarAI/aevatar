@@ -171,8 +171,9 @@ public sealed record StudioMemberBindingRunResultResponse(
     string? ExpectedActorId = null);
 
 // Refactor (iter159/cluster-594-first):
-//   Old pattern: Studio member binding-run status response 未暴露 StateVersion
-//   New principle: 暴露 readmodel 已有的 StateVersion; 前端用 freshness marker 诚实表达 not-yet-materialized 状态
+//   Old pattern: Studio member binding-run status response did not expose StateVersion.
+//   New principle: expose the read model's StateVersion so the frontend can show
+//   not-yet-materialized state with an honest freshness marker.
 public sealed record StudioMemberBindingRunStatusResponse(
     string BindingRunId,
     string ScopeId,

@@ -9,7 +9,7 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// existing application service. It preserves the application boundary while
 /// keeping local agent tools off HTTP self-calls and NyxID proxy routing.
 /// </summary>
-public sealed class StudioTeamProvisioningPort : IStudioTeamProvisioningPort, IStudioTeamQueryProvisioningPort
+public sealed class StudioTeamProvisioningPort : IStudioTeamProvisioningPort
 {
     private readonly IStudioTeamService _teamService;
 
@@ -47,38 +47,4 @@ public sealed class StudioTeamProvisioningPort : IStudioTeamProvisioningPort, IS
         };
     }
 
-    public async Task<StudioTeamListProvisioningResult> ListAsync(
-        StudioTeamListProvisioningRequest request,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var roster = await _teamService.ListAsync(
-            request.ScopeId,
-            new StudioTeamRosterPageRequest(
-                PageSize: request.PageSize,
-                PageToken: request.PageToken),
-            ct);
-
-        return new StudioTeamListProvisioningResult(
-            Success: true,
-            ScopeId: roster.ScopeId,
-            Teams: roster.Teams.Select(ToProvisioningResult).ToList(),
-            NextPageToken: roster.NextPageToken);
-    }
-
-    private static StudioTeamProvisioningResult ToProvisioningResult(StudioTeamSummaryResponse summary) =>
-        new(
-            Success: true,
-            ScopeId: summary.ScopeId,
-            TeamId: summary.TeamId,
-            DisplayName: summary.DisplayName,
-            Description: summary.Description,
-            LifecycleStage: summary.LifecycleStage,
-            MemberCount: summary.MemberCount,
-            CreatedAt: summary.CreatedAt,
-            UpdatedAt: summary.UpdatedAt)
-        {
-            EntryMemberId = summary.EntryMemberId,
-        };
 }

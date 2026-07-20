@@ -17,6 +17,46 @@ public sealed class ChatConversationCurrentStateProjectorTests
     private const string RootActorId = "chat-history-conversation-scope-a-conversation-a";
 
     [Fact]
+    public async Task ProjectAsync_ShouldMaterializeBlockedTurnStatus()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ChatConversationCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-20T09:00:00Z")));
+        var state = new ChatConversationState
+        {
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            Turns =
+            {
+                new ChatTurn
+                {
+                    TurnId = "turn-blocked",
+                    Sequence = 1,
+                    UserText = "read private resource",
+                    TerminalStatus = ChatTurnTerminalStatus.Blocked,
+                    SanitizedError = "Connect api-github to continue.",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ChatTurnAppendedEvent { ScopeId = "scope-a", ConversationId = "conversation-a" },
+                state,
+                version: 1,
+                eventId: "evt-chat-blocked",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-07-20T08:30:00Z")));
+
+        dispatcher.Upserts.Should().ContainSingle().Which.Turns.Should()
+            .ContainSingle(turn =>
+                turn.TurnId == "turn-blocked" &&
+                turn.TerminalStatus == "blocked" &&
+                turn.SanitizedError == "Connect api-github to continue.");
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldMaterializeConversationStateAndTerminalTurnNames()
     {
         var dispatcher = new RecordingWriteDispatcher();

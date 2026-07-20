@@ -192,7 +192,12 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
             allowed_tools:
               - aevatar_list_teams
               - aevatar_create_team
+              - aevatar_get_team
               - aevatar_create_member
+              - aevatar_list_members
+              - aevatar_get_member
+              - aevatar_list_schedules
+              - aevatar_get_schedule
               - aevatar_bind_member_workflow
               - aevatar_schedule_member_workflow
               - aevatar_provision_workflow_schedule

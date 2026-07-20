@@ -72,6 +72,11 @@ function readResponseErrorFromPayload(
     return message;
   }
 
+  const error = readJsonErrorText(payload.error);
+  if (error) {
+    return error;
+  }
+
   const detail = readJsonErrorText(payload.detail);
   const title = readJsonErrorText(payload.title);
   if (detail && title) {
@@ -89,11 +94,6 @@ function readResponseErrorFromPayload(
 
   if (title) {
     return title;
-  }
-
-  const error = readJsonErrorText(payload.error);
-  if (error) {
-    return error;
   }
 
   const code = readJsonErrorText(payload.code);
@@ -153,7 +153,10 @@ export async function readResponseErrorDetails(
     const message =
       readResponseErrorFromPayload(payload, response) || normalizeWhitespace(text);
     return {
-      code: readJsonErrorText(payload.code) ?? undefined,
+      code:
+        readJsonErrorText(payload.code) ??
+        readJsonErrorText(payload.error) ??
+        undefined,
       message,
       status: response.status,
     };

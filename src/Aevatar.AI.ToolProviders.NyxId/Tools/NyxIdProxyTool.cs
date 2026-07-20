@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -53,6 +54,25 @@ public sealed class NyxIdProxyTool : IAgentTool
     /// The proxy response may take 30+ seconds during approval wait.
     /// </summary>
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError)
+            return null;
+
+        return NyxIdAuthorizationReceiptFactory.TryCreate(
+            callId,
+            toolName,
+            args.Str("slug") ?? args.Str("service") ?? string.Empty,
+            serviceLabel: null,
+            args.Str("path"),
+            resultJson);
+    }
 
     public string ParametersSchema => """
         {

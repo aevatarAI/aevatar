@@ -30,25 +30,3 @@ public sealed record StudioTeamProvisioningResult(
 {
     public string? EntryMemberId { get; init; }
 }
-
-/// <summary>
-/// Request to list Studio teams through a local, read-only agent tool.
-/// The caller scope is not model-controlled: the tool reads it from
-/// AgentToolRequestContext and passes it through this narrow port.
-/// </summary>
-public sealed record StudioTeamListProvisioningRequest(
-    string ScopeId)
-{
-    public int? PageSize { get; init; }
-
-    public string? PageToken { get; init; }
-}
-
-/// <summary>
-/// Result returned by the local Studio team list capability.
-/// </summary>
-public sealed record StudioTeamListProvisioningResult(
-    bool Success,
-    string ScopeId,
-    IReadOnlyList<StudioTeamProvisioningResult> Teams,
-    string? NextPageToken);

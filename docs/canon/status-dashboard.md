@@ -109,12 +109,14 @@ tick 通过 `ScheduleSelfDurableTimeoutAsync` 调度，回到同一个 actor inb
 | `http_status` | `HttpStatusProbeExecutor` | 发送一次 HTTP 请求，按 status code 与 body assertion 分类结果 |
 | `readmodel_freshness` | `ReadmodelFreshnessProbeExecutor` | 读取某个注册的 `IReadmodelFreshnessSource`，检查数量与更新时间 |
 
-Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不创建 run、不调用固定 actor/team，只验证 host 组合层是否仍具备 core-loop 所需能力：
+Mainnet Host 额外注册 `aevatar_core_loop` 与 `audit_query_index` executor。前者不调用 LLM、不创建 run、不调用固定 actor/team，只验证 host 组合层是否仍具备 core-loop 所需能力：
 
 1. `workspace.default` tool set 可解析。
 2. 四个 Aevatar invocation tools 可发现，且具备 description、parameters schema 与 `IAevatarInvocationTool` 契约。
 3. route policy 使用 `ForwardToModel + tool_choice_hint` 表达 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 目标；旧 GAgent/team wire action 已删除。
 4. `wait=complete` 在 `aevatar_invoke_gagent`、`aevatar_invoke_team`、`aevatar_start_workflow` 上只保留公开参数与 accepted/streaming receipt 语义；完成态由 typed `aevatar_observe_run` target 读取单一 readmodel 获取，不再进入 ChatRun completion 协调。普通 workflow 查询走 workflow-owned `workflow_actor_current_state`、`workflow_status`、`event_query`。
+
+`audit_query_index` 通过 `IAuditTrailQueryPort` 执行一次有界未来时间窗查询，同时验证 audit alias、mapping、Elasticsearch query 与空结果反序列化。它只返回脱敏后的成功/失败分类，不把 Elasticsearch URL、凭证或原始异常写入 health actor state。
 
 `http_status` 支持的常用参数：
 
@@ -214,7 +216,8 @@ Mainnet Host 额外注册 `aevatar_core_loop` executor。它不调用 LLM、不�
 2. `studio-health`（`/api/health` → 200）、`app-context`（`/api/app/context` → 200）：匿名 200 即真实成功信号。
 3. `aevatar-core-loop-tools`（critical），展示当前分支核心的 LLM-driven Aevatar invocation/tool-choice 链路是否在 host 组合层可用。
 4. `channel-bot-runtime` readmodel freshness（standard）。
-5. NyxID `/health` 与 OIDC discovery 上游探测（standard）。
+5. `audit-query-index` audit artifact query/index readiness（standard）。
+6. NyxID `/health` 与 OIDC discovery 上游探测（standard）。
 
 凭证门控的 LLM canary（仅当配置了 `Aevatar:Status:Probe:CanaryBearer` 时生成，`severity=canary`）：
 

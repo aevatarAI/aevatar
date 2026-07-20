@@ -144,7 +144,10 @@ internal sealed class SkillRecoveryOrchestrator
             executor.AddTool(state, toolCall);
             await foreach (var result in executor.GetRemainingResultsAsync(state, ct))
             {
-                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
+                var toolMsg = ToolCallLoop.BuildToolResultMessage(
+                    result.CallId,
+                    result.ToolName,
+                    ToolExecutionResultHistory.ResolveSafeContent(result));
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
             }

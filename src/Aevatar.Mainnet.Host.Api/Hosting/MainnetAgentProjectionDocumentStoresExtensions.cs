@@ -195,10 +195,13 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         services.TryAddSingleton<ElasticsearchAuditTrailArtifactStore>(sp =>
             new ElasticsearchAuditTrailArtifactStore(
                 ProjectionDocumentProviderConfiguration.BindRequiredElasticsearchOptions(configuration),
-                sp.GetRequiredService<AuditTrailDocumentMetadataProvider>().Metadata));
+                sp.GetRequiredService<AuditTrailDocumentMetadataProvider>().Metadata,
+                logger: sp.GetRequiredService<ILogger<ElasticsearchAuditTrailArtifactStore>>()));
         services.TryAddSingleton<IAuditTrailArtifactStore>(static sp =>
             sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
         services.TryAddSingleton<IAuditTrailQueryPort>(static sp =>
+            sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
+        services.AddSingleton<IProjectionIndexReconcileTarget>(static sp =>
             sp.GetRequiredService<ElasticsearchAuditTrailArtifactStore>());
     }
 
@@ -305,7 +308,11 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         };
     }
 
-    internal sealed class ElasticsearchAuditTrailArtifactStore : IAuditTrailArtifactStore, IAuditTrailQueryPort, IDisposable
+    internal sealed class ElasticsearchAuditTrailArtifactStore :
+        IAuditTrailArtifactStore,
+        IAuditTrailQueryPort,
+        IProjectionIndexReconcileTarget,
+        IDisposable
     {
         private const int DefaultAuditQueryTake = 100;
         private const int MaxAuditQueryTake = 500;
@@ -318,21 +325,25 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         private readonly HttpClient _httpClient;
         private readonly ElasticsearchProjectionDocumentStoreOptions _options;
         private readonly DocumentIndexMetadata _metadata;
-        private readonly SemaphoreSlim _indexGate = new(1, 1);
+        private readonly ElasticsearchIndexLifecycleManager _indexManager;
+        private readonly ILogger<ElasticsearchAuditTrailArtifactStore> _logger;
+        private readonly string _legacyIndexName;
         private readonly string _indexName;
-        private bool _indexEnsured;
 
         public ElasticsearchAuditTrailArtifactStore(
             ElasticsearchProjectionDocumentStoreOptions options,
             DocumentIndexMetadata metadata,
-            HttpMessageHandler? httpMessageHandler = null)
+            HttpMessageHandler? httpMessageHandler = null,
+            ILogger<ElasticsearchAuditTrailArtifactStore>? logger = null)
         {
             ArgumentNullException.ThrowIfNull(options);
             ArgumentNullException.ThrowIfNull(metadata);
 
             _options = options;
-            _metadata = metadata;
-            _indexName = BuildIndexName(options.IndexPrefix, metadata.IndexName);
+            _legacyIndexName = BuildIndexName(options.IndexPrefix, metadata.IndexName);
+            _indexName = $"{_legacyIndexName}-current";
+            _metadata = metadata with { IndexName = _indexName };
+            _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ElasticsearchAuditTrailArtifactStore>.Instance;
             _httpClient = httpMessageHandler == null
                 ? new HttpClient()
                 : new HttpClient(httpMessageHandler, disposeHandler: true);
@@ -345,7 +356,20 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                 var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
                 _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", token);
             }
+
+            // Startup reconciliation is an explicit, governed provisioning operation. It remains
+            // enabled when request-path AutoCreateIndex is false.
+            _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, autoCreate: true, _logger);
         }
+
+        public string IndexAlias => _indexName;
+
+        public Task ReconcileIndexAsync(CancellationToken ct = default) =>
+            _indexManager.ReconcileArtifactWithReindexAsync(
+                _indexName,
+                _legacyIndexName,
+                _metadata,
+                ct);
 
         public async Task<Audit.AuditTrailDocument?> GetAsync(string auditId, CancellationToken ct = default)
         {
@@ -522,53 +546,10 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
         private async Task EnsureIndexAsync(CancellationToken ct)
         {
-            if (!_options.AutoCreateIndex || _indexEnsured)
+            if (!_options.AutoCreateIndex)
                 return;
 
-            await _indexGate.WaitAsync(ct);
-            try
-            {
-                if (_indexEnsured)
-                    return;
-
-                using var response = await _httpClient.PutAsync(
-                    _indexName,
-                    new StringContent(
-                        BuildIndexPayload(),
-                        Encoding.UTF8,
-                        "application/json"),
-                    ct);
-                if (!response.IsSuccessStatusCode)
-                {
-                    var payload = await response.Content.ReadAsStringAsync(ct);
-                    if (response.StatusCode != HttpStatusCode.BadRequest ||
-                        !payload.Contains("resource_already_exists_exception", StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new InvalidOperationException(
-                            $"Elasticsearch audit artifact index create failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
-                    }
-                }
-
-                _indexEnsured = true;
-            }
-            finally
-            {
-                _indexGate.Release();
-            }
-        }
-
-        private string BuildIndexPayload()
-        {
-            var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
-            {
-                ["mappings"] = _metadata.Mappings,
-            };
-            if (_metadata.Settings.Count > 0)
-                payload["settings"] = _metadata.Settings;
-            if (_metadata.Aliases.Count > 0)
-                payload["aliases"] = _metadata.Aliases;
-
-            return JsonSerializer.Serialize(payload);
+            await ReconcileIndexAsync(ct);
         }
 
         private static string BuildAuditQueryPayload(AuditTrailQuery query, int boundedTake)
@@ -634,7 +615,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
                                     {
                                         ["term"] = new Dictionary<string, object?>
                                         {
-                                            ["artifact.schema_version.keyword"] =
+                                            ["artifact.schema_version"] =
                                                 AuditContractSemantics.CurrentSchemaVersion,
                                         },
                                     },
@@ -928,7 +909,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             return new string(chars).Trim('-');
         }
 
-        private static async Task EnsureSuccessAsync(
+        private async Task EnsureSuccessAsync(
             HttpResponseMessage response,
             string operation,
             CancellationToken ct)
@@ -936,9 +917,14 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
             if (response.IsSuccessStatusCode)
                 return;
 
-            var payload = await response.Content.ReadAsStringAsync(ct);
+            _ = await response.Content.ReadAsStringAsync(ct);
+            _logger.LogError(
+                "Elasticsearch audit artifact operation failed. operation={Operation} statusCode={StatusCode} errorType={ErrorType}",
+                operation,
+                (int)response.StatusCode,
+                "backend_rejected");
             throw new InvalidOperationException(
-                $"Elasticsearch {operation} failed: {(int)response.StatusCode} {response.ReasonPhrase}. body={payload}");
+                $"Elasticsearch {operation} failed: {(int)response.StatusCode} {response.ReasonPhrase}. errorType=backend_rejected");
         }
 
         private static bool IsIndexNotFoundPayload(string payload) =>
@@ -946,8 +932,8 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
 
         public void Dispose()
         {
+            _indexManager.Dispose();
             _httpClient.Dispose();
-            _indexGate.Dispose();
         }
     }
 }

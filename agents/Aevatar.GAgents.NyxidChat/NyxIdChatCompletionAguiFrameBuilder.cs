@@ -23,7 +23,44 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
         var content = completed.Content ?? string.Empty;
 
         var frames = new List<AGUIEvent>();
+        if (completed.Outcome == RoleChatSessionOutcome.Blocked && completed.AuthorizationRequired != null)
+        {
+            var blocker = completed.AuthorizationRequired.Clone();
+            frames.Add(new AGUIEvent
+            {
+                Custom = new CustomEvent
+                {
+                    Name = "nyxid.authorization.required",
+                    Payload = Any.Pack(blocker),
+                },
+            });
+            frames.Add(new AGUIEvent
+            {
+                RunFinished = new RunFinishedEvent
+                {
+                    ThreadId = context.RootActorId,
+                    RunId = context.SessionId,
+                    Result = Any.Pack(blocker),
+                    Status = RunCompletionStatus.Blocked,
+                },
+            });
+            return frames;
+        }
+
         frames.AddRange(BuildToolFrames(completed));
+        if (completed.Outcome == RoleChatSessionOutcome.Failed)
+        {
+            frames.Add(BuildRunError(
+                string.IsNullOrWhiteSpace(completed.SafeMessage)
+                    ? "The chat request failed. Please try again."
+                    : completed.SafeMessage,
+                context.SessionId,
+                string.IsNullOrWhiteSpace(completed.FailureCode)
+                    ? "CHAT_REQUEST_FAILED"
+                    : completed.FailureCode));
+            return frames;
+        }
+
         if (TryBuildFailureFrame(content, context.SessionId, out var failureFrame))
         {
             frames.Add(failureFrame);
@@ -67,6 +104,7 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
                 ThreadId = context.RootActorId,
                 RunId = context.SessionId,
                 Result = Any.Pack(new StringValue { Value = content }),
+                Status = RunCompletionStatus.Completed,
             },
         });
         return frames;
@@ -87,7 +125,7 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
                     Fields =
                     {
                         ["requestId"] = Value.ForString(pending.RequestId),
-                        ["sessionId"] = Value.ForString(pending.SessionId ?? string.Empty),
+                        ["turnId"] = Value.ForString(pending.SessionId ?? string.Empty),
                         ["toolName"] = Value.ForString(pending.ToolName ?? string.Empty),
                         ["toolCallId"] = Value.ForString(pending.ToolCallId ?? string.Empty),
                         ["argumentsJson"] = Value.ForString(pending.ArgumentsJson ?? string.Empty),
@@ -181,26 +219,30 @@ internal static class NyxIdChatCompletionAguiFrameBuilder
         const string llmFailedPrefix = "LLM request failed";
         if (content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
         {
-            failureFrame = BuildRunError(content[llmErrorPrefix.Length..].Trim(), runId);
+            failureFrame = BuildRunError(content[llmErrorPrefix.Length..].Trim(), runId, "LLM_REQUEST_FAILED");
             return true;
         }
 
         if (content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
         {
-            failureFrame = BuildRunError(ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content), runId);
+            failureFrame = BuildRunError(
+                ScopeGAgentAguiEventMapper.NormalizeLlmFailureMessage(content),
+                runId,
+                "LLM_REQUEST_FAILED");
             return true;
         }
 
         return false;
     }
 
-    private static AGUIEvent BuildRunError(string message, string runId) =>
+    private static AGUIEvent BuildRunError(string message, string runId, string code) =>
         new()
         {
             RunError = new RunErrorEvent
             {
                 Message = string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message,
                 RunId = runId,
+                Code = code,
             },
         };
 

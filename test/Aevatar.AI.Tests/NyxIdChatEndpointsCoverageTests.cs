@@ -57,7 +57,7 @@ namespace Aevatar.AI.Tests;
 
 using RelayOptions = Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions;
 
-public class NyxIdChatEndpointsCoverageTests
+public partial class NyxIdChatEndpointsCoverageTests
 {
     private static readonly System.Type EndpointsType = typeof(NyxIdChatEndpoints);
     private const string NyxRefreshTokenMetadataKey = "nyxid.refresh_token";
@@ -1127,6 +1127,8 @@ public class NyxIdChatEndpointsCoverageTests
             var body = bodyStream.GetText();
             body.Should().Contain("RUN_STARTED");
             body.Should().Contain("aevatar.nyxid_chat.keepalive");
+            body.Should().Contain("\"turnId\":");
+            body.Should().NotContain("\"sessionId\":");
             body.Should().Contain("RUN_FINISHED");
             body.IndexOf("RUN_STARTED", StringComparison.Ordinal)
                 .Should().BeLessThan(body.IndexOf("aevatar.nyxid_chat.keepalive", StringComparison.Ordinal));
@@ -1170,39 +1172,6 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public async Task HandleStreamMessageAsync_ShouldWriteRunError_WhenFailureOccursAfterWriterStarts()
-    {
-        var context = new DefaultHttpContext();
-        context.Request.Headers.Authorization = "Bearer valid-token";
-        context.Response.Body = new MemoryStream();
-
-        var runtime = new StubActorRuntime();
-        runtime.Actors["actor-1"] = new StubActor("actor-1");
-
-        await InvokeTaskAsync(
-            "HandleStreamMessageAsync",
-            context,
-            "scope-a",
-            "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
-            runtime,
-            new StubGAgentActorStore(),
-            new StubNyxIdChatInteractionService<NyxIdChatCommand>
-            {
-                Exception = new InvalidOperationException("subscription failed"),
-            },
-            NullLoggerFactory.Instance,
-            CancellationToken.None);
-
-        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        context.Response.Body.Position = 0;
-        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
-        body.Should().Contain("RUN_STARTED");
-        body.Should().Contain("RUN_ERROR");
-        body.Should().Contain("The chat request failed. Please try again.");
-    }
-
-    [Fact]
     public async Task HandleApproveAsync_ShouldDispatchDecision_AndWriteRunFinished()
     {
         var context = new DefaultHttpContext();
@@ -1241,7 +1210,7 @@ public class NyxIdChatEndpointsCoverageTests
         command.RequestId.Should().Be("req-1");
         command.Approved.Should().BeFalse();
         command.Reason.Should().Be("deny");
-        command.SessionId.Should().Be("session-1");
+        command.TurnId.Should().StartWith("turn-").And.NotBe("session-1");
 
         context.Response.Body.Position = 0;
         var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
@@ -1361,7 +1330,7 @@ public class NyxIdChatEndpointsCoverageTests
         result.Receipt.CommandId.Should().NotBeNullOrWhiteSpace();
         result.Receipt.CommandId.Should().NotBe("session-1");
         result.Receipt.CorrelationId.Should().Be(result.Receipt.CommandId);
-        result.Receipt.SessionId.Should().Be("session-1");
+        result.Receipt.TurnId.Should().Be("session-1");
         result.FinalizeResult.Should().NotBeNull();
         result.FinalizeResult!.Completed.Should().BeTrue();
         result.FinalizeResult.Completion.Should().Be(NyxIdChatCompletionStatus.Completed);
@@ -1604,7 +1573,7 @@ public class NyxIdChatEndpointsCoverageTests
         envelope.Propagation?.CorrelationId.Should().Be("correlation-1");
         var decision = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
         decision.RequestId.Should().Be("request-1");
-        decision.SessionId.Should().Be("session-1");
+        decision.ContinuationTurnId.Should().Be("session-1");
         decision.Approved.Should().BeFalse();
         decision.Reason.Should().Be("deny");
     }
@@ -1657,7 +1626,7 @@ public class NyxIdChatEndpointsCoverageTests
         envelope.Propagation?.CorrelationId.Should().Be("approval-correlation-explicit");
         var decision = envelope.Payload.Unpack<ToolApprovalDecisionEvent>();
         decision.RequestId.Should().Be("request-1");
-        decision.SessionId.Should().Be("session-1");
+        decision.ContinuationTurnId.Should().Be("session-1");
     }
 
     [Fact]
@@ -3051,6 +3020,27 @@ public class NyxIdChatEndpointsCoverageTests
         }
     }
 
+    private static DefaultHttpContext CreateAuthorizedStreamContext()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+        return context;
+    }
+
+    private static async Task<string> ReadResponseBodyAsync(DefaultHttpContext context)
+    {
+        context.Response.Body.Position = 0;
+        return await new StreamReader(context.Response.Body).ReadToEndAsync();
+    }
+
+    private static IReadOnlyList<JsonElement> ParseSseFrames(string body) =>
+        body.Split("\n\n", StringSplitOptions.RemoveEmptyEntries)
+            .Select(static frame => frame.Trim())
+            .Where(static frame => frame.StartsWith("data: ", StringComparison.Ordinal))
+            .Select(static frame => JsonDocument.Parse(frame["data: ".Length..]).RootElement.Clone())
+            .ToArray();
+
     private static DefaultHttpContext CreateScopeGuardedContext(string claimedScopeId)
     {
         var context = new DefaultHttpContext
@@ -3606,6 +3596,8 @@ public class NyxIdChatEndpointsCoverageTests
         public List<TCommand> Commands { get; } = [];
         public List<AGUIEvent> Frames { get; } = [];
         public Exception? Exception { get; init; }
+        public Exception? AfterBeforeEmitException { get; init; }
+        public Exception? AfterEmitException { get; init; }
         public NyxIdChatStartError? Failure { get; init; }
         public Func<CancellationToken, Task>? BeforeEmitAsync { get; init; }
 
@@ -3635,8 +3627,14 @@ public class NyxIdChatEndpointsCoverageTests
             if (BeforeEmitAsync != null)
                 await BeforeEmitAsync(ct);
 
+            if (AfterBeforeEmitException != null)
+                throw AfterBeforeEmitException;
+
             foreach (var frame in Frames)
                 await emitAsync(frame, ct);
+
+            if (AfterEmitException != null)
+                throw AfterEmitException;
 
             return CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus>
                 .Success(
@@ -3656,11 +3654,11 @@ public class NyxIdChatEndpointsCoverageTests
             return await ExecuteAsync(inbound, emitAsync, onAcceptedAsync, ct);
         }
 
-        private static (string ActorId, string SessionId) ResolveReceiptParts(TCommand command) =>
+        private static (string ActorId, string TurnId) ResolveReceiptParts(TCommand command) =>
             command switch
             {
-                NyxIdChatCommand chat => (chat.ActorId, chat.SessionId),
-                NyxIdApprovalCommand approval => (approval.ActorId, approval.SessionId),
+                NyxIdChatCommand chat => (chat.ActorId, chat.TurnId),
+                NyxIdApprovalCommand approval => (approval.ActorId, approval.TurnId),
                 _ => ("actor", "session"),
             };
     }

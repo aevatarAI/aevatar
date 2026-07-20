@@ -1,8 +1,11 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -12,9 +15,14 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning.Tests;
 public sealed class ProvisionWorkflowScheduleToolTests
 {
     private const string ScheduleToolName = "aevatar_provision_workflow_schedule";
-    private const string ListTeamsToolName = "aevatar_list_teams";
     private const string CreateTeamToolName = "aevatar_create_team";
+    private const string ListTeamsToolName = "aevatar_list_teams";
+    private const string GetTeamToolName = "aevatar_get_team";
     private const string CreateMemberToolName = "aevatar_create_member";
+    private const string ListMembersToolName = "aevatar_list_members";
+    private const string GetMemberToolName = "aevatar_get_member";
+    private const string ListSchedulesToolName = "aevatar_list_schedules";
+    private const string GetScheduleToolName = "aevatar_get_schedule";
     private const string BindMemberWorkflowToolName = "aevatar_bind_member_workflow";
     private const string ScheduleMemberWorkflowToolName = "aevatar_schedule_member_workflow";
 
@@ -57,9 +65,11 @@ public sealed class ProvisionWorkflowScheduleToolTests
     {
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowScheduleProvisioningPort, RecordingProvisioningPort>();
-        services.AddSingleton<IStudioTeamQueryProvisioningPort, RecordingTeamQueryProvisioningPort>();
         services.AddSingleton<IStudioTeamProvisioningPort, RecordingTeamProvisioningPort>();
+        services.AddSingleton<IStudioTeamQueryPort, RecordingTeamQueryPort>();
         services.AddSingleton<IStudioMemberProvisioningPort, RecordingMemberProvisioningPort>();
+        services.AddSingleton<IStudioMemberQueryPort, RecordingMemberQueryPort>();
+        services.AddSingleton<IScheduledDispatchApplicationService, RecordingScheduledDispatchApplicationService>();
         services.AddSingleton<IStudioMemberWorkflowBindingPort, RecordingMemberWorkflowBindingPort>();
         services.AddSingleton<IStudioMemberWorkflowSchedulePort, RecordingMemberWorkflowSchedulePort>();
         services.AddStudioProvisioningTools();
@@ -74,87 +84,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
         }
 
         toolNames.Should().Contain(ScheduleToolName);
-        toolNames.Should().Contain(ListTeamsToolName);
         toolNames.Should().Contain(CreateTeamToolName);
+        toolNames.Should().Contain(ListTeamsToolName);
+        toolNames.Should().Contain(GetTeamToolName);
         toolNames.Should().Contain(CreateMemberToolName);
+        toolNames.Should().Contain(ListMembersToolName);
+        toolNames.Should().Contain(GetMemberToolName);
+        toolNames.Should().Contain(ListSchedulesToolName);
+        toolNames.Should().Contain(GetScheduleToolName);
         toolNames.Should().Contain(BindMemberWorkflowToolName);
         toolNames.Should().Contain(ScheduleMemberWorkflowToolName);
-    }
-
-    [Fact]
-    public async Task ToolSource_WhenTeamQueryPortRegistered_ShouldDiscoverListTeamsTool()
-    {
-        var source = new ListStudioTeamsToolSource(new RecordingTeamQueryProvisioningPort());
-
-        var tools = await source.DiscoverToolsAsync();
-
-        tools.Should().ContainSingle();
-        tools[0].Name.Should().Be(ListTeamsToolName);
-    }
-
-    [Fact]
-    public async Task ToolSource_WhenTeamQueryPortMissing_ShouldNotDiscoverListTeamsTool()
-    {
-        var source = new ListStudioTeamsToolSource();
-
-        var tools = await source.DiscoverToolsAsync();
-
-        tools.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task ListTeams_ShouldCallTeamQueryPortWithCallerScope()
-    {
-        var teamPort = new RecordingTeamQueryProvisioningPort();
-        var tool = await DiscoverListTeamsToolAsync(teamPort);
-
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        var output = await tool.ExecuteAsync("""{"page_size":10}""");
-
-        teamPort.LastRequest.Should().NotBeNull();
-        teamPort.LastRequest!.ScopeId.Should().Be("scope-current");
-        teamPort.LastRequest.PageSize.Should().Be(10);
-
-        using var document = JsonDocument.Parse(output);
-        var root = document.RootElement;
-        root.GetProperty("success").GetBoolean().Should().BeTrue();
-        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
-        var teams = root.GetProperty("teams").EnumerateArray().ToList();
-        teams.Should().ContainSingle();
-        teams[0].GetProperty("team_id").GetString().Should().Be("team-alpha");
-        teams[0].GetProperty("display_name").GetString().Should().Be("Alpha Team");
-        teams[0].GetProperty("team_url").GetString().Should()
-            .Be("/api/scopes/scope-current/teams/team-alpha");
-    }
-
-    [Fact]
-    public async Task ListTeams_WhenArgumentsEmpty_ShouldCallTeamQueryPortWithCallerScope()
-    {
-        var teamPort = new RecordingTeamQueryProvisioningPort();
-        var tool = await DiscoverListTeamsToolAsync(teamPort);
-
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        var output = await tool.ExecuteAsync("");
-
-        teamPort.LastRequest.Should().NotBeNull();
-        teamPort.LastRequest!.ScopeId.Should().Be("scope-current");
-        teamPort.LastRequest.PageSize.Should().BeNull();
-
-        using var document = JsonDocument.Parse(output);
-        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task ListTeams_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
-    {
-        var teamPort = new RecordingTeamQueryProvisioningPort();
-        var tool = await DiscoverListTeamsToolAsync(teamPort);
-
-        using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
-        var output = await tool.ExecuteAsync("{}");
-
-        ErrorCode(output).Should().Be("caller_scope_unavailable");
-        teamPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -168,9 +107,75 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ToolSource_WhenTeamQueryPortRegistered_ShouldDiscoverReadOnlyTeamQueryTools()
+    {
+        var source = new StudioTeamQueryToolSource(new RecordingTeamQueryPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().BeEquivalentTo(ListTeamsToolName, GetTeamToolName);
+        tools.Should().OnlyContain(static tool => tool.IsReadOnly);
+        tools.Should().OnlyContain(static tool => !tool.IsDestructive);
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenTeamQueryPortMissing_ShouldNotDiscoverTeamQueryTools()
+    {
+        var source = new StudioTeamQueryToolSource();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ToolSource_WhenMemberPortMissing_ShouldNotDiscoverCreateMemberTool()
     {
         var source = new CreateStudioMemberToolSource();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenMemberQueryPortRegistered_ShouldDiscoverReadOnlyMemberQueryTools()
+    {
+        var source = new StudioMemberQueryToolSource(new RecordingMemberQueryPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().BeEquivalentTo(ListMembersToolName, GetMemberToolName);
+        tools.Should().OnlyContain(static tool => tool.IsReadOnly);
+        tools.Should().OnlyContain(static tool => !tool.IsDestructive);
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenMemberQueryPortMissing_ShouldNotDiscoverMemberQueryTools()
+    {
+        var source = new StudioMemberQueryToolSource();
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenScheduleQueryServiceRegistered_ShouldDiscoverReadOnlyScheduleQueryTools()
+    {
+        var source = new StudioScheduleQueryToolSource(new RecordingScheduledDispatchApplicationService());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().BeEquivalentTo(ListSchedulesToolName, GetScheduleToolName);
+        tools.Should().OnlyContain(static tool => tool.IsReadOnly);
+        tools.Should().OnlyContain(static tool => !tool.IsDestructive);
+    }
+
+    [Fact]
+    public async Task ToolSource_WhenScheduleQueryServiceMissing_ShouldNotDiscoverScheduleQueryTools()
+    {
+        var source = new StudioScheduleQueryToolSource();
 
         var tools = await source.DiscoverToolsAsync();
 
@@ -363,6 +368,274 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
         tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
+    }
+
+    [Fact]
+    public async Task ListTeams_ShouldCallReadPortWithCallerScopeAndPage()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort();
+        var tool = await DiscoverListTeamsToolAsync(teamQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "page_size": 25,
+              "page_token": "page-2"
+            }
+            """);
+
+        teamQueryPort.LastListScopeId.Should().Be("scope-current");
+        teamQueryPort.LastListPage.Should().Be(new StudioTeamRosterPageRequest(25, "page-2"));
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("teams")[0].GetProperty("team_id").GetString().Should().Be("team-alpha");
+        root.GetProperty("teams")[0].GetProperty("team_url").GetString()
+            .Should().Be("/api/scopes/scope-current/teams/team-alpha");
+        root.GetProperty("next_page_token").GetString().Should().Be("next-page");
+    }
+
+    [Fact]
+    public async Task GetTeam_ShouldCallReadPortWithCallerScopeAndTeamId()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort();
+        var tool = await DiscoverGetTeamToolAsync(teamQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"team_id":"team-alpha"}""");
+
+        teamQueryPort.LastGetScopeId.Should().Be("scope-current");
+        teamQueryPort.LastGetTeamId.Should().Be("team-alpha");
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("team_id").GetString().Should().Be("team-alpha");
+        root.GetProperty("entry_member_id").GetString().Should().Be("m-entry");
+    }
+
+    [Fact]
+    public async Task TeamQueryTools_WhenModelSuppliesScope_ShouldRejectUnknownArgumentAndNotCallPort()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort();
+        var tool = await DiscoverListTeamsToolAsync(teamQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"scope_id":"scope-model"}""");
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("Unknown argument: scope_id");
+        teamQueryPort.ListCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task TeamQueryTools_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort();
+        var tool = await DiscoverGetTeamToolAsync(teamQueryPort);
+
+        using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"team_id":"team-alpha"}""");
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        teamQueryPort.GetCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetTeam_WhenMissing_ShouldReturnStructuredNotFound()
+    {
+        var teamQueryPort = new RecordingTeamQueryPort { GetResult = null };
+        var tool = await DiscoverGetTeamToolAsync(teamQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"team_id":"team-missing"}""");
+
+        ErrorCode(output).Should().Be("team_not_found");
+    }
+
+    [Fact]
+    public async Task ListMembers_ShouldCallReadPortWithCallerScopeTeamAndPage()
+    {
+        var memberQueryPort = new RecordingMemberQueryPort();
+        var tool = await DiscoverListMembersToolAsync(memberQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "team_id": "team-alpha",
+              "page_size": 10,
+              "page_token": "page-3"
+            }
+            """);
+
+        memberQueryPort.LastListScopeId.Should().Be("scope-current");
+        memberQueryPort.LastListPage.Should().Be(new StudioMemberRosterPageRequest(10, "page-3", "team-alpha"));
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        var member = root.GetProperty("members")[0];
+        member.GetProperty("member_id").GetString().Should().Be("m-alpha");
+        member.GetProperty("published_service_id").GetString().Should().Be("svc-alpha");
+        member.GetProperty("implementation_ref").GetProperty("workflow_id").GetString().Should().Be("wf-alpha");
+        member.GetProperty("team_id").GetString().Should().Be("team-alpha");
+        member.GetProperty("member_url").GetString().Should().Be("/api/scopes/scope-current/members/m-alpha");
+        member.GetProperty("binding_url").GetString().Should().Be("/api/scopes/scope-current/members/m-alpha/binding");
+        root.GetProperty("next_page_token").GetString().Should().Be("next-members");
+    }
+
+    [Fact]
+    public async Task GetMember_ShouldCallReadPortWithCallerScopeAndMemberId()
+    {
+        var memberQueryPort = new RecordingMemberQueryPort();
+        var tool = await DiscoverGetMemberToolAsync(memberQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha"}""");
+
+        memberQueryPort.LastGetScopeId.Should().Be("scope-current");
+        memberQueryPort.LastGetMemberId.Should().Be("m-alpha");
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        var summary = root.GetProperty("summary");
+        summary.GetProperty("member_id").GetString().Should().Be("m-alpha");
+        summary.GetProperty("published_service_id").GetString().Should().Be("svc-alpha");
+        root.GetProperty("implementation_ref").GetProperty("workflow_id").GetString().Should().Be("wf-alpha");
+        root.GetProperty("last_binding").GetProperty("published_service_id").GetString().Should().Be("svc-alpha");
+        root.GetProperty("last_binding").GetProperty("revision_id").GetString().Should().Be("rev-alpha");
+    }
+
+    [Fact]
+    public async Task MemberQueryTools_WhenModelSuppliesScope_ShouldRejectUnknownArgumentAndNotCallPort()
+    {
+        var memberQueryPort = new RecordingMemberQueryPort();
+        var tool = await DiscoverListMembersToolAsync(memberQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"scope_id":"scope-model"}""");
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("Unknown argument: scope_id");
+        memberQueryPort.ListCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MemberQueryTools_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
+    {
+        var memberQueryPort = new RecordingMemberQueryPort();
+        var tool = await DiscoverGetMemberToolAsync(memberQueryPort);
+
+        using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha"}""");
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        memberQueryPort.GetCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetMember_WhenMissing_ShouldReturnStructuredNotFound()
+    {
+        var memberQueryPort = new RecordingMemberQueryPort { GetResult = null };
+        var tool = await DiscoverGetMemberToolAsync(memberQueryPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-missing"}""");
+
+        ErrorCode(output).Should().Be("member_not_found");
+    }
+
+    [Fact]
+    public async Task ListSchedules_ShouldCallReadServiceWithCallerScopeMemberAndPage()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var tool = await DiscoverListSchedulesToolAsync(schedules);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-alpha",
+              "page_size": 15,
+              "page_token": "page-4",
+              "include_total_count": true
+            }
+            """);
+
+        schedules.LastListOwner.Should().Be(new TeamMemberAutomationOwner("scope-current", "m-alpha"));
+        schedules.LastListTake.Should().Be(15);
+        schedules.LastListCursor.Should().Be("page-4");
+        schedules.LastListIncludeTotalCount.Should().BeTrue();
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("member_id").GetString().Should().Be("m-alpha");
+        var schedule = root.GetProperty("schedules")[0];
+        schedule.GetProperty("schedule_id").GetString().Should().Be("sched-alpha");
+        schedule.GetProperty("schedule_url").GetString().Should().Be("/api/schedules/sched-alpha");
+        schedule.GetProperty("state_version").GetInt64().Should().Be(42);
+        root.GetProperty("next_page_token").GetString().Should().Be("next-schedules");
+        root.GetProperty("total_count").GetInt64().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetSchedule_ShouldCallReadServiceWithCallerScopeMemberAndScheduleId()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var tool = await DiscoverGetScheduleToolAsync(schedules);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha","schedule_id":"sched-alpha"}""");
+
+        schedules.LastGetOwner.Should().Be(new TeamMemberAutomationOwner("scope-current", "m-alpha"));
+        schedules.LastGetScheduleId.Should().Be("sched-alpha");
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        root.GetProperty("scope_id").GetString().Should().Be("scope-current");
+        root.GetProperty("member_id").GetString().Should().Be("m-alpha");
+        root.GetProperty("schedule").GetProperty("schedule_id").GetString().Should().Be("sched-alpha");
+        root.GetProperty("recent_fires")[0].GetProperty("command_id").GetString().Should().Be("command-alpha");
+    }
+
+    [Fact]
+    public async Task ScheduleQueryTools_WhenModelSuppliesScope_ShouldRejectUnknownArgumentAndNotCallService()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var tool = await DiscoverListSchedulesToolAsync(schedules);
+
+        using var _ = PushContext(scopeId: "scope-context", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"scope_id":"scope-model","member_id":"m-alpha"}""");
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("Unknown argument: scope_id");
+        schedules.ListCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ScheduleQueryTools_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallService()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var tool = await DiscoverGetScheduleToolAsync(schedules);
+
+        using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha","schedule_id":"sched-alpha"}""");
+
+        ErrorCode(output).Should().Be("caller_scope_unavailable");
+        schedules.GetCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetSchedule_WhenMissing_ShouldReturnStructuredNotFound()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService { GetResult = null };
+        var tool = await DiscoverGetScheduleToolAsync(schedules);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""{"member_id":"m-alpha","schedule_id":"sched-missing"}""");
+
+        ErrorCode(output).Should().Be("schedule_not_found");
     }
 
     [Fact]
@@ -971,13 +1244,6 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return tools.Single(tool => tool.Name == ScheduleToolName);
     }
 
-    private static async Task<IAgentTool> DiscoverListTeamsToolAsync(IStudioTeamQueryProvisioningPort teamPort)
-    {
-        var source = new ListStudioTeamsToolSource(teamPort);
-        var tools = await source.DiscoverToolsAsync();
-        return tools.Single(tool => tool.Name == ListTeamsToolName);
-    }
-
     private static async Task<IAgentTool> DiscoverCreateTeamToolAsync(IStudioTeamProvisioningPort teamPort)
     {
         var source = new CreateStudioTeamToolSource(teamPort);
@@ -985,11 +1251,55 @@ public sealed class ProvisionWorkflowScheduleToolTests
         return tools.Single(tool => tool.Name == CreateTeamToolName);
     }
 
+    private static async Task<IAgentTool> DiscoverListTeamsToolAsync(IStudioTeamQueryPort teamQueryPort)
+    {
+        var source = new StudioTeamQueryToolSource(teamQueryPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == ListTeamsToolName);
+    }
+
+    private static async Task<IAgentTool> DiscoverGetTeamToolAsync(IStudioTeamQueryPort teamQueryPort)
+    {
+        var source = new StudioTeamQueryToolSource(teamQueryPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == GetTeamToolName);
+    }
+
     private static async Task<IAgentTool> DiscoverCreateMemberToolAsync(IStudioMemberProvisioningPort memberPort)
     {
         var source = new CreateStudioMemberToolSource(memberPort);
         var tools = await source.DiscoverToolsAsync();
         return tools.Single(tool => tool.Name == CreateMemberToolName);
+    }
+
+    private static async Task<IAgentTool> DiscoverListMembersToolAsync(IStudioMemberQueryPort memberQueryPort)
+    {
+        var source = new StudioMemberQueryToolSource(memberQueryPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == ListMembersToolName);
+    }
+
+    private static async Task<IAgentTool> DiscoverGetMemberToolAsync(IStudioMemberQueryPort memberQueryPort)
+    {
+        var source = new StudioMemberQueryToolSource(memberQueryPort);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == GetMemberToolName);
+    }
+
+    private static async Task<IAgentTool> DiscoverListSchedulesToolAsync(
+        IScheduledDispatchApplicationService schedules)
+    {
+        var source = new StudioScheduleQueryToolSource(schedules);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == ListSchedulesToolName);
+    }
+
+    private static async Task<IAgentTool> DiscoverGetScheduleToolAsync(
+        IScheduledDispatchApplicationService schedules)
+    {
+        var source = new StudioScheduleQueryToolSource(schedules);
+        var tools = await source.DiscoverToolsAsync();
+        return tools.Single(tool => tool.Name == GetScheduleToolName);
     }
 
     private static async Task<IAgentTool> DiscoverBindMemberWorkflowToolAsync(IStudioMemberWorkflowBindingPort bindingPort)
@@ -1125,33 +1435,54 @@ public sealed class ProvisionWorkflowScheduleToolTests
         }
     }
 
-    private sealed class RecordingTeamQueryProvisioningPort : IStudioTeamQueryProvisioningPort
+    private sealed class RecordingTeamQueryPort : IStudioTeamQueryPort
     {
-        public StudioTeamListProvisioningRequest? LastRequest { get; private set; }
+        public string? LastListScopeId { get; private set; }
+        public StudioTeamRosterPageRequest? LastListPage { get; private set; }
+        public string? LastGetScopeId { get; private set; }
+        public string? LastGetTeamId { get; private set; }
+        public int ListCallCount { get; private set; }
+        public int GetCallCount { get; private set; }
+        public StudioTeamSummaryResponse? GetResult { get; init; } = DefaultTeam();
 
-        public Task<StudioTeamListProvisioningResult> ListAsync(
-            StudioTeamListProvisioningRequest request,
+        public Task<StudioTeamRosterResponse> ListAsync(
+            string scopeId,
+            StudioTeamRosterPageRequest? page = null,
             CancellationToken ct = default)
         {
-            LastRequest = request;
-            return Task.FromResult(new StudioTeamListProvisioningResult(
-                Success: true,
-                ScopeId: request.ScopeId,
-                Teams:
-                [
-                    new StudioTeamProvisioningResult(
-                        Success: true,
-                        ScopeId: request.ScopeId,
-                        TeamId: "team-alpha",
-                        DisplayName: "Alpha Team",
-                        Description: "Operations team",
-                        LifecycleStage: "active",
-                        MemberCount: 2,
-                        CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
-                        UpdatedAt: DateTimeOffset.Parse("2026-07-02T00:00:00Z")),
-                ],
-                NextPageToken: null));
+            ListCallCount++;
+            LastListScopeId = scopeId;
+            LastListPage = page;
+            return Task.FromResult(new StudioTeamRosterResponse(
+                scopeId,
+                [DefaultTeam() with { ScopeId = scopeId }],
+                "next-page"));
         }
+
+        public Task<StudioTeamSummaryResponse?> GetAsync(
+            string scopeId,
+            string teamId,
+            CancellationToken ct = default)
+        {
+            GetCallCount++;
+            LastGetScopeId = scopeId;
+            LastGetTeamId = teamId;
+            return Task.FromResult(GetResult is null ? null : GetResult with { ScopeId = scopeId, TeamId = teamId });
+        }
+
+        private static StudioTeamSummaryResponse DefaultTeam() =>
+            new(
+                TeamId: "team-alpha",
+                ScopeId: "scope-current",
+                DisplayName: "Alpha Team",
+                Description: "Current caller scope team",
+                LifecycleStage: TeamLifecycleStageNames.Active,
+                MemberCount: 2,
+                CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
+                UpdatedAt: DateTimeOffset.Parse("2026-07-02T00:00:00Z"))
+            {
+                EntryMemberId = "m-entry",
+            };
     }
 
     private sealed class RecordingMemberProvisioningPort : IStudioMemberProvisioningPort
@@ -1179,6 +1510,265 @@ public sealed class ProvisionWorkflowScheduleToolTests
                 TeamId = request.TeamId,
             });
         }
+    }
+
+    private sealed class RecordingMemberQueryPort : IStudioMemberQueryPort
+    {
+        public string? LastListScopeId { get; private set; }
+        public StudioMemberRosterPageRequest? LastListPage { get; private set; }
+        public string? LastGetScopeId { get; private set; }
+        public string? LastGetMemberId { get; private set; }
+        public int ListCallCount { get; private set; }
+        public int GetCallCount { get; private set; }
+        public StudioMemberDetailResponse? GetResult { get; init; } = DefaultDetail();
+
+        public Task<StudioMemberRosterResponse> ListAsync(
+            string scopeId,
+            StudioMemberRosterPageRequest? page = null,
+            CancellationToken ct = default)
+        {
+            ListCallCount++;
+            LastListScopeId = scopeId;
+            LastListPage = page;
+            return Task.FromResult(new StudioMemberRosterResponse(
+                scopeId,
+                [DefaultSummary() with { ScopeId = scopeId, TeamId = page?.TeamId ?? "team-alpha" }],
+                "next-members"));
+        }
+
+        public Task<StudioMemberDetailResponse?> GetAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default)
+        {
+            GetCallCount++;
+            LastGetScopeId = scopeId;
+            LastGetMemberId = memberId;
+            if (GetResult is null)
+                return Task.FromResult<StudioMemberDetailResponse?>(null);
+
+            var summary = GetResult.Summary with { ScopeId = scopeId, MemberId = memberId };
+            return Task.FromResult<StudioMemberDetailResponse?>(GetResult with { Summary = summary });
+        }
+
+        private static StudioMemberDetailResponse DefaultDetail() =>
+            new(
+                DefaultSummary(),
+                DefaultImplementationRef(),
+                new StudioMemberBindingContractResponse(
+                    PublishedServiceId: "svc-alpha",
+                    RevisionId: "rev-alpha",
+                    ImplementationKind: MemberImplementationKindNames.Workflow,
+                    BoundAt: DateTimeOffset.Parse("2026-07-03T00:00:00Z"),
+                    ExpectedActorId: "workflow-actor-alpha"))
+            {
+                CurrentBindingRun = new StudioMemberBindingRunStatusResponse(
+                    BindingRunId: "binding-run-alpha",
+                    ScopeId: "scope-current",
+                    MemberId: "m-alpha",
+                    Status: StudioMemberBindingRunStatusNames.Succeeded,
+                    StateVersion: 42,
+                    Failure: null,
+                    UpdatedAt: DateTimeOffset.Parse("2026-07-04T00:00:00Z"))
+                {
+                    Result = new StudioMemberBindingRunResultResponse(
+                        PublishedServiceId: "svc-alpha",
+                        RevisionId: "rev-alpha",
+                        ImplementationKind: MemberImplementationKindNames.Workflow,
+                        ExpectedActorId: "workflow-actor-alpha"),
+                },
+            };
+
+        private static StudioMemberSummaryResponse DefaultSummary() =>
+            new(
+                MemberId: "m-alpha",
+                ScopeId: "scope-current",
+                DisplayName: "Alpha Member",
+                Description: "Current caller scope member",
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                LifecycleStage: MemberLifecycleStageNames.BindReady,
+                PublishedServiceId: "svc-alpha",
+                LastBoundRevisionId: "rev-alpha",
+                CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
+                UpdatedAt: DateTimeOffset.Parse("2026-07-02T00:00:00Z"))
+            {
+                TeamId = "team-alpha",
+                ImplementationRef = DefaultImplementationRef(),
+            };
+
+        private static StudioMemberImplementationRefResponse DefaultImplementationRef() =>
+            new(
+                ImplementationKind: MemberImplementationKindNames.Workflow,
+                WorkflowId: "wf-alpha",
+                WorkflowRevision: "wf-rev-alpha");
+    }
+
+    private sealed class RecordingScheduledDispatchApplicationService : IScheduledDispatchApplicationService
+    {
+        public TeamMemberAutomationOwner? LastListOwner { get; private set; }
+        public int? LastListTake { get; private set; }
+        public string? LastListCursor { get; private set; }
+        public bool? LastListIncludeTotalCount { get; private set; }
+        public string? LastGetScheduleId { get; private set; }
+        public TeamMemberAutomationOwner? LastGetOwner { get; private set; }
+        public int ListCallCount { get; private set; }
+        public int GetCallCount { get; private set; }
+        public ScheduledDispatchDetail? GetResult { get; init; } = DefaultDetail();
+
+        public Task<ScheduledDispatchListResult> ListTeamAutomationsAsync(
+            TeamMemberAutomationOwner owner,
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default)
+        {
+            ListCallCount++;
+            LastListOwner = owner;
+            LastListTake = take;
+            LastListCursor = cursor;
+            LastListIncludeTotalCount = includeTotalCount;
+            return Task.FromResult(new ScheduledDispatchListResult(
+                [DefaultSummary() with { TeamOwnerScopeId = owner.ScopeId, TeamOwnerMemberId = owner.MemberId }],
+                "next-schedules",
+                1));
+        }
+
+        public Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default)
+        {
+            GetCallCount++;
+            LastGetScheduleId = scheduleId;
+            LastGetOwner = owner;
+            if (GetResult is null)
+                return Task.FromResult<ScheduledDispatchDetail?>(null);
+
+            var summary = GetResult.Schedule with
+            {
+                ScheduleId = scheduleId,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamOwnerMemberId = owner.MemberId,
+            };
+            return Task.FromResult<ScheduledDispatchDetail?>(GetResult with { Schedule = summary });
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> CreateAsync(
+            ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
+            ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchMutationReceipt> UpdateAsync(
+            string scheduleId,
+            ScheduledDispatchConfiguration configuration,
+            ScheduledDispatchMutationContext? context = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchMutationReceipt> EnableAsync(
+            string scheduleId,
+            string reason,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchMutationReceipt> DisableAsync(
+            string scheduleId,
+            string reason,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchMutationReceipt> DeleteAsync(
+            string scheduleId,
+            string reason,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchDetail?> GetAsync(
+            string scheduleId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchListResult> ListAsync(
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchListResult> ListAsync(
+            ScheduledDispatchListQuery query,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchPreview> PreviewAsync(
+            string cronExpression,
+            string? timezone,
+            int count,
+            DateTimeOffset? fromUtc = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
+            string scheduleId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        private static ScheduledDispatchDetail DefaultDetail() =>
+            new(
+                DefaultSummary(),
+                [
+                    new ScheduledDispatchFireRecord(
+                        ScheduledFireAt: DateTimeOffset.Parse("2026-07-05T01:00:00Z"),
+                        CompletedAt: DateTimeOffset.Parse("2026-07-05T01:01:00Z"),
+                        IdempotencyKey: "fire-alpha",
+                        TargetActorId: "target-alpha",
+                        CommandId: "command-alpha",
+                        CorrelationId: "correlation-alpha",
+                        Error: string.Empty,
+                        Manual: false),
+                ]);
+
+        private static ScheduledDispatchSummary DefaultSummary() =>
+            new(
+                ScheduleId: "sched-alpha",
+                DisplayName: "Alpha Schedule",
+                TargetKind: ScheduledDispatchTargetKind.ServiceInvocation,
+                TargetActorId: "target-alpha",
+                PayloadTypeUrl: "type.googleapis.com/aevatar.workflow.Trigger",
+                ServiceKey: "service-key-alpha",
+                ServiceId: "svc-alpha",
+                ServiceEndpointId: "endpoint-alpha",
+                CronExpression: "0 9 * * *",
+                Timezone: "Asia/Shanghai",
+                Enabled: true,
+                CreatedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
+                UpdatedAt: DateTimeOffset.Parse("2026-07-02T00:00:00Z"),
+                NextFireAt: DateTimeOffset.Parse("2026-07-06T01:00:00Z"),
+                LastFireAt: DateTimeOffset.Parse("2026-07-05T01:00:00Z"),
+                LastTargetActorId: "target-alpha",
+                LastCommandId: "command-alpha",
+                LastCorrelationId: "correlation-alpha",
+                LastError: string.Empty,
+                FireCount: 2,
+                FailureCount: 0,
+                Headers: new Dictionary<string, string>(StringComparer.Ordinal),
+                ScheduleActorId: "schedule-actor-alpha",
+                Prompt: "Daily summary",
+                ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+                TeamOwned: true,
+                TeamOwnerScopeId: "scope-current",
+                TeamOwnerMemberId: "m-alpha",
+                TeamAutomationLifecycleStatus: TeamAutomationLifecycleStatus.Active,
+                StateVersion: 42,
+                PermissionDigest: "permission-digest-alpha",
+                PolicyVersion: "policy-alpha");
     }
 
     private sealed class RecordingMemberWorkflowBindingPort : IStudioMemberWorkflowBindingPort
