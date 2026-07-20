@@ -8,9 +8,41 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatRunRequestNormalizerChatHistoryTests
 {
     [Fact]
-    public void Normalize_ShouldTrimAndCarryChatHistoryWriteIntent()
+    public void WorkflowChatRunRequest_ShouldNotExposeLegacyChatHistory()
     {
-        var input = JsonSerializer.Deserialize<ChatInput>(
+        typeof(WorkflowChatRunRequest)
+            .GetProperty("ChatHistory")
+            .Should()
+            .BeNull();
+        typeof(ChatInput)
+            .GetProperty("ChatHistory")
+            .Should()
+            .BeNull();
+        typeof(HttpChatInput)
+            .GetProperty("ChatHistory")
+            .Should()
+            .BeNull();
+    }
+
+    [Fact]
+    public void ChatInput_ShouldRejectLegacyChatHistoryWriteIntent()
+    {
+        var act = () => JsonSerializer.Deserialize<ChatInput>(
+            """
+            {
+              "prompt": "assistant prompt",
+              "chatHistory": "legacy payload should be ignored"
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void HttpChatInput_ShouldRejectLegacyChatHistoryWriteIntent()
+    {
+        var act = () => JsonSerializer.Deserialize<HttpChatInput>(
             """
             {
               "prompt": "assistant prompt",
@@ -21,49 +53,98 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
               }
             }
             """,
+            ChatWebSocketProtocol.JsonOptions);
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public void HttpChatInput_ShouldIgnoreBodyScopeId()
+    {
+        var input = JsonSerializer.Deserialize<HttpChatInput>(
+            """
+            {
+              "prompt": "assistant prompt",
+              "scopeId": "scope-from-body"
+            }
+            """,
             ChatWebSocketProtocol.JsonOptions)!;
 
-        input.ChatHistory.Should().NotBeNull();
-        input.ChatHistory!.ConversationId.Should().Be(" conversation-a ");
-        input.ChatHistory.TurnId.Should().Be(" turn-a ");
-        input.ChatHistory.UserText.Should().Be(" original user text ");
-
-        var result = ChatRunRequestNormalizer.Normalize(input);
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
 
         result.Succeeded.Should().BeTrue();
-        result.Request!.ChatHistory.Should().NotBeNull();
-        result.Request.ChatHistory!.ConversationId.Should().Be("conversation-a");
-        result.Request.ChatHistory.TurnId.Should().Be("turn-a");
-        result.Request.ChatHistory.UserText.Should().Be("original user text");
+        result.Request!.ScopeId.Should().Be("trusted-scope");
+    }
+
+    [Fact]
+    public void Normalize_ShouldMapConversationNullToCreateIntent()
+    {
+        var input = JsonSerializer.Deserialize<HttpChatInput>(
+            """
+            {
+              "prompt": "assistant prompt",
+              "conversation": {
+                "conversationId": null
+              }
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ScopeId.Should().Be("trusted-scope");
+        result.Request.ChatConversation.Should().BeEquivalentTo(
+            WorkflowChatConversationIntent.Create());
+    }
+
+    [Fact]
+    public void Normalize_ShouldMapConversationIdToContinueIntent()
+    {
+        var input = JsonSerializer.Deserialize<HttpChatInput>(
+            """
+            {
+              "prompt": "assistant prompt",
+              "conversation": {
+                "conversationId": " conversation-existing "
+              }
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ChatConversation.Should().BeEquivalentTo(
+            WorkflowChatConversationIntent.Continue("conversation-existing"));
     }
 
     [Theory]
-    [InlineData(null, " turn-a ", " original user text ")]
-    [InlineData(" conversation-a ", null, " original user text ")]
-    [InlineData(" conversation-a ", " turn-a ", null)]
-    [InlineData("   ", " turn-a ", " original user text ")]
-    [InlineData(" conversation-a ", "   ", " original user text ")]
-    [InlineData(" conversation-a ", " turn-a ", "   ")]
-    public void Normalize_ShouldRejectChatHistoryWriteIntent_WhenAnyRequiredFieldIsBlank(
-        string? conversationId,
-        string? turnId,
-        string? userText)
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Normalize_ShouldRejectBlankConversationId(string conversationId)
     {
-        var input = new ChatInput
+        var input = new HttpChatInput
         {
             Prompt = "assistant prompt",
-            ChatHistory = new ChatHistoryWriteIntentInput
+            Conversation = new ChatConversationInput
             {
                 ConversationId = conversationId,
-                TurnId = turnId,
-                UserText = userText,
             },
         };
 
-        var result = ChatRunRequestNormalizer.Normalize(input);
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
 
         result.Succeeded.Should().BeFalse();
         result.Request.Should().BeNull();
-        result.Error.Should().Be(WorkflowChatRunStartError.InvalidChatHistory);
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidConversationId);
     }
 }

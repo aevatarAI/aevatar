@@ -137,15 +137,22 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
             Role: "user",
             Content: turn.UserText,
             Timestamp: turn.TerminalTimeMs,
-            Status: "complete");
+            Status: "complete",
+            TurnId: turn.TurnId);
 
         yield return new StoredChatMessage(
             Id: $"{turn.TurnId}:assistant",
             Role: "assistant",
             Content: turn.AssistantText,
             Timestamp: turn.TerminalTimeMs,
-            Status: turn.TerminalStatus == "error" ? "error" : "complete",
-            Error: string.IsNullOrEmpty(turn.SanitizedError) ? null : turn.SanitizedError);
+            Status: turn.TerminalStatus switch
+            {
+                "error" => "error",
+                "blocked" => "blocked",
+                _ => "complete",
+            },
+            Error: string.IsNullOrEmpty(turn.SanitizedError) ? null : turn.SanitizedError,
+            TurnId: turn.TurnId);
     }
 
     private static AppendChatTurnCommand? ToAppendCommand(
@@ -172,18 +179,30 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
             ServiceKind = meta.ServiceKind ?? string.Empty,
             Turn = new ChatTurn
             {
-                TurnId = assistant.Id ?? user.Id ?? Guid.NewGuid().ToString("N"),
+                TurnId = ResolveTurnId(user, assistant),
                 UserText = user.Content ?? string.Empty,
                 AssistantText = assistant.Content ?? string.Empty,
-                TerminalStatus = assistant.Status == "error"
-                    ? ChatTurnTerminalStatus.Failed
-                    : ChatTurnTerminalStatus.Completed,
+                TerminalStatus = assistant.Status switch
+                {
+                    "error" => ChatTurnTerminalStatus.Failed,
+                    "blocked" => ChatTurnTerminalStatus.Blocked,
+                    _ => ChatTurnTerminalStatus.Completed,
+                },
                 SanitizedError = assistant.Error ?? string.Empty,
                 TerminalTime = Timestamp.FromDateTimeOffset(FromUnixMs(assistant.Timestamp)),
                 LlmRoute = meta.LlmRoute ?? string.Empty,
                 LlmModel = meta.LlmModel ?? string.Empty,
             },
         };
+    }
+
+    private static string ResolveTurnId(StoredChatMessage user, StoredChatMessage assistant)
+    {
+        if (!string.IsNullOrWhiteSpace(assistant.TurnId))
+            return assistant.TurnId.Trim();
+        if (!string.IsNullOrWhiteSpace(user.TurnId))
+            return user.TurnId.Trim();
+        return assistant.Id ?? user.Id ?? Guid.NewGuid().ToString("N");
     }
 
     private static DateTimeOffset FromUnixMs(long ms) =>

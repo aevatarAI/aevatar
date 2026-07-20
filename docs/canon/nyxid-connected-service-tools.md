@@ -79,6 +79,14 @@ LLM tool_call
 
 token 可见性与 `NyxIdProxyTool` 一致：user token 优先，org-only 的 service 用 org token 下发。token 只从 `AgentToolRequestContext` 读取，不落盘、不缓存。
 
+### Typed authorization blocker
+
+NyxID proxy 的权限错误只按真实 structured contract 分类：HTTP `401` + `unauthorized/1001`，或 HTTP `403` + `forbidden/1002`。`ConnectedServiceProxyTool` 与 `NyxIdProxyTool` 都通过同一个 result-receipt 边界生成 `AgentToolReceipt(status=AUTHORIZATION_REQUIRED)`，其中携带 typed `NyxIdAuthorizationRequiredEvent`。不使用 exception message、LLM 文案或 JSON substring 猜测权限状态。
+
+receipt 只保留 `service_slug`、可选 `service_label`、去除 query/fragment 的可选 `resource_uri`、`reason_code` 与 `safe_message`。上游 raw body、credential、token 不进入 receipt、Role completion 或 AGUI payload。
+
+NyxIdChat 收到该 receipt 后提交 `RoleChatSessionOutcome.BLOCKED`，Projection Pipeline 依次映射为 `CUSTOM nyxid.authorization.required` 与 `RUN_FINISHED(status=blocked)`。该事实只终止当前 turn，不创建 `PendingToolApprovalState`，也不触发 `:approve` continuation。缺少整个 connected service 时，`nyxid_require_service` 提供相同的 deterministic typed blocker 路径。
+
 平台审计只在 canonical tool chain 的 `ToolExecutionAuditMiddleware` 中完成。它消费
 typed `AgentToolExecutionContext`、`ToolCallContext.CredentialSource` 和最终
 `AgentToolReceipt`，写入 Aevatar 的 `AuditRecord`；默认不记录完整 tool

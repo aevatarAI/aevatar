@@ -1,3 +1,4 @@
+using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -18,30 +19,42 @@ public static class ChatHistoryEndpoints
     }
 
     private static async Task<IResult> HandleGetIndex(
+        HttpContext http,
         string scopeId,
         [FromServices] IChatHistoryQueryPort queryPort,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var index = await queryPort.GetIndexAsync(scopeId, ct);
         return Results.Ok(index);
     }
 
     private static async Task<IResult> HandleGetConversation(
+        HttpContext http,
         string scopeId,
         string conversationId,
         [FromServices] IChatHistoryQueryPort queryPort,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         var messages = await queryPort.GetMessagesAsync(scopeId, conversationId, ct);
         return Results.Ok(messages);
     }
 
     private static async Task<IResult> HandleDeleteConversation(
+        HttpContext http,
         string scopeId,
         string conversationId,
         [FromServices] IChatHistoryCommandPort commandPort,
         CancellationToken ct)
     {
+        if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
         await commandPort.DeleteConversationAsync(scopeId, conversationId, ct);
         return Results.Ok();
     }

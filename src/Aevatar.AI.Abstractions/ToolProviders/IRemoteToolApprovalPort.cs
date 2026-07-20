@@ -75,5 +75,6 @@ public enum RemoteToolApprovalStatus
     Approved = 1,
     Rejected = 2,
     Expired = 3,
-    Unknown = 4,
+    Cancelled = 4,
+    Unknown = 5,
 }

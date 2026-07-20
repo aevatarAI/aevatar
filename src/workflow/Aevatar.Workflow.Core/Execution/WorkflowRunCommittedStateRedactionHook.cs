@@ -28,6 +28,12 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
                 stateEvent.State = Any.Pack(RedactSecureInputState(secureState));
                 context.Published.StateEvent.EventData = Any.Pack(stateEvent);
             }
+            else if (stateEvent.State?.Is(ConnectorCallModuleState.Descriptor) == true)
+            {
+                var connectorState = stateEvent.State.Unpack<ConnectorCallModuleState>() ?? new ConnectorCallModuleState();
+                stateEvent.State = Any.Pack(RedactConnectorCallState(connectorState));
+                context.Published.StateEvent.EventData = Any.Pack(stateEvent);
+            }
         }
 
         if (context.Published.StateEvent?.EventData?.Is(WorkflowRunExecutionStartedEvent.Descriptor) == true)
@@ -47,6 +53,7 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
         var state = context.Published.StateRoot.Unpack<WorkflowRunState>() ?? new WorkflowRunState();
         state.ExecutionContext = WorkflowRunExecutionContextStateAccess.RedactedClone(state.ExecutionContext);
         RedactSecureInputExecutionState(state);
+        RedactConnectorCallExecutionState(state);
 
         context.Published.StateRoot = Any.Pack(state);
         return Task.CompletedTask;
@@ -69,6 +76,29 @@ internal sealed class WorkflowRunCommittedStateRedactionHook : ICommittedStatePu
         var redacted = source.Clone();
         foreach (var captured in redacted.Captured.Values)
             captured.Value = string.Empty;
+        return redacted;
+    }
+
+    private static void RedactConnectorCallExecutionState(WorkflowRunState state)
+    {
+        foreach (var pair in state.ExecutionStates.ToList())
+        {
+            if (!pair.Value.Is(ConnectorCallModuleState.Descriptor))
+                continue;
+
+            var connectorState = pair.Value.Unpack<ConnectorCallModuleState>() ?? new ConnectorCallModuleState();
+            state.ExecutionStates[pair.Key] = Any.Pack(RedactConnectorCallState(connectorState));
+        }
+    }
+
+    private static ConnectorCallModuleState RedactConnectorCallState(ConnectorCallModuleState source)
+    {
+        var redacted = source.Clone();
+        foreach (var coordination in redacted.ApprovalsByActionId.Values)
+        {
+            coordination.MaterialReference = null;
+            coordination.CompletionReference = null;
+        }
         return redacted;
     }
 

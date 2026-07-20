@@ -424,7 +424,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
     {
         if (!string.IsNullOrEmpty(snapshot.RedirectUri)
             && string.Equals(snapshot.RedirectUri, resolvedRedirectUri, StringComparison.Ordinal)
-            && AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope))
+            && AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(snapshot.OauthScope))
         {
             return;
         }

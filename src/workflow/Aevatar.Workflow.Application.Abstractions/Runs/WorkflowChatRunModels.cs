@@ -78,10 +78,26 @@ public sealed record WorkflowExternalIngressContext(
     string? AuthScheme = null,
     string? PrincipalSubject = null);
 
-public sealed record WorkflowChatHistoryWriteIntent(
-    string ConversationId,
-    string TurnId,
-    string UserText);
+public enum WorkflowChatConversationIntentKind
+{
+    None = 0,
+    Create = 1,
+    Continue = 2,
+}
+
+public sealed record WorkflowChatConversationIntent(
+    WorkflowChatConversationIntentKind Intent,
+    string? ConversationId = null)
+{
+    public static WorkflowChatConversationIntent None() =>
+        new(WorkflowChatConversationIntentKind.None);
+
+    public static WorkflowChatConversationIntent Create() =>
+        new(WorkflowChatConversationIntentKind.Create);
+
+    public static WorkflowChatConversationIntent Continue(string conversationId) =>
+        new(WorkflowChatConversationIntentKind.Continue, conversationId);
+}
 
 public sealed record WorkflowCompletionNotificationTarget(
     string ActorId,
@@ -206,7 +222,7 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
-    WorkflowChatHistoryWriteIntent? ChatHistory = null,
+    WorkflowChatConversationIntent? ChatConversation = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
     [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
@@ -238,7 +254,10 @@ public enum WorkflowChatRunStartError
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
     InvalidFileInput = 12,
-    InvalidChatHistory = 13,
+    InvalidConversationInput = 14,
+    InvalidConversationId = 15,
+    ConversationNotFound = 16,
+    ChatHistoryReservationUnavailable = 17,
 }
 
 public enum WorkflowProjectionCompletionStatus
@@ -257,3 +276,17 @@ public sealed record WorkflowChatRunAcceptedReceipt(
     string WorkflowName,
     string CommandId,
     string CorrelationId);
+
+public sealed record WorkflowChatContext(
+    string ScopeId,
+    string ConversationId,
+    string TurnId);
+
+public sealed record WorkflowChatInteractionAcceptedReceipt(
+    WorkflowChatRunAcceptedReceipt Run,
+    WorkflowChatContext? ChatContext)
+{
+    public static implicit operator WorkflowChatInteractionAcceptedReceipt(
+        WorkflowChatRunAcceptedReceipt run) =>
+        new(run, null);
+}

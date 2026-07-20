@@ -445,11 +445,11 @@ public static class ScopeWorkflowEndpoints
                 },
                 async (receipt, token) =>
                 {
-                    if (!string.IsNullOrWhiteSpace(receipt.CorrelationId))
-                        http.Response.Headers["X-Correlation-Id"] = receipt.CorrelationId;
+                    if (!string.IsNullOrWhiteSpace(receipt.Run.CorrelationId))
+                        http.Response.Headers["X-Correlation-Id"] = receipt.Run.CorrelationId;
 
                     await StartAsync(token);
-                    await writer.WriteAsync(ScopeWorkflowAguiEventMapper.BuildRunContextEvent(receipt), token);
+                    await writer.WriteAsync(ScopeWorkflowAguiEventMapper.BuildRunContextEvent(receipt.Run), token);
                 },
                 ct);
 

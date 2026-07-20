@@ -332,7 +332,8 @@ public static class IdentityOAuthEndpoints
             var redirectUriListDrifted = registeredRedirectUris.Count == 0
                 || registeredRedirectUris.Count != resolvedRedirectUris.Count
                 || !registeredRedirectUris.SequenceEqual(resolvedRedirectUris, StringComparer.Ordinal);
-            var oauthScopeDrifted = !AevatarOAuthClientScopes.ContainsRequiredScopes(snapshot.OauthScope);
+            var oauthScopeDrifted =
+                !AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(snapshot.OauthScope);
             var status = redirectUriDrifted || redirectUriListDrifted
                 ? "redirect_uri_drifted"
                 : oauthScopeDrifted ? "oauth_scope_drifted"

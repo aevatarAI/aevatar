@@ -14,6 +14,7 @@ message StoredChatMessageProto {
   string status = 5;
   string error = 6;
   string thinking = 7;
+  string turn_id = 8;
 }
 
 message ConversationMetaProto {
@@ -33,6 +34,7 @@ enum ChatTurnTerminalStatus {
   CHAT_TURN_TERMINAL_STATUS_COMPLETED = 1;
   CHAT_TURN_TERMINAL_STATUS_FAILED = 2;
   CHAT_TURN_TERMINAL_STATUS_STOPPED = 3;
+  CHAT_TURN_TERMINAL_STATUS_BLOCKED = 4;
 }
 
 enum ChatTurnAppendRejectionReason {
@@ -145,6 +147,7 @@ message ChatTurnHistoryDeliveryState {
   string error_code = 18;
   string error_summary = 19;
   ChatTurnAppendRejectionReason append_rejection_reason = 20;
+  bool create_conversation_if_missing = 21;
 }
 
 message ChatTurnHistoryDeliveryReserveRequested {
@@ -156,6 +159,7 @@ message ChatTurnHistoryDeliveryReserveRequested {
   string workflow_actor_id = 6;
   string workflow_command_id = 7;
   string workflow_correlation_id = 8;
+  bool create_conversation_if_missing = 9;
 }
 
 message ChatTurnHistoryDeliveryReservedEvent {
@@ -168,6 +172,7 @@ message ChatTurnHistoryDeliveryReservedEvent {
   string workflow_command_id = 7;
   string workflow_correlation_id = 8;
   int64 reserved_at_unix_ms = 9;
+  bool create_conversation_if_missing = 10;
 }
 
 message ChatTurnHistoryDeliveryAcceptedBound {

@@ -283,6 +283,11 @@ state reads, query-time replay, or event-store reconstruction. If platform-admin
 authorization is unavailable for an admin-only path, the endpoint returns
 `503 AUDIT_ADMIN_AUTH_UNAVAILABLE`.
 
+If the configured query store rejects or cannot execute the query, the endpoint returns
+`503 AUDIT_QUERY_UNAVAILABLE` with a stable generic message. The response and server log may
+identify only the operation, status class, and exception type; they must not include an
+Elasticsearch URL, username, password, bearer, request payload, or raw backend exception body.
+
 Audit query responses expose requested and effective windows, continuation cursor,
 truncation, ingestion watermark, optional complete-through checkpoint, window
 completeness, schema compatibility, and read timestamp. Each record exposes all safe
@@ -335,6 +340,36 @@ maps to one terminal outcome), and never writes that projection back to storage.
 page containing such records reports `contains_legacy_records`. Unknown nonempty
 schema versions report `incompatible`; they are not silently claimed current.
 
+### 7.4 Elasticsearch Index Lifecycle and Readiness
+
+The Elasticsearch audit artifact store is not a CQRS current-state read model. It is registered
+as `IAuditTrailArtifactStore`, `IAuditTrailQueryPort`, and an index lifecycle reconcile target,
+but never as `IProjectionReadModelDescriptor`; `/api/cqrs/readmodels` must not inventory it.
+
+Query-critical fields have explicit mappings. `artifact.occurred_at` and
+`artifact.recorded_at` are dates; stable string filters and enum values expose explicit
+`.keyword` subfields; `id.keyword` is the deterministic cursor tie-breaker.
+`artifact.schema_version` is a root keyword because compatibility aggregations operate on that
+field directly. Dynamic mapping remains available only for non-query extension fields and cannot
+define the types used by the stable query contract.
+
+The governed target is the stable `<prefix>-audit-trail-current` alias backed by a physical
+`<alias>-v<schema-fingerprint>` index. Startup reconcile always provisions this target, including
+when request-path `AutoCreateIndex=false` and `MissingIndexBehavior=Throw`. This is an explicit
+startup lifecycle operation, not Elasticsearch dynamic auto-create and not query-time priming.
+
+For the pre-alias `<prefix>-audit-trail` index, startup reconcile creates the fingerprinted
+physical index, reindexes with `op_type=create`, validates completion, and only then attaches the
+new alias. The legacy index is retained unchanged. Later schema drift follows the same copy-forward
+rule and atomically repoints the alias while retaining the old physical. Reconcile never issues
+`DELETE`, `_delete_by_query`, or `remove_index`; retention remains the only deletion authority.
+
+Readiness is active rather than registration-only. `/health/ready` runs a bounded future-window
+query through `IAuditTrailQueryPort`. The status dashboard also declares an
+`audit-query-index` target whose `audit_query_index` executor records the same availability as
+actor-owned health state for `/api/status`. Neither health read endpoint repairs or primes the
+index in its query call stack.
+
 ## 8. Retention and Operations
 
 Retention, export, and legal hold are artifact-store concerns. They do not
@@ -349,6 +384,9 @@ Operational requirements:
 3. Backfill is a maintenance action over safe committed feeds or existing safe
    artifacts. It is not part of query handling.
 4. Export jobs must keep the same redaction rules as online queries.
+5. Index lifecycle migration copies forward and retains legacy/previous physical indices;
+   operators may remove them only through an approved retention action after independent backup
+   and count verification.
 
 ## 9. Validation
 

@@ -217,7 +217,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
 
-        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, typingReactionTask, ct) is { } agentBuilderResult)
+        if (await TryHandleAgentBuilderAsync(activity, inboundEvent, registration, runtimeContext, senderBinding, typingReactionTask, ct) is { } agentBuilderResult)
             return agentBuilderResult;
 
         if (activity.Type == ActivityType.CardAction)
@@ -1427,6 +1427,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelInboundEvent inboundEvent,
         ChannelBotRegistrationEntry registration,
         ConversationTurnRuntimeContext runtimeContext,
+        ResolvedSenderBinding? senderBinding,
         Task typingReactionTask,
         CancellationToken ct)
     {
@@ -1454,6 +1455,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                        activity,
                        registration,
                        ResolveUserAccessToken(activity, runtimeContext),
+                       senderBinding,
                        metadata)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
@@ -2128,6 +2130,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChatActivity activity,
         ChannelBotRegistrationEntry registration,
         string? userAccessToken,
+        ResolvedSenderBinding? senderBinding,
         IReadOnlyDictionary<string, string> metadata)
     {
         var token = NormalizeOptional(userAccessToken);
@@ -2138,7 +2141,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
                 inboundEvent.RegistrationScopeId,
-                inboundEvent.MessageId),
+                inboundEvent.MessageId,
+                senderBinding?.OwnerScopeId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
                 inboundEvent.SenderId,
@@ -2397,7 +2401,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             Caller = new AgentToolCallerContext(
                 inboundEvent.RegistrationScopeId,
                 inboundEvent.RegistrationScopeId,
-                inboundEvent.MessageId),
+                inboundEvent.MessageId,
+                senderBinding?.OwnerScopeId),
             Channel = new AgentToolChannelContext(
                 inboundEvent.Platform,
                 inboundEvent.SenderId,

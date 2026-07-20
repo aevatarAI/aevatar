@@ -26,7 +26,7 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         var dispatch = new RecordingActorDispatchPort();
         var agent = await CreateAgentAsync(runtime, dispatch);
 
-        await agent.HandleEventAsync(Envelope(Reserve(), "chat-history-terminal-delivery-port"));
+        await agent.HandleEventAsync(Envelope(Reserve(createConversationIfMissing: true), "chat-history-terminal-delivery-port"));
         await agent.HandleEventAsync(Envelope(Bind(), "chat-history-terminal-delivery-port"));
         await agent.HandleEventAsync(Envelope(Terminal(), WorkflowActorId));
 
@@ -43,7 +43,22 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         append.Turn.TerminalStatus.Should().Be(ChatTurnTerminalStatus.Completed);
     }
 
-    private static ChatTurnHistoryDeliveryReserveRequested Reserve() => new()
+    [Fact]
+    public async Task TerminalNotification_ShouldNotCreateOrAppend_WhenContinueConversationIsMissing()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(runtime, dispatch);
+
+        await agent.HandleEventAsync(Envelope(Reserve(createConversationIfMissing: false), "chat-history-terminal-delivery-port"));
+        await agent.HandleEventAsync(Envelope(Bind(), "chat-history-terminal-delivery-port"));
+        await agent.HandleEventAsync(Envelope(Terminal(), WorkflowActorId));
+
+        runtime.CreateCalls.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    private static ChatTurnHistoryDeliveryReserveRequested Reserve(bool createConversationIfMissing) => new()
     {
         DeliveryId = DeliveryId,
         ScopeId = "scope-a",
@@ -53,6 +68,7 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         WorkflowActorId = WorkflowActorId,
         WorkflowCommandId = WorkflowCommandId,
         WorkflowCorrelationId = "workflow-correlation",
+        CreateConversationIfMissing = createConversationIfMissing,
     };
 
     private static ChatTurnHistoryDeliveryAcceptedBound Bind() => new()

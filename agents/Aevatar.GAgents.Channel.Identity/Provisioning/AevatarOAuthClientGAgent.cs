@@ -160,7 +160,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var redirectUriListDrifted = sameClient
             && (State.RedirectUris.Count == 0
                 || !RedirectUriListsEqual(State.RedirectUris, expectedRedirectUris));
-        var oauthScopeDrifted = sameClient && !AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope);
+        var oauthScopeDrifted = sameClient
+            && !AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(State.OauthScope);
 
         if (sameClient && !forceReprovision && !redirectUriDrifted && !redirectUriListDrifted && !oauthScopeDrifted)
         {
@@ -380,7 +381,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
         && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
         && RedirectUriListsEqual(State.RedirectUris, NormalizeProvisioningRedirectUris(cmd.RedirectUris, cmd.RedirectUri))
-        && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
+        && AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(State.OauthScope)
         && HasHmacKey;
 
     private async Task ScheduleProvisioningRetryAsync(
@@ -566,7 +567,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
             && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
             && RedirectUriListsEqual(State.RedirectUris, expectedRedirectUris)
-            && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
+            && AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(State.OauthScope)
             && HasHmacKey;
 
         if (peerHealed)

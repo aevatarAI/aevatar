@@ -60,6 +60,27 @@ public sealed class AuditTrailEndpointsTests
     }
 
     [Fact]
+    public async Task QueryAuditTrail_WhenNoRecordsMatch_ReturnsOkWithEmptyRecords()
+    {
+        var queryPort = new EmptyAuditTrailQueryPort();
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort),
+            NullLoggerFactory.Instance,
+            from: DateTimeOffset.Parse("2100-01-01T00:00:00Z"),
+            to: DateTimeOffset.Parse("2100-01-02T00:00:00Z"),
+            take: 1);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("records").GetArrayLength().Should().Be(0);
+        queryPort.Queries.Should().ContainSingle().Which.ScopeId.Should().Be(CallerScope);
+    }
+
+    [Fact]
     public async Task QueryAuditTrail_WhenCallerScopeMissing_ReturnsUnauthorizedBeforeQuery()
     {
         var queryPort = new RecordingAuditTrailQueryPort();
@@ -392,6 +413,33 @@ public sealed class AuditTrailEndpointsTests
     }
 
     [Fact]
+    public async Task QueryAuditTrail_WhenStoreThrows_ReturnsSanitizedServiceUnavailable()
+    {
+        var queryPort = new ThrowingAuditTrailQueryPort(
+            "https://elastic-secret.example:9200 Bearer secret-token raw-backend-detail");
+        var http = BuildHttpContext(CallerScope, bearer: "token", queryPort);
+        using var loggerProvider = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(loggerProvider));
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort),
+            loggerFactory);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        using var json = JsonDocument.Parse(body);
+        json.RootElement.GetProperty("code").GetString().Should().Be("AUDIT_QUERY_UNAVAILABLE");
+        body.Should().NotContain("elastic-secret").And.NotContain("secret-token").And.NotContain("raw-backend-detail");
+        loggerProvider.Messages.Should().ContainSingle(message =>
+            message.Contains(nameof(InvalidOperationException), StringComparison.Ordinal));
+        loggerProvider.Messages.Should().NotContain(message =>
+            message.Contains("elastic-secret", StringComparison.Ordinal) ||
+            message.Contains("secret-token", StringComparison.Ordinal) ||
+            message.Contains("raw-backend-detail", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ResolveAuditActor_WhenCallerScopeMissing_ReturnsUnauthorizedBeforeAuthorization()
     {
         var hasher = new RecordingHasher();
@@ -610,6 +658,31 @@ public sealed class AuditTrailEndpointsTests
         result.Message.Should().Be("Audit trail query port is not configured.");
     }
 
+    [Fact]
+    public async Task AddAuditTrailCapabilityBundle_WhenQueryFails_ReportsUnhealthyReadinessWithoutSensitiveDetail()
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.WebHost.UseTestServer();
+        builder.Services.AddSingleton<IAuditTrailQueryPort>(
+            new ThrowingAuditTrailQueryPort("https://elastic-secret.example:9200 password=secret"));
+        builder.AddAuditTrailCapabilityBundle();
+
+        await using var app = builder.Build();
+
+        var contributor = app.Services.GetServices<AevatarHealthContributorRegistration>()
+            .Single(static registration => registration.Name == "audit-trail");
+        var result = await contributor.ProbeAsync!(app.Services, CancellationToken.None);
+
+        result.Status.Should().Be(AevatarHealthStatuses.Unhealthy);
+        result.Message.Should().Be("Audit trail query/index is unavailable.");
+        result.Details.Values.Should().NotContain(value =>
+            value.Contains("elastic-secret", StringComparison.Ordinal) ||
+            value.Contains("password=secret", StringComparison.Ordinal));
+    }
+
     private static DefaultHttpContext BuildHttpContext(
         string? scopeClaim,
         string? bearer,
@@ -770,6 +843,36 @@ public sealed class AuditTrailEndpointsTests
                     schemaCompatibility: ReturnLegacyRecord
                         ? AuditSchemaCompatibility.ContainsLegacyRecords
                         : AuditSchemaCompatibility.Current)));
+        }
+    }
+
+    private sealed class ThrowingAuditTrailQueryPort(string message) : IAuditTrailQueryPort
+    {
+        public Task<AuditTrailPage> QueryAsync(
+            AuditTrailQuery query,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<AuditTrailPage>(new InvalidOperationException(message));
+    }
+
+    private sealed class EmptyAuditTrailQueryPort : IAuditTrailQueryPort
+    {
+        public List<AuditTrailQuery> Queries { get; } = [];
+
+        public Task<AuditTrailPage> QueryAsync(
+            AuditTrailQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            Queries.Add(query);
+            return Task.FromResult(new AuditTrailPage(
+                [],
+                null,
+                DateTimeOffset.UtcNow,
+                AuditQueryCoverage.Create(
+                    query,
+                    truncated: false,
+                    ingestionWatermark: null,
+                    completeThrough: null,
+                    schemaCompatibility: AuditSchemaCompatibility.Current)));
         }
     }
 

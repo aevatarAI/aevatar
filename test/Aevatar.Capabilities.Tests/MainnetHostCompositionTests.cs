@@ -169,6 +169,8 @@ public sealed class MainnetHostCompositionTests
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
         readModelDescriptors.Should()
             .NotContain(static descriptor => descriptor.Name == "script-native-document");
+        readModelDescriptors.Should()
+            .NotContain(static descriptor => descriptor.Name.Contains("audit", StringComparison.OrdinalIgnoreCase));
         app.Services.GetService<IProjectionDocumentReader<ScriptNativeDocumentReadModel, string>>()
             .Should()
             .BeNull();
@@ -185,7 +187,7 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<IHealthProbeExecutor>()
             .Select(static executor => executor.Kind)
             .Should()
-            .Contain("aevatar_core_loop");
+            .Contain(["aevatar_core_loop", "audit_query_index"]);
 
         var routePatterns = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -850,6 +852,14 @@ public sealed class MainnetHostCompositionTests
         revocationMigrationIndex.Should().BeGreaterThan(reconcileIndex);
         hostedServices.Should().ContainSingle(static descriptor =>
             descriptor.ImplementationType == typeof(ElasticsearchProjectionIndexReconcileHostedService));
+
+        using var app = builder.Build();
+        app.Services.GetServices<IProjectionIndexReconcileTarget>()
+            .Should()
+            .ContainSingle(static target => target.IndexAlias.EndsWith("-audit-trail-current", StringComparison.Ordinal));
+        app.Services.GetServices<IProjectionReadModelDescriptor>()
+            .Should()
+            .NotContain(static descriptor => descriptor.Name.Contains("audit", StringComparison.OrdinalIgnoreCase));
     }
 
     [Theory]

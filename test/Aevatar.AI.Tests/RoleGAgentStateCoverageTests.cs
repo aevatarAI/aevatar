@@ -17,7 +17,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
-public sealed class RoleGAgentStateCoverageTests
+public sealed partial class RoleGAgentStateCoverageTests
 {
     private static readonly MethodInfo ApplyClearPendingApprovalMethod = typeof(RoleGAgent)
         .GetMethod("ApplyClearPendingApproval", BindingFlags.NonPublic | BindingFlags.Static)
@@ -105,7 +105,8 @@ public sealed class RoleGAgentStateCoverageTests
         var pending = new PendingToolApprovalState
         {
             RequestId = "req-1",
-            SessionId = "session-a",
+            SessionId = "turn-original",
+            ScopeId = "scope-a",
             ToolName = "dangerous_tool",
         };
 
@@ -322,7 +323,8 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
-            SessionId = "session-a",
+            SessionId = "turn-original",
+            ScopeId = "scope-a",
             ToolName = "dangerous_tool",
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
@@ -336,47 +338,6 @@ public sealed class RoleGAgentStateCoverageTests
 
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RequestId.Should().Be("req-1");
-    }
-
-    [Fact]
-    public async Task HandleToolApprovalDecision_ShouldClearPending_WhenDenied()
-    {
-        using var provider = BuildServiceProvider();
-        var agent = CreateRoleAgent(provider, "role-approval-denied");
-        await agent.ActivateAsync();
-        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
-        {
-            RoleId = "approval-role",
-            RoleName = "approval worker",
-        });
-        agent.State.PendingApproval = new PendingToolApprovalState
-        {
-            RequestId = "req-1",
-            SessionId = "session-a",
-            ToolName = "dangerous_tool",
-            ToolCallId = "call-1",
-            ArgumentsJson = "{}",
-        };
-
-        await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
-        {
-            RequestId = "req-1",
-            Approved = false,
-            Reason = "user denied",
-        });
-
-        agent.State.PendingApproval.Should().BeNull();
-        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
-        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_denied: user denied");
-
-        var persistedCompletion = provider.GetRequiredService<IEventStore>() as InMemoryEventStoreForTests;
-        persistedCompletion.Should().NotBeNull();
-        var completed = (await persistedCompletion!.GetEventsAsync("role-approval-denied"))
-            .Single(x => x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal))
-            .EventData
-            .Unpack<RoleChatSessionCompletedEvent>();
-        completed.RoleId.Should().Be("approval-role");
-        completed.Content.Should().Contain("approval_denied: user denied");
     }
 
     [Fact]
@@ -404,7 +365,8 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
-            SessionId = "session-a",
+            SessionId = "turn-original",
+            ScopeId = "scope-a",
             ToolName = "dangerous_tool",
             ToolCallId = "call-1",
             ArgumentsJson = "{\"value\":1}",
@@ -425,6 +387,7 @@ public sealed class RoleGAgentStateCoverageTests
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
             RequestId = "req-1",
+            ContinuationTurnId = "turn-approval-continuation",
             Approved = true,
             Reason = "approved",
         });
@@ -440,7 +403,8 @@ public sealed class RoleGAgentStateCoverageTests
             .OfType<ChatRequestEvent>()
             .Should()
             .ContainSingle(x =>
-                x.ScopeId == "session-a" &&
+                x.SessionId == "turn-approval-continuation" &&
+                x.ScopeId == "scope-a" &&
                 x.ToolContext != null &&
                 x.ToolContext.Caller.ScopeId == "scope-a" &&
                 x.Prompt.Contains("dangerous_tool") &&
@@ -483,7 +447,8 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
-            SessionId = "session-a",
+            SessionId = "turn-original",
+            ScopeId = "scope-a",
             ToolName = "dangerous_tool",
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
@@ -551,7 +516,8 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
-            SessionId = "session-a",
+            SessionId = "turn-original",
+            ScopeId = "scope-a",
             ToolName = "dangerous_tool",
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
@@ -598,7 +564,8 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
-            SessionId = "session-a",
+            SessionId = "turn-original",
+            ScopeId = "scope-a",
             ToolName = "dangerous_tool",
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
@@ -607,15 +574,22 @@ public sealed class RoleGAgentStateCoverageTests
         await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
             {
                 RequestId = "req-1",
+                ContinuationTurnId = "turn-approval-failed",
                 Approved = true,
             }))
             .Should()
             .ThrowAsync<InvalidOperationException>()
-            .WithMessage("dispatch failed");
+            .WithMessage("dispatch failed with bearer-secret credential");
 
         agent.State.PendingApproval.Should().BeNull();
-        agent.State.Sessions["session-a"].Completed.Should().BeTrue();
-        agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_continuation_failed: dispatch failed");
+        agent.State.Sessions.Should().NotContainKey("turn-original");
+        agent.State.Sessions["turn-approval-failed"].Completed.Should().BeTrue();
+        agent.State.Sessions["turn-approval-failed"].FinalContent.Should()
+            .Contain("approval_continuation_failed: The approval continuation failed. Please try again.");
+        agent.State.Sessions["turn-approval-failed"].SafeMessage.Should()
+            .Be("The approval continuation failed. Please try again.");
+        agent.State.Sessions["turn-approval-failed"].ToString().Should()
+            .NotContain("bearer-secret").And.NotContain("credential");
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
@@ -802,7 +776,7 @@ public sealed class RoleGAgentStateCoverageTests
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should()
-            .Contain("approval_timeout: Remote approval submit failed: submit failed");
+            .Contain("approval_timeout: Remote approval submission failed. Please try again.");
         remotePort.StatusQueries.Should().BeEmpty();
     }
 
@@ -1748,7 +1722,7 @@ public sealed class RoleGAgentStateCoverageTests
             _ = ct;
             _ = sourceEnvelope;
             _ = options;
-            throw new InvalidOperationException("dispatch failed");
+            throw new InvalidOperationException("dispatch failed with bearer-secret credential");
         }
 
         public Task PublishCommittedStateEventAsync(

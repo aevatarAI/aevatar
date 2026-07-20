@@ -200,6 +200,12 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(PendingToolApprovalPersistedEvent.Descriptor))
         {
             var pending = payload.Unpack<PendingToolApprovalPersistedEvent>().Pending;
+            if (pending == null ||
+                !string.Equals(pending.SessionId, context.SessionId, StringComparison.Ordinal))
+            {
+                return EmptyEntries;
+            }
+
             var frame = NyxIdChatCompletionAguiFrameBuilder.BuildPendingApprovalFrame(pending);
             return frame == null ? EmptyEntries : [Entry(context, frame)];
         }
@@ -207,9 +213,34 @@ public sealed class NyxIdChatSessionEventProjector
         if (payload.Is(RoleChatSessionCompletedEvent.Descriptor))
         {
             var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
+            if (!string.Equals(completed.SessionId, context.SessionId, StringComparison.Ordinal))
+                return EmptyEntries;
+
             return NyxIdChatCompletionAguiFrameBuilder.Build(context, completed)
                 .Select(frame => Entry(context, frame))
                 .ToArray();
+        }
+
+        if (payload.Is(RoleChatSessionConflictEvent.Descriptor))
+        {
+            var conflict = payload.Unpack<RoleChatSessionConflictEvent>();
+            if (!string.Equals(conflict.SessionId, context.SessionId, StringComparison.Ordinal))
+                return EmptyEntries;
+
+            return
+            [
+                Entry(context, new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        RunId = context.SessionId,
+                        Code = "IDEMPOTENCY_CONFLICT",
+                        Message = string.IsNullOrWhiteSpace(conflict.SafeMessage)
+                            ? "This client request id was already used for different input."
+                            : conflict.SafeMessage,
+                    },
+                }),
+            ];
         }
 
         return EmptyEntries;

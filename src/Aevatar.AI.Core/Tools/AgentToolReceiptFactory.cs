@@ -17,14 +17,19 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
-        string resultJson)
+        string resultJson,
+        string argumentsJson = "")
     {
+        var providerReceipt = tool.CreateResultReceipt(
+            callId,
+            toolName,
+            argumentsJson ?? string.Empty,
+            resultJson ?? string.Empty);
+        if (providerReceipt is not null)
+            return NormalizeProviderResultReceipt(tool, callId, toolName, resultJson, providerReceipt);
+
         if (!IsReceiptWorthy(tool))
             return null;
-
-        var providerReceipt = tool.CreateSuccessReceipt(callId, toolName, resultJson ?? string.Empty);
-        if (providerReceipt is not null)
-            return NormalizeProviderSuccessReceipt(tool, callId, toolName, resultJson, providerReceipt);
 
         var receipt = CreateBase(tool, callId, toolName, AgentToolReceiptStatus.Success);
         receipt.ResultJson = resultJson ?? string.Empty;
@@ -122,7 +127,7 @@ internal static class AgentToolReceiptFactory
     private static string NormalizeSideEffectKind(string? sideEffectKind) =>
         string.IsNullOrWhiteSpace(sideEffectKind) ? string.Empty : sideEffectKind.Trim().ToLowerInvariant();
 
-    private static AgentToolReceipt NormalizeProviderSuccessReceipt(
+    private static AgentToolReceipt NormalizeProviderResultReceipt(
         IAgentTool tool,
         string callId,
         string toolName,
@@ -134,15 +139,19 @@ internal static class AgentToolReceiptFactory
         normalized.ToolName = string.IsNullOrWhiteSpace(normalized.ToolName)
             ? string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName
             : normalized.ToolName;
-        normalized.Status = AgentToolReceiptStatus.Success;
+        if (normalized.Status == AgentToolReceiptStatus.Unspecified)
+            normalized.Status = AgentToolReceiptStatus.Success;
         if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
             normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
         normalized.IsDestructive = normalized.IsDestructive || tool.IsDestructive;
         normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
             ? NormalizeSideEffectKind(tool.SideEffectKind)
             : NormalizeSideEffectKind(normalized.SideEffectKind);
-        if (string.IsNullOrWhiteSpace(normalized.ResultJson))
+        if (normalized.Status == AgentToolReceiptStatus.Success &&
+            string.IsNullOrWhiteSpace(normalized.ResultJson))
+        {
             normalized.ResultJson = resultJson ?? string.Empty;
+        }
         return normalized;
     }
 }
