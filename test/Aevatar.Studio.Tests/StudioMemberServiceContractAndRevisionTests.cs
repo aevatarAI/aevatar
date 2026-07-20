@@ -495,6 +495,13 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not update implementation refs.");
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not record published bindings.");
+
         public Task RenameAsync(
             string scopeId,
             string memberId,
@@ -511,6 +518,12 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             string scopeId, string memberId, string? targetTeamId,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("contract/activate/retire flows must not reassign teams.");
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("contract/activate/retire flows must not delete members.");
     }
 
     private sealed class InertTeamQueryPort : IStudioTeamQueryPort

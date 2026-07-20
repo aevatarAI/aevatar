@@ -454,6 +454,24 @@ public sealed partial class ScheduledDispatchDocument : IProjectionReadModel<Sch
         set => DeletedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
     }
 
+    public DateTimeOffset? OneShotFireAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(OneShotFireAtUtcValue);
+        set => OneShotFireAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? CompletedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CompletedAtUtcValue);
+        set => CompletedAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
+    public DateTimeOffset? CredentialExpiresAt
+    {
+        get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(CredentialExpiresAtUtcValue);
+        set => CredentialExpiresAtUtcValue = ServiceProjectionReadModelSupport.ToNullableTimestamp(value);
+    }
+
     public IDictionary<string, string> Headers
     {
         get => HeadersMap;

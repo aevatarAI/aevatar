@@ -5,6 +5,7 @@ package aevatar.gagents.channel.identity;
 option csharp_namespace = "Aevatar.GAgents.Channel.Identity";
 
 import "google/protobuf/timestamp.proto";
+import "Credentials/credential_secret_references.proto";
 
 // Cluster-singleton state for the aevatar host's own OAuth client registration
 // against NyxID. Persisted by AevatarOAuthClientGAgent (well-known id
@@ -12,6 +13,8 @@ import "google/protobuf/timestamp.proto";
 // client_id and HMAC key — no appsettings, no secrets store, no per-host
 // drift. See ADR-0017 §Implementation Notes #1 for the HMAC key invariant.
 message AevatarOAuthClientState {
+  reserved 28, 29;
+  reserved "default_service_slugs", "provisioning_retry_default_service_slugs";
   // Opaque OAuth client_id returned by NyxID's RFC 7591 dynamic registration
   // endpoint. Empty when not yet provisioned.
   string client_id = 1;
@@ -85,6 +88,16 @@ message AevatarOAuthClientState {
   // NyxID client per silo. Cleared by the next normal (non-force) ensure after
   // operators remove AEVATAR_OAUTH_FORCE_DCR_ON_STARTUP.
   bool force_reprovision_consumed = 25;
+  // Secret-vault reference for the current HMAC signing key. New writes
+  // populate this and leave [hmac_key] empty; the projection provider
+  // resolves the key material from ISecretVault at read time. Legacy state
+  // carries the plaintext key in [hmac_key] with this ref unset — the
+  // provider falls back to the legacy bytes (dual-read migration).
+  aevatar.credentials.SecretReference hmac_key_ref = 26;
+  // Secret-vault reference for the demoted previous HMAC key kept for the
+  // rotation grace window. Set only when a rotation demoted an existing
+  // ref-backed key; empty on initial seed and for legacy state.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 27;
 }
 
 // Issued by the bootstrap startup service from every silo on cluster cold-
@@ -93,9 +106,11 @@ message AevatarOAuthClientState {
 // duplicate OAuth clients at NyxID — see PR #521 review (codex/k2p6/v4-pro
 // consensus on the cold-boot race).
 message EnsureAevatarOAuthClientProvisionedCommand {
+  reserved 6;
+  reserved "default_service_slugs";
   string nyxid_authority = 1;
   string redirect_uri = 2;
-  // Optional override for the DCR <c>client_name</c>; bootstrap leaves blank.
+  // Optional override for the legacy explicit DCR command path.
   string client_name = 3;
   // Full redirect URI allowlist to register at NyxID. Empty means legacy caller;
   // the actor falls back to [redirect_uri].
@@ -110,6 +125,8 @@ message EnsureAevatarOAuthClientProvisionedCommand {
 // retry becomes due. The actor validates it against typed retry facts before
 // re-entering the DCR path.
 message AevatarOAuthClientProvisioningRetryFiredEvent {
+  reserved 11;
+  reserved "default_service_slugs";
   int32 attempt = 1;
   int64 due_unix_ms = 2;
   string nyxid_authority = 3;
@@ -122,25 +139,23 @@ message AevatarOAuthClientProvisioningRetryFiredEvent {
   bool force_reprovision = 10;
 }
 
-// Issued by tests / manual operator scripts that already hold a client_id
-// (e.g. seeded fixture, post-rotation retag, post-incident rebuild). Bootstrap
-// NEVER uses this — it always sends EnsureAevatarOAuthClientProvisionedCommand
-// instead so the actor mediates the DCR call.
+// Issued by configured host bootstrap, operator reconciliation, and tests that
+// already hold a client_id. The actor materializes the supplied deployment
+// fact without calling DCR.
 message ProvisionAevatarOAuthClientCommand {
+  reserved 7;
+  reserved "default_service_slugs";
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
   // Optional diagnostic scope for manually provisioned clients. Bootstrap
   // never uses this command path; an empty value means unknown. The
-  // operator-rebuild path must set this to AevatarOAuthClientScopes
-  // .AuthorizationScope so the next bootstrap does not detect drift and
-  // re-DCR the freshly-pinned client.
+  // Configured bootstrap and operator reconciliation set this to
+  // AevatarOAuthClientScopes.AuthorizationScope.
   string oauth_scope = 4;
   // Optional redirect URI. The operator-rebuild path (POST /api/oauth/
-  // aevatar-client/rebuild) must set this to the resolver output so the next
-  // bootstrap does not detect redirect drift and re-DCR the freshly-pinned
-  // client. Tests / fixture seeds may leave it empty when they don't care
-  // about drift detection on a subsequent bootstrap pass.
+  // aevatar-client/rebuild) sets this to the resolver output. Tests / fixture
+  // seeds may leave it empty when they do not exercise callback validation.
   string redirect_uri = 5;
   // Full redirect URI allowlist pinned for the supplied client_id. Empty means
   // preserve existing list or fall back to [redirect_uri] for legacy callers.
@@ -168,6 +183,8 @@ message AevatarOAuthClientProjectionRebuildRequestedEvent {
 // Persisted after a failed actor-owned provisioning attempt schedules a
 // durable self-callback for the next retry.
 message AevatarOAuthClientProvisioningRetryScheduledEvent {
+  reserved 12;
+  reserved "default_service_slugs";
   int32 attempt = 1;
   int64 due_unix_ms = 2;
   string nyxid_authority = 3;
@@ -211,6 +228,8 @@ message AevatarOAuthClientDriftReconciledEvent {
 // the readmodel and so the actor can detect redirect-uri drift across
 // redeploys.
 message AevatarOAuthClientProvisionedEvent {
+  reserved 8;
+  reserved "default_service_slugs";
   string client_id = 1;
   int64 client_id_issued_at_unix = 2;
   string nyxid_authority = 3;
@@ -239,6 +258,12 @@ message AevatarOAuthClientHmacKeyRotatedEvent {
   bytes previous_hmac_key = 5;
   string previous_hmac_kid = 6;
   int64 previous_hmac_demoted_at_unix = 7;
+  // Secret-vault reference for the newly-generated HMAC key. New writes set
+  // this and leave [hmac_key] empty; the reducer copies the ref into state.
+  aevatar.credentials.SecretReference hmac_key_ref = 8;
+  // Secret-vault reference for the demoted previous key on rotation. Empty on
+  // initial seed and when the demoted key was legacy plaintext-only.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 9;
 }
 
 // Persisted when the OAuth callback observes the broker capability for
@@ -259,6 +284,8 @@ message AevatarOAuthClientBrokerCapabilityObservedEvent {
 // MUST keep ES index `aevatar-oauth-client-*` access scoped to the same
 // services that can read grain events.
 message AevatarOAuthClientDocument {
+  reserved 21;
+  reserved "default_service_slugs";
   string id = 1;
   int64 state_version = 2;
   string last_event_id = 3;
@@ -293,4 +320,12 @@ message AevatarOAuthClientDocument {
   // Mirror of AevatarOAuthClientState.redirect_uris for diagnostics and drift
   // detection of explicitly configured external callbacks.
   repeated string redirect_uris = 18;
+  // Secret-vault reference for the current HMAC key mirrored from state. When
+  // set, AevatarOAuthClientProjectionProvider resolves the key material from
+  // ISecretVault; legacy documents carry the plaintext key in [hmac_key] with
+  // this ref unset (dual-read migration).
+  aevatar.credentials.SecretReference hmac_key_ref = 19;
+  // Secret-vault reference for the demoted previous HMAC key mirrored from
+  // state for the rotation grace window.
+  aevatar.credentials.SecretReference previous_hmac_key_ref = 20;
 }

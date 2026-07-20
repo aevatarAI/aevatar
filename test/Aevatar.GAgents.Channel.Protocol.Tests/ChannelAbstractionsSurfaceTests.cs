@@ -118,10 +118,45 @@ public sealed class ChannelAbstractionsSurfaceTests
             .GetParameters()[2]
             .ParameterType
             .ShouldBe(typeof(AuthContext));
+        typeof(IChannelNativeMessageSender).Assembly.ShouldBe(typeof(ChannelNativeMessage).Assembly);
+        typeof(IChannelNativeMessageSender).GetMethod(nameof(IChannelNativeMessageSender.SendAsync))!
+            .GetParameters()[0]
+            .ParameterType
+            .ShouldBe(typeof(ChannelNativeDeliveryTarget));
+        typeof(IChannelNativeMessageSender).GetMethod(nameof(IChannelNativeMessageSender.UpdateAsync))!
+            .GetParameters()[1]
+            .ParameterType
+            .ShouldBe(typeof(string));
+        typeof(IChannelNativeMessageSender).GetMethod(nameof(IChannelNativeMessageSender.UpdateAsync))!
+            .GetParameters()[3]
+            .ParameterType
+            .ShouldBe(typeof(bool));
 
         var genericComposer = typeof(IMessageComposer<>);
         genericComposer.IsGenericTypeDefinition.ShouldBeTrue();
         genericComposer.GetMethod(nameof(IMessageComposer.Compose))!.ReturnType.IsGenericParameter.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void ChannelNativeDeliveryTarget_ShouldStayPlatformNeutral()
+    {
+        var propertyNames = typeof(ChannelNativeDeliveryTarget)
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Select(static property => property.Name)
+            .ToArray();
+
+        propertyNames.ShouldBe([
+            nameof(ChannelNativeDeliveryTarget.AgentId),
+            nameof(ChannelNativeDeliveryTarget.Platform),
+            nameof(ChannelNativeDeliveryTarget.ConversationId),
+            nameof(ChannelNativeDeliveryTarget.NyxProviderSlug),
+            nameof(ChannelNativeDeliveryTarget.NyxApiKey),
+        ]);
+        propertyNames.ShouldNotContain(static name =>
+            name.StartsWith("Lark", StringComparison.Ordinal) ||
+            name.StartsWith("Telegram", StringComparison.Ordinal) ||
+            name.StartsWith("Slack", StringComparison.Ordinal) ||
+            name.StartsWith("Discord", StringComparison.Ordinal));
     }
 
     [Fact]

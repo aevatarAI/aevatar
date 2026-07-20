@@ -59,7 +59,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ICommandInteractionService<GAgentDraftRunCommand, GAgentDraftRunAcceptedReceipt, GAgentDraftRunStartError, AGUIEvent, GAgentDraftRunCompletionStatus>>());
         services.TryAddSingleton<ICommandTargetResolver<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalStartError>, GAgentApprovalCommandTargetResolver>();
         services.TryAddSingleton<ICommandObservationLifecycle<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>, GAgentApprovalObservationLifecycle>();
-        services.TryAddSingleton<ICommandEnvelopeFactory<GAgentApprovalCommand>, GAgentApprovalCommandEnvelopeFactory>();
+        services.TryAddSingleton<ICommandTargetEnvelopeFactory<GAgentApprovalCommand, GAgentApprovalCommandTarget>, GAgentApprovalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<GAgentApprovalCommandTarget>, ActorCommandTargetDispatcher<GAgentApprovalCommandTarget>>();
         services.TryAddSingleton<ICommandReceiptFactory<GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt>, GAgentApprovalAcceptedReceiptFactory>();
         services.TryAddSingleton<ICommandDispatchPipeline<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>, DefaultCommandDispatchPipeline<GAgentApprovalCommand, GAgentApprovalCommandTarget, GAgentApprovalAcceptedReceipt, GAgentApprovalStartError>>();

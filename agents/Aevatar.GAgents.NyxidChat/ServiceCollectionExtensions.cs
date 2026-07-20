@@ -53,6 +53,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
         services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
+        services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
+        services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
         AddNyxIdLifecycleCommands(services);
 
@@ -74,7 +76,8 @@ public static class ServiceCollectionExtensions
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowChatRunInteractionPort>(),
                 sp.GetService<TimeProvider>(),
                 sp.GetService<ILarkNyxClient>(),
-                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowFileIngressPort>()));
+                sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
+                sp.GetService<ILarkOutboundClientFactory>()));
         // ─── Conversation turn-runner override + reply generator ───
         // Lets the turn runner resolve the bot's own Lark open_id on demand so its group-chat
         // admission gate can tell whether an inbound @-mention addressed the bot.
@@ -128,13 +131,17 @@ public static class ServiceCollectionExtensions
                 sp.GetService<INyxIdUserLlmPreferencesStore>(),
                 sp.GetService<IUserMemoryStore>(),
                 larkClient: sp.GetService<ILarkNyxClient>(),
+                fileIngressPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactIngressPort>(),
+                fileArtifactReadPort: sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactReadPort>(),
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
-                overlayProvider: sp.GetService<ISystemSkillOverlayProvider>()));
+                overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
+                larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
         services.TryAddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort, WorkflowRunBackgroundDeliveryRegistrationPort>();
+        services.TryAddSingleton<IWorkflowResultDeliveryCredentialResolver, SecretVaultWorkflowResultDeliveryCredentialResolver>();
         // ─── LLM-call middleware that injects channel context into LLM requests ───
         // Lives here (not in Channel.Runtime) because it implements ILLMCallMiddleware
         // (AI.Abstractions); keeping it in NyxidChat lets Channel.Runtime stay free of
@@ -204,13 +211,13 @@ public static class ServiceCollectionExtensions
             sp => new NyxIdChatObservationScopeLeasePreparation<NyxIdChatCommand>(
                 sp.GetRequiredService<IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>>(),
                 sp.GetRequiredService<IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>>(),
-                static command => command.SessionId));
+                static command => command.TurnId));
         services.TryAddSingleton<
             ICommandObservationScopeLeasePreparation<NyxIdApprovalCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError>>(
             sp => new NyxIdChatObservationScopeLeasePreparation<NyxIdApprovalCommand>(
                 sp.GetRequiredService<IProjectionScopeActivationService<NyxIdChatSessionRuntimeLease>>(),
                 sp.GetRequiredService<IProjectionScopeReleaseService<NyxIdChatSessionRuntimeLease>>(),
-                static command => command.SessionId));
+                static command => command.TurnId));
         services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdChatCommand>, NyxIdChatCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandEnvelopeFactory<NyxIdApprovalCommand>, NyxIdApprovalCommandEnvelopeFactory>();
         services.TryAddSingleton<ICommandTargetDispatcher<NyxIdChatCommandTarget>, ActorCommandTargetDispatcher<NyxIdChatCommandTarget>>();

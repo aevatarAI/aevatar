@@ -1,6 +1,8 @@
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Commands;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
@@ -28,6 +30,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         // Refactor (iter56/cluster-933-channel-registration-rebuild-narrow): old=public/manual projection refresh dispatch, new=startup-owned projection refresh
         ArgumentNullException.ThrowIfNull(services);
 
+        services.TryAddSingleton<NyxIdToolOptions>();
         services.TryAddSingleton<NyxIdApiClient>();
         services.TryAddSingleton<ICommandContextPolicy, DefaultCommandContextPolicy>();
         services.TryAddSingleton<ChannelRegistrationCommandFacade>();
@@ -49,6 +52,7 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<INyxChannelBotDeprovisioningService, NyxChannelBotDeprovisioningService>();
         services.TryAddSingleton<INyxIdRelayScopeResolver, NyxIdRelayScopeResolver>();
         services.TryAddSingleton<IChannelRelayActivityRecorder, ChannelRelayActivityRecorder>();
+        services.TryAddSingleton<ChannelDeliveryTargetResolver>();
 
         // Provisioning service set — both Lark + Telegram are concrete provisioning sources.
         services.TryAddEnumerable(ServiceDescriptor.Singleton<INyxChannelBotProvisioningService, NyxLarkProvisioningService>());
@@ -56,6 +60,10 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
 
         services.TryAddSingleton<ChannelPlatformReplyService>();
         services.TryAddSingleton<NyxIdRelayOutboundPort>();
+        // Mainnet workflow/human interaction delivery must go through the channel-neutral
+        // relay path; platform packages keep only native rendering/transport adapters.
+        services.Replace(ServiceDescriptor.Singleton<IChannelInteractionNotificationPort, NyxIdRelayChannelInteractionNotificationPort>());
+        services.Replace(ServiceDescriptor.Singleton<IRemoteToolApprovalNotificationPort, NyxIdRelayRemoteToolApprovalNotificationPort>());
         services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
 
         return services;

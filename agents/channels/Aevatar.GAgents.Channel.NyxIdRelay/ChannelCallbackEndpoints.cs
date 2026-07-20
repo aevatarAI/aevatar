@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -28,16 +30,43 @@ public static class ChannelCallbackEndpoints
 
         // Registration CRUD — requires authentication
         group.MapGet("/me", HandleGetCallerInfoAsync).RequireAuthorization();
-        group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
+        group.MapPost("/registrations", HandleRegisterAsync)
+            .WithEndpointAudit(
+                "channel.registration.create",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.Static("channel-registration", "new"),
+                ChannelRegistrationRequestSummary)
+            .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
-        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
+        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync)
+            .WithEndpointAudit(
+                "channel.registration.delete",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
 
         // Diagnostic: test reply path without going through full LLM chat
-        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
+        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync)
+            .WithEndpointAudit(
+                "channel.registration.test-reply",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
+    }
+
+    private static ValueTask<string> ChannelRegistrationRequestSummary(EndpointAuditSanitizationContext context)
+    {
+        return ValueTask.FromResult(
+            $"{context.HttpContext.Request.Method} {EndpointAuditSanitizers.ResolveRoutePattern(context.HttpContext)}");
     }
 
     // ─── Registration CRUD ───
@@ -101,7 +130,8 @@ public static class ChannelCallbackEndpoints
                     AppId: request.AppId?.Trim() ?? string.Empty,
                     AppSecret: request.AppSecret?.Trim() ?? string.Empty,
                     VerificationToken: request.VerificationToken?.Trim() ?? string.Empty),
-                Credentials: BuildCredentialsMap(platformNormalized, request)),
+                Credentials: BuildCredentialsMap(platformNormalized, request),
+                DefaultSkillName: request.DefaultSkillName?.Trim() ?? string.Empty),
             ct);
 
         var payload = new
@@ -137,7 +167,7 @@ public static class ChannelCallbackEndpoints
     /// Lists channel-bot registrations. Scoped to the caller's own account by default
     /// (a tenant must not see other tenants' bots, and their status is only queryable
     /// for the caller's own bots anyway). <c>?scope=all</c> returns every account's bots
-    /// but is gated on a platform-admin role, verified server-side against the IdP.
+    /// but is gated on aevatar admin access, resolved server-side from the caller identity.
     /// </summary>
     private static async Task<IResult> HandleListRegistrationsAsync(
         HttpContext http,
@@ -158,7 +188,7 @@ public static class ChannelCallbackEndpoints
             if (!caller.IsElevated)
             {
                 return Results.Json(
-                    new { error = "scope_admin_required", message = "Listing channel bots across accounts requires a platform admin role." },
+                    new { error = "scope_admin_required", message = "Listing channel bots across accounts requires aevatar admin access." },
                     statusCode: StatusCodes.Status403Forbidden);
             }
         }
@@ -179,6 +209,7 @@ public static class ChannelCallbackEndpoints
             nyx_channel_bot_id = e.NyxChannelBotId,
             nyx_agent_api_key_id = e.NyxAgentApiKeyId,
             nyx_conversation_route_id = e.NyxConversationRouteId,
+            default_skill_name = e.DefaultSkillName,
             // Whether this bot belongs to the caller's account. Cross-account bots
             // (admin all-view) cannot have their live status read from NyxID.
             owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
@@ -188,8 +219,8 @@ public static class ChannelCallbackEndpoints
     }
 
     /// <summary>
-    /// Caller info for the page: own scope id + whether the caller is a platform admin
-    /// (so the UI can offer the cross-account view). Admin is verified against the IdP.
+    /// Caller info for the page: own scope id + whether the caller has aevatar admin access
+    /// (so the UI can offer the cross-account view).
     /// </summary>
     private static async Task<IResult> HandleGetCallerInfoAsync(
         HttpContext http,
@@ -207,6 +238,7 @@ public static class ChannelCallbackEndpoints
             scope_id = callerScope,
             is_admin = caller.IsElevated,
             role = caller.Role,
+            grant_source = caller.GrantSource,
         });
     }
 
@@ -217,11 +249,22 @@ public static class ChannelCallbackEndpoints
     /// the existing channel-bot client (no browser→NyxID CORS, no NyxID change).
     /// Status read failures degrade to <c>unknown</c> — polling must never 500.
     /// </summary>
+    /// <remarks>
+    /// L1 (cross-tenant disclosure): a registration the caller does not own is
+    /// indistinguishable from a non-existent one — the handler returns 404 rather
+    /// than a populated degraded response, so an authenticated caller cannot probe
+    /// another tenant's bot platform/last-activity by guessing registration ids.
+    /// The one exception is a caller with aevatar admin access, who is allowed the
+    /// cross-account view (mirrors <see cref="HandleListRegistrationsAsync"/>) and
+    /// still only gets aevatar's own relay-activity observation, never the foreign
+    /// owner's NyxID live status.
+    /// </remarks>
     private static async Task<IResult> HandleGetStatusAsync(
         string registrationId,
         HttpContext http,
         [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] IPlatformAdminAuthorizer adminAuthorizer,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -229,8 +272,7 @@ public static class ChannelCallbackEndpoints
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
 
-        // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped (even a
-        // platform admin gets 404 for another user's bot), so we can't query its live status.
+        // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped, so we can't query its live status.
         // Instead report aevatar's OWN observation: the relay-activity read model marks a bot
         // active once it has received a verified inbound. No historical backfill exists, so a
         // bot that was active before this feature shipped shows pending until its next inbound.
@@ -238,6 +280,17 @@ public static class ChannelCallbackEndpoints
         if (!string.IsNullOrWhiteSpace(callerScope)
             && !string.Equals(registration.ScopeId, callerScope, StringComparison.Ordinal))
         {
+            // L1: only aevatar admin access may see a foreign registration's status.
+            // For any other caller a mismatched scope is a 404 (existence-hiding),
+            // NOT a populated degraded response — otherwise the platform/activity of
+            // another tenant's bot leaks to anyone who can guess a registration id.
+            var token = ResolveBearerAccessToken(http);
+            var caller = string.IsNullOrWhiteSpace(token)
+                ? PlatformCaller.NotElevated
+                : await adminAuthorizer.ResolveCallerAsync(token, ct);
+            if (!caller.IsElevated)
+                return Results.NotFound(new { error = "Registration not found" });
+
             var observedAt = registration.LastInboundAtUtc;
             return Results.Json(new
             {
@@ -336,7 +389,7 @@ public static class ChannelCallbackEndpoints
         //   is success (idempotent). A hard channel-bot delete failure returns a non-2xx and does
         //   NOT tombstone the local mirror (row stays visible/retryable). Residual route/api-key
         //   cleanup failures are surfaced as warnings but never block the tombstone. NyxID
-        //   channel-bot delete is owner-scoped, so a platform admin deleting another owner's
+            //   channel-bot delete is owner-scoped, so an admin deleting another owner's
         //   foreign registration cannot delete that owner's NyxID bot — that hard-fails here and
         //   keeps the local mirror; a pure-local admin purge would be a separate explicit path.
         var registration = await queryPort.GetAsync(registrationId, ct);
@@ -405,12 +458,20 @@ public static class ChannelCallbackEndpoints
 
     private static int ResolveProvisioningFailureStatusCode(string? error)
     {
-        return error switch
+        var reason = error ?? string.Empty;
+        return reason switch
         {
             "unsupported_platform" => StatusCodes.Status409Conflict,
             "missing_access_token" => StatusCodes.Status401Unauthorized,
-            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" => StatusCodes.Status400BadRequest,
+            "missing_app_id" or "missing_app_secret" or "missing_verification_token" or "missing_bot_token" or "missing_webhook_base_url" or "missing_scope_id" or "insecure_webhook_base_url" => StatusCodes.Status400BadRequest,
             "nyx_base_url_not_configured" => StatusCodes.Status500InternalServerError,
+            // A downstream NyxID channel-bot uniqueness conflict (NyxID allows one active bot per
+            // app across all accounts) is a real Conflict, not a gateway failure. Surface 409 so the
+            // caller learns the app is already registered — possibly under another account this
+            // registration cannot auto-clean — instead of an opaque 502 that reads as an outage.
+            _ when reason.Contains("nyx_status=409", StringComparison.Ordinal)
+                || reason.Contains("already registered", StringComparison.OrdinalIgnoreCase)
+                => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status502BadGateway,
         };
     }
@@ -456,7 +517,10 @@ public static class ChannelCallbackEndpoints
         // Platform-extensible credential bag. Per-platform provisioning services document
         // which keys they expect (e.g. Telegram reads "bot_token").
         IReadOnlyDictionary<string, string>? Credentials,
-        string? Label);
+        string? Label,
+        // Optional Ornn skill this bot's plain inbound messages are routed to
+        // (deterministic channel→skill binding; message text becomes the skill args).
+        string? DefaultSkillName);
 
     private static IReadOnlyDictionary<string, string>? BuildCredentialsMap(
         string platform,

@@ -8,9 +8,13 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
+using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -55,7 +59,104 @@ public sealed class AgentRunReplyGenerationExecutorTests
             .Should().BeEmpty();
     }
 
-    private static AgentRunReplyGenerationExecutor CreateExecutor(RecordingProvider provider)
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenStepStateCarriesFileRef_ShouldMaterializeOnlyForProviderRequest()
+    {
+        var provider = new RecordingProvider();
+        var artifactPort = new RecordingFileArtifactReadPort(
+            new ApplicationFileArtifactRef
+            {
+                FileId = "wf-file-1",
+                ArtifactId = "workflow-file://wf-file-1",
+                SourceKind = FileArtifactSourceKind.ChatInput,
+                SourceMessageId = "om-image",
+                SourceResourceKey = "img-image",
+                FileName = "photo.png",
+                MediaType = "image/png",
+                SizeBytes = 3,
+            },
+            [1, 2, 3]);
+        var executor = CreateExecutor(provider, fileArtifactReadPort: artifactPort);
+        var workItem = BuildFinalNoToolsWorkItem();
+        var imagePart = new ContentPart
+        {
+            Kind = ContentPartKind.Image,
+            MediaType = "image/png",
+            Name = "photo.png",
+            FileRef = new LlmChatFileRef
+            {
+                FileId = "wf-file-1",
+                ArtifactId = "workflow-file://wf-file-1",
+                SourceKind = LlmChatFileSourceKind.ChatInput,
+                SourceMessageId = "om-image",
+                SourceResourceKey = "img-image",
+                FileName = "photo.png",
+                MediaType = "image/png",
+                SizeBytes = 3,
+            },
+        };
+        workItem.StepState.Messages.Clear();
+        workItem.StepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User([
+            ContentPart.TextPart("describe"),
+            imagePart,
+        ])));
+
+        await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+
+        var providerImagePart = provider.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user")
+            .ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Image);
+        providerImagePart.DataBase64.Should().Be(Convert.ToBase64String(new byte[] { 1, 2, 3 }));
+        providerImagePart.FileRef.Should().BeNull();
+        workItem.StepState.Messages.Single().ContentParts.Single(part => part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Image)
+            .DataBase64.Should().BeEmpty();
+        workItem.StepState.Messages.Single().ContentParts.Single(part => part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Image)
+            .FileRef.ArtifactId.Should().Be("workflow-file://wf-file-1");
+    }
+
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenFileRefMaterializationExceedsLimit_ShouldThrowGenericInvalidOperation()
+    {
+        var provider = new RecordingProvider();
+        var oversized = new byte[10 * 1024 * 1024 + 1];
+        var artifactPort = new RecordingFileArtifactReadPort(
+            new ApplicationFileArtifactRef
+            {
+                FileId = "wf-file-large",
+                ArtifactId = "workflow-file://wf-file-large",
+                SourceKind = FileArtifactSourceKind.ChatInput,
+                FileName = "large.png",
+                MediaType = "image/png",
+                SizeBytes = oversized.LongLength,
+            },
+            oversized);
+        var executor = CreateExecutor(provider, fileArtifactReadPort: artifactPort);
+        var workItem = BuildFinalNoToolsWorkItem();
+        workItem.StepState.Messages.Clear();
+        workItem.StepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User([
+            ContentPart.ImageFileRefPart(
+                new LlmChatFileRef
+                {
+                    FileId = "wf-file-large",
+                    ArtifactId = "workflow-file://wf-file-large",
+                    SourceKind = LlmChatFileSourceKind.ChatInput,
+                    FileName = "large.png",
+                    MediaType = "image/png",
+                    SizeBytes = oversized.LongLength,
+                }),
+        ])));
+
+        var act = async () => await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+
+        var failure = await act.Should().ThrowAsync<InvalidOperationException>();
+        failure.Which.Message.Should().Contain("Referenced chat media exceeds the materialization size limit");
+        provider.Requests.Should().BeEmpty();
+    }
+
+    private static AgentRunReplyGenerationExecutor CreateExecutor(
+        RecordingProvider provider,
+        IFileArtifactReadPort? fileArtifactReadPort = null)
     {
         var runtime = new ChatRuntime(
             providerFactory: () => provider,
@@ -77,7 +178,8 @@ public sealed class AgentRunReplyGenerationExecutorTests
             new StaticStepPlanReplyGenerator(plan),
             interactiveReplyCollector: null,
             relayOptions: null,
-            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance,
+            fileArtifactReadPort: fileArtifactReadPort);
     }
 
     private static AgentRunReplyStepExecutionRequest BuildFinalNoToolsWorkItem(params AgentToolReceipt[] receipts)
@@ -160,5 +262,21 @@ public sealed class AgentRunReplyGenerationExecutorTests
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
             throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
+    }
+
+    private sealed class RecordingFileArtifactReadPort(ApplicationFileArtifactRef fileRef, byte[] content)
+        : IFileArtifactReadPort
+    {
+        public ValueTask<ApplicationFileArtifactRef> DescribeAsync(
+            ApplicationFileArtifactRef requestedFileRef,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(fileRef);
+
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            ApplicationFileArtifactRef requestedFileRef,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(new FileArtifactContent(
+                fileRef,
+                new MemoryStream(content, writable: false)));
     }
 }

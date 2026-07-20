@@ -176,6 +176,38 @@ public sealed class VoicePresenceBootstrapTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_WhenBrokerOnlyOpenAIVoiceConfigured_ShouldCreateDefaultAlias()
+    {
+        using var envScope = new EnvironmentVariablesScope(new Dictionary<string, string?>
+        {
+            ["OPENAI_API_KEY"] = null,
+        });
+
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder().Build();
+        services.AddLogging();
+        AddVoicePresenceTestCredentialResolver(services);
+
+        // The ADR-0033 production shape: no long-lived OpenAI key, no MiniCPM provider, only the
+        // NyxID ephemeral realtime broker (enabled via its default service slug). The openai module
+        // must still own the "voice_presence" default alias — auto-enable and the module mount both
+        // target that name, and a name the factory cannot create leaves the session-lease signal
+        // unhandled so /ws/voice loops on 503 voice_capability_not_ready.
+        services.AddAevatarAIFeatures(config, options => options.EnableMEAIProviders = false);
+
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
+            .OfType<VoicePresenceModuleFactory>()
+            .Single();
+
+        factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
+        defaultModule.Should().BeOfType<VoicePresenceModule>();
+
+        factory.TryCreate("voice_presence_openai", out var openAIModule).Should().BeTrue();
+        openAIModule.Should().BeOfType<VoicePresenceModule>();
+    }
+
+    [Fact]
     public async Task ConnectVoiceProviderSessionAsync_ShouldUseHandleLeaseEpochInProviderSessionKey()
     {
         var provider = new RecordingRealtimeVoiceProvider();

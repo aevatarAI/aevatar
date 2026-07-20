@@ -254,8 +254,8 @@ public sealed class ChannelAbstractionsProtoTests
         AssertField<DeliveryTarget>("channel", 1, FieldType.Message);
         AssertField<DeliveryTarget>("conversation_key", 2, FieldType.String);
         AssertField<DeliveryTarget>("platform", 3, FieldType.String);
-        AssertField<DeliveryTarget>("receive_id", 4, FieldType.String);
-        AssertField<DeliveryTarget>("receive_id_type", 5, FieldType.String);
+        AssertField<DeliveryTarget>("address_id", 4, FieldType.String);
+        AssertField<DeliveryTarget>("address_type", 5, FieldType.String);
         AssertField<DeliveryTarget>("conversation_id", 6, FieldType.String);
         AssertField<DeliveryTarget>("reply_message_id", 7, FieldType.String);
 
@@ -264,7 +264,7 @@ public sealed class ChannelAbstractionsProtoTests
         AssertField<DeliveryProducedEvent>("delivery_kind", 3, FieldType.Enum);
         AssertField<DeliveryProducedEvent>("target", 4, FieldType.Message);
         AssertField<DeliveryProducedEvent>("status", 5, FieldType.Enum);
-        AssertField<DeliveryProducedEvent>("lark_message_id", 6, FieldType.String);
+        AssertField<DeliveryProducedEvent>("provider_message_id", 6, FieldType.String);
         AssertField<DeliveryProducedEvent>("card_id", 7, FieldType.String);
         AssertField<DeliveryProducedEvent>("request_id", 8, FieldType.String);
         AssertField<DeliveryProducedEvent>("source_event_id", 9, FieldType.String);
@@ -273,7 +273,7 @@ public sealed class ChannelAbstractionsProtoTests
         AssertField<DeliveryLedgerEntry>("delivery_kind", 1, FieldType.Enum);
         AssertField<DeliveryLedgerEntry>("status", 2, FieldType.Enum);
         AssertField<DeliveryLedgerEntry>("target", 3, FieldType.Message);
-        AssertField<DeliveryLedgerEntry>("lark_message_id", 4, FieldType.String);
+        AssertField<DeliveryLedgerEntry>("provider_message_id", 4, FieldType.String);
         AssertField<DeliveryLedgerEntry>("card_id", 5, FieldType.String);
         AssertField<DeliveryLedgerEntry>("request_id", 6, FieldType.String);
         AssertField<DeliveryLedgerEntry>("source_event_id", 7, FieldType.String);
@@ -293,13 +293,13 @@ public sealed class ChannelAbstractionsProtoTests
                 Channel = ChannelId.From("lark"),
                 ConversationKey = "lark:tenant:thread",
                 Platform = "lark",
-                ReceiveId = "oc_1",
-                ReceiveIdType = "chat_id",
+                AddressId = "oc_1",
+                AddressType = "chat_id",
                 ConversationId = "conv-1",
                 ReplyMessageId = "reply-1",
             },
             Status = DeliveryStatus.FailedPostSend,
-            LarkMessageId = "om_1",
+            ProviderMessageId = "om_1",
             CardId = "card-1",
             RequestId = "request-1",
             SourceEventId = "chunk-1",
@@ -325,7 +325,7 @@ public sealed class ChannelAbstractionsProtoTests
                 Channel = ChannelId.From("nyxid"),
                 ConversationKey = "nyxid:user",
             },
-            LarkMessageId = "om_2",
+            ProviderMessageId = "om_2",
             CardId = "card-2",
             RequestId = "request-2",
             SourceEventId = "event-2",

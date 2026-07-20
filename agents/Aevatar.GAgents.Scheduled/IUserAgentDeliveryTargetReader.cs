@@ -1,3 +1,6 @@
+using Aevatar.GAgents.Channel.Abstractions;
+using ChannelAddressModel = Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress;
+
 namespace Aevatar.GAgents.Scheduled;
 
 /// <summary>
@@ -29,10 +32,14 @@ public sealed record UserAgentDeliveryTarget(
     string ConversationId,
     string NyxProviderSlug,
     string NyxApiKey,
-    string LarkReceiveId,
-    string LarkReceiveIdType,
-    string LarkReceiveIdFallback,
-    string LarkReceiveIdTypeFallback,
-    SkillRunnerOutputFormat OutputFormat,
+    ChannelAddressModel ChannelAddress,
+    ScheduledAgentOutputFormat OutputFormat,
     string TemplateName,
-    string AgentType);
+    string AgentType)
+    : ChannelNativeDeliveryTarget(
+        AgentId,
+        Platform,
+        ConversationId,
+        NyxProviderSlug,
+        NyxApiKey),
+        IChannelDeliveryAddressTarget;

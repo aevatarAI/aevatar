@@ -31,6 +31,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         observed!.Credentials.NyxIdAccessToken.Should().Be("sender-token");
         observed.Credentials.NyxIdOrgToken.Should().Be("sender-token");
         observed.Credentials.SenderNyxIdAccessToken.Should().Be("sender-token");
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         context.Terminate.Should().BeFalse();
     }
 
@@ -63,6 +64,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         });
 
         nextCalled.Should().BeFalse();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         context.Terminate.Should().BeTrue();
         context.TerminationKind.Should().Be(ToolCallTerminationKind.MiddlewareTerminated);
         context.Result.Should().Contain("credential_denied");
@@ -89,6 +91,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         });
 
         nextCalled.Should().BeTrue();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
         context.Terminate.Should().BeFalse();
         AgentToolRequestContext.NyxIdAccessToken.Should().Be("owner-token");
     }
@@ -116,6 +119,72 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         observed.Should().NotBeNull();
         observed!.Credentials.NyxIdAccessToken.Should().Be("owner-token");
         observed.Credentials.NyxIdOrgToken.Should().Be("owner-org-token");
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
+        context.Terminate.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenDirectCallerHasNoBearerToken_ShouldSetSystemCredentialSource()
+    {
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: false), "{}");
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty);
+        var nextCalled = false;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        nextCalled.Should().BeTrue();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.System);
+        context.Terminate.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenScheduleContextExists_ShouldSetScheduledRunCredentialSource()
+    {
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: false), "{}");
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("owner-token", "owner-org-token", null),
+            Schedule = new AgentToolScheduleContext(" schedule-1 "),
+        });
+        var nextCalled = false;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        nextCalled.Should().BeTrue();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.ScheduledRun);
+        context.Terminate.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WhenExecutionContextHasExplicitCredentialSource_ShouldPreserveIt()
+    {
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(isReadOnly: false), "{}");
+        using var _ = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials("owner-token", "owner-org-token", null),
+            CredentialSource = AgentToolCredentialSource.ServiceAccount,
+        });
+        var nextCalled = false;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        nextCalled.Should().BeTrue();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.ServiceAccount);
         context.Terminate.Should().BeFalse();
     }
 
@@ -137,6 +206,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         });
 
         nextCalled.Should().BeFalse();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.ChannelRegistration);
         context.Terminate.Should().BeTrue();
         context.TerminationKind.Should().Be(ToolCallTerminationKind.MiddlewareTerminated);
         context.Result.Should().Contain("credential_denied");
@@ -164,6 +234,7 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         });
 
         nextCalled.Should().BeTrue();
+        context.CredentialSource.Should().Be(AgentToolCredentialSource.BearerToken);
         context.Terminate.Should().BeFalse();
         AgentToolRequestContext.NyxIdAccessToken.Should().Be("owner-token");
     }

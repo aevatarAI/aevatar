@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Core.Execution;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -23,10 +24,14 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
     private const string ModuleStateKey = "llm_call";
 
     private readonly WorkflowStepTargetAgentResolver? _targetAgentResolver;
+    private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
 
-    public LLMCallModule(WorkflowStepTargetAgentResolver? targetAgentResolver = null)
+    public LLMCallModule(
+        WorkflowStepTargetAgentResolver? targetAgentResolver = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         _targetAgentResolver = targetAgentResolver;
+        _callerAccessTokenProvider = callerAccessTokenProvider;
     }
 
     public string Name => "llm_call";
@@ -391,6 +396,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             // channel stamps the caller scope there). Empty stays empty; the role actor only
             // fills a caller scope that is otherwise unset.
             ScopeId = Normalize(ctx.ScopeId) ?? string.Empty,
+            ScheduleId = Normalize(ctx.ScheduleId) ?? string.Empty,
         };
         intent.InputFileRefs.Add(request.InputFileRefs.Select(static fileRef => fileRef.Clone()));
         var runtimeContext = WorkflowRunExecutionContextStateAccess.GetWorkflowRuntimeContext(
@@ -414,8 +420,12 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             if (llm.HasMaxToolRoundsOverride)
                 intent.MaxToolRounds = llm.MaxToolRoundsOverride;
         }
-        intent.CallerCredential = WorkflowRunExecutionContextStateAccess.TryGetCallerCredential(ctx, out var callerCredential)
-            ? callerCredential
+        var callerCredential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(ctx, ct);
+        intent.CallerCredential = callerCredential.Found
+            ? await WorkflowCallerAccessTokenResolver.ResolveAsync(
+                callerCredential.Credential,
+                _callerAccessTokenProvider,
+                ct)
             : new WorkflowCallerCredential();
         WorkflowLlmExecutionIntentRuntimeContextAccess.ApplySenderNyxIdAccessToken(ctx, intent);
         CopyAgentToolScope(request.StepParameters?.AgentToolScope, intent);

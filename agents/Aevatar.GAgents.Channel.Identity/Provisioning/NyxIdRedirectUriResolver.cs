@@ -3,11 +3,9 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
-/// Resolves the OAuth callback URL the broker registers at NyxID DCR and
-/// the URL it sends to NyxID at authorize / token-exchange time. Both call
-/// sites MUST resolve to the same PUBLIC URL — DCR's redirect_uri is
-/// echoed back to the user's browser at /authorize, so it has to be a real
-/// hostname the browser can reach.
+/// Resolves the OAuth callback URL registered on the configured NyxID client
+/// and sent at authorize / token-exchange time. Both uses MUST resolve to the
+/// same PUBLIC URL, so it has to be a real hostname the browser can reach.
 /// </summary>
 /// <remarks>
 /// Mirrors <see cref="NyxIdAuthorityResolver"/>: hardcoded production
@@ -54,7 +52,7 @@ public static class NyxIdRedirectUriResolver
     public const string AdditionalRedirectUrisEnvVar = "AEVATAR_OAUTH_ADDITIONAL_REDIRECT_URIS";
 
     /// <summary>
-    /// Returns the absolute callback URL DCR + authorize must use. Reads
+    /// Returns the absolute callback URL client registration + authorize must use. Reads
     /// <see cref="OverrideEnvVar"/> if set; otherwise returns the
     /// hardcoded production default. A wildcard / unspecified-host
     /// override (e.g. <c>http://+:8080</c>) is rejected with a warning
@@ -115,7 +113,7 @@ public static class NyxIdRedirectUriResolver
             return DefaultPublicBaseUrl;
 
         var trimmed = raw.Trim();
-        if (IsWildcardListenAddress(trimmed))
+        if (!TryResolveExplicitBaseUrl(trimmed, out var baseUrl))
         {
             logger?.LogWarning(
                 "Ignoring {EnvVar}='{Value}': it is a Kestrel listen address (wildcard / unspecified host) " +
@@ -128,7 +126,21 @@ public static class NyxIdRedirectUriResolver
             return DefaultPublicBaseUrl;
         }
 
-        return trimmed;
+        return baseUrl;
+    }
+
+    internal static bool TryResolveExplicitBaseUrl(string? raw, out string baseUrl)
+    {
+        baseUrl = string.Empty;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        var trimmed = raw.Trim();
+        if (IsWildcardListenAddress(trimmed))
+            return false;
+
+        baseUrl = trimmed;
+        return true;
     }
 
     /// <summary>

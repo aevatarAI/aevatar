@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Execution;
@@ -189,6 +190,18 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void CreateBuiltInAutoYaml_ShouldUseSharedAuthorableRootSchema()
+    {
+        var autoYaml = WorkflowDefinitionCatalog.CreateBuiltInAutoYaml();
+
+        autoYaml.Should().Contain(
+            $"Authorable top-level keys: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}");
+        autoYaml.Should().Contain(
+            $"Do NOT use top-level keys from other workflow dialects, including {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}");
+        autoYaml.Should().NotContain("Top-level keys: name, description, roles, steps");
+    }
+
+    [Fact]
     public void BuiltInStudioYaml_ShouldParseAsMemberProvisionStudioRoleWithToolAllowlist()
     {
         var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
@@ -200,11 +213,29 @@ public class WorkflowDefinitionCatalogTests
         // member/provision path — NOT a bare "helpful assistant", NOT a Lark/skill-publishing playbook,
         // and NOT the loose-definition author-then-run-by-name path that hangs.
         role.SystemPrompt.Should().Contain("Studio agent");
+        role.SystemPrompt.Should().Contain("aevatar_create_team");
+        role.SystemPrompt.Should().Contain("aevatar_create_member");
+        role.SystemPrompt.Should().Contain("aevatar_bind_member_workflow");
+        role.SystemPrompt.Should().Contain("aevatar_schedule_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
+        role.SystemPrompt.Should().Contain("NOT create a separate `wf-...` member");
         role.SystemPrompt.Should().Contain("/workflow/observatory");
         role.SystemPrompt.Should().Contain("Do NOT");
         // Honesty: the receipt is Accepted (async), not a success claim.
         role.SystemPrompt.Should().Contain("Accepted");
+        // Schema teaching: without it the model falls back to foreign workflow
+        // dialects (GitHub-Actions-style version:/inputs:) that the strict parser
+        // rejects. Pin the load-bearing pieces: the closed top-level key list,
+        // the foreign-dialect counter-examples, and a runnable example.
+        role.SystemPrompt.Should().Contain(
+            $"Authorable top-level keys are EXACTLY: {WorkflowYamlRootSchema.FormatAuthorableRootFields()}");
+        role.SystemPrompt.Should().Contain(
+            $"no {WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}");
+        role.SystemPrompt.Should().Contain("name: daily_digest");
+        // Retry semantics: same display_name converges on the same resources;
+        // reusing it for a different automation replaces the previous one.
+        role.SystemPrompt.Should().Contain("SAME `display_name`");
+        role.SystemPrompt.Should().Contain("REPLACES");
         // The loose-definition tools that hang on by-name resolution are no longer steered to.
         role.SystemPrompt.Should().NotContain("workflow_create_def");
         role.SystemPrompt.Should().NotContain("aevatar_start_workflow");
@@ -213,6 +244,10 @@ public class WorkflowDefinitionCatalogTests
         // tools out of the studio surface, and brings the channel-free provision tool in.
         role.AgentToolScope.Should().NotBeNull();
         var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("aevatar_create_team");
+        allowed.Should().Contain("aevatar_create_member");
+        allowed.Should().Contain("aevatar_bind_member_workflow");
+        allowed.Should().Contain("aevatar_schedule_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
         allowed.Should().Contain("aevatar_observe_run");
         allowed.Should().Contain("aevatar_read_workflow_run_artifact");

@@ -7,6 +7,56 @@ namespace Aevatar.CQRS.Projection.Core.Tests;
 public sealed class InMemoryProjectionDocumentStoreBehaviorTests
 {
     [Fact]
+    public async Task QueryAsync_ShouldApplyAnyOfFiltersBeforeCountAndPaging()
+    {
+        var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(
+            keySelector: model => model.Id);
+        foreach (var (id, value) in new[]
+                 {
+                     ("item-a", "active"),
+                     ("item-b", "revocation-pending"),
+                     ("item-c", "deleted"),
+                 })
+        {
+            await store.UpsertAsync(new TestStoreReadModel
+            {
+                Id = id,
+                ActorId = id,
+                StateVersion = 1,
+                LastEventId = $"event-{id}",
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+                Value = value,
+            });
+        }
+
+        var result = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Take = 1,
+            IncludeTotalCount = true,
+            AnyOfFilters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("active"),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("revocation-pending"),
+                },
+            ],
+        });
+
+        result.Items.Should().ContainSingle();
+        result.Items[0].Value.Should().BeOneOf("active", "revocation-pending");
+        result.TotalCount.Should().Be(2);
+        result.NextCursor.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
     public async Task DeleteAsync_WhenKeyExists_ShouldReturnApplied_AndRemoveItem()
     {
         var store = new InMemoryProjectionDocumentStore<TestStoreReadModel, string>(

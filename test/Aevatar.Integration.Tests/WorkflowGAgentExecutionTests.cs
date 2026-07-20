@@ -22,6 +22,7 @@ using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Integration.AI;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using Any = Google.Protobuf.WellKnownTypes.Any;
@@ -206,27 +207,23 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
                 });
 
             await agent.UpsertExecutionStateAsync("scope-a", Any.Pack(new StringValue { Value = "state-a" }));
-            await agent.UpsertExecutionStateAsync(
-                SecureInputStateAccess.ModuleStateKey,
-                Any.Pack(new SecureInputModuleState
-                {
-                    Captured =
-                    {
-                        ["run-redaction::api_key"] = new CapturedSecureInputState
-                        {
-                            RunId = "run-redaction",
-                            VariableName = "api_key",
-                            Value = "sk-secret",
-                        },
-                    },
-                }));
+            var captureCtx = new TestEventHandlerContext(agent.Services, agent, NullLogger.Instance);
+            await SecureInputRuntimeContextAccess.SetCapturedValueAsync(
+                captureCtx,
+                "run-redaction",
+                "api_key",
+                "sk-secret",
+                CancellationToken.None);
 
             agent.State.ExecutionContext.Llm!.ModelOverride.Should().Be("model");
-            agent.State.ExecutionContext.CallerCredential!.BearerToken.Should().Be("secret");
+            agent.State.ExecutionContext.CallerCredential!.BearerToken.Should().BeEmpty();
+            var credential = await WorkflowCallerCredentialRuntimeContextAccess.TryGetCredentialAsync(agent);
+            credential.Found.Should().BeTrue();
+            credential.Credential.BearerToken.Should().Be("secret");
             agent.State.ExecutionStates[SecureInputStateAccess.ModuleStateKey]
                 .Unpack<SecureInputModuleState>()
                 .Captured["run-redaction::api_key"]
-                .Value.Should().Be("sk-secret");
+                .ValueReference.Should().NotBeNull();
 
             var observedState = publisher.Published
                 .Select(x => x.evt)

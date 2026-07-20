@@ -129,9 +129,9 @@ public class NyxIdProxyToolDualTokenTests
     public void LooksLikeErrorEnvelope_TruthyError_True(string input)
     {
         // Used by DiscoverMergedServicesAsync to short-circuit when both user and org
-        // discovery returned NyxID error envelopes — without it, the merge synthesizes
-        // an empty array and the SkillRunner safety net misclassifies the run as
-        // successful (PR #471 review round 2).
+        // discovery returned NyxID error envelopes; without it, the merge synthesizes
+        // an empty array and downstream tool-result classification misclassifies the run
+        // as successful (PR #471 review round 2).
         NyxIdProxyTool.LooksLikeErrorEnvelope(input).Should().BeTrue();
     }
 

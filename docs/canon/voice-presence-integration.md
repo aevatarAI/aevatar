@@ -107,9 +107,12 @@ Authoritative schema: `src/Aevatar.Foundation.VoicePresence.Abstractions/Protos/
 The edge consumes a JSON projection of it (camelCase), hand-parsed by
 `voice-presence` `Aevatar/AevatarRealtimeFrameParser.cs`.
 
-- **Endpoint** — `GET /ws/voice` (policy-resolved). Auth:
-  `Authorization: Bearer <NyxID JWT>` or `?access_token=`. Query:
-  `codec=pcm16`, `mode`, `voice_module_name`. Mainnet does not expose an
+- **Endpoint** — `GET /ws/voice` (policy-resolved). Browser clients offer
+  `aevatar-voice-v1` and `aevatar-bearer.<NyxID JWT>` through
+  `Sec-WebSocket-Protocol`; the host must select only `aevatar-voice-v1` in the
+  upgrade response and must never echo the bearer entry. Non-browser clients
+  may use `Authorization: Bearer <NyxID JWT>`; `?access_token=` is legacy only.
+  Query: `codec=pcm16`, `mode`, `voice_module_name`. Mainnet does not expose an
   actor-id path; explicit voice attachment is represented only by typed
   `ForwardToModel.tool_choice_hint.voice_attach_target`.
 - **Audio** — WebSocket **binary** frames carry raw PCM16 (24 kHz) both
@@ -200,6 +203,18 @@ The edge consumes a JSON projection of it (camelCase), hand-parsed by
 
 ## Connect + turn sequence
 
+The browser `/voice` surface keeps its provider grant separate from the shared
+console login. Before route provisioning or microphone access, it obtains a
+feature token whose RFC 8707 resources are the union of the baseline Aevatar
+resource and
+`<same-NyxID-resource-base>/api/v1/proxy/s/<configured-realtime-service-slug>`.
+The browser derives that URI from the injected Aevatar resource, so it preserves
+the resource server's canonical API base independently of the OIDC authority. The
+authorization-code exchange repeats that exact resource set, and refresh uses
+the resources stored with the feature token. The shared baseline token is not
+overwritten. Owning the NyxID service and authorizing a particular access token
+to proxy it are separate facts.
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "sequence": {"useMaxWidth": false}, "themeVariables": {"fontSize": "10px"}}}%%
 sequenceDiagram
@@ -259,7 +274,7 @@ sequenceDiagram
 | Media relay | `VoiceVolatileMediaStreamPort` (volatile, per-lease) | `VoiceSession` + WebRTC/WHIP transcode |
 | Brain state | `VoicePresenceModule` on a `RoleGAgent` actor | — (no `session.update`) |
 | Provider | `OpenAIRealtimeProvider` (direct WS) / MiniCPM | — |
-| Credentials | `VoiceToolExecutionContext` + `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer only |
+| Credentials | `/voice` feature-scoped OAuth token + `VoiceToolExecutionContext` / `ICredentialProvider` use-boundary resolution; `NyxIdRealtimeProviderCredentialResolver` mints provider ephemeral | NyxID bearer authorized for both Aevatar and the configured realtime service |
 | Tools | `IVoiceToolInvoker` / `IAgentToolSource` (+ NyxID connected-service) | `/edge-tools` HTTP surface (LAN execution) |
 | Device events | `/api/device-events` HMAC ingress → actor | `AevatarDeviceEventClient` (HMAC sign) |
 

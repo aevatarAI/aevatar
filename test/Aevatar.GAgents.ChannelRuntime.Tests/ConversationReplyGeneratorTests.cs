@@ -1,19 +1,30 @@
+using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Channel.Abstractions;
 using FluentAssertions;
+using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Schedules;
+using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
+using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
+using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
@@ -282,11 +293,16 @@ public sealed class ConversationReplyGeneratorTests
         var imageBytes = new byte[] { 1, 2, 3, 4 };
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, imageBytes, "image/png", "photo.png"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
         var providerFactory = new RecordingProviderFactory
         {
             Capabilities = MultimodalCapabilities,
         };
-        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(providerFactory, larkClient: lark);
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
 
         await generator.GenerateReplyAsync(
             CreateLarkImageActivity(
@@ -309,6 +325,7 @@ public sealed class ConversationReplyGeneratorTests
         imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
         imagePart.MediaType.Should().Be("image/png");
         imagePart.Name.Should().Be("photo.png");
+        imagePart.FileRef.Should().BeNull();
         userMessage.ContentParts!.Should().NotContain(part =>
             part.Text != null &&
             part.Text.Contains("Attachment visibility warning", StringComparison.Ordinal));
@@ -317,21 +334,183 @@ public sealed class ConversationReplyGeneratorTests
             "om_current",
             "img_current",
             LarkMessageResourceKind.Image));
+        fileArtifacts.IngressRequests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_BuildsImageContentPart()
+    public async Task GenerateReplyAsync_WithCurrentLarkImageAttachment_ShouldUseInboundProviderSlugClient()
     {
-        var imageBytes = new byte[] { 9, 8, 7 };
-        var lark = new RecordingLarkNyxClient(
-            new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "recent.jpg"));
+        var imageBytes = new byte[] { 5, 6, 7, 8 };
+        var defaultLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(false, [], Detail: "wrong-client"));
+        var inboundLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/png", "photo.png"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var outboundFactory = Substitute.For<ILarkOutboundClientFactory>();
+        outboundFactory.ResolveNyxClient("api-lark-bot-4").Returns(inboundLark);
         var providerFactory = new RecordingProviderFactory
         {
             Capabilities = MultimodalCapabilities,
         };
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
-            larkClient: lark);
+            larkClient: defaultLark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts,
+            larkOutboundClientFactory: outboundFactory);
+        var activity = CreateLarkImageActivity(
+            "msg-image-current-inbound-provider",
+            "describe it",
+            "om_current",
+            "img_current",
+            token: "user-token");
+        activity.TransportExtras!.NyxProviderSlug = " api-lark-bot-4 ";
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        var imagePart = userMessage.ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.FileRef.Should().BeNull();
+        outboundFactory.Received(1).ResolveNyxClient("api-lark-bot-4");
+        inboundLark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_current",
+            "img_current",
+            LarkMessageResourceKind.Image));
+        defaultLark.Downloads.Should().BeEmpty();
+        fileArtifacts.IngressRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithOversizedLarkImageAttachment_ContinuesWithAttachmentVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "large.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: new RecordingWorkflowFileArtifactPort(),
+            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
+        var activity = CreateLarkImageActivity(
+            "msg-image-large",
+            "describe it",
+            "om_large",
+            "img_large",
+            token: "user-token");
+        activity.Content.Attachments[0].SizeBytes = 10 * 1024 * 1024 + 1;
+        var reply = await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().ContainSingle();
+        var request = providerFactory.Requests[0];
+        request.Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
+        request.Messages.Single(message => message.Role == "user").ContentParts.Should()
+            .ContainSingle(part => part.Kind == ContentPartKind.Text && part.Text == "describe it");
+        lark.Downloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithUnsupportedLarkImageDownload_ContinuesWithAttachmentVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/tiff", "scan.tiff"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: new RecordingWorkflowFileArtifactPort(),
+            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
+
+        var reply = await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-unsupported",
+                "describe it",
+                "om_unsupported",
+                "img_unsupported",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
+        lark.Downloads.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WhenFileIngressRejectsAttachment_ContinuesWithAttachmentVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1, 2, 3], "image/png", "large.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: new RejectingWorkflowFileIngressPort(
+                new InvalidOperationException("ingress policy rejected attachment")),
+            fileArtifactReadPort: new RecordingWorkflowFileArtifactPort());
+
+        var reply = await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-ingress-large",
+                "describe it",
+                "om_ingress_large",
+                "img_ingress_large",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        reply.Text.Should().Be("ok");
+        providerFactory.Requests.Should().ContainSingle();
+        providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
+            .Contain("Attachment visibility warning")
+            .And.Contain("one or more attachments could not be converted to LLM image input");
+        lark.Downloads.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_PersistsFileRefWithoutDataBase64()
+    {
+        var imageBytes = new byte[] { 9, 8, 7 };
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "recent.jpg"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
         var recentActivity = CreateLarkImageActivity(
             "msg-image-recent",
             "earlier image",
@@ -369,7 +548,12 @@ public sealed class ConversationReplyGeneratorTests
         var userMessage = plan.InitialMessages.Last(message => message.Role == "user");
         var imagePart = userMessage.ContentParts.Should().NotBeNull().And.Subject
             .Single(part => part.Kind == ContentPartKind.Image);
-        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.DataBase64.Should().BeNull();
+        imagePart.FileRef.Should().NotBeNull();
+        imagePart.FileRef!.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        imagePart.FileRef.SourceKind.Should().Be(LlmChatFileSourceKind.ChatInput);
+        imagePart.FileRef.SourceMessageId.Should().Be("om_recent");
+        imagePart.FileRef.SourceResourceKey.Should().Be("img_recent");
         imagePart.MediaType.Should().Be("image/jpeg");
         imagePart.Name.Should().Be("recent.jpg");
         userMessage.ContentParts!.Should().NotContain(part =>
@@ -380,6 +564,90 @@ public sealed class ConversationReplyGeneratorTests
             "om_recent",
             "img_recent",
             LarkMessageResourceKind.Image));
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<FileArtifactIngressRequest>(
+            request => request.Content.ToArray().SequenceEqual(imageBytes) &&
+                       request.SourceKind == FileArtifactSourceKind.ChatInput &&
+                       request.SourceMessageId == "om_recent" &&
+                       request.SourceResourceKey == "img_recent" &&
+                       request.FileName == "recent.jpg" &&
+                       request.MediaType == "image/jpeg");
+    }
+
+    [Fact]
+    public async Task BuildStepPlanAsync_WithRecentLarkImageAttachment_ShouldUseAttachmentActivityProviderSlugClient()
+    {
+        var imageBytes = new byte[] { 3, 4, 5 };
+        var defaultLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(false, [], Detail: "wrong-client"));
+        var inboundLark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "recent.jpg"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var outboundFactory = Substitute.For<ILarkOutboundClientFactory>();
+        outboundFactory.ResolveNyxClient("api-lark-bot-4").Returns(inboundLark);
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: defaultLark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts,
+            larkOutboundClientFactory: outboundFactory);
+        var recentActivity = CreateLarkImageActivity(
+            "msg-image-recent-provider",
+            "earlier image",
+            "om_recent",
+            "img_recent",
+            token: null);
+        recentActivity.TransportExtras!.NyxProviderSlug = " api-lark-bot-4 ";
+        var currentActivity = new ChatActivity
+        {
+            Id = "msg-follow-up-provider",
+            ChannelId = ChannelId.From("lark"),
+            Conversation = new ConversationReference { CanonicalKey = "lark:scope-a:chat-1" },
+            Content = new MessageContent { Text = "/invoice-approval" },
+        };
+        var attachmentContext = new ChatAttachmentInputContext(
+            [
+                new RecentConversationAttachmentActivity
+                {
+                    ActivityId = recentActivity.Id,
+                    AcceptedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Activity = recentActivity.Clone(),
+                },
+            ],
+            "recent-token");
+
+        var plan = await generator.BuildStepPlanAsync(
+            currentActivity,
+            new Dictionary<string, string>(),
+            llmControl: null,
+            toolContext: null,
+            priorHistory: null,
+            attachmentContext,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        var userMessage = plan.InitialMessages.Last(message => message.Role == "user");
+        var imagePart = userMessage.ContentParts.Should().NotBeNull().And.Subject
+            .Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().BeNull();
+        imagePart.FileRef.Should().NotBeNull();
+        imagePart.FileRef!.ArtifactId.Should().Be("workflow-file://wf-file-1");
+        imagePart.FileRef.SourceMessageId.Should().Be("om_recent");
+        imagePart.FileRef.SourceResourceKey.Should().Be("img_recent");
+        outboundFactory.Received(1).ResolveNyxClient("api-lark-bot-4");
+        inboundLark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "recent-token",
+            "om_recent",
+            "img_recent",
+            LarkMessageResourceKind.Image));
+        defaultLark.Downloads.Should().BeEmpty();
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<FileArtifactIngressRequest>(
+            request => request.Content.ToArray().SequenceEqual(imageBytes) &&
+                       request.SourceMessageId == "om_recent" &&
+                       request.SourceResourceKey == "img_recent");
     }
 
     [Fact]
@@ -1917,6 +2185,100 @@ public sealed class ConversationReplyGeneratorTests
         toolSource.DiscoverCount.Should().Be(0);
     }
 
+    // The unbound-sender gate detaches every tool while the kernel prompt still documents
+    // them; the system prompt must carry the honest override so the model reports "tools
+    // disabled this turn, bind to enable" instead of denying the capability exists
+    // (2026-07 incident: the bot answered "no scheduling tool entry point" to a bound-
+    // looking user whose turn ran in the unbound degrade).
+    [Fact]
+    public async Task GenerateReplyAsync_ForUnboundChannelTurn_TellsModelToolsAreDisabledAndBindable()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [new SingleToolSource(new FixedResultTool("any_tool", """{"ok":true}"""))]);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-unbound-tools-notice",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "remind me in five minutes" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-unbound-tools-notice",
+            },
+            Control("owner-only-model", "owner-route", 4),
+            toolContext: null,
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().BeNull();
+        var systemMessage = request.Messages.Should().Contain(message => message.Role == "system").Which;
+        systemMessage.Content.Should().Contain("Tools disabled for this turn");
+        systemMessage.Content.Should().Contain("/init");
+    }
+
+    // The production DI pool hands the channel reply generator EVERY registered tool
+    // source, including the Lark authoring source carrying the scheduling tool. Pin the
+    // full bound-sender relay path — real AgentBuilderToolSource → discovery → channel
+    // filters → LLM request — so a future change that drops the source or gates its tools
+    // out of channel turns fails here instead of shipping. Concrete tool names appear as
+    // test fixtures only (CLAUDE.md testfile exception).
+    [Fact]
+    public async Task GenerateReplyAsync_ForBoundLarkRelayTurn_InjectsAgentBuilderToolsIntoLlmRequest()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var nyxClientFactory = Substitute.For<INyxIdApiClientFactory>();
+        var catalogCommandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = new ScheduledAgentApiKeyIssuer(nyxClientFactory);
+        var agentBuilderSource = new AgentBuilderToolSource(
+            Substitute.For<IUserAgentCatalogQueryPort>(),
+            Substitute.For<IScheduledDispatchApplicationService>(),
+            Substitute.For<IScheduledWorkflowAgentCreationPort>(),
+            catalogCommandPort,
+            Substitute.For<ICallerScopeResolver>(),
+            new ScheduledAgentCreateRequestMapper(),
+            new ScheduledAgentCredentialLifecycle(new InMemorySecretVault(), catalogCommandPort, issuer),
+            Substitute.For<IScheduledInvocationAuthorizationPlanner>(),
+            Substitute.For<IScheduledInvocationAuthorizationRevalidator>());
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            toolSources: [agentBuilderSource]);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-bound-channel-tools",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "remind me in five minutes" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-bound-channel-tools",
+            },
+            Control("sender-model", "sender-route", 4),
+            RelayToolContext("bnd-user-1", "msg-bound-channel-tools"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().NotBeNull();
+        request.Tools!.Select(static tool => tool.Name).Should().Contain(
+        [
+            "scheduled_agent_creator",
+            "agent_builder",
+        ]);
+        request.Messages.Should().Contain(message => message.Role == "system")
+            .Which.Content.Should().NotContain("Tools disabled for this turn");
+    }
+
     [Fact]
     public async Task GenerateReplyAsync_FallsBackToOwnerPrefsWhenSenderStoreThrows()
     {
@@ -2448,6 +2810,75 @@ public sealed class ConversationReplyGeneratorTests
 
         public Task<string> UploadApprovalFileAsync(string token, LarkApprovalFileUploadRequest request, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingWorkflowFileArtifactPort : IFileArtifactIngressPort, IFileArtifactReadPort
+    {
+        private readonly Dictionary<string, (ApplicationFileArtifactRef FileRef, byte[] Content)> _files = new(StringComparer.Ordinal);
+        private int _nextId;
+
+        public List<FileArtifactIngressRequest> IngressRequests { get; } = [];
+
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            IngressRequests.Add(request);
+            var content = request.Content.ToArray();
+            var fileId = $"wf-file-{++_nextId}";
+            var fileRef = new ApplicationFileArtifactRef
+            {
+                FileId = fileId,
+                ArtifactId = $"workflow-file://{fileId}",
+                SourceKind = request.SourceKind,
+                SourceMessageId = request.SourceMessageId,
+                SourceResourceKey = request.SourceResourceKey,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = content.LongLength,
+                Sha256 = $"sha-{fileId}",
+                CreatedAtUnixMs = 1_000 + _nextId,
+                ExpiresAtUnixMs = 2_000 + _nextId,
+                OwnerRunId = request.OwnerRunId,
+                OwnerScopeId = request.OwnerScopeId,
+            };
+            _files[fileRef.ArtifactId!] = (fileRef, content);
+            return ValueTask.FromResult(new FileArtifactIngressResult(fileRef));
+        }
+
+        public ValueTask<ApplicationFileArtifactRef> DescribeAsync(
+            ApplicationFileArtifactRef fileRef,
+            CancellationToken cancellationToken = default)
+        {
+            var stored = Resolve(fileRef);
+            return ValueTask.FromResult(stored.FileRef);
+        }
+
+        public ValueTask<FileArtifactContent> OpenReadAsync(
+            ApplicationFileArtifactRef fileRef,
+            CancellationToken cancellationToken = default)
+        {
+            var stored = Resolve(fileRef);
+            return ValueTask.FromResult(new FileArtifactContent(
+                stored.FileRef,
+                new MemoryStream(stored.Content, writable: false)));
+        }
+
+        private (ApplicationFileArtifactRef FileRef, byte[] Content) Resolve(ApplicationFileArtifactRef fileRef)
+        {
+            var key = fileRef.ArtifactId ?? $"workflow-file://{fileRef.FileId}";
+            if (!_files.TryGetValue(key, out var stored))
+                throw new FileNotFoundException("Test workflow file artifact was not found.", key);
+            return stored;
+        }
+    }
+
+    private sealed class RejectingWorkflowFileIngressPort(Exception exception) : IFileArtifactIngressPort
+    {
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<FileArtifactIngressResult>(exception);
     }
 
     private sealed class SequentialResponseProviderFactory(params string[] responses) : ILLMProviderFactory, ILLMProvider

@@ -84,7 +84,7 @@ public sealed class ConversationDeliveryCurrentStateProjectorTests
             ConversationKey = "lark:tenant:thread",
             ReplyMessageId = $"om_{requestId}",
         },
-        LarkMessageId = $"om_{requestId}",
+        ProviderMessageId = $"om_{requestId}",
         RequestId = requestId,
         SourceEventId = $"event-{requestId}",
         ProducedAtVersion = version,

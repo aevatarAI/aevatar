@@ -1003,6 +1003,10 @@ public sealed class NyxIdRelayTransportTests
         parsed.Success.Should().BeTrue();
         parsed.Activity!.TransportExtras.NyxLarkUnionId.Should().Be("on_user_1");
         parsed.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc_dm_chat_1");
+        parsed.Activity.TransportExtras.DeliveryAddressId.Should().Be("oc_dm_chat_1");
+        parsed.Activity.TransportExtras.DeliveryAddressType.Should().Be("chat_id");
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressId.Should().Be("on_user_1");
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressType.Should().Be("union_id");
     }
 
     [Fact]
@@ -1050,6 +1054,10 @@ public sealed class NyxIdRelayTransportTests
         parsed.Success.Should().BeTrue();
         parsed.Activity!.TransportExtras.NyxLarkUnionId.Should().Be("on_user_2");
         parsed.Activity.TransportExtras.NyxLarkChatId.Should().Be("oc_dm_chat_2");
+        parsed.Activity.TransportExtras.DeliveryAddressId.Should().Be("oc_dm_chat_2");
+        parsed.Activity.TransportExtras.DeliveryAddressType.Should().Be("chat_id");
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressId.Should().BeEmpty();
+        parsed.Activity.TransportExtras.DeliveryFallbackAddressType.Should().BeEmpty();
     }
 
     [Fact]

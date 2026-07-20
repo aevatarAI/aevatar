@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
@@ -495,9 +496,18 @@ public sealed class ServiceImplementationAdaptersTests
     [Fact]
     public async Task WorkflowAdapter_ShouldInferWorkflowName_WhenNotProvided()
     {
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            OwnerLlmRouteRequired = true,
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ConnectorCapabilityRefs.Add("calendar");
+        dependencies.NyxIdServiceIds.Add("service-alpha");
+        dependencies.NyxIdServiceSlugs.Add("provider-alpha");
+        dependencies.NyxIdServiceSlugs.Add("provider-alpha");
         var workflowPort = new RecordingWorkflowRunActorPort
         {
-            ParseResult = WorkflowYamlParseResult.Success("inferred-workflow"),
+            ParseResult = WorkflowYamlParseResult.Success("inferred-workflow", dependencies),
         };
         var adapter = new WorkflowServiceImplementationAdapter(workflowPort);
 
@@ -518,6 +528,13 @@ public sealed class ServiceImplementationAdaptersTests
         artifact.ImplementationKind.Should().Be(ServiceImplementationKind.Workflow);
         artifact.Endpoints.Should().ContainSingle(x => x.Kind == ServiceEndpointKind.Chat);
         artifact.DeploymentPlan.WorkflowPlan.WorkflowName.Should().Be("inferred-workflow");
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.OwnerLlmRouteRequired.Should().BeTrue();
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ConnectorCapabilityRefs.Should().Equal("calendar");
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.NyxIdServiceIds.Should().Equal("service-alpha");
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.NyxIdServiceSlugs.Should()
+            .Equal("provider-alpha", "provider-alpha");
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
+            .Be(Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required);
         workflowPort.ParseCalls.Should().ContainSingle("name: inferred-workflow");
     }
 
@@ -552,7 +569,7 @@ public sealed class ServiceImplementationAdaptersTests
     {
         var workflowPort = new RecordingWorkflowRunActorPort
         {
-            ParseResult = WorkflowYamlParseResult.Success("provided-workflow"),
+            ParseResult = CreateSuccessfulWorkflowParse("provided-workflow"),
         };
         var adapter = new WorkflowServiceImplementationAdapter(workflowPort);
 
@@ -610,7 +627,7 @@ public sealed class ServiceImplementationAdaptersTests
     {
         var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort
         {
-            ParseResult = WorkflowYamlParseResult.Success("yaml-workflow"),
+            ParseResult = CreateSuccessfulWorkflowParse("yaml-workflow"),
         });
 
         var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
@@ -697,9 +714,17 @@ public sealed class ServiceImplementationAdaptersTests
         }
     }
 
+    private static WorkflowYamlParseResult CreateSuccessfulWorkflowParse(string workflowName) =>
+        WorkflowYamlParseResult.Success(
+            workflowName,
+            new WorkflowAuthorizationDependencies
+            {
+                ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+            });
+
     private sealed class RecordingWorkflowRunActorPort : IWorkflowDefinitionProvisioningPort, IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {
-        public WorkflowYamlParseResult ParseResult { get; init; } = WorkflowYamlParseResult.Success("workflow");
+        public WorkflowYamlParseResult ParseResult { get; init; } = CreateSuccessfulWorkflowParse("workflow");
 
         public List<string> ParseCalls { get; } = [];
 

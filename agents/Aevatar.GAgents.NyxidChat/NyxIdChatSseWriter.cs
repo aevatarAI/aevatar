@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AGUI.Contracts;
 using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -44,10 +46,16 @@ internal sealed class NyxIdChatSseWriter
         await _response.Body.FlushAsync(ct);
     }
 
-    public ValueTask WriteRunStartedAsync(string actorId, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "RUN_STARTED", actorId }, ct);
+    public ValueTask WriteRunStartedAsync(string actorId, string turnId, CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "RUN_STARTED",
+            actorId,
+            turnId,
+            runStarted = new { threadId = actorId, runId = turnId },
+        }, ct);
 
-    public ValueTask WriteKeepAliveAsync(string actorId, string sessionId, CancellationToken ct) =>
+    public ValueTask WriteKeepAliveAsync(string actorId, string turnId, CancellationToken ct) =>
         WriteFrameAsync(new
         {
             type = "CUSTOM",
@@ -57,7 +65,7 @@ internal sealed class NyxIdChatSseWriter
                 payload = new
                 {
                     actorId,
-                    sessionId,
+                    turnId,
                     status = "running",
                 },
             },
@@ -72,8 +80,40 @@ internal sealed class NyxIdChatSseWriter
     public ValueTask WriteTextEndAsync(string messageId, CancellationToken ct) =>
         WriteFrameAsync(new { type = "TEXT_MESSAGE_END", textMessageEnd = new { messageId } }, ct);
 
-    public ValueTask WriteRunFinishedAsync(CancellationToken ct) =>
-        WriteFrameAsync(new { type = "RUN_FINISHED" }, ct);
+    public ValueTask WriteRunFinishedAsync(
+        string turnId,
+        RunCompletionStatus status,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "RUN_FINISHED",
+            turnId,
+            runFinished = new
+            {
+                runId = turnId,
+                status = status == RunCompletionStatus.Blocked ? "blocked" : "completed",
+            },
+        }, ct);
+
+    public ValueTask WriteAuthorizationRequiredAsync(
+        NyxIdAuthorizationRequiredEvent blocker,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "CUSTOM",
+            custom = new
+            {
+                name = "nyxid.authorization.required",
+                payload = new
+                {
+                    serviceSlug = blocker.ServiceSlug,
+                    serviceLabel = blocker.HasServiceLabel ? blocker.ServiceLabel : null,
+                    resourceUri = blocker.HasResourceUri ? blocker.ResourceUri : null,
+                    reasonCode = blocker.ReasonCode,
+                    safeMessage = blocker.SafeMessage,
+                },
+            },
+        }, ct);
 
     public ValueTask WriteUsageAsync(
         bool available,
@@ -101,8 +141,13 @@ internal sealed class NyxIdChatSseWriter
     public ValueTask WriteToolCallEndAsync(string callId, string result, CancellationToken ct) =>
         WriteFrameAsync(new { type = "TOOL_CALL_END", toolCallEnd = new { toolCallId = callId, result } }, ct);
 
-    public ValueTask WriteRunErrorAsync(string message, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "RUN_ERROR", runError = new { message } }, ct);
+    public ValueTask WriteRunErrorAsync(string turnId, string code, string message, CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "RUN_ERROR",
+            turnId,
+            runError = new { runId = turnId, code, message },
+        }, ct);
 
     public ValueTask WriteMediaContentAsync(Aevatar.AI.Abstractions.MediaContentEvent evt, CancellationToken ct)
     {

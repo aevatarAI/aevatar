@@ -52,3 +52,60 @@ public sealed class CreateStudioTeamToolSource : IAgentToolSource
                 : [new CreateStudioTeamTool(_teamProvisioningPort)]);
     }
 }
+
+public sealed class CreateStudioMemberToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberProvisioningPort? _memberProvisioningPort;
+
+    public CreateStudioMemberToolSource(IStudioMemberProvisioningPort? memberProvisioningPort = null)
+    {
+        _memberProvisioningPort = memberProvisioningPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _memberProvisioningPort is null
+                ? []
+                : [new CreateStudioMemberTool(_memberProvisioningPort)]);
+    }
+}
+
+public sealed class BindStudioMemberWorkflowToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberWorkflowBindingPort? _bindingPort;
+
+    public BindStudioMemberWorkflowToolSource(IStudioMemberWorkflowBindingPort? bindingPort = null)
+    {
+        _bindingPort = bindingPort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _bindingPort is null
+                ? []
+                : [new BindStudioMemberWorkflowTool(_bindingPort)]);
+    }
+}
+
+public sealed class ScheduleStudioMemberWorkflowToolSource : IAgentToolSource
+{
+    private readonly IStudioMemberWorkflowSchedulePort? _schedulePort;
+
+    public ScheduleStudioMemberWorkflowToolSource(IStudioMemberWorkflowSchedulePort? schedulePort = null)
+    {
+        _schedulePort = schedulePort;
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<IAgentTool>>(
+            _schedulePort is null
+                ? []
+                : [new ScheduleStudioMemberWorkflowTool(_schedulePort)]);
+    }
+}

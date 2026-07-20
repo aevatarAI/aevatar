@@ -134,6 +134,13 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
             CancellationToken ct = default) =>
             throw new InvalidOperationException("create must not dispatch implementation update.");
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("create must not record published bindings.");
+
         public Task StartBindingRunAsync(
             StudioMemberBindingRunStartRequest request,
             CancellationToken ct = default) =>
@@ -152,6 +159,12 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
             string displayName,
             CancellationToken ct = default) =>
             throw new InvalidOperationException("create must not rename members.");
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("create must not delete members.");
     }
 
     private sealed record CreateCall(string ScopeId, CreateStudioMemberRequest Request);

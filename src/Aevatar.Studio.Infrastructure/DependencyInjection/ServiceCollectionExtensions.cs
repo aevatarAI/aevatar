@@ -2,6 +2,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.CQRS.Core.DependencyInjection;
 using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
@@ -15,6 +16,7 @@ using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Studio.Infrastructure.DependencyInjection;
 
@@ -25,6 +27,9 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.AddChatHistoryGAgents();
+        services.Replace(ServiceDescriptor.Singleton<
+            IChatConversationContinuationAdmissionReader,
+            ProjectionChatConversationContinuationAdmissionReader>());
         services.AddCqrsCore();
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
             typeof(Aevatar.GAgents.ConnectorCatalog.ConnectorCatalogGAgent).Assembly,
@@ -66,7 +71,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ActorBackedChatHistoryStore>();
         services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
-        services.AddSingleton<IScriptRuntimeActivityQueryPort, ScriptNativeDocumentRuntimeActivityQueryPort>();
+        // Script runtime activity reads the scripting capability's native-document read model;
+        // hosts composed without scripting have no reader, and consumers of this port already
+        // treat it as optional (resolved via GetService).
+        if (services.Any(x => x.ServiceType == typeof(
+                Aevatar.CQRS.Projection.Stores.Abstractions.IProjectionDocumentReader<
+                    Aevatar.Scripting.Projection.ReadModels.ScriptNativeDocumentReadModel, string>)))
+        {
+            services.AddSingleton<IScriptRuntimeActivityQueryPort, ScriptNativeDocumentRuntimeActivityQueryPort>();
+        }
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
         // Refactor (iter21/cluster-001):

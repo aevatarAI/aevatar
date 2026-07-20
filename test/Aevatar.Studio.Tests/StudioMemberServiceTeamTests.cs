@@ -276,6 +276,13 @@ public sealed class StudioMemberServiceTeamTests
             StudioMemberImplementationRefResponse implementation, CancellationToken ct = default) =>
             Task.CompletedTask;
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task RenameAsync(
             string scopeId,
             string memberId,
@@ -296,6 +303,12 @@ public sealed class StudioMemberServiceTeamTests
             LastTargetTeamId = targetTeamId;
             return Task.CompletedTask;
         }
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default) =>
+            throw new InvalidOperationException("delete should not be called in team tests.");
     }
 
     private sealed class ThrowingScopeBindingPort : IScopeBindingCommandPort

@@ -15,7 +15,7 @@ internal sealed class MainnetWorkflowFileMultipartUploadSafetyPolicyResolver
 
     public ValueTask<WorkflowFileMultipartUploadPolicyResolution> ResolveAsync(
         WorkflowFileMultipartUploadCandidate candidate,
-        WorkflowFileRef descriptor,
+        FileArtifactRef descriptor,
         WorkflowFileMultipartUploadExecutionContext context,
         CancellationToken cancellationToken = default)
     {

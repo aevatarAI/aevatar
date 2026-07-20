@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Channel.NyxIdRelay;
@@ -70,6 +71,27 @@ internal static class NyxApiResponseHelper
         }
     }
 
+    /// <summary>
+    /// Returns the one-time <c>full_key</c> from a Nyx create-api-key response, or <c>null</c>
+    /// when the response is an error envelope, unparseable, or carries no full_key. NyxID returns
+    /// the raw key material exactly once at creation; the caller must hand it straight to the
+    /// secret vault and never persist or log it.
+    /// </summary>
+    public static string? ExtractOptionalApiKeyFullKey(string response)
+    {
+        if (LooksLikeErrorEnvelope(response))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            return ReadNonEmptyString(document.RootElement, "full_key");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Returns the trimmed per-connection proxy slug from a Nyx <c>POST /api/v1/keys</c>
@@ -297,9 +319,12 @@ internal static class NyxApiResponseHelper
                 ? messageElement.GetString()
                 : string.Empty;
 
+            // The body/message are relayed from the upstream platform and surface into the
+            // registration error string (which is logged); scrub secret-shaped content so a
+            // misbehaving upstream cannot echo a submitted secret back into our logs.
             return $"nyx_status={status}" +
-                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}") +
-                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={message}");
+                   (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={SecretScrubber.Scrub(body)}") +
+                   (string.IsNullOrWhiteSpace(message) ? string.Empty : $" message={SecretScrubber.Scrub(message)}");
         }
         catch (JsonException)
         {
@@ -327,7 +352,7 @@ internal static class NyxApiResponseHelper
                     "Nyx rollback returned an error envelope: type={ResourceType}, id={ResourceId}, response={Response}",
                     resourceType,
                     resourceId,
-                    response);
+                    SecretScrubber.Scrub(response));
             }
         }
         catch (Exception ex)

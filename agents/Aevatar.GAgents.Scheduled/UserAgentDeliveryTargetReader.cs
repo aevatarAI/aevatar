@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -26,13 +27,16 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
 {
     private readonly IProjectionDocumentReader<UserAgentCatalogDocument, string> _documentReader;
     private readonly IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string> _credentialReader;
+    private readonly ISecretVault _secretVault;
 
     public UserAgentDeliveryTargetReader(
         IProjectionDocumentReader<UserAgentCatalogDocument, string> documentReader,
-        IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string> credentialReader)
+        IProjectionDocumentReader<UserAgentCatalogNyxCredentialDocument, string> credentialReader,
+        ISecretVault secretVault)
     {
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _credentialReader = credentialReader ?? throw new ArgumentNullException(nameof(credentialReader));
+        _secretVault = secretVault ?? throw new ArgumentNullException(nameof(secretVault));
     }
 
     public async Task<UserAgentDeliveryTarget?> GetAsync(string agentId, CancellationToken ct = default)
@@ -43,7 +47,7 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
         if (document is null || document.Tombstoned) return null;
 
         var credential = await _credentialReader.GetAsync(agentId, ct);
-        if (credential is null || string.IsNullOrWhiteSpace(credential.NyxApiKey))
+        if (credential is null)
         {
             // Fail-closed: credential not yet projected (or projected blank). Returning a
             // target with NyxApiKey="" would push the projection-lag failure mode onto the
@@ -53,22 +57,65 @@ public sealed class UserAgentDeliveryTargetReader : IUserAgentDeliveryTargetRead
             return null;
         }
 
+        var nyxApiKey = await ResolveNyxApiKeyAsync(document, credential, ct);
+        if (string.IsNullOrWhiteSpace(nyxApiKey))
+            return null;
+
+#pragma warning disable CS0612 // deprecated document fields are read only as a channel_address compatibility bridge
+        var channelAddress = UserAgentCatalogChannelAddress.ToModel(
+            document.ChannelAddress,
+            ResolveDeliveryPlatform(document),
+            document.NyxProviderSlug,
+            document.ConversationId,
+            document.LarkReceiveId,
+            document.LarkReceiveIdType,
+            document.LarkReceiveIdFallback,
+            document.LarkReceiveIdTypeFallback);
+#pragma warning restore CS0612
+
         return new UserAgentDeliveryTarget(
             AgentId: document.Id ?? string.Empty,
-#pragma warning disable CS0612 // legacy field read for delivery target compatibility
-            Platform: ResolveDeliveryPlatform(document),
-#pragma warning restore CS0612
-            ConversationId: document.ConversationId ?? string.Empty,
-            NyxProviderSlug: document.NyxProviderSlug ?? string.Empty,
-            NyxApiKey: credential.NyxApiKey,
-            LarkReceiveId: document.LarkReceiveId ?? string.Empty,
-            LarkReceiveIdType: document.LarkReceiveIdType ?? string.Empty,
-            LarkReceiveIdFallback: document.LarkReceiveIdFallback ?? string.Empty,
-            LarkReceiveIdTypeFallback: document.LarkReceiveIdTypeFallback ?? string.Empty,
+            Platform: channelAddress.Platform,
+            ConversationId: channelAddress.ConversationId,
+            NyxProviderSlug: channelAddress.ProviderSlug,
+            NyxApiKey: nyxApiKey,
+            ChannelAddress: channelAddress,
             OutputFormat: document.OutputFormat,
             TemplateName: document.TemplateName ?? string.Empty,
             AgentType: document.AgentType ?? string.Empty);
     }
+
+    private async Task<string> ResolveNyxApiKeyAsync(
+        UserAgentCatalogDocument document,
+        UserAgentCatalogNyxCredentialDocument credential,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(credential.NyxApiKeyReference?.Ref))
+        {
+            var resolved = await _secretVault.ResolveAsync(new ResolveSecretRequest(
+                credential.NyxApiKeyReference.Ref,
+                ResolveScheduledAgentKeyPurpose(credential.NyxApiKeyReference),
+                credential.NyxApiKeyReference.OwnerScopeKey,
+                ResolveApiKeyId(document, credential),
+                "scheduled-delivery-target"),
+                ct);
+            return resolved.Secret?.Trim() ?? string.Empty;
+        }
+
+        return credential.NyxApiKey?.Trim() ?? string.Empty;
+    }
+
+    private static string ResolveApiKeyId(
+        UserAgentCatalogDocument document,
+        UserAgentCatalogNyxCredentialDocument credential) =>
+        string.IsNullOrWhiteSpace(credential.ApiKeyId)
+            ? document.ApiKeyId ?? string.Empty
+            : credential.ApiKeyId.Trim();
+
+    private static string ResolveScheduledAgentKeyPurpose(SecretReference reference) =>
+        string.IsNullOrWhiteSpace(reference.Purpose)
+            ? CredentialSecretPurposes.ScheduledNyxApiKey
+            : reference.Purpose.Trim();
 
     private static string ResolveDeliveryPlatform(UserAgentCatalogDocument document)
     {

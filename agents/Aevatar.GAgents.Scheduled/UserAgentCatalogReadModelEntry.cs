@@ -1,5 +1,7 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Abstractions;
 using Google.Protobuf.WellKnownTypes;
+using ChannelAddressModel = Aevatar.GAgents.Channel.Abstractions.ChannelDeliveryAddress;
 
 namespace Aevatar.GAgents.Scheduled;
 
@@ -18,7 +20,7 @@ public sealed class UserAgentCatalogReadModelEntry
     public string ApiKeyId { get; init; } = string.Empty;
     public string ScheduleCron { get; init; } = string.Empty;
     public string ScheduleTimezone { get; init; } = string.Empty;
-    public SkillRunnerScheduleMode ScheduleMode { get; init; } = SkillRunnerScheduleMode.Cron;
+    public ScheduledAgentScheduleMode ScheduleMode { get; init; } = ScheduledAgentScheduleMode.Cron;
     public Timestamp? RunAt { get; init; }
     public Timestamp? RetiredAt { get; init; }
     public string RetirementReason { get; init; } = string.Empty;
@@ -30,11 +32,8 @@ public sealed class UserAgentCatalogReadModelEntry
     public Timestamp? CreatedAt { get; init; }
     public Timestamp? UpdatedAt { get; init; }
     public bool Tombstoned { get; init; }
-    public string LarkReceiveId { get; init; } = string.Empty;
-    public string LarkReceiveIdType { get; init; } = string.Empty;
-    public string LarkReceiveIdFallback { get; init; } = string.Empty;
-    public string LarkReceiveIdTypeFallback { get; init; } = string.Empty;
-    public SkillRunnerOutputFormat OutputFormat { get; init; } = SkillRunnerOutputFormat.Auto;
+    public ChannelAddressModel ChannelAddress { get; init; } = ChannelAddressModel.Empty;
+    public ScheduledAgentOutputFormat OutputFormat { get; init; } = ScheduledAgentOutputFormat.Auto;
     public OwnerScope? OwnerScope { get; init; }
     public ScheduledAgentSharingGrant? SharingGrant { get; init; }
     public string TargetPlatform { get; init; } = string.Empty;

@@ -11,16 +11,19 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Application.Scripts;
 using Aevatar.GAgentService.Application.Schedules;
+using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.GAgentService.Core.Models;
 using Aevatar.GAgentService.Core.Schedules;
+using Aevatar.GAgentService.Core.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Infrastructure.Activation;
@@ -28,6 +31,9 @@ using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.GAgentService.Infrastructure.Schedules;
+using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
+using Aevatar.GAgentService.Infrastructure.Credentials;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.GAgentService.Hosting.Demo;
 using Aevatar.GAgentService.Hosting.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
@@ -44,7 +50,9 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -64,8 +72,12 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (!services.Any(x => x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker)))
-            services.AddScriptCapability(configuration);
+        // Scripting is an optional capability: this bundle bridges to it only when the host
+        // composed AddScriptCapability beforehand. It must never pull scripting in by itself —
+        // hosts that disable scripting (mainnet security lockdown) get no scripting services,
+        // endpoints, or hooks from this registration.
+        var scriptingCapabilityRegistered = services.Any(x =>
+            x.ServiceType == typeof(Aevatar.Scripting.Hosting.DependencyInjection.ServiceCollectionExtensions.ScriptCapabilityRegistrationsMarker));
 
         if (!services.Any(x => x.ServiceType == typeof(WorkflowCapabilityServiceCollectionExtensions.WorkflowCapabilityRegistrationsMarker)))
             services.AddWorkflowCapability(configuration);
@@ -89,13 +101,19 @@ public static class ServiceCollectionExtensions
             services.AddScopeServiceTokens(configuration);
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
+        services.AddNyxIdAuthorizationCatalog(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<ServiceInvokeReadinessEvaluator>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceCommandTargetProvisioner, DefaultServiceCommandTargetProvisioner>();
-        services.TryAddSingleton<IServiceRuntimeActivator, DefaultServiceRuntimeActivator>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ScriptingServiceRevisionRepublishHook>());
+        services.TryAddSingleton<IServiceRuntimeActivator>(sp => new DefaultServiceRuntimeActivator(
+            sp.GetRequiredService<Aevatar.Foundation.Abstractions.IActorRuntime>(),
+            sp.GetService<IScriptDefinitionSnapshotPort>(),
+            sp.GetService<IScriptRuntimeProvisioningPort>(),
+            sp.GetRequiredService<IWorkflowDefinitionProvisioningPort>()));
+        if (scriptingCapabilityRegistered)
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ScriptingServiceRevisionRepublishHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICommittedStatePublicationHook, ServiceExposureReconcileHook>());
         services.TryAddSingleton<ServiceExternalExposureIntentService>();
         services.TryAddSingleton<IServiceExternalExposureIntentPort>(sp => sp.GetRequiredService<ServiceExternalExposureIntentService>());
@@ -134,11 +152,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
-        services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
+        services.TryAddSingleton<IServiceInvocationDispatcher>(sp => new DefaultServiceInvocationDispatcher(
+            sp.GetRequiredService<IActorDispatchPort>(),
+            sp.GetService<IScriptRuntimeCommandPort>(),
+            sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
+            sp.GetRequiredService<IServiceRunRegistrationPort>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultServiceInvocationDispatcher>>()));
         services.TryAddSingleton<IExecutionActivityScopeResolver, ExecutionActivityScopeResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<Aevatar.Foundation.Abstractions.Hooks.IGAgentExecutionHook, ExecutionActivityPublisherHook>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, StaticServiceImplementationAdapter>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
+        if (scriptingCapabilityRegistered)
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, ScriptingServiceImplementationAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IServiceImplementationAdapter, WorkflowServiceImplementationAdapter>());
         services.TryAddSingleton<ServiceInvocationResolutionService>();
         services.TryAddSingleton<IServiceInvocationResolutionPort>(sp =>
@@ -149,14 +173,18 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IServiceServingQueryPort, ServiceServingQueryApplicationService>();
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
+        services.TryAddSingleton<IWorkflowCallerAccessTokenProvider, NyxIdWorkflowCallerAccessTokenProvider>();
         services.AddScheduledCredentialExchangePort();
+        services.TryAddSingleton<IScheduledDispatchCredentialRequirementPolicy, DefaultScheduledDispatchCredentialRequirementPolicy>();
+        services.AddScheduledCredentialAdmissionPort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
         services.TryAddTransient<ScheduledDispatchGAgent>();
         services.TryAddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>, StaticGAgentStreamInvocationApplicationService>();
         services.AddScopeGAgentDraftRunInteraction();
-        services.AddScriptServiceRunInteraction();
+        if (scriptingCapabilityRegistered)
+            services.AddScriptServiceRunInteraction();
         services.AddOptions<ScopeWorkflowCapabilityOptions>()
             .Bind(configuration.GetSection(ScopeWorkflowCapabilityOptions.SectionName));
         services.TryAddSingleton<ScopeWorkflowQueryApplicationService>();
@@ -164,15 +192,28 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
         services.TryAddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
-        services.TryAddSingleton<IScopeBindingCommandPort, ScopeBindingCommandApplicationService>();
+        services.TryAddSingleton<IScopeBindingCommandPort>(sp => new ScopeBindingCommandApplicationService(
+            sp.GetRequiredService<IServiceCommandPort>(),
+            sp.GetRequiredService<IServiceLifecycleQueryPort>(),
+            sp.GetRequiredService<IServiceGovernanceCommandPort>(),
+            sp.GetRequiredService<IServiceGovernanceQueryPort>(),
+            sp.GetService<IScopeScriptQueryPort>(),
+            sp.GetService<IScriptDefinitionSnapshotPort>(),
+            sp.GetRequiredService<IWorkflowDefinitionParser>(),
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ScopeWorkflowCapabilityOptions>>(),
+            sp.GetService<IAgentKindRegistry>(),
+            sp.GetService<IServiceExternalExposureIntentPort>()));
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
         services.TryAddSingleton<IMemberPublishedServiceResolver, DefaultMemberPublishedServiceResolver>();
-        services.AddOptions<ScopeScriptCapabilityOptions>()
-            .Bind(configuration.GetSection(ScopeScriptCapabilityOptions.SectionName));
-        services.TryAddSingleton<ScopeScriptQueryApplicationService>();
-        services.TryAddSingleton<IScopeScriptQueryPort>(sp => sp.GetRequiredService<ScopeScriptQueryApplicationService>());
-        services.TryAddSingleton<IScopeScriptCommandPort, ScopeScriptCommandApplicationService>();
-        services.TryAddSingleton<IScopeScriptSaveObservationPort, ScopeScriptSaveObservationService>();
+        if (scriptingCapabilityRegistered)
+        {
+            services.AddOptions<ScopeScriptCapabilityOptions>()
+                .Bind(configuration.GetSection(ScopeScriptCapabilityOptions.SectionName));
+            services.TryAddSingleton<ScopeScriptQueryApplicationService>();
+            services.TryAddSingleton<IScopeScriptQueryPort>(sp => sp.GetRequiredService<ScopeScriptQueryApplicationService>());
+            services.TryAddSingleton<IScopeScriptCommandPort, ScopeScriptCommandApplicationService>();
+            services.TryAddSingleton<IScopeScriptSaveObservationPort, ScopeScriptSaveObservationService>();
+        }
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
         return services;
     }
@@ -184,9 +225,14 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.AddAevatarAgentKindRegistry(builder => builder.Register<ScheduledDispatchGAgent>());
+        services.AddAevatarAgentKindRegistry(builder =>
+        {
+            builder.Register<ScheduledDispatchGAgent>();
+            builder.Register<NyxIdAuthorizationCatalogGAgent>();
+        });
         services.AddGAgentServiceProjection();
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
+        services.AddNyxIdAuthorizationCatalog(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
@@ -195,10 +241,17 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ServiceInvocationResolutionService>());
         services.TryAddSingleton<ServiceInvokeReadinessErrorMapper>();
         services.TryAddSingleton<IInvokeAdmissionAuthorizer, ScheduledDispatchInvokeAdmissionAuthorizer>();
-        services.TryAddSingleton<IServiceInvocationDispatcher, DefaultServiceInvocationDispatcher>();
+        services.TryAddSingleton<IServiceInvocationDispatcher>(sp => new DefaultServiceInvocationDispatcher(
+            sp.GetRequiredService<IActorDispatchPort>(),
+            sp.GetService<IScriptRuntimeCommandPort>(),
+            sp.GetRequiredService<IWorkflowRunProvisioningPort>(),
+            sp.GetRequiredService<IServiceRunRegistrationPort>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<DefaultServiceInvocationDispatcher>>()));
         services.TryAddSingleton<IServiceInvocationPort, ServiceInvocationApplicationService>();
         services.TryAddSingleton<IScheduledServiceInvocationDispatchPort, ScheduledServiceInvocationDispatchPort>();
         services.AddScheduledCredentialExchangePort();
+        services.TryAddSingleton<IScheduledDispatchCredentialRequirementPolicy, DefaultScheduledDispatchCredentialRequirementPolicy>();
+        services.AddScheduledCredentialAdmissionPort();
         services.TryAddSingleton<IScheduledDispatchTargetPreparationService, ScheduledDispatchTargetPreparationService>();
         services.TryAddSingleton<IScheduledDispatchApplicationService, ScheduledDispatchApplicationService>();
         services.TryAddSingleton<IScheduledDispatchActorPort, ScheduledDispatchActorPort>();
@@ -213,6 +266,25 @@ public static class ServiceCollectionExtensions
                     broker,
                     sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
                 : new NoopScheduledServiceInvocationCredentialExchangePort());
+
+    private static IServiceCollection AddNyxIdAuthorizationCatalog(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddScheduledInvocationAuthorization();
+        services.AddHttpClient();
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
+        services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
+        services.TryAddTransient<NyxIdAuthorizationCatalogGAgent>();
+        return services;
+    }
+
+    private static void AddScheduledCredentialAdmissionPort(this IServiceCollection services) =>
+        services.TryAddSingleton<IScheduledDispatchCredentialAdmissionPort>(sp =>
+            sp.GetService<IExternalIdentityBindingQueryPort>() is { } bindingQueryPort
+                ? new NyxIdScheduledDispatchCredentialAdmissionPort(bindingQueryPort)
+                : new NoopScheduledDispatchCredentialAdmissionPort());
 
     public static IServiceCollection AddGAgentServiceProjectionReadModelProviders(
         this IServiceCollection services,
@@ -244,6 +316,7 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ScheduledDispatchDocument>(services, configuration, static readModel => readModel.ScheduleId);
+            TryAddElasticsearchDocumentProjectionStore<NyxIdAuthorizationCatalogDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
         }
@@ -262,6 +335,7 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ScheduledDispatchDocument>(services, static readModel => readModel.ScheduleId);
+            TryAddInMemoryDocumentProjectionStore<NyxIdAuthorizationCatalogDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, static readModel => readModel.Id);
         }
@@ -286,6 +360,7 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ScheduledDispatchDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<NyxIdAuthorizationCatalogDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<WorkflowCatalogCurrentStateDocument>(services, providerKind);
     }

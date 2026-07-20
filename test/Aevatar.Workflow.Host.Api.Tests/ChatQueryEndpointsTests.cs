@@ -7,6 +7,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -284,6 +285,104 @@ public sealed class ChatQueryEndpointsTests
         deadLetter.GetProperty("error").GetString().Should().Be("refund provider rejected compensation");
         service.Calls.Should().ContainSingle()
             .Which.Should().Be("GetWorkflowActorCurrentState:run-dead-letter");
+    }
+
+    [Fact]
+    public async Task GetWorkflowActorCurrentStateRoute_ShouldSerializeSafeConnectorApprovalLifecycles()
+    {
+        var lifecycleStatuses = new[]
+        {
+            WorkflowExternalActionLifecycleStatus.WaitingApproval,
+            WorkflowExternalActionLifecycleStatus.Approved,
+            WorkflowExternalActionLifecycleStatus.Denied,
+            WorkflowExternalActionLifecycleStatus.Expired,
+            WorkflowExternalActionLifecycleStatus.Executing,
+            WorkflowExternalActionLifecycleStatus.Succeeded,
+            WorkflowExternalActionLifecycleStatus.Failed,
+        };
+        var snapshot = new WorkflowActorSnapshot
+        {
+            ActorId = "run-connector-approval",
+            WorkflowName = "connector-approval",
+            CompletionStatus = WorkflowRunCompletionStatus.Running,
+            StateVersion = 17,
+        };
+        foreach (var (status, index) in lifecycleStatuses.Select(static (status, index) => (status, index)))
+        {
+            snapshot.ConnectorApprovals.Add(new WorkflowExternalActionApprovalSnapshot
+            {
+                Plan = new WorkflowExternalActionPlan
+                {
+                    ActionId = $"action-{index}",
+                    IdempotencyKey = $"private-idempotency-{index}",
+                    MaterialDigestSha256 = new string('a', 64),
+                    Summary = "POST /resources/alpha",
+                    ServiceRef = "service-alpha",
+                    NodeId = "node-alpha",
+                    ConnectorName = "service_proxy",
+                    ConnectorType = "http",
+                    Operation = "create_resource",
+                    HttpVerb = "POST",
+                    Resource = "/resources/alpha",
+                    PermissionScope = "resources.write",
+                    CreatedAt = Timestamp.FromDateTime(new DateTime(2026, 7, 17, 8, 0, 0, DateTimeKind.Utc)),
+                    ExpiresAt = Timestamp.FromDateTime(new DateTime(2026, 7, 17, 8, 5, 0, DateTimeKind.Utc)),
+                    Provenance = new WorkflowExternalActionProvenance
+                    {
+                        ScopeId = "scope-alpha",
+                        TeamId = "team-alpha",
+                        MemberId = "member-alpha",
+                        WorkflowId = "workflow-alpha",
+                        PublishedServiceId = "published-service-alpha",
+                        WorkflowActorId = "run-connector-approval",
+                        RunId = "run-connector-approval",
+                        StepId = "connector-approval",
+                        ExecutionId = "execution-alpha",
+                        RequesterPlatform = "nyxid",
+                        RequesterTenant = "tenant-alpha",
+                        RequesterExternalUserId = "user-alpha",
+                        PrincipalSubject = "user-alpha",
+                        RequesterCapabilityScope = "proxy",
+                    },
+                },
+                RemoteApprovalId = $"private-remote-{index}",
+                RemoteExpiresAt = Timestamp.FromDateTime(new DateTime(2026, 7, 17, 8, 2, 0, DateTimeKind.Utc)),
+                LifecycleStatus = status,
+                ApprovalStatus = status == WorkflowExternalActionLifecycleStatus.Denied
+                    ? WorkflowExternalActionApprovalStatus.Denied
+                    : WorkflowExternalActionApprovalStatus.Approved,
+                ApprovalReasonCode = "approval_result",
+                ExecutionStatus = status switch
+                {
+                    WorkflowExternalActionLifecycleStatus.Executing => WorkflowExternalActionExecutionStatus.Executing,
+                    WorkflowExternalActionLifecycleStatus.Succeeded => WorkflowExternalActionExecutionStatus.Succeeded,
+                    WorkflowExternalActionLifecycleStatus.Failed => WorkflowExternalActionExecutionStatus.Failed,
+                    _ => WorkflowExternalActionExecutionStatus.NotStarted,
+                },
+                ExecutionReasonCode = "execution_result",
+            });
+        }
+        var service = new FakeWorkflowExecutionQueryApplicationService { Snapshot = snapshot };
+        await using var app = await CreateRouteAppAsync(service);
+        using var client = CreateClient(app);
+
+        var response = await client.GetAsync("/api/workflow-actors/run-connector-approval/current-state");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(body);
+        var approvals = json.RootElement.GetProperty("connectorApprovals").EnumerateArray().ToList();
+        approvals.Select(static approval => approval.GetProperty("lifecycleStatus").GetString())
+            .Should().Equal(lifecycleStatuses.Select(static status => status.ToString()));
+        approvals[0].GetProperty("actionId").GetString().Should().Be("action-0");
+        approvals[0].GetProperty("principalSubject").GetString().Should().Be("user-alpha");
+        approvals[0].GetProperty("nodeId").GetString().Should().Be("node-alpha");
+        approvals[0].GetProperty("permissionScope").GetString().Should().Be("resources.write");
+        approvals[0].GetProperty("expiresAt").GetDateTimeOffset()
+            .Should().Be(new DateTimeOffset(2026, 7, 17, 8, 5, 0, TimeSpan.Zero));
+        body.Should().NotContain("private-idempotency");
+        body.Should().NotContain("private-remote");
+        body.Should().NotContain(new string('a', 64));
     }
 
     [Fact]

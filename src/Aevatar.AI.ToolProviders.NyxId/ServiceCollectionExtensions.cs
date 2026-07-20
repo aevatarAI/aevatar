@@ -37,11 +37,11 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());
-        if (services.Any(static descriptor => descriptor.ServiceType == typeof(IWorkflowFileIngressPort)))
+        if (services.Any(static descriptor => descriptor.ServiceType == typeof(IFileArtifactIngressPort)))
         {
             services.TryAddSingleton<INyxIdProxyFileArtifactIngress>(sp =>
                 new NyxIdProxyWorkflowFileArtifactIngress(
-                    sp.GetRequiredService<IWorkflowFileIngressPort>()));
+                    sp.GetRequiredService<IFileArtifactIngressPort>()));
         }
 
         services.TryAddEnumerable(
@@ -55,11 +55,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    // 06-20-observatory-admin-cross-scope (G3/G8): registers the NyxID-backed platform-admin authorizer + user
-    //   directory behind their provider-agnostic interfaces, plus the per-token decision cache. Requires
-    //   AddNyxIdTools to have registered NyxIdApiClient (the typed client backing INyxIdUserReadApi).
-    //   Authorizer/directory are scoped (per-request); the IMemoryCache that backs the decision cache is the
-    //   singleton, so positive decisions are shared across requests within the TTL.
+    // Registers the NyxID-backed current-user resolver behind the aevatar admin authorization seam.
     public static IServiceCollection AddNyxIdPlatformAuthorization(
         this IServiceCollection services,
         IConfiguration? configuration = null,
@@ -68,7 +64,13 @@ public static class ServiceCollectionExtensions
         services.AddMemoryCache();
         var optionsBuilder = services.AddOptions<ObservatoryAdminAuthorizationOptions>();
         if (configuration is not null)
+        {
+            // Bind the retired section first so an existing CrossScopeEnabled=false kill switch
+            // remains fail-safe during deployment migration. The canonical section is applied
+            // second and therefore wins when operators have explicitly moved the setting.
+            optionsBuilder.Bind(configuration.GetSection(ObservatoryAdminAuthorizationOptions.LegacyConfigSection));
             optionsBuilder.Bind(configuration.GetSection(ObservatoryAdminAuthorizationOptions.ConfigSection));
+        }
         if (configure is not null)
             optionsBuilder.Configure(configure);
 

@@ -145,7 +145,7 @@ New principle: CLAUDE.md keeps the cross-process architecture and engineering bo
 - CI full-scan 禁止 `GetAwaiter().GetResult()`、`TypeUrl.Contains(...)` 字符串路由、投影端口 `actorId` 反查上下文。
 - 新增非抽象 `Reducer` 类必须有测试引用；事件类型到 reducer 路由必须使用精确键路由。
 - 守卫：提交前按变更范围运行对应 `tools/ci/*_guard*.sh`；架构相关默认跑 `bash tools/ci/architecture_guards.sh`，测试相关默认跑 `bash tools/ci/test_stability_guards.sh`。
-- 涉及 query/read、projection lifecycle、state version、workflow binding、CLI playground 静态资源时，运行对应专项 guard。
+- 涉及 query/read、projection lifecycle、state version、workflow binding、backend console 静态资产时，运行对应专项 guard。
 - 若新增或修改测试，提交前必须运行 `bash tools/ci/test_stability_guards.sh`。
 - Git：分支命名 `<type>/YYYY-MM-DD_<purpose>`；提交信息用祈使句并聚焦单一目的；PR 写明问题与方案、影响路径、验证命令与结果。
 - 分支 `type` 仅限 `feat/fix/refactor/docs/test/chore`；日期固定 `YYYY-MM-DD`；purpose 只用小写字母、数字、连字符。

@@ -499,7 +499,14 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                 ModelOverride: "model-a",
                 MaxToolRoundsOverride: 5,
                 UserMemoryPrompt: "memory",
-                RoutePreference: "route-a"));
+                RoutePreference: "route-a"),
+            CallerCredential: new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerCredential(
+                "trusted-token",
+                new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                    "nyxid",
+                    string.Empty,
+                    "nyx-user-42",
+                    "proxy")));
 
         var envelope = factory.CreateEnvelope(command, new CommandContext(
             "actor-1",
@@ -513,6 +520,14 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.LlmControl.MaxToolRoundsOverride.Should().Be(5);
         request.LlmControl.UserMemoryPrompt.Should().Be("memory");
         request.LlmControl.RoutePreference.Should().Be("route-a");
+        request.CallerCredential.BearerToken.Should().Be("trusted-token");
+        request.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Abstractions.WorkflowCallerNyxIdAuthority
+            {
+                Platform = "nyxid",
+                ExternalUserId = "nyx-user-42",
+                Scope = "proxy",
+            });
         request.Metadata.Should().Contain("client-note", "open-extension");
         request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         request.Metadata.Should().NotContainKey("scope_id");
@@ -563,11 +578,11 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     Uri = "artifact-1",
                     MediaType = "application/pdf",
                     Name = "invoice.pdf",
-                    FileRef = new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileRef
+                    FileRef = new Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef
                     {
                         FileId = "file-1",
                         ArtifactId = "artifact-1",
-                        SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.WorkflowFileSourceKind.ConnectedServiceResource,
+                        SourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind.ConnectedServiceResource,
                         SourceMessageId = "om_1",
                         SourceResourceKey = "file_key_1",
                         FileName = "invoice.pdf",

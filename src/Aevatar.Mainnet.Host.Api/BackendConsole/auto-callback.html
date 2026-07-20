@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>登录中 · Aevatar Backend Console</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { height:100%; margin:0; }
+  body { background:#0b0d12; color:#e6e8ee; display:grid; place-items:center;
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .card { text-align:center; padding:32px 28px; max-width:420px; }
+  .spinner { width:30px; height:30px; margin:0 auto 18px; border:3px solid rgba(255,255,255,.15);
+    border-top-color:#6ea8fe; border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  h1 { font-size:15px; font-weight:600; margin:0 0 6px; letter-spacing:-.01em; }
+  p { margin:0; color:#9aa3b2; font-size:13px; }
+  a { color:#6ea8fe; text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .back { margin-top:16px; display:none; }
+</style>
+</head>
+<body>
+  <main class="card" role="status" aria-live="polite">
+    <div class="spinner" id="spin" aria-hidden="true"></div>
+    <h1>Aevatar Backend Console</h1>
+    <p id="msg">正在完成登录…</p>
+    <p class="back" id="back"></p>
+  </main>
+<script>
+(function(){
+  "use strict";
+  var BACKEND_CONSOLE_CONFIG = __BACKEND_CONSOLE_CONFIG__;
+  var AUTHORITY = BACKEND_CONSOLE_CONFIG.authority || "";
+  var CLIENT_ID = BACKEND_CONSOLE_CONFIG.clientId || "";
+  var RESOURCES = Array.isArray(BACKEND_CONSOLE_CONFIG.resources) ? BACKEND_CONSOLE_CONFIG.resources : [];
+  var REDIRECT_URI = location.origin + "/auto/callback";
+  var STORAGE_KEY = BACKEND_CONSOLE_CONFIG.storageKey || "";
+  var VOICE_TOKEN_PURPOSE = "voice-realtime";
+  var TOKEN_KEY = STORAGE_KEY + ":token";
+  var VOICE_TOKEN_KEY = STORAGE_KEY + ":voice-realtime:token";
+  var PKCE_KEY  = STORAGE_KEY + ":pkce";
+  var DEFAULT_RETURN = safePath(BACKEND_CONSOLE_CONFIG.defaultReturnPath, "/admin");
+
+  function safePath(p, fallback){ return (typeof p === "string" && p.charAt(0) === "/" && p.charAt(1) !== "/") ? p : fallback; }
+  function normalizeResources(values){
+    var result=[];
+    (Array.isArray(values)?values:[]).forEach(function(value){ var resource=typeof value==="string"?value.trim():""; if(resource&&result.indexOf(resource)<0) result.push(resource); });
+    return result;
+  }
+  function decodeJwtPayload(value){
+    try {
+      var encoded=String(value||"").split(".")[1];
+      if(!encoded) return null;
+      var base64=encoded.replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-encoded.length%4)%4);
+      var bytes=Uint8Array.from(atob(base64),function(c){return c.charCodeAt(0);});
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch(e){ return null; }
+  }
+  function tokenResponseResources(token){
+    if(!token) return null;
+    var explicit=false, groups=[];
+    if(Array.isArray(token.resource)){ explicit=true; groups.push(token.resource); }
+    else if(typeof token.resource==="string"){ explicit=true; groups.push([token.resource]); }
+    var claims=decodeJwtPayload(token.access_token);
+    if(claims&&Array.isArray(claims.resources)){ explicit=true; groups.push(claims.resources); }
+    if(!explicit) return null;
+    var result=[];
+    groups.forEach(function(group){ normalizeResources(group).forEach(function(resource){ if(result.indexOf(resource)<0) result.push(resource); }); });
+    return result;
+  }
+  function resourcesCover(granted,requested){ return Array.isArray(granted)&&requested.every(function(resource){return granted.indexOf(resource)>=0;}); }
+  function stop(){ var s=document.getElementById("spin"); if(s) s.style.display="none"; }
+  function show(t){ var m=document.getElementById("msg"); if(m) m.textContent=t; }
+  function offerBack(to){ stop(); var b=document.getElementById("back"); if(b){ b.innerHTML='<a href="'+to+'">返回控制台</a>'; b.style.display="block"; } }
+
+  var params = new URLSearchParams(location.search);
+  var code = params.get("code");
+  var oauthError = params.get("error");
+  var pending = null;
+  try { pending = JSON.parse(sessionStorage.getItem(PKCE_KEY) || "null"); } catch(e){ pending = null; }
+  var returnTo = safePath(pending && pending.returnTo, DEFAULT_RETURN);
+  var requestedResources = pending && Array.isArray(pending.resources) ? normalizeResources(pending.resources) : normalizeResources(RESOURCES);
+  var rawTokenPurpose = pending && typeof pending.tokenPurpose === "string" ? pending.tokenPurpose : "";
+  if(rawTokenPurpose && rawTokenPurpose !== VOICE_TOKEN_PURPOSE){ show("登录状态包含未知的令牌用途，请返回重试。"); offerBack(returnTo); return; }
+  var tokenPurpose = rawTokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_PURPOSE : "";
+
+  if(oauthError){ show("登录失败：" + oauthError); offerBack(returnTo); return; }
+  if(!code){ location.replace(returnTo); return; }
+  if(!pending || pending.state !== params.get("state")){ show("登录状态校验失败，请返回重试。"); offerBack(returnTo); return; }
+
+  var form = new URLSearchParams();
+  form.set("grant_type", "authorization_code");
+  form.set("code", code);
+  form.set("redirect_uri", REDIRECT_URI);
+  form.set("client_id", CLIENT_ID);
+  form.set("code_verifier", pending.verifier);
+  requestedResources.forEach(function(resource){ form.append("resource", resource); });
+
+  fetch(AUTHORITY + "/oauth/token", { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: form.toString() })
+    .then(function(res){
+      try { sessionStorage.removeItem(PKCE_KEY); } catch(e){}
+      if(!res.ok){ show("令牌交换失败（" + res.status + "），请返回重试。"); offerBack(returnTo); return null; }
+      return res.json();
+    })
+    .then(function(token){
+      if(!token) return;
+      if(requestedResources.length && !resourcesCover(tokenResponseResources(token), requestedResources)){
+        show("令牌未包含本次请求的服务授权，请返回重试。"); offerBack(returnTo); return;
+      }
+      token.obtained_at = Date.now();
+      token.oauth_resources = requestedResources;
+      localStorage.setItem(tokenPurpose === VOICE_TOKEN_PURPOSE ? VOICE_TOKEN_KEY : TOKEN_KEY, JSON.stringify(token));
+      location.replace(returnTo);
+    })
+    .catch(function(e){ show("登录出错：" + (e && e.message ? e.message : e)); offerBack(returnTo); });
+})();
+</script>
+</body>
+</html>

@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -53,6 +54,25 @@ public sealed class NyxIdProxyTool : IAgentTool
     /// The proxy response may take 30+ seconds during approval wait.
     /// </summary>
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson)
+    {
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError)
+            return null;
+
+        return NyxIdAuthorizationReceiptFactory.TryCreate(
+            callId,
+            toolName,
+            args.Str("slug") ?? args.Str("service") ?? string.Empty,
+            serviceLabel: null,
+            args.Str("path"),
+            resultJson);
+    }
 
     public string ParametersSchema => """
         {
@@ -236,12 +256,12 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (response.Content.Length == 0)
             return FileArtifactError("empty_file_artifact", "NyxID binary proxy response was empty.", response.HttpStatus, response.ContentType);
 
-        WorkflowFileIngressResult ingressResult;
+        FileArtifactIngressResult ingressResult;
         try
         {
-            ingressResult = await _fileArtifactIngress.IngestAsync(new WorkflowFileIngressRequest(
+            ingressResult = await _fileArtifactIngress.IngestAsync(new FileArtifactIngressRequest(
                 response.Content,
-                WorkflowFileSourceKind.ConnectedServiceResource,
+                FileArtifactSourceKind.ConnectedServiceResource,
                 SourceMessageId: $"nyxid_proxy:{slug}",
                 SourceResourceKey: path,
                 FileName: response.FileName,
@@ -277,7 +297,7 @@ public sealed class NyxIdProxyTool : IAgentTool
     private async Task<string> DiscoverMergedServicesAsync(
         string userToken, string? orgToken, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(orgToken) || orgToken == userToken)
+        if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
             return await _client.DiscoverProxyServicesAsync(userToken, ct);
 
         var userServicesJson = await _client.DiscoverProxyServicesAsync(userToken, ct);
@@ -285,8 +305,8 @@ public sealed class NyxIdProxyTool : IAgentTool
 
         // PR #471 reviewer concern: when both tokens fail discovery, both responses are
         // NyxID error envelopes, neither has a `services` array, the merge below quietly
-        // synthesizes `[]`, and the SkillRunner safety net classifies an empty array as a
-        // successful call. Surface the user-token error verbatim instead so the middleware
+        // synthesizes `[]`, and downstream tool-result classification treats an empty array as
+        // a successful call. Surface the user-token error verbatim instead so the middleware
         // can classify it. A single-token failure stays masked: the healthy token's slugs
         // still merge in and the call counts as a successful discovery.
         if (LooksLikeErrorEnvelope(userServicesJson) && LooksLikeErrorEnvelope(orgServicesJson))
@@ -340,7 +360,7 @@ public sealed class NyxIdProxyTool : IAgentTool
     private async Task<string> ResolveTokenForServiceAsync(
         string userToken, string? orgToken, string slug, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(orgToken) || orgToken == userToken)
+        if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
             return userToken;
 
         if (await ServiceExistsForTokenAsync(userToken, slug, ct))
@@ -519,7 +539,7 @@ public sealed class NyxIdProxyTool : IAgentTool
                 sourceContentType),
             JsonOptions);
 
-    private static NyxIdProxyWorkflowFileRefProjection ToFileRefProjection(WorkflowFileRef fileRef) =>
+    private static NyxIdProxyWorkflowFileRefProjection ToFileRefProjection(FileArtifactRef fileRef) =>
         new(
             fileRef.FileId,
             fileRef.ArtifactId,
@@ -537,6 +557,24 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>
+    /// Constant-time equality for two access tokens. Comparing secrets with <c>==</c> is
+    /// short-circuiting and leaks a length/prefix timing signal; <see cref="System.Security.Cryptography.CryptographicOperations.FixedTimeEquals"/>
+    /// over the UTF-8 bytes runs in time independent of where the tokens first differ.
+    /// Null is not a secret, so a null operand falls back to reference/<c>==</c> semantics
+    /// (only two nulls are equal); behavior is otherwise identical to <c>==</c> for
+    /// equal/unequal non-null tokens.
+    /// </summary>
+    internal static bool TokensEqual(string? left, string? right)
+    {
+        if (left is null || right is null)
+            return ReferenceEquals(left, right);
+
+        var leftBytes = System.Text.Encoding.UTF8.GetBytes(left);
+        var rightBytes = System.Text.Encoding.UTF8.GetBytes(right);
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
 
     private sealed record NyxIdProxyFileArtifactSuccess(
         bool Success,

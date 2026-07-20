@@ -85,7 +85,6 @@ public sealed class StudioCommittedStateProjectionActivationPlanProviderTests
             { typeof(ConnectorCatalogGAgent), ConnectorCatalogGAgent.ProjectionKind },
             { typeof(RoleCatalogGAgent), RoleCatalogGAgent.ProjectionKind },
             { typeof(UserMemoryGAgent), UserMemoryGAgent.ProjectionKind },
-            { typeof(ChatHistoryIndexGAgent), ChatHistoryIndexGAgent.ProjectionKind },
             { typeof(ChatConversationGAgent), ChatConversationGAgent.ProjectionKind },
             { typeof(StudioMemberGAgent), StudioMemberGAgent.ProjectionKind },
             { typeof(StudioMemberBindingRunGAgent), StudioMemberBindingRunGAgent.ProjectionKind },

@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.StudioProvisioning\Aevatar.AI.ToolProviders.StudioProvisioning.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Studio.Application.Abstractions\Aevatar.Studio.Application.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>

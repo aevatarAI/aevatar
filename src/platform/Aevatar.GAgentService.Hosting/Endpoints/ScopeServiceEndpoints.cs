@@ -1,5 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Audit;
+using Aevatar.Audit.Hosting.EndpointAudit;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -54,53 +56,95 @@ public static class ScopeServiceEndpoints
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
         var group = ScopeEndpointRouteGroups.MapScopeGroup(app).WithTags("ScopeServices");
-        group.MapPost("/{scopeId}/workflow/draft-run", HandleDraftRunAsync);
-        group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync);
+        group.MapPost("/{scopeId}/workflow/draft-run", HandleDraftRunAsync)
+            .WithScopeServiceAudit("scope.workflow.draft-run", "scope-workflow-draft", "scopeId");
+        group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync)
+            .WithScopeServiceAudit("scope.binding.upsert", "scope-binding", "scopeId");
         group.MapGet("/{scopeId}/binding", HandleGetBindingAsync);
         group.MapGet("/{scopeId}/members/{memberId}/published-service", HandleGetMemberPublishedServiceAsync);
-        group.MapPost("/{scopeId}/binding/revisions/{revisionId}:activate", HandleActivateBindingRevisionAsync);
+        group.MapPost("/{scopeId}/binding/revisions/{revisionId}:activate", HandleActivateBindingRevisionAsync)
+            .WithScopeServiceAudit("scope.binding-revision.activate", "scope-binding-revision", "scopeId", "revisionId");
         group.MapGet("/{scopeId}/revisions", HandleGetDefaultServiceRevisionsAsync);
         group.MapGet("/{scopeId}/revisions/{revisionId}", HandleGetDefaultServiceRevisionAsync);
-        group.MapPost("/{scopeId}/binding/revisions/{revisionId}:retire", HandleRetireBindingRevisionAsync);
-        group.MapPost("/{scopeId}/invoke/chat:stream", HandleInvokeDefaultChatStreamAsync);
-        group.MapPost("/{scopeId}/invoke/{endpointId}", HandleInvokeDefaultAsync);
-        group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}:stream", HandleInvokeMemberStreamAsync);
-        group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}", HandleInvokeMemberAsync);
-        group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream", HandleInvokeTeamStreamAsync);
-        group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}", HandleInvokeTeamAsync);
+        group.MapPost("/{scopeId}/binding/revisions/{revisionId}:retire", HandleRetireBindingRevisionAsync)
+            .WithScopeServiceAudit("scope.binding-revision.retire", "scope-binding-revision", "scopeId", "revisionId");
+        group.MapPost("/{scopeId}/invoke/chat:stream", HandleInvokeDefaultChatStreamAsync)
+            .WithScopeServiceAudit("scope.default-service.invoke-chat-stream", "scope-service-invocation", "scopeId");
+        group.MapPost("/{scopeId}/invoke/{endpointId}", HandleInvokeDefaultAsync)
+            .WithScopeServiceAudit("scope.default-service.invoke", "scope-service-invocation", "scopeId", "endpointId");
+        group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}:stream", HandleInvokeMemberStreamAsync)
+            .WithScopeServiceAudit("scope.member.invoke-stream", "scope-member-invocation", "scopeId", "memberId", "endpointId");
+        group.MapPost("/{scopeId}/members/{memberId}/invoke/{endpointId}", HandleInvokeMemberAsync)
+            .WithScopeServiceAudit("scope.member.invoke", "scope-member-invocation", "scopeId", "memberId", "endpointId");
+        group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}:stream", HandleInvokeTeamStreamAsync)
+            .WithScopeServiceAudit("scope.team.invoke-stream", "scope-team-invocation", "scopeId", "teamId", "endpointId");
+        group.MapPost("/{scopeId}/teams/{teamId}/invoke/{endpointId}", HandleInvokeTeamAsync)
+            .WithScopeServiceAudit("scope.team.invoke", "scope-team-invocation", "scopeId", "teamId", "endpointId");
         group.MapGet("/{scopeId}/runs", HandleListDefaultRunsAsync);
         group.MapGet("/{scopeId}/runs/{runId}", HandleGetDefaultRunAsync);
         group.MapGet("/{scopeId}/members/{memberId}/runs", HandleListMemberRunsAsync);
         group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}", HandleGetMemberRunAsync);
         group.MapGet("/{scopeId}/members/{memberId}/runs/{runId}/audit", HandleGetMemberRunAuditAsync);
-        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:resume", HandleResumeMemberRunAsync);
-        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:signal", HandleSignalMemberRunAsync);
-        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:stop", HandleStopMemberRunAsync);
-        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:retry-compensation", HandleRetryCompensationMemberRunAsync);
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:resume", HandleResumeMemberRunAsync)
+            .WithScopeServiceAudit("scope.member-run.resume", "workflow-run", "scopeId", "memberId", "runId");
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:signal", HandleSignalMemberRunAsync)
+            .WithScopeServiceAudit("scope.member-run.signal", "workflow-run", "scopeId", "memberId", "runId");
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:stop", HandleStopMemberRunAsync)
+            .WithScopeServiceAudit("scope.member-run.stop", "workflow-run", "scopeId", "memberId", "runId");
+        group.MapPost("/{scopeId}/members/{memberId}/runs/{runId}:retry-compensation", HandleRetryCompensationMemberRunAsync)
+            .WithScopeServiceAudit("scope.member-run.retry-compensation", "workflow-run", "scopeId", "memberId", "runId");
         group.MapGet("/{scopeId}/runs/{runId}/audit", HandleGetDefaultRunAuditAsync);
-        group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync);
-        group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync);
-        group.MapPost("/{scopeId}/runs/{runId}:stop", HandleStopDefaultRunAsync);
-        group.MapPost("/{scopeId}/runs/{runId}:retry-compensation", HandleRetryCompensationDefaultRunAsync);
+        group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync)
+            .WithScopeServiceAudit("scope.default-run.resume", "workflow-run", "scopeId", "runId");
+        group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync)
+            .WithScopeServiceAudit("scope.default-run.signal", "workflow-run", "scopeId", "runId");
+        group.MapPost("/{scopeId}/runs/{runId}:stop", HandleStopDefaultRunAsync)
+            .WithScopeServiceAudit("scope.default-run.stop", "workflow-run", "scopeId", "runId");
+        group.MapPost("/{scopeId}/runs/{runId}:retry-compensation", HandleRetryCompensationDefaultRunAsync)
+            .WithScopeServiceAudit("scope.default-run.retry-compensation", "workflow-run", "scopeId", "runId");
         group.MapGet("/{scopeId}/services", HandleListScopeServicesAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream", HandleInvokeStreamAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
+        group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream", HandleInvokeStreamAsync)
+            .WithScopeServiceAudit("scope.service.invoke-stream", "scope-service-invocation", "scopeId", "serviceId", "endpointId");
+        group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}", HandleInvokeAsync)
+            .WithScopeServiceAudit("scope.service.invoke", "scope-service-invocation", "scopeId", "serviceId", "endpointId");
         group.MapGet("/{scopeId}/services/{serviceId}/revisions", HandleGetServiceRevisionsAsync);
         group.MapGet("/{scopeId}/services/{serviceId}/revisions/{revisionId}", HandleGetServiceRevisionAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/revisions/{revisionId}:retire", HandleRetireServiceRevisionAsync);
+        group.MapPost("/{scopeId}/services/{serviceId}/revisions/{revisionId}:retire", HandleRetireServiceRevisionAsync)
+            .WithScopeServiceAudit("scope.service-revision.retire", "scope-service-revision", "scopeId", "serviceId", "revisionId");
         group.MapGet("/{scopeId}/services/{serviceId}/runs", HandleListRunsAsync);
         group.MapGet("/{scopeId}/services/{serviceId}/runs/{runId}", HandleGetRunAsync);
         group.MapGet("/{scopeId}/services/{serviceId}/runs/{runId}/audit", HandleGetRunAuditAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:resume", HandleResumeRunAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:signal", HandleSignalRunAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:stop", HandleStopRunAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:retry-compensation", HandleRetryCompensationRunAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/bindings", HandleCreateBindingAsync);
-        group.MapPut("/{scopeId}/services/{serviceId}/bindings/{bindingId}", HandleUpdateBindingAsync);
-        group.MapPost("/{scopeId}/services/{serviceId}/bindings/{bindingId}:retire", HandleRetireBindingAsync);
+        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:resume", HandleResumeRunAsync)
+            .WithScopeServiceAudit("scope.service-run.resume", "workflow-run", "scopeId", "serviceId", "runId");
+        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:signal", HandleSignalRunAsync)
+            .WithScopeServiceAudit("scope.service-run.signal", "workflow-run", "scopeId", "serviceId", "runId");
+        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:stop", HandleStopRunAsync)
+            .WithScopeServiceAudit("scope.service-run.stop", "workflow-run", "scopeId", "serviceId", "runId");
+        group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:retry-compensation", HandleRetryCompensationRunAsync)
+            .WithScopeServiceAudit("scope.service-run.retry-compensation", "workflow-run", "scopeId", "serviceId", "runId");
+        group.MapPost("/{scopeId}/services/{serviceId}/bindings", HandleCreateBindingAsync)
+            .WithScopeServiceAudit("scope.service-binding.create", "scope-service-binding", "scopeId", "serviceId");
+        group.MapPut("/{scopeId}/services/{serviceId}/bindings/{bindingId}", HandleUpdateBindingAsync)
+            .WithScopeServiceAudit("scope.service-binding.update", "scope-service-binding", "scopeId", "serviceId", "bindingId");
+        group.MapPost("/{scopeId}/services/{serviceId}/bindings/{bindingId}:retire", HandleRetireBindingAsync)
+            .WithScopeServiceAudit("scope.service-binding.retire", "scope-service-binding", "scopeId", "serviceId", "bindingId");
         group.MapGet("/{scopeId}/services/{serviceId}/bindings", HandleGetBindingsAsync);
         group.MapGet("/{scopeId}/services/{serviceId}/endpoints/{endpointId}/contract", HandleGetEndpointContractAsync);
         return app;
+    }
+
+    private static RouteHandlerBuilder WithScopeServiceAudit(
+        this RouteHandlerBuilder builder,
+        string operationName,
+        string targetKind,
+        params string[] routeValueNames)
+    {
+        return builder.WithEndpointAudit(
+            operationName,
+            AuditSensitivityLevel.Confidential,
+            targetKind,
+            EndpointAuditTargetResolvers.FromRouteValues(targetKind, routeValueNames),
+            EndpointAuditSanitizers.WithRouteValues(routeValueNames));
     }
 
     private static async Task HandleDraftRunAsync(
@@ -108,7 +152,7 @@ public static class ScopeServiceEndpoints
         string scopeId,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
         CancellationToken ct)
     {
         try
@@ -211,7 +255,7 @@ public static class ScopeServiceEndpoints
     private static async ValueTask<ScopeDraftRunRequestInput> ParseScopeDraftRunRequestAsync(
         HttpContext http,
         WorkflowMultipartFileInputParser multipartFileInputParser,
-        IWorkflowFileIngressPort workflowFileIngressPort,
+        IFileArtifactIngressPort workflowFileIngressPort,
         string scopeId,
         CancellationToken ct)
     {
@@ -700,8 +744,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -766,8 +810,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -864,8 +908,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -1758,8 +1802,8 @@ public static class ScopeServiceEndpoints
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] IServiceRunRegistrationPort serviceRunRegistrationPort,
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
-        [FromServices] IWorkflowFileIngressPort workflowFileIngressPort,
-        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> scriptServiceRunService,
+        [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
+        [FromServices] ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? scriptServiceRunService,
         [FromServices] IStaticGAgentStreamInvocationPort<AGUIEvent> staticGAgentStreamInvocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -2080,10 +2124,16 @@ public static class ScopeServiceEndpoints
         string scopeId,
         string serviceId,
         IReadOnlyDictionary<string, string>? headers,
-        ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus> interactionService,
+        ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>? interactionService,
         ServiceInvocationRequest invocationRequest,
         CancellationToken ct)
     {
+        if (interactionService is null)
+        {
+            throw new InvalidOperationException(
+                "Scripting capability is not enabled on this host; scripting services cannot be invoked.");
+        }
+
         var actorId = target.Service.PrimaryActorId;
         var runId = Guid.NewGuid().ToString("N");
         var commandId = Guid.NewGuid().ToString("N");
@@ -3198,6 +3248,7 @@ const response = await fetch("{{invokePath}}", {
             scopeId,
             serviceId,
             binding.RunId,
+            string.Empty,
             binding.ActorId,
             binding.EffectiveDefinitionActorId,
             deployment?.RevisionId ?? string.Empty,
@@ -3247,6 +3298,7 @@ const response = await fetch("{{invokePath}}", {
             scopeId,
             serviceId,
             snapshot.RunId,
+            snapshot.ScheduleId,
             // ActorId stays the controllable target so existing resume/signal/stop
             // round-trips keep working; the registry actor is internal infra.
             snapshot.TargetActorId,
@@ -3324,6 +3376,7 @@ const response = await fetch("{{invokePath}}", {
             memberResolution.MemberId,
             memberResolution.PublishedServiceId,
             summary.RunId,
+            summary.ScheduleId,
             summary.ActorId,
             summary.DefinitionActorId,
             summary.RevisionId,
@@ -3342,7 +3395,14 @@ const response = await fetch("{{invokePath}}", {
             summary.LastOutput,
             summary.LastError,
             summary.SagaStatus,
-            summary.DeadLetter);
+            summary.DeadLetter,
+            summary.ImplementationKind,
+            summary.Status,
+            summary.CommandId,
+            summary.CorrelationId,
+            summary.EndpointId,
+            summary.TargetActorId,
+            summary.CreatedAt);
     }
 
     private static ScopeServiceRunDeadLetterHttpResponse? BuildScopeServiceRunDeadLetter(
@@ -3810,7 +3870,7 @@ const response = await fetch("{{invokePath}}", {
                 MediaType = part.FileRef?.MediaType ?? part.MediaType,
                 Uri = part.FileRef?.ArtifactId ?? part.FileRef?.Uri ?? part.Uri,
                 Name = part.FileRef?.FileName ?? part.FileRef?.Name ?? part.Name,
-                FileRef = MapWorkflowFileRef(part.FileRef),
+                FileRef = MapFileArtifactRef(part.FileRef),
             });
         }
 
@@ -3834,16 +3894,16 @@ const response = await fetch("{{invokePath}}", {
         return kind != WorkflowChatInputPartKind.Unspecified;
     }
 
-    private static WorkflowFileRef? MapWorkflowFileRef(ChatInputFileRef? fileRef)
+    private static FileArtifactRef? MapFileArtifactRef(ChatInputFileRef? fileRef)
     {
         if (fileRef == null)
             return null;
 
-        return new WorkflowFileRef
+        return new FileArtifactRef
         {
             FileId = fileRef.FileId,
             ArtifactId = fileRef.ArtifactId ?? fileRef.Uri,
-            SourceKind = MapWorkflowFileSourceKind(fileRef.SourceKind),
+            SourceKind = MapFileArtifactSourceKind(fileRef.SourceKind),
             SourceMessageId = fileRef.SourceMessageId,
             SourceResourceKey = fileRef.SourceResourceKey,
             FileName = fileRef.FileName ?? fileRef.Name,
@@ -3856,19 +3916,19 @@ const response = await fetch("{{invokePath}}", {
         };
     }
 
-    private static WorkflowFileSourceKind MapWorkflowFileSourceKind(string? raw)
+    private static FileArtifactSourceKind MapFileArtifactSourceKind(string? raw)
     {
         var key = string.IsNullOrWhiteSpace(raw)
             ? string.Empty
             : raw.Trim().ToLowerInvariant().Replace("-", string.Empty).Replace("_", string.Empty);
         return key switch
         {
-            "chatinput" or "chat" => WorkflowFileSourceKind.ChatInput,
-            "formupload" or "form" => WorkflowFileSourceKind.FormUpload,
-            "connectedserviceresource" or "connectedservice" => WorkflowFileSourceKind.ConnectedServiceResource,
-            "externalresource" or "external" => WorkflowFileSourceKind.ExternalResource,
-            "generated" => WorkflowFileSourceKind.Generated,
-            _ => WorkflowFileSourceKind.Unspecified,
+            "chatinput" or "chat" => FileArtifactSourceKind.ChatInput,
+            "formupload" or "form" => FileArtifactSourceKind.FormUpload,
+            "connectedserviceresource" or "connectedservice" => FileArtifactSourceKind.ConnectedServiceResource,
+            "externalresource" or "external" => FileArtifactSourceKind.ExternalResource,
+            "generated" => FileArtifactSourceKind.Generated,
+            _ => FileArtifactSourceKind.Unspecified,
         };
     }
 
@@ -3890,14 +3950,14 @@ const response = await fetch("{{invokePath}}", {
 
     private static async ValueTask<IReadOnlyList<ChatInputContentPart>> IngestMultipartInputPartsAsync(
         WorkflowMultipartFileInputForm form,
-        IWorkflowFileIngressPort workflowFileIngressPort,
+        IFileArtifactIngressPort workflowFileIngressPort,
         string scopeId,
         CancellationToken ct)
     {
         var inputParts = new List<ChatInputContentPart>(form.PendingFiles.Count);
         foreach (var file in form.PendingFiles)
         {
-            WorkflowFileIngressResult ingressResult;
+            FileArtifactIngressResult ingressResult;
             try
             {
                 ingressResult = await workflowFileIngressPort.IngestAsync(
@@ -4521,6 +4581,7 @@ const response = await fetch("{{invokePath}}", {
         string ScopeId,
         string ServiceId,
         string RunId,
+        string ScheduleId,
         string ActorId,
         string DefinitionActorId,
         string RevisionId,
@@ -4553,6 +4614,7 @@ const response = await fetch("{{invokePath}}", {
         string MemberId,
         string PublishedServiceId,
         string RunId,
+        string ScheduleId,
         string ActorId,
         string DefinitionActorId,
         string RevisionId,
@@ -4571,7 +4633,14 @@ const response = await fetch("{{invokePath}}", {
         string LastOutput,
         string LastError,
         WorkflowSagaStatus SagaStatus,
-        ScopeServiceRunDeadLetterHttpResponse? DeadLetter);
+        ScopeServiceRunDeadLetterHttpResponse? DeadLetter,
+        string ImplementationKind,
+        string Status,
+        string CommandId,
+        string CorrelationId,
+        string EndpointId,
+        string TargetActorId,
+        DateTimeOffset? CreatedAt = null);
 
     public sealed record ScopeServiceRunDeadLetterHttpResponse(
         string FailedCompensationStepId,

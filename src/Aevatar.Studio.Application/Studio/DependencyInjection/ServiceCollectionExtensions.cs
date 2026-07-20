@@ -28,7 +28,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowAuthoringPromptCatalog>();
         services.AddSingleton<ScriptAuthoringPromptCatalog>();
         services.AddSingleton<WorkflowAuthoringPreviewGenerator>();
-        services.AddSingleton<ScriptAuthoringPreviewGenerator>();
+        // Script authoring preview needs the scripting capability's compiler; hosts composed
+        // without scripting get no script generator and reject script previews explicitly.
+        if (services.Any(x => x.ServiceType == typeof(Aevatar.Scripting.Core.Compilation.IScriptBehaviorCompiler)))
+            services.AddSingleton<ScriptAuthoringPreviewGenerator>();
         services.TryAddSingleton<IStudioAuthoringPreviewApplicationService, StudioAuthoringPreviewApplicationService>();
         services.TryAddSingleton<IStudioMemberService, StudioMemberService>();
         services.TryAddSingleton<IStudioWorkflowProvisioningService, StudioWorkflowProvisioningService>();
@@ -37,6 +40,10 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowScheduleProvisioningPort, WorkflowScheduleProvisioningPort>();
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
         services.TryAddSingleton<IStudioTeamProvisioningPort, StudioTeamProvisioningPort>();
+        services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();
+        services.TryAddSingleton<IStudioMemberWorkflowBindingPort, StudioMemberWorkflowBindingPort>();
+        services.TryAddSingleton(new StudioMemberWorkflowSchedulePolicy());
+        services.TryAddSingleton<IStudioMemberWorkflowSchedulePort, StudioMemberWorkflowSchedulePort>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.TryAddSingleton<IWorkflowBoardClock, SystemWorkflowBoardClock>();
         services.TryAddSingleton<IWorkflowBoardRosterQueryPort, StudioWorkflowBoardRosterQueryPort>();

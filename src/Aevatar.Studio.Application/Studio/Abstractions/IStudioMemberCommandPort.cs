@@ -33,6 +33,16 @@ public interface IStudioMemberCommandPort
         CancellationToken ct = default);
 
     /// <summary>
+    /// Records that an already-published member service now points at a new
+    /// implementation revision without creating a binding run.
+    /// </summary>
+    Task RecordPublishedBindingAsync(
+        string scopeId,
+        string memberId,
+        StudioMemberPublishedBindingRecordRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Renames an existing member through the member actor's authoritative
     /// rename event. Identity fields and implementation references are left
     /// unchanged by the actor state transition.
@@ -67,5 +77,16 @@ public interface IStudioMemberCommandPort
         string scopeId,
         string memberId,
         string? targetTeamId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Dispatches a tombstone command to the StudioMember actor. The actor
+    /// owns idempotency and emits any required team-removal fact before the
+    /// delete event; published service artifacts remain owned by the platform
+    /// service lifecycle and are not cleaned up here.
+    /// </summary>
+    Task DeleteAsync(
+        string scopeId,
+        string memberId,
         CancellationToken ct = default);
 }

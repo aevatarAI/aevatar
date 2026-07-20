@@ -25,8 +25,8 @@ message DeliveryTarget {
   ChannelId channel = 1;
   string conversation_key = 2;
   string platform = 3;
-  string receive_id = 4;
-  string receive_id_type = 5;
+  string address_id = 4;
+  string address_type = 5;
   string conversation_id = 6;
   string reply_message_id = 7;
 }
@@ -37,7 +37,7 @@ message DeliveryProducedEvent {
   DeliveryKind delivery_kind = 3;
   DeliveryTarget target = 4;
   DeliveryStatus status = 5;
-  string lark_message_id = 6;
+  string provider_message_id = 6;
   string card_id = 7;
   string request_id = 8;
   string source_event_id = 9;
@@ -48,7 +48,7 @@ message DeliveryLedgerEntry {
   DeliveryKind delivery_kind = 1;
   DeliveryStatus status = 2;
   DeliveryTarget target = 3;
-  string lark_message_id = 4;
+  string provider_message_id = 4;
   string card_id = 5;
   string request_id = 6;
   string source_event_id = 7;

@@ -52,7 +52,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 static document => document.RootActorId);
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
-            RegisterElasticsearch<ChatHistoryIndexCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration);
@@ -70,7 +69,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                 static document => document.UpdatedAt);
             RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
             RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
-            RegisterInMemory<ChatHistoryIndexCurrentStateDocument>(services);
             RegisterInMemory<ChatConversationCurrentStateDocument>(services);
             RegisterInMemory<GAgentRegistryCurrentStateDocument>(services);
             RegisterInMemory<UserMemoryCurrentStateDocument>(services);
@@ -146,7 +144,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
         return HasDocumentReaderForProvider<WorkflowExecutionBoardDocument>(services, providerKind)
                && HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<ChatHistoryIndexCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
@@ -198,7 +195,6 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             ConnectorCatalogState.Descriptor,
             RoleCatalogState.Descriptor,
             UserMemoryState.Descriptor,
-            ChatHistoryIndexState.Descriptor,
             ChatConversationState.Descriptor,
             StudioMemberState.Descriptor,
             StudioMemberBindingRunState.Descriptor,

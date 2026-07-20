@@ -1,4 +1,7 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -16,6 +19,7 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -36,6 +40,8 @@ internal static class StudioHostingServiceCollectionExtensions
                     System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull;
             });
         services.AddHttpContextAccessor();
+        services.AddHttpClient();
+        services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         services.Configure<NyxIdLlmCatalogCacheOptions>(
@@ -50,6 +56,20 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
+        services.AddOptions<ScheduledInvocationOwnerLLMRouteOptions>()
+            .Configure(options =>
+            {
+                var configuredRoute = configuration["Aevatar:NyxId:DefaultRoute"];
+                options.DefaultRoutePreference = string.IsNullOrWhiteSpace(configuredRoute)
+                    ? LlmDefaults.NyxIdRoute
+                    : configuredRoute.Trim();
+            });
+        services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
+        services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
+        services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(
+            sp.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>(),
+            configuration,
+            sp.GetService<TimeProvider>() ?? TimeProvider.System));
         services.AddWorkflowBoardExecutionProjectionAdapter();
         return services;
     }

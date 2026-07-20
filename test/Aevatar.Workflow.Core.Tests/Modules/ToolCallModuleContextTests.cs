@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Modules;
 using FluentAssertions;
@@ -126,7 +127,10 @@ public sealed class ToolCallModuleContextTests
     {
         var tool = new CapturingWorkflowTool("nyxid_tool");
         var module = CreateModule(tool);
-        var ctx = new RecordingWorkflowContext();
+        var ctx = new RecordingWorkflowContext
+        {
+            ScheduleId = "schedule-tool",
+        };
         ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
         {
             BearerToken = " typed-token ",
@@ -161,12 +165,33 @@ public sealed class ToolCallModuleContextTests
         tool.LastRequest.IdempotencyKey.Should().Be("idem-tool-1");
         tool.LastRequest.ScopeId.Should().Be("scope-1");
         tool.LastRequest.CallerCredential.BearerToken.Should().Be("typed-token");
+        tool.LastRequest.ScheduleId.Should().Be("schedule-tool");
         tool.LastRequest.RuntimeContext.ParentActorId.Should().Be("agent-1");
         tool.LastRequest.RuntimeContext.ParentRunId.Should().Be("run-1");
         tool.LastRequest.RuntimeContext.ParentStepId.Should().Be("call_proxy");
         tool.LastRequest.RuntimeContext.RootRunId.Should().Be("root-run");
         tool.LastRequest.RuntimeContext.Depth.Should().Be(2);
         LastCompleted(ctx).Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ToolCallModule_ShouldIssueFreshCallerTokenForEveryExecution()
+    {
+        var tool = new CapturingWorkflowTool("nyxid_tool");
+        var tokenProvider = new RotatingCallerAccessTokenProvider();
+        var module = CreateModule(tool, tokenProvider);
+        var ctx = new RecordingWorkflowContext();
+        ctx.ExecutionContextState.CallerCredential = new WorkflowCallerCredentialState
+        {
+            NyxIdAuthority = CreateCallerAuthority(),
+        };
+
+        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call-1");
+        await ExecuteToolCallAsync(module, ctx, tool.Name, stepId: "call-2");
+
+        tool.Requests.Select(request => request.CallerCredential.BearerToken)
+            .Should().Equal("token-1", "token-2");
+        tokenProvider.Authorities.Should().HaveCount(2);
     }
 
     [Fact]
@@ -259,10 +284,22 @@ public sealed class ToolCallModuleContextTests
         executeMethods[0].GetParameters().Should().NotContain(parameter => parameter.ParameterType == typeof(string));
     }
 
-    private static ToolCallModule CreateModule(IWorkflowTool tool) =>
+    private static ToolCallModule CreateModule(
+        IWorkflowTool tool,
+        IWorkflowCallerAccessTokenProvider? tokenProvider = null) =>
         new(
             [new SingleToolSource(tool)],
-            NullLogger<ToolCallModule>.Instance);
+            NullLogger<ToolCallModule>.Instance,
+            tokenProvider);
+
+    private static WorkflowCallerNyxIdAuthority CreateCallerAuthority() =>
+        new()
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-1",
+            ExternalUserId = "m-alpha",
+            Scope = "invoke",
+        };
 
     private static async Task ExecuteToolCallAsync(
         ToolCallModule module,
@@ -347,11 +384,26 @@ public sealed class ToolCallModuleContextTests
 
         public WorkflowToolExecutionRequest? LastRequest { get; private set; }
 
+        public List<WorkflowToolExecutionRequest> Requests { get; } = [];
+
         public Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             LastRequest = request;
+            Requests.Add(request);
             return Task.FromResult(WorkflowToolExecutionResult.Success("""{"typed":true}"""));
+        }
+    }
+
+    private sealed class RotatingCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
+    {
+        public List<WorkflowCallerNyxIdAuthority> Authorities { get; } = [];
+
+        public Task<string> IssueAsync(WorkflowCallerNyxIdAuthority authority, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Authorities.Add(authority.Clone());
+            return Task.FromResult($"token-{Authorities.Count}");
         }
     }
 
@@ -393,6 +445,8 @@ public sealed class ToolCallModuleContextTests
         public string? ScopeIdOverride { get; init; } = "scope-1";
 
         public string ScopeId => ScopeIdOverride!;
+
+        public string ScheduleId { get; init; } = string.Empty;
 
         public IServiceProvider Services { get; } = new EmptyServiceProvider();
 

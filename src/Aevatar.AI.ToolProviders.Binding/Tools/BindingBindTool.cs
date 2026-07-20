@@ -84,9 +84,9 @@ public sealed class BindingBindTool : IAgentTool
             if (args.ParseError != null)
                 return JsonDefaults.Error(args.ParseError);
 
-            var scopeId = AgentToolRequestContext.ScopeId;
+            var scopeId = ToolOwnerScopeResolver.Resolve();
             if (string.IsNullOrWhiteSpace(scopeId))
-                return JsonDefaults.Error("scope_id not available in request context");
+                return JsonDefaults.Error(ToolOwnerScopeResolver.MissingMessage);
 
             var kindStr = args.Str("kind");
             if (string.IsNullOrWhiteSpace(kindStr))

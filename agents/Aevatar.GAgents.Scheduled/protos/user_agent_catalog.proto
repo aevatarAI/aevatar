@@ -6,13 +6,26 @@ option csharp_namespace = "Aevatar.GAgents.Scheduled";
 
 import "google/protobuf/timestamp.proto";
 import "agent_messages.proto";
-import "skill_runner.proto";
+import "Credentials/credential_secret_references.proto";
+import "channel_delivery_address.proto";
 
 // Refactor (iter91/cluster-091-owner-scope-foundation):
 //   Old: this proto declared OwnerScope locally even though the tuple is foundational caller identity.
 //   New: fields below use canonical aevatar.OwnerScope from Foundation.Abstractions.
 
 // ─── User Agent Catalog (actor-backed delivery target store) ───
+
+enum ScheduledAgentOutputFormat {
+  SCHEDULED_AGENT_OUTPUT_FORMAT_AUTO = 0;
+  SCHEDULED_AGENT_OUTPUT_FORMAT_TEXT = 1;
+  SCHEDULED_AGENT_OUTPUT_FORMAT_FEISHU_DOC = 2;
+}
+
+enum ScheduledAgentScheduleMode {
+  SCHEDULED_AGENT_SCHEDULE_MODE_UNSPECIFIED = 0;
+  SCHEDULED_AGENT_SCHEDULE_MODE_CRON = 1;
+  SCHEDULED_AGENT_SCHEDULE_MODE_ONE_SHOT = 2;
+}
 
 message UserAgentCatalogEntry {
   string agent_id = 1;
@@ -45,36 +58,96 @@ message UserAgentCatalogEntry {
   reserved 16, 17, 18, 19, 20;
   reserved "status", "last_run_at", "next_run_at", "error_count", "last_error";
   int64 tombstone_state_version = 21;
-  // Authoritative Lark outbound delivery target captured at create time. When
-  // both fields are present, outbound senders use them verbatim instead of
-  // inferring receive_id_type from the conversation_id prefix. The creator
-  // pins the chat-scoped `chat_id` (`oc_*`) here when available because it is
-  // the only identifier that survives both cross-app and cross-tenant
-  // boundaries when the same Lark app is on both ends of the relay.
-  string lark_receive_id = 22;
-  string lark_receive_id_type = 23;
-  // Secondary outbound delivery target. The runtime attempts the primary
-  // (`lark_receive_id`/`lark_receive_id_type`) first and falls back to this
-  // pair on a Lark `230002 bot not in chat` rejection — the failure mode
-  // when the outbound app is a different Lark app than the one that received
-  // the inbound DM (cross-app same-tenant deployment). The creator pins
-  // `union_id` (`on_*`) here so the fallback survives a chat_id rejection
-  // without needing a fresh ingress event.
-  string lark_receive_id_fallback = 24;
-  string lark_receive_id_type_fallback = 25;
+  // Deprecated compatibility bridge for state serialized before channel_address.
+  // New writes must leave these empty and map delivery through channel_address.
+  string lark_receive_id = 22 [deprecated = true];
+  string lark_receive_id_type = 23 [deprecated = true];
+  string lark_receive_id_fallback = 24 [deprecated = true];
+  string lark_receive_id_type_fallback = 25 [deprecated = true];
   // Caller scope captured at create time. New writes always populate this;
   // the deprecated platform/owner_nyx_user_id fields are kept readable for
   // legacy state (issue #466 migration plan).
   aevatar.OwnerScope owner_scope = 26;
-  SkillRunnerOutputFormat output_format = 27;
+  ScheduledAgentOutputFormat output_format = 27;
   // Delivery target platform selected by the creator.
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 28;
   ScheduledAgentSharingGrant sharing_grant = 29;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 30;
+  ChannelDeliveryAddress channel_address = 31;
+}
+
+enum UserAgentApiKeyRevocationFailureKind {
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_UNSPECIFIED = 0;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_NONE = 1;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_UNAUTHORIZED = 2;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_TRANSIENT = 3;
+  USER_AGENT_API_KEY_REVOCATION_FAILURE_KIND_PROVIDER_ERROR = 4;
+}
+
+enum ScheduledCredentialRevocationTrackStatus {
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_UNSPECIFIED = 0;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_PENDING = 1;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_BLOCKED_MISSING_SECRET_REF = 2;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_COMPLETED = 3;
+  SCHEDULED_CREDENTIAL_REVOCATION_TRACK_STATUS_NOT_APPLICABLE = 4;
+}
+
+message ScheduledCredentialRevocationTrack {
+  ScheduledCredentialRevocationTrackStatus status = 1;
+  int32 attempt_count = 2;
+  google.protobuf.Timestamp last_attempt_at = 3;
+  int32 last_http_status = 4;
+  string last_error = 5;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 6;
+}
+
+enum ScheduledCredentialVaultReferenceAvailability {
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_UNSPECIFIED = 0;
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_NOT_APPLICABLE = 1;
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_REQUESTED_NOT_CONFIRMED = 2;
+  SCHEDULED_CREDENTIAL_VAULT_REFERENCE_AVAILABILITY_CONFIRMED = 3;
+}
+
+message ScheduledCredentialVaultRevocationDescriptor {
+  string ref = 1;
+  string purpose = 2;
+  string owner_scope_key = 3;
+  string subject_id = 4;
+  ScheduledCredentialVaultReferenceAvailability reference_availability = 5;
+}
+
+message ScheduledAgentCredentialRevocationIntent {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.OwnerScope owner_scope = 3;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 4;
+  ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 5;
+}
+
+message UserAgentApiKeyRevocation {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 3;
+  aevatar.OwnerScope owner_scope = 4;
+  google.protobuf.Timestamp requested_at = 5;
+  int32 attempt_count = 6;
+  google.protobuf.Timestamp last_attempt_at = 7;
+  int32 last_http_status = 8;
+  string last_error = 9;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 10;
+  ScheduledCredentialRevocationTrack nyx_id_track = 11;
+  ScheduledCredentialRevocationTrack vault_track = 12;
+  string secret_subject_id = 13;
+  string repair_reason = 14;
+  string requested_by_subject_id = 15;
+  int64 repair_requested_at_unix_ms = 16;
+  ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 17;
 }
 
 message UserAgentCatalogState {
   repeated UserAgentCatalogEntry entries = 1;
+  repeated UserAgentApiKeyRevocation pending_api_key_revocations = 2;
 }
 
 message ScheduledAgentSharingGrant {
@@ -101,23 +174,27 @@ message UserAgentCatalogUpsertCommand {
   string schedule_timezone = 12;
   reserved 13;
   reserved "status";
-  // See UserAgentCatalogEntry.lark_receive_id for semantics. Empty values
-  // preserve any existing entry value via the merge-non-empty upsert policy.
-  string lark_receive_id = 14;
-  string lark_receive_id_type = 15;
-  // See UserAgentCatalogEntry.lark_receive_id_fallback for semantics.
-  string lark_receive_id_fallback = 16;
-  string lark_receive_id_type_fallback = 17;
+  // Deprecated compatibility bridge for command envelopes emitted before
+  // channel_address. New callers must set channel_address instead.
+  string lark_receive_id = 14 [deprecated = true];
+  string lark_receive_id_type = 15 [deprecated = true];
+  string lark_receive_id_fallback = 16 [deprecated = true];
+  string lark_receive_id_type_fallback = 17 [deprecated = true];
   // Caller scope captured at create time. Required for new writes.
   aevatar.OwnerScope owner_scope = 18;
-  SkillRunnerOutputFormat output_format = 19;
+  ScheduledAgentOutputFormat output_format = 19;
   // Delivery target platform selected by the creator.
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 20;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 21;
+  ChannelDeliveryAddress channel_address = 22;
 }
 
 message UserAgentCatalogTombstoneCommand {
   string agent_id = 1;
+  // Transient authorization for the immediate NyxID compensation attempt.
+  // Command handlers must never copy this value into events or actor state.
+  string bearer_token = 2;
 }
 
 message UserAgentCatalogCompactTombstonesCommand {
@@ -135,6 +212,47 @@ message UserAgentCatalogUnshareCommand {
   aevatar.OwnerScope owner_scope = 2;
 }
 
+message UserAgentCatalogRecordApiKeyRevocationAttemptCommand {
+  string agent_id = 1;
+  string api_key_id = 2;
+  bool completed = 3;
+  int32 http_status = 4;
+  string error = 5;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 6;
+  enum Track {
+    TRACK_UNSPECIFIED = 0;
+    TRACK_NYX_ID = 1;
+    TRACK_VAULT = 2;
+  }
+  Track track = 7;
+  string secret_reference_ref = 8;
+}
+
+message UserAgentCatalogRepairCredentialRevocationCommand {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.credentials.SecretReference secret_reference = 3;
+  string secret_subject_id = 4;
+  string repair_reason = 5;
+  string requested_by_subject_id = 6;
+  int64 repair_requested_at_unix_ms = 7;
+  string request_id = 8;
+}
+
+message UserAgentCatalogRequestCredentialRevocationCommand {
+  ScheduledAgentCredentialRevocationIntent intent = 1;
+  // Transient authorization for the immediate NyxID compensation attempt.
+  // Command handlers must never copy this value into events or actor state.
+  string bearer_token = 2;
+}
+
+message UserAgentCatalogRetryCredentialRevocationsCommand {
+  aevatar.OwnerScope owner_scope = 1;
+  // Transient authorization for this caller-owned retry turn.
+  // Command handlers must never copy this value into events or actor state.
+  string bearer_token = 2;
+}
+
 message UserAgentCatalogUpsertedEvent {
   UserAgentCatalogEntry entry = 1;
 }
@@ -142,6 +260,58 @@ message UserAgentCatalogUpsertedEvent {
 message UserAgentCatalogTombstonedEvent {
   string agent_id = 1;
   int64 tombstone_state_version = 2;
+}
+
+message UserAgentCatalogApiKeyRevocationRequestedEvent {
+  UserAgentApiKeyRevocation revocation = 1;
+}
+
+message UserAgentCatalogCredentialRevocationsMigratedEvent {
+  repeated UserAgentApiKeyRevocation revocations = 1;
+}
+
+message UserAgentCatalogApiKeyRevocationAttemptRecordedEvent {
+  string agent_id = 1;
+  string api_key_id = 2;
+  bool completed = 3;
+  int32 http_status = 4;
+  string error = 5;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 6;
+  google.protobuf.Timestamp attempted_at = 7;
+  UserAgentCatalogRecordApiKeyRevocationAttemptCommand.Track track = 8;
+  string secret_reference_ref = 9;
+}
+
+message UserAgentCatalogCredentialRevocationRepairedEvent {
+  string agent_id = 1;
+  string api_key_id = 2;
+  aevatar.credentials.SecretReference secret_reference = 3;
+  string secret_subject_id = 4;
+  string repair_reason = 5;
+  string requested_by_subject_id = 6;
+  int64 repair_requested_at_unix_ms = 7;
+  string request_id = 8;
+}
+
+enum UserAgentCatalogCredentialRevocationRepairRejectionReason {
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_UNSPECIFIED = 0;
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_INVALID_REQUEST = 1;
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_NOT_BLOCKED = 2;
+  USER_AGENT_CATALOG_CREDENTIAL_REVOCATION_REPAIR_REJECTION_REASON_ALIAS_CONFLICT = 3;
+}
+
+message UserAgentCatalogCredentialRevocationRepairRejectedEvent {
+  string request_id = 1;
+  string agent_id = 2;
+  string api_key_id = 3;
+  UserAgentCatalogCredentialRevocationRepairRejectionReason reason = 4;
+}
+
+message UserAgentCatalogCredentialRepairOutcome {
+  oneof outcome {
+    UserAgentCatalogCredentialRevocationRepairedEvent repaired = 1;
+    UserAgentCatalogCredentialRevocationRepairRejectedEvent rejected = 2;
+  }
 }
 
 message UserAgentCatalogTombstonesCompactedEvent {
@@ -182,16 +352,13 @@ message UserAgentCatalogDocument {
   string schedule_timezone = 18;
   reserved 19, 20, 21, 22, 23;
   reserved "status", "last_run_at_utc", "next_run_at_utc", "error_count", "last_error";
-  // Mirrors UserAgentCatalogEntry.lark_receive_id*. Required so catalog-backed
-  // outbound senders (FeishuCardHumanInteractionPort) read the typed target
-  // through the projection rather than re-deriving from conversation_id.
-  string lark_receive_id = 24;
-  string lark_receive_id_type = 25;
-  // Mirrors UserAgentCatalogEntry.lark_receive_id_fallback*. Carried through
-  // the projection so catalog-backed senders see the same primary+fallback
-  // pair as actor-state senders.
-  string lark_receive_id_fallback = 26;
-  string lark_receive_id_type_fallback = 27;
+  // Deprecated compatibility bridge for documents materialized before
+  // channel_address. New projections leave these empty and map reads into
+  // channel_address.
+  string lark_receive_id = 24 [deprecated = true];
+  string lark_receive_id_type = 25 [deprecated = true];
+  string lark_receive_id_fallback = 26 [deprecated = true];
+  string lark_receive_id_type_fallback = 27 [deprecated = true];
   // Caller scope materialized from the upserted entry. New rows always carry
   // this; legacy rows may have only owner_nyx_user_id+platform set, in which
   // case the caller-scoped query port lazily synthesizes owner_scope on read
@@ -199,21 +366,49 @@ message UserAgentCatalogDocument {
   aevatar.OwnerScope owner_scope = 28;
   reserved 29, 30, 31, 32;
   reserved "catalog_source_version", "catalog_last_event_id", "runner_source_version", "runner_last_event_id";
-  SkillRunnerOutputFormat output_format = 33;
+  ScheduledAgentOutputFormat output_format = 33;
   // Delivery target platform selected by the creator.
   // This is distinct from owner_scope.platform, which identifies the caller surface.
   string target_platform = 34;
   ScheduledAgentSharingGrant sharing_grant = 35;
   string visible_sharing_audience_key = 36;
   string trigger_sharing_audience_key = 37;
+  ChannelDeliveryAddress channel_address = 38;
 }
 
 // Runtime-only Nyx credential read model for delivery-target execution paths.
 message UserAgentCatalogNyxCredentialDocument {
   string id = 1;
-  string nyx_api_key = 2;
+  string nyx_api_key = 2 [deprecated = true];
   int64 state_version = 3;
   string last_event_id = 4;
   google.protobuf.Timestamp updated_at_utc = 5;
   string actor_id = 6;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 7;
+  string api_key_id = 8;
+}
+
+message UserAgentApiKeyRevocationDocument {
+  string id = 1;
+  string agent_id = 2;
+  string api_key_id = 3;
+  aevatar.credentials.SecretReference nyx_api_key_reference = 4;
+  aevatar.OwnerScope owner_scope = 5;
+  google.protobuf.Timestamp requested_at_utc = 6;
+  int32 attempt_count = 7;
+  google.protobuf.Timestamp last_attempt_at_utc = 8;
+  int32 last_http_status = 9;
+  string last_error = 10;
+  UserAgentApiKeyRevocationFailureKind failure_kind = 11;
+  int64 state_version = 12;
+  string last_event_id = 13;
+  google.protobuf.Timestamp updated_at_utc = 14;
+  string actor_id = 15;
+  ScheduledCredentialRevocationTrack nyx_id_track = 16;
+  ScheduledCredentialRevocationTrack vault_track = 17;
+  string secret_subject_id = 18;
+  string repair_reason = 19;
+  string requested_by_subject_id = 20;
+  int64 repair_requested_at_unix_ms = 21;
+  ScheduledCredentialVaultRevocationDescriptor vault_revocation_descriptor = 22;
 }

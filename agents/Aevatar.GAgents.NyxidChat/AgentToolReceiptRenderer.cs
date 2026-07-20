@@ -35,9 +35,11 @@ public sealed class AgentToolReceiptRenderer : IAgentToolReceiptRenderer
         AgentToolReceipt receipt,
         IReadOnlyDictionary<string, AgentRunToolCall> toolCallById)
     {
+        // Success receipts stay typed-only (persisted state, audit trail, model reply
+        // constraint); the user-visible line is reserved for statuses the model must
+        // not narrate around: pending approval, denial, failure.
         var status = receipt.Status switch
         {
-            AgentToolReceiptStatus.Success => "Completed",
             AgentToolReceiptStatus.ApprovalRequired => "Approval pending",
             AgentToolReceiptStatus.Denied => "Denied",
             AgentToolReceiptStatus.Error => "Failed",

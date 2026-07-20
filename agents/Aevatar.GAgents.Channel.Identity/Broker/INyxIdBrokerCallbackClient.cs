@@ -60,6 +60,8 @@ public interface INyxIdBrokerCallbackClient
 /// </summary>
 public sealed record BrokerAuthorizationCodeResult(string? BindingId, string? IdToken, string? AccessToken)
 {
+    public bool BindingUpdated { get; init; }
+
     public string? RefreshToken { get; init; }
 
     public string? TokenType { get; init; }

@@ -129,7 +129,10 @@ internal sealed class WorkflowProjectionBoardExecutionQueryPort : IWorkflowBoard
                 document.Summary.CompletedSteps,
                 document.Summary.RunningNodes,
                 document.Summary.WaitingOrPendingNodes,
-                document.Summary.FailedNodes),
+                document.Summary.FailedNodes,
+                document.Summary.HasDefinitionStepCount
+                    ? document.Summary.DefinitionStepCount
+                    : null),
             Revision = $"state-version-{document.StateVersion}:event-{document.LastEventId ?? string.Empty}",
         };
     }
