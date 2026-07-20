@@ -71,6 +71,54 @@ public sealed class StreamingAgentProfileTurnClassifierTests
     }
 
     [Fact]
+    public async Task ClassifyAsync_NonPositiveTimeout_ShouldFailBeforeCallingProvider()
+    {
+        var provider = new StubProvider([]);
+        var classifier = new StreamingAgentProfileTurnClassifier(new StubProviderFactory(provider));
+
+        var result = await classifier.ClassifyAsync(NewRequest() with { Timeout = TimeSpan.Zero });
+
+        result.Should().Be(AgentProfileTurnClassificationResult.Failed("timeout_out_of_bounds"));
+        provider.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_InternalTimeout_ShouldFailClosed()
+    {
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new CancellationBlockingProvider()));
+
+        var result = await classifier.ClassifyAsync(
+            NewRequest() with { Timeout = TimeSpan.FromMilliseconds(20) });
+
+        result.Should().Be(AgentProfileTurnClassificationResult.Failed("timeout"));
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_ProviderException_ShouldFailClosed()
+    {
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new ThrowingProvider(new InvalidOperationException("provider failed"))));
+
+        var result = await classifier.ClassifyAsync(NewRequest());
+
+        result.Should().Be(AgentProfileTurnClassificationResult.Failed("provider_failure"));
+    }
+
+    [Fact]
+    public async Task ClassifyAsync_CallerCancellation_ShouldPropagate()
+    {
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new CancellationBlockingProvider()));
+        using var callerCts = new CancellationTokenSource();
+        callerCts.Cancel();
+
+        var act = async () => await classifier.ClassifyAsync(NewRequest(), callerCts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
     public async Task ClassifyAsync_ShouldFailClosedForToolMalformedUnknownAndOversizedOutput()
     {
         var cases = new[]
@@ -142,6 +190,36 @@ public sealed class StreamingAgentProfileTurnClassifierTests
             }
 
             await Task.CompletedTask;
+        }
+    }
+
+    private sealed class CancellationBlockingProvider : ILLMProvider
+    {
+        public string Name => "blocking-classifier-test";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(
+                static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
+                canceled);
+            await canceled.Task;
+            yield break;
+        }
+    }
+
+    private sealed class ThrowingProvider(Exception exception) : ILLMProvider
+    {
+        public string Name => "throwing-classifier-test";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return await Task.FromException<LLMStreamChunk>(exception);
         }
     }
 }

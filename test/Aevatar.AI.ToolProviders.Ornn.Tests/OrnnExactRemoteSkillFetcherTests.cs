@@ -125,19 +125,73 @@ public sealed class OrnnExactRemoteSkillFetcherTests
         }
     }
 
+    [Fact]
+    public async Task FetchAsync_NullExactResponses_ShouldFailClosed()
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => OrnnTestHttpMessageHandler.JsonResponse("{}"),
+            _ => OrnnTestHttpMessageHandler.JsonResponse("{}"));
+
+        var result = await CreateFetcher(handler).FetchAsync("token", ExactRef());
+
+        result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.InvalidResponse);
+        handler.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task FetchAsync_InternalTimeout_ShouldReturnTypedTimeout()
+    {
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+
+        var result = await CreateFetcher(handler, TimeSpan.FromMilliseconds(20))
+            .FetchAsync("token", ExactRef());
+
+        result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.Timeout);
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task FetchAsync_InvalidJsonException_ShouldReturnTypedFailure()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("not-json");
+
+        var result = await CreateFetcher(handler).FetchAsync("token", ExactRef());
+
+        result.FailureCode.Should().Be(ExactRemoteSkillFetchFailureCode.Failed);
+        result.FailureDetail.Should().Be("JsonException");
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task FetchAsync_CallerCancellation_ShouldPropagate()
+    {
+        var handler = OrnnTestHttpMessageHandler.HangingUntilCanceled();
+        using var callerCts = new CancellationTokenSource();
+        callerCts.Cancel();
+
+        var act = async () => await CreateFetcher(handler)
+            .FetchAsync("token", ExactRef(), callerCts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
     private static OrnnTestHttpMessageHandler SuccessHandler() =>
         new(
             _ => OrnnTestHttpMessageHandler.JsonResponse(DetailJson()),
             _ => OrnnTestHttpMessageHandler.JsonResponse(SkillJson()));
 
-    private static OrnnExactRemoteSkillFetcher CreateFetcher(OrnnTestHttpMessageHandler handler)
+    private static OrnnExactRemoteSkillFetcher CreateFetcher(
+        OrnnTestHttpMessageHandler handler,
+        TimeSpan? perCallTimeout = null)
     {
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler));
-        return new OrnnExactRemoteSkillFetcher(new OrnnSkillClient(
-            new OrnnOptions { NyxIdSlug = "ornn" },
-            nyxClient));
+        var options = new OrnnOptions { NyxIdSlug = "ornn" };
+        var client = perCallTimeout.HasValue
+            ? new OrnnSkillClient(options, nyxClient, perCallTimeout.Value)
+            : new OrnnSkillClient(options, nyxClient);
+        return new OrnnExactRemoteSkillFetcher(client);
     }
 
     private static ExactRemoteSkillRef ExactRef() => new()

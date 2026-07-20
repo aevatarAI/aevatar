@@ -195,12 +195,12 @@ public sealed class OrnnSkillClient
                 "Ornn exact skill read exceeded {TimeoutSeconds}s per-call budget for guid '{Guid}'",
                 (int)_perCallTimeout.TotalSeconds,
                 guid);
-            return default;
+            throw;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ornn exact skill read failed for guid '{Guid}'", guid);
-            return default;
+            throw;
         }
     }
 
