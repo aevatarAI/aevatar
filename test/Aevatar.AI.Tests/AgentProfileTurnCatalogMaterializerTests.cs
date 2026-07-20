@@ -164,6 +164,32 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_BlankMessage_ShouldUseClassifierAndRecoveryWithoutFetching()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                " \t\n",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
+        catalog.SelectedIntentId.Should().BeNull();
+        catalog.CandidateIntentId.Should().BeNull();
+        catalog.SelectedSkillPromptLayer.Should().BeNull();
+        catalog.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierNoMatch);
+        classifier.CallCount.Should().Be(1);
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_ClassifierMatch_ShouldSelectExactMember()
     {
         var tools = NewTools("recovery", "task", "extra");

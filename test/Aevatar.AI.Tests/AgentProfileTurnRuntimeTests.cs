@@ -130,6 +130,29 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
+    public async Task UnprofiledTurn_LlmMiddlewareRestrictionShouldRemainEffectiveForProviderAndExecutor()
+    {
+        var visible = new CountingTool("visible");
+        var hidden = new CountingTool("hidden");
+        var tools = NewToolManager(visible, hidden);
+        var provider = new ForgedToolProvider("hidden");
+        var runtime = NewRuntime(
+            provider,
+            tools,
+            [new RestrictingRequestMiddleware(visible)]);
+
+        await DrainAsync(runtime.ChatStreamAsync("run", turnCatalog: null));
+
+        var firstRequest = provider.Requests[0];
+        firstRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
+        firstRequest.ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
+        firstRequest.ToolContext.ToolVisibility.Allows("visible").Should().BeTrue();
+        firstRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+        visible.ExecuteCount.Should().Be(0);
+        hidden.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task StepTurn_LlmMiddlewareShouldNotRestoreToolsOutsideCatalog()
     {
         var visible = new CountingTool("visible");
@@ -346,6 +369,23 @@ public sealed class AgentProfileTurnRuntimeTests
                 Messages = context.Request.Messages,
                 ToolContext = AgentToolExecutionContext.Empty,
                 Tools = tools,
+            };
+            await next();
+        }
+    }
+
+    private sealed class RestrictingRequestMiddleware(IAgentTool visibleTool) : ILLMCallMiddleware
+    {
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            context.Request = new LLMRequest
+            {
+                Messages = context.Request.Messages,
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames([visibleTool.Name]),
+                },
+                Tools = [visibleTool],
             };
             await next();
         }

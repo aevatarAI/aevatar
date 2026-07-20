@@ -150,6 +150,8 @@ public sealed class OrnnExactRemoteSkillFetcherTests
     [Theory]
     [InlineData(true, HttpStatusCode.Forbidden, ExactRemoteSkillFetchFailureCode.AccessDenied)]
     [InlineData(false, HttpStatusCode.NotFound, ExactRemoteSkillFetchFailureCode.NotFound)]
+    [InlineData(true, HttpStatusCode.InternalServerError, ExactRemoteSkillFetchFailureCode.InvalidResponse)]
+    [InlineData(false, HttpStatusCode.ServiceUnavailable, ExactRemoteSkillFetchFailureCode.InvalidResponse)]
     public async Task FetchAsync_ExactEndpointProxyFailure_ShouldPreserveTypedFailureWithoutFallback(
         bool failDetailEndpoint,
         HttpStatusCode statusCode,

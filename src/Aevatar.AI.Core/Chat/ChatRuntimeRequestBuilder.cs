@@ -80,7 +80,7 @@ internal static class ChatRuntimeRequestBuilder
         if (!existing.IsRestricted)
             return ceiling;
         if (!ceiling.IsRestricted)
-            return existing;
+            return ceiling;
 
         return AgentToolVisibilityScope.FromAllowedToolNames(
             ceiling.AllowedToolNames!.Where(existing.Allows));

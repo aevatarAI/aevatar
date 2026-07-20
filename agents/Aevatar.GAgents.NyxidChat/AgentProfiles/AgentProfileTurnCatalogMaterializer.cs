@@ -467,7 +467,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
 
     private static bool MatchesAlias(string? userMessage, string? alias)
     {
-        if (string.IsNullOrWhiteSpace(userMessage) || string.IsNullOrWhiteSpace(alias))
+        if (string.IsNullOrWhiteSpace(userMessage))
+            return true;
+        if (string.IsNullOrWhiteSpace(alias))
             return false;
 
         var message = userMessage.Trim();

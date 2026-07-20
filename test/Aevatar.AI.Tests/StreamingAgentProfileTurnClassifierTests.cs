@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -114,6 +115,17 @@ public sealed class StreamingAgentProfileTurnClassifierTests
     }
 
     [Fact]
+    public async Task ClassifyAsync_ProviderJsonException_ShouldReturnMalformedOutput()
+    {
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new ThrowingProvider(new JsonException("malformed provider output"))));
+
+        var result = await classifier.ClassifyAsync(NewRequest());
+
+        result.Should().Be(AgentProfileTurnClassificationResult.Failed("malformed_output"));
+    }
+
+    [Fact]
     public async Task ClassifyAsync_CallerCancellation_ShouldPropagate()
     {
         var classifier = new StreamingAgentProfileTurnClassifier(
@@ -143,13 +155,31 @@ public sealed class StreamingAgentProfileTurnClassifierTests
         result.Should().Be(AgentProfileTurnClassificationResult.Failed("tool_call_not_allowed"));
     }
 
+    [Fact]
+    public async Task ClassifyAsync_EmptyDeltaBeforeValidContent_ShouldStillMatch()
+    {
+        var classifier = new StreamingAgentProfileTurnClassifier(
+            new StubProviderFactory(new StubProvider(
+            [
+                new LLMStreamChunk { DeltaContent = string.Empty },
+                new LLMStreamChunk { DeltaContent = "{\"status\":\"matched\",\"intent_id\":\"intent-a\"}" },
+            ])));
+
+        var result = await classifier.ClassifyAsync(NewRequest());
+
+        result.Should().Be(AgentProfileTurnClassificationResult.Matched("intent-a"));
+    }
+
     [Theory]
     [InlineData(null, "empty_output")]
     [InlineData(" \t\n", "empty_output")]
     [InlineData("not-json", "malformed_output")]
+    [InlineData("[]", "malformed_output")]
     [InlineData("{\"status\":\"matched\",\"intent_id\":\"intent-a\",\"extra\":true}", "unexpected_output_field")]
     [InlineData("{\"intent_id\":\"intent-a\"}", "status_missing")]
     [InlineData("{\"status\":1,\"intent_id\":\"intent-a\"}", "status_missing")]
+    [InlineData("{\"status\":\"matched\"}", "malformed_output")]
+    [InlineData("{\"status\":\"matched\",\"intent_id\":1}", "malformed_output")]
     [InlineData("{\"status\":\"matched\",\"intent_id\":\"unknown\"}", "unknown_intent")]
     public async Task ClassifyAsync_RejectedTextOutput_ShouldFailClosed(
         string? deltaContent,
