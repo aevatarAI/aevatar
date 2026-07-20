@@ -203,6 +203,7 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
       loading ||
       hasConflict ||
       hasBlockingFindings ||
+      !hasUnappliedChanges ||
       !buffer.trim(),
   );
 
