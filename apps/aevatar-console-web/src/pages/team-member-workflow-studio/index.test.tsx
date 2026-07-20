@@ -4859,8 +4859,73 @@ describe("TeamMemberWorkflowStudioPage", () => {
         }),
       );
     });
+    await waitFor(() => {
+      expect(screen.queryByText("Unapplied")).toBeNull();
+      expect(applyButton).toBeDisabled();
+    });
+    fireEvent.change(yamlView, {
+      target: {
+        value: `${(yamlView as HTMLTextAreaElement).value}\n# local edit\n`,
+      },
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Unapplied")).toBeTruthy();
+      expect(applyButton).toBeEnabled();
+    });
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("keeps Apply to draft enabled after a valid YAML apply failure", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (studioApi.serializeYaml as jest.Mock).mockImplementation(
+      async ({ document }) => {
+        if (document.name === "Rejected apply") {
+          throw new Error("Apply serialization failed");
+        }
+
+        return {
+          document,
+          findings: [],
+          yaml: `name: ${document.name}\nsteps:\n${(document.steps ?? [])
+            .map((step: { id?: string; type?: string }) => `  - id: ${step.id}\n    type: ${step.type}`)
+            .join("\n")}`,
+        };
+      },
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await screen.findByLabelText("Workflow title");
+    clickYamlAction("Edit YAML");
+    const editor = await screen.findByLabelText("Workflow YAML editor");
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
+    expect(applyButton).toBeDisabled();
+
+    fireEvent.change(editor, {
+      target: {
+        value:
+          "name: Rejected apply\nsteps:\n  - id: triage\n    type: llm_call\n",
+      },
+    });
+    await waitFor(() => {
+      expect(applyButton).toBeEnabled();
+    });
+
+    fireEvent.click(applyButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Apply serialization failed")).toBeTruthy();
+      expect(applyButton).toBeEnabled();
+    });
+    expect(editor).toHaveValue(
+      "name: Rejected apply\nsteps:\n  - id: triage\n    type: llm_call\n",
+    );
+    expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:0");
   });
 
   it("keeps invalid YAML in the buffer and preserves the current graph", async () => {
@@ -5164,7 +5229,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     const editor = await screen.findByLabelText("Workflow YAML editor");
     const applyButton = screen.getByRole("button", { name: "Apply to draft" });
     await waitFor(() => {
-      expect(applyButton).toBeEnabled();
+      expect(applyButton).toBeDisabled();
     });
 
     fireEvent.change(titleInput, {
@@ -5175,7 +5240,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect((editor as HTMLTextAreaElement).value).toContain(
         "name: Renamed member",
       );
-      expect(applyButton).toBeEnabled();
+      expect(applyButton).toBeDisabled();
       expect(
         screen.queryByText(
           "This YAML buffer is stale because the canvas or source draft changed.",
