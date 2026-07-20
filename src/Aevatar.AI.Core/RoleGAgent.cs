@@ -51,6 +51,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     /// </summary>
     protected string? CurrentTurnNyxIdAccessToken => _currentTurnNyxIdAccessToken;
 
+    protected virtual TimeProvider ChatRequestTimeProvider => TimeProvider.System;
+
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
@@ -869,11 +871,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             requestSummary.InputPartCount);
         var timeoutMs = ResolveLlmTimeoutMs(request);
         var useWorkflowFailureMarker = timeoutMs > 0;
-        using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
+        using var timeoutCts = timeoutMs > 0
+            ? new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs), ChatRequestTimeProvider)
+            : null;
         var streamCt = timeoutCts?.Token ?? CancellationToken.None;
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
-        var turnCatalog = await MaterializeAgentProfileTurnCatalogAsync(request, toolContext, streamCt);
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
@@ -885,6 +888,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         SessionReplayRecord replayRecord;
         try
         {
+            var turnCatalog = await MaterializeAgentProfileTurnCatalogAsync(request, toolContext, streamCt);
             replayRecord = await ExecuteStreamingChatAsync(
                 request,
                 llmControl,

@@ -77,6 +77,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         _turnCatalogMaterializer = turnCatalogMaterializer;
     }
 
+    protected override TimeProvider ChatRequestTimeProvider => _timeProvider;
+
     // Refactor (iter47/issue-877-chat-endpoints-own-lifecycle-and-compensation):
     //   Old pattern: Chat endpoints owned actor lifecycle, registry compensation, participant orchestration, terminal-state recovery, and chat history command-port side effects.
     //   New principle: Endpoint is adapter-only (HTTP/SSE); typed command facade owns lifecycle; existing chat actors own compensation events and terminal-state publication.

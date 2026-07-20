@@ -39,6 +39,73 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_PolicyToolSetRefs_ShouldOnlyAttenuateFinalAuthority()
+    {
+        var routeTools = NewTools(
+            "recovery-from-set",
+            "task-from-set",
+            "route-only",
+            "visibility-blocked");
+        var registeredTools = NewTools(
+            "recovery-from-set",
+            "task-from-set",
+            "route-only",
+            "visibility-blocked",
+            "registered-only");
+        var registry = new RecordingToolSetRegistry();
+        registry.Add("profile.route", new StaticToolSource(routeTools));
+        registry.Add("maximum.policy", new StaticToolSource(NewTools(
+            "recovery-from-set",
+            "task-from-set",
+            "maximum-only")));
+        registry.Add("recovery.policy", new StaticToolSource(NewTools(
+            "recovery-from-set",
+            "recovery-outside-maximum")));
+        registry.Add("task.policy", new StaticToolSource(NewTools(
+            "task-from-set",
+            "task-outside-maximum")));
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolSetRefs.Add("maximum.policy");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+        profile.RecoveryToolPolicy.ToolSetRefs.Add("recovery.policy");
+        profile.Members[0].TaskToolPolicy.ToolNames.Clear();
+        profile.Members[0].TaskToolPolicy.ToolSetRefs.Add("task.policy");
+        var toolContext = ToolContext() with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
+                ["recovery-from-set", "task-from-set", "route-only"]),
+        };
+
+        var catalog = await NewMaterializer(
+                registry,
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                registeredTools,
+                toolContext,
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery-from-set", "task-from-set");
+        catalog.FinalAllowedToolNames.Should().NotContain([
+            "route-only",
+            "visibility-blocked",
+            "registered-only",
+            "maximum-only",
+            "recovery-outside-maximum",
+            "task-outside-maximum",
+        ]);
+        registry.ResolveCalls.Should().Equal(
+            "profile.route",
+            "maximum.policy",
+            "recovery.policy",
+            "task.policy");
+    }
+
+    [Fact]
     public async Task MaterializeAsync_DuplicateAlias_ShouldUseRecoveryWithoutFetching()
     {
         var tools = NewTools("recovery", "task", "extra");

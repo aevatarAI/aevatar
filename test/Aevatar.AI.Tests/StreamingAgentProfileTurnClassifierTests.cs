@@ -277,6 +277,17 @@ internal sealed class ManualDeadlineTimeProvider : TimeProvider
         }
     }
 
+    public int PendingTimerCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count;
+            }
+        }
+    }
+
     public void Advance(TimeSpan delta)
     {
         ManualTimer[] timers;

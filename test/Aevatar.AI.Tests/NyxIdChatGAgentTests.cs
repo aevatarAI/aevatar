@@ -512,6 +512,68 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_BoundTurnCatalogTimeout_ShouldCommitFailureAndPublishTerminalFrame()
+    {
+        const int timeoutMs = 1_000;
+        const string actorId = "nyxid-chat-catalog-timeout";
+        const string sessionId = "catalog-timeout-session";
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var blockingSource = new ReleasableBlockingToolSource();
+        var registry = new BlockingProfileToolSetRegistry("profile.route", blockingSource);
+        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "must not run" }],
+        ]);
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1", "profile.route") });
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            timeProvider: timeProvider,
+            turnCatalogMaterializer: materializer);
+        var eventPublisher = new RecordingEventPublisher();
+        agent.EventPublisher = eventPublisher;
+
+        await agent.ActivateAsync();
+        var handling = agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "wait for catalog",
+            SessionId = sessionId,
+            TimeoutMs = timeoutMs,
+        });
+        await blockingSource.Started;
+
+        try
+        {
+            timeProvider.PendingTimerCount.Should().Be(1);
+            timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+            await handling;
+        }
+        finally
+        {
+            blockingSource.Release();
+            await handling;
+        }
+
+        blockingSource.CancellationObserved.Should().BeTrue();
+        llm.StreamRequests.Should().BeEmpty();
+        var completion = (await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Should().ContainSingle().Subject.EventData.Unpack<RoleChatSessionCompletedEvent>();
+        completion.SessionId.Should().Be(sessionId);
+        completion.Content.Should().Contain($"LLM request timed out after {timeoutMs}ms");
+        eventPublisher.Published.OfType<TextMessageStartEvent>()
+            .Should().ContainSingle(start => start.SessionId == sessionId);
+        eventPublisher.Published.OfType<TextMessageEndEvent>()
+            .Should().ContainSingle(end => end.SessionId == sessionId && end.Content == completion.Content);
+    }
+
+    [Fact]
     public async Task HandleChatRequest_BoundTurn_ShouldPropagateTokenCatalogPromptAndAdmission()
     {
         const string turnToken = "turn-token-alpha";
@@ -1319,6 +1381,50 @@ public class NyxIdChatGAgentTests
                     "missing",
                     GetRegisteredNames()));
         }
+    }
+
+    private sealed class BlockingProfileToolSetRegistry(
+        string name,
+        IAgentToolSource source) : IToolSetRegistry
+    {
+        public IReadOnlyList<string> GetRegisteredNames() => [name];
+
+        public ToolSetResolveResult Resolve(ChatRouteToolSetRef? toolSetRef) =>
+            string.Equals(toolSetRef?.Name, name, StringComparison.Ordinal)
+                ? ToolSetResolveResult.Success(name, [source])
+                : ToolSetResolveResult.Failure(new ToolSetResolveError(
+                    ToolSetResolveError.UnknownNameCode,
+                    toolSetRef?.Name ?? string.Empty,
+                    "missing",
+                    GetRegisteredNames()));
+    }
+
+    private sealed class ReleasableBlockingToolSource : IAgentToolSource
+    {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+        public bool CancellationObserved { get; private set; }
+
+        public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            _started.TrySetResult();
+            try
+            {
+                await _released.Task.WaitAsync(ct);
+                return [];
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
+        }
+
+        public void Release() => _released.TrySetResult();
     }
 
     private sealed class ThrowingNameToolSetRegistry : IToolSetRegistry
