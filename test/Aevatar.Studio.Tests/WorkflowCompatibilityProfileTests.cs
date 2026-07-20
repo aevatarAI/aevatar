@@ -67,6 +67,67 @@ public sealed class WorkflowCompatibilityProfileTests
         parserParse.Should().NotThrow();
     }
 
+    [Fact]
+    public void Parse_WhenRuntimeAllowedToolsFieldsDeclared_ShouldAcceptTypedFieldsAndRoundTripToRuntime()
+    {
+        var service = new YamlWorkflowDocumentService(_profile);
+        var yaml = """
+            name: tool_scope
+            roles:
+              - id: planner
+                allowed_tools: [search, calendar]
+              - id: isolated
+                allowed_tools: []
+              - id: inherited
+            steps:
+              - id: scoped
+                type: llm_call
+                target_role: planner
+                allowed_tools: [calendar]
+                parameters:
+                  prompt_prefix: "Use scoped tool"
+              - id: no_tools
+                type: llm_call
+                target_role: isolated
+                allowed_tools: []
+              - id: inherited_tools
+                type: llm_call
+                target_role: inherited
+            """;
+
+        var studioParse = service.Parse(yaml);
+
+        studioParse.Findings.Should().NotContain(finding =>
+            string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase));
+        studioParse.Document.Should().NotBeNull();
+        var document = studioParse.Document!;
+        document.Roles[0].AllowedTools.Should().Equal("search", "calendar");
+        document.Roles[1].AllowedTools.Should().BeEmpty();
+        document.Roles[2].AllowedTools.Should().BeNull();
+        document.Steps[0].AllowedTools.Should().Equal("calendar");
+        document.Steps[1].AllowedTools.Should().BeEmpty();
+        document.Steps[2].AllowedTools.Should().BeNull();
+
+        var serialized = service.Serialize(document);
+        var studioRoundTrip = service.Parse(serialized);
+        studioRoundTrip.Findings.Should().NotContain(finding =>
+            string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase));
+        studioRoundTrip.Document!.Roles[0].AllowedTools.Should().Equal("search", "calendar");
+        studioRoundTrip.Document.Roles[1].AllowedTools.Should().BeEmpty();
+        studioRoundTrip.Document.Roles[2].AllowedTools.Should().BeNull();
+        studioRoundTrip.Document.Steps[0].AllowedTools.Should().Equal("calendar");
+        studioRoundTrip.Document.Steps[1].AllowedTools.Should().BeEmpty();
+        studioRoundTrip.Document.Steps[2].AllowedTools.Should().BeNull();
+
+        var runtimeRoundTrip = new WorkflowParser().Parse(serialized);
+        runtimeRoundTrip.Roles[0].AgentToolScope!.AllowedToolNames.Should().Equal("search", "calendar");
+        runtimeRoundTrip.Roles[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
+        runtimeRoundTrip.Roles[2].AgentToolScope.Should().BeNull();
+        runtimeRoundTrip.Steps[0].AgentToolScope!.AllowedToolNames.Should().Equal("calendar");
+        runtimeRoundTrip.Steps[1].AgentToolScope!.AllowedToolNames.Should().BeEmpty();
+        runtimeRoundTrip.Steps[2].AgentToolScope.Should().BeNull();
+    }
+
     [Theory]
     [InlineData("version")]
     [InlineData("inputs")]

@@ -153,6 +153,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
                 MaxTokens = ReadInteger(roleNode, "max_tokens", findings, path),
                 MaxToolRounds = ReadInteger(roleNode, "max_tool_rounds", findings, path),
                 MaxHistoryMessages = ReadInteger(roleNode, "max_history_messages", findings, path),
+                AllowedTools = ParseAllowedTools(roleNode, path, findings),
                 EventModules = eventModules,
                 EventRoutes = eventRoutes,
                 Connectors = ParseConnectors(roleNode, path, findings),
@@ -212,6 +213,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
             OriginalType = rawType,
             TargetRole = ReadScalar(stepNode, "target_role") ?? ReadScalar(stepNode, "role"),
             UsedRoleAlias = GetNode(stepNode, "target_role") is null && GetNode(stepNode, "role") is not null,
+            AllowedTools = ParseAllowedTools(stepNode, path, findings),
             Parameters = parameters,
             Next = ReadScalar(stepNode, "next"),
             Branches = ParseBranches(stepNode, path, findings),
@@ -398,6 +400,50 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         return [];
     }
 
+    private static List<string>? ParseAllowedTools(
+        YamlMappingNode node,
+        string path,
+        ICollection<ValidationFinding> findings)
+    {
+        var allowedToolsNode = GetNode(node, "allowed_tools");
+        if (allowedToolsNode is null)
+        {
+            return null;
+        }
+
+        if (allowedToolsNode is YamlSequenceNode sequenceNode)
+        {
+            var tools = new List<string>();
+            for (var index = 0; index < sequenceNode.Children.Count; index++)
+            {
+                if (sequenceNode.Children[index] is not YamlScalarNode scalarNode)
+                {
+                    findings.Add(ValidationFinding.Error(
+                        $"{path}/allowed_tools/{index}",
+                        "Each `allowed_tools` entry must be a string."));
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(scalarNode.Value))
+                {
+                    tools.Add(scalarNode.Value.Trim());
+                }
+            }
+
+            return tools;
+        }
+
+        if (allowedToolsNode is YamlScalarNode scalar)
+        {
+            return (scalar.Value ?? string.Empty)
+                .Split([',', ';', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList();
+        }
+
+        findings.Add(ValidationFinding.Error($"{path}/allowed_tools", "`allowed_tools` must be a list or delimited string."));
+        return [];
+    }
+
     private Dictionary<string, object?> SerializeRole(RoleModel role)
     {
         // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
@@ -424,6 +470,7 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         AddIfNotNull(result, "max_tokens", role.MaxTokens);
         AddIfNotNull(result, "max_tool_rounds", role.MaxToolRounds);
         AddIfNotNull(result, "max_history_messages", role.MaxHistoryMessages);
+        AddIfPresent(result, "allowed_tools", role.AllowedTools);
         AddIfNotNull(result, "event_modules", role.EventModules);
         AddIfNotNull(result, "event_routes", role.EventRoutes);
 
@@ -447,6 +494,8 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
         {
             result["target_role"] = step.TargetRole;
         }
+
+        AddIfPresent(result, "allowed_tools", step.AllowedTools);
 
         if (step.Parameters.Count > 0)
         {
@@ -495,6 +544,14 @@ public sealed class YamlWorkflowDocumentService : IWorkflowYamlDocumentService
 
         AddIfNotNull(result, "timeout_ms", step.TimeoutMs);
         return result;
+    }
+
+    private static void AddIfPresent(IDictionary<string, object?> dictionary, string key, List<string>? value)
+    {
+        if (value is not null)
+        {
+            dictionary[key] = value;
+        }
     }
 
     private void CanonicalizeStepTypeParameters(IDictionary<string, StudioStepParameterValue?> parameters)
