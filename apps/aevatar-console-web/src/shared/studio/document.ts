@@ -89,6 +89,7 @@ const DEFAULT_PARAMETERS_BY_STEP_TYPE: Record<string, Record<string, unknown>> =
     body: '',
     authentication: { scheme: 'bearer', secret_ref: '' },
     timeout_ms: '30000',
+    max_request_bytes: '65536',
     max_response_bytes: '65536',
     retry: '0',
     on_error: 'fail',

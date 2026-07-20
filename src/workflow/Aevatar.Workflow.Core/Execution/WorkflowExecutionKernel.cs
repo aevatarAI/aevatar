@@ -2043,6 +2043,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             BodyMode = EvaluateOption(options.BodyMode, state),
             Body = EvaluateOption(options.Body, state),
             TimeoutMs = options.TimeoutMs,
+            MaxRequestBytes = options.MaxRequestBytes,
             MaxResponseBytes = options.MaxResponseBytes,
             MaxRedirects = options.MaxRedirects,
             AllowInsecureHttp = options.AllowInsecureHttp,

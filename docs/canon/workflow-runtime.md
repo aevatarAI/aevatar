@@ -502,7 +502,7 @@ services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyE
 
 `http_request` and named HTTP connectors share one hardened outbound HTTP executor, but their authoring contracts are intentionally different:
 
-- `http_request` is direct workflow-owned HTTP. The workflow stores typed URL, method, query, headers, body mode, authentication secret reference, timeout, redirect, and response limit fields in `WorkflowStepParameters.http_request`; it does not read `parameters.connector` and does not require host-local `connectors.json`.
+- `http_request` is direct workflow-owned HTTP. The workflow stores typed URL, method, query, headers, body mode, authentication secret reference, timeout, redirect, request limit, and response limit fields in `WorkflowStepParameters.http_request`; it does not read `parameters.connector` and does not require host-local `connectors.json`.
 - `connector_call` is named connector lookup. The workflow stores a connector name plus operation parameters, then resolves the connector from `IConnectorRegistry` for reuse, role authorization, and centralized policy.
 
 ### HTTP Request primitive
@@ -522,7 +522,8 @@ Security and execution rules:
 - Raw `Authorization` headers in `headers` fail before dispatch. Authentication must use `authentication.secret_ref`.
 - `ICredentialProvider` resolves the secret only while the step is executing; raw secret material is not copied into YAML, actor state, read models, traces, annotations, or UI output.
 - The executor requires HTTPS unless the step explicitly sets development-only `allow_insecure_http`.
-- Direct HTTP disallows private-network destinations. The executor validates each target and redirect with DNS resolution, blocks loopback, link-local, multicast, private, carrier-grade NAT, and metadata-service style destinations, and enforces timeout, redirect, and response-size bounds.
+- The executor rejects request bodies over `max_request_bytes` before dispatch and rejects response bodies over `max_response_bytes` while reading the response stream.
+- Direct HTTP disallows private-network destinations. The executor validates each target and redirect with DNS resolution, blocks loopback, link-local, multicast, private, carrier-grade NAT, and metadata-service style destinations, and enforces timeout, redirect, request-size, and response-size bounds.
 - Retry preserves the canonical step type `http_request` and the typed request options in `PendingConnectorCallState`; replay does not fall back to a named connector lookup.
 
 ### Named connector mechanism

@@ -11,6 +11,7 @@ namespace Aevatar.Foundation.Core.Connectors;
 public sealed class DefaultOutboundHttpRequestExecutor : IOutboundHttpRequestExecutor
 {
     public const int DefaultTimeoutMs = 30_000;
+    public const int DefaultMaxRequestBytes = 65_536;
     public const int DefaultMaxResponseBytes = 65_536;
     public const int DefaultMaxRedirects = 3;
 
@@ -52,6 +53,7 @@ public sealed class DefaultOutboundHttpRequestExecutor : IOutboundHttpRequestExe
 
         var method = NormalizeMethod(request.Method);
         var timeoutMs = ClampOrDefault(request.TimeoutMs, 100, 300_000, DefaultTimeoutMs);
+        var maxRequestBytes = ClampOrDefault(request.MaxRequestBytes, 1, 10 * 1024 * 1024, DefaultMaxRequestBytes);
         var maxResponseBytes = ClampOrDefault(request.MaxResponseBytes, 1, 10 * 1024 * 1024, DefaultMaxResponseBytes);
         var maxRedirects = ClampOrDefault(request.MaxRedirects, 0, 10, DefaultMaxRedirects);
         var currentUri = ApplyQuery(targetUri, request.Query);
@@ -61,6 +63,9 @@ public sealed class DefaultOutboundHttpRequestExecutor : IOutboundHttpRequestExe
             ? "application/json"
             : request.ContentType.Trim();
         var sw = Stopwatch.StartNew();
+
+        if (Encoding.UTF8.GetByteCount(body) > maxRequestBytes)
+            return Failure($"http request exceeded {maxRequestBytes} bytes", currentMethod, currentUri, sw);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));

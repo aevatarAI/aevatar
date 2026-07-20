@@ -509,6 +509,7 @@ message WorkflowHttpRequestOptions
   int32 max_response_bytes = 9;
   int32 max_redirects = 10;
   bool allow_insecure_http = 11;
+  int32 max_request_bytes = 12;
 }
 message StepRequestEvent
 {

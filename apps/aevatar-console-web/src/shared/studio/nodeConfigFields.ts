@@ -254,6 +254,19 @@ const HTTP_REQUEST_FIELDS: readonly NodeConfigFieldSource[] = [
     default: '65536',
   },
   {
+    name: 'max_request_bytes',
+    label: message(
+      'shared.studio.nodeConfigFields.httpRequest.maxRequestBytes.label',
+      'Max request bytes',
+    ),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.maxRequestBytes.description',
+      'Maximum request body size sent by the workflow.',
+    ),
+    type: 'number',
+    default: '65536',
+  },
+  {
     name: 'retry',
     label: message('shared.studio.nodeConfigFields.httpRequest.retry.label', 'Retry'),
     description: message(

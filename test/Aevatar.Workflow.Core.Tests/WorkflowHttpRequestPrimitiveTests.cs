@@ -26,6 +26,7 @@ public sealed class WorkflowHttpRequestPrimitiveTests
                     scheme: bearer
                     secret_ref: scope-secret:q1000-token
                   timeout_ms: "20000"
+                  max_request_bytes: "4096"
                   max_response_bytes: "65536"
                   max_redirects: "2"
             """);
@@ -42,6 +43,7 @@ public sealed class WorkflowHttpRequestPrimitiveTests
         step.HttpRequestOptions.Authentication!.Scheme.Should().Be("bearer");
         step.HttpRequestOptions.Authentication.SecretRef.Should().Be("scope-secret:q1000-token");
         step.HttpRequestOptions.TimeoutMs.Should().Be(20000);
+        step.HttpRequestOptions.MaxRequestBytes.Should().Be(4096);
         step.HttpRequestOptions.MaxResponseBytes.Should().Be(65536);
         step.HttpRequestOptions.MaxRedirects.Should().Be(2);
     }
@@ -98,5 +100,8 @@ public sealed class WorkflowHttpRequestPrimitiveTests
         WorkflowStepParameters.Descriptor.Fields.InDeclarationOrder()
             .Should()
             .Contain(field => field.Name == "http_request" && field.FieldNumber == 12);
+        WorkflowHttpRequestOptions.Descriptor.Fields.InDeclarationOrder()
+            .Should()
+            .Contain(field => field.Name == "max_request_bytes");
     }
 }

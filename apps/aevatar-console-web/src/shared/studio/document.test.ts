@@ -68,6 +68,7 @@ describe('studio document helpers', () => {
           body: '',
           body_mode: 'none',
           headers: {},
+          max_request_bytes: '65536',
           max_response_bytes: '65536',
           method: 'GET',
           on_error: 'fail',

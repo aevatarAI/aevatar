@@ -685,6 +685,16 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
       {
         kind: 'number',
         label: message(
+          'shared.studio.nodeConfiguration.httpRequest.maxRequestBytes.label',
+          'Max request bytes',
+        ),
+        name: 'maxRequestBytes',
+        parameterName: 'max_request_bytes',
+        validation: { integer: true, min: 1, max: 10485760 },
+      },
+      {
+        kind: 'number',
+        label: message(
           'shared.studio.nodeConfiguration.httpRequest.retry.label',
           'Retries',
         ),

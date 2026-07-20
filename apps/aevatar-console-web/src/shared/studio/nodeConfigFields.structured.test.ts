@@ -131,6 +131,7 @@ describe('studio node configuration semantics', () => {
       url: 'https://api.example.com/q1000',
       authentication: { scheme: 'bearer', secret_ref: 'q1000-token' },
       timeout_ms: '20000',
+      max_request_bytes: '4096',
       max_response_bytes: '65536',
     });
 
@@ -144,6 +145,7 @@ describe('studio node configuration semantics', () => {
         'body',
         'authentication',
         'timeout_ms',
+        'max_request_bytes',
         'max_response_bytes',
         'retry',
         'on_error',
@@ -180,6 +182,7 @@ describe('studio node configuration semantics', () => {
           body: '',
           bodyMode: 'none',
           headers: '{}',
+          maxRequestBytes: '4096',
           maxResponseBytes: '65536',
           method: 'POST',
           onError: 'fail',
@@ -193,6 +196,7 @@ describe('studio node configuration semantics', () => {
       authentication: { scheme: 'bearer', secret_ref: 'q1000-token' },
       body_mode: 'none',
       headers: {},
+      max_request_bytes: 4096,
       max_response_bytes: 65536,
       method: 'POST',
       on_error: 'fail',

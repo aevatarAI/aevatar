@@ -117,6 +117,34 @@ public sealed class OutboundHttpRequestExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldRejectRequestBodyThatExceedsLimitBeforeSending()
+    {
+        var handler = new RecordingHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}"),
+            });
+        var executor = new DefaultOutboundHttpRequestExecutor(
+            new HttpClient(handler),
+            new StaticDnsResolver(IPAddress.Parse("93.184.216.34")));
+        var request = new OutboundHttpRequest
+        {
+            Method = "POST",
+            Url = "https://api.example.com/data",
+            Body = "abcdef",
+            ContentType = "text/plain",
+            TimeoutMs = 5000,
+            MaxRequestBytes = 5,
+        };
+
+        var response = await executor.ExecuteAsync(request);
+
+        response.Success.Should().BeFalse();
+        response.Error.Should().Contain("request exceeded 5 bytes");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldReturnStatusAndBodyForNonSuccess()
     {
         var handler = new RecordingHttpMessageHandler(_ =>

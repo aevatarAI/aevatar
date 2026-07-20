@@ -1114,6 +1114,7 @@ public sealed class WorkflowParser
             Body = GetParameter(parameters, "body", "payload", "stdin_value"),
             Authentication = authentication,
             TimeoutMs = ParseNonNegativeInt(GetParameter(parameters, "timeout_ms")),
+            MaxRequestBytes = ParseNonNegativeInt(GetParameter(parameters, "max_request_bytes")),
             MaxResponseBytes = ParseNonNegativeInt(GetParameter(parameters, "max_response_bytes")),
             MaxRedirects = ParseNonNegativeInt(GetParameter(parameters, "max_redirects")),
             AllowInsecureHttp = ParseBool(GetParameter(parameters, "allow_insecure_http")),

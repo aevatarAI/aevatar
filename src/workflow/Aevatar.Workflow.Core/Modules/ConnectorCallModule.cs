@@ -772,6 +772,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 Body = ResolveBody(request.Payload),
                 ContentType = contentType,
                 TimeoutMs = options.TimeoutMs,
+                MaxRequestBytes = options.MaxRequestBytes,
                 MaxResponseBytes = options.MaxResponseBytes,
                 MaxRedirects = options.MaxRedirects,
                 AllowInsecureHttp = options.AllowInsecureHttp,

@@ -677,13 +677,13 @@ steps:
 ### `http_request` (aliases: `http_get`, `http_post`, `http_put`, `http_delete`)
 
 - Purpose: send one direct outbound HTTP request from the workflow without looking up a named connector in `IConnectorRegistry`.
-- Common parameters: `method`, `url`, `query`, `headers`, `body_mode`, `body`, `authentication`, `timeout_ms`, `max_response_bytes`, `max_redirects`, `retry`, `on_error`.
+- Common parameters: `method`, `url`, `query`, `headers`, `body_mode`, `body`, `authentication`, `timeout_ms`, `max_request_bytes`, `max_response_bytes`, `max_redirects`, `retry`, `on_error`.
 - Stable control semantics are typed as `WorkflowHttpRequestOptions` and `WorkflowHttpRequestAuthentication`, then carried through `WorkflowStepParameters.http_request`. They are not inferred from a generic connector name or arbitrary response JSON.
 - `http_request` side effects are at-least-once. The workflow actor uses the logical run id + step id + logical attempt to resolve and persist the typed `idempotency_key`; pending replay and physical retry reuse that key and the executor sends it as `Idempotency-Key` when non-empty. This key is for callee-side dedup only; the workflow engine does not promise exactly-once.
 - Authentication must use `authentication.secret_ref` or compatible `credential_ref` input names. Raw secret values and raw `Authorization` headers are rejected before dispatch. The raw secret is resolved through `ICredentialProvider` only at execution time, and secret-derived values are redacted from output, error text, annotations, read models, traces, and UI-visible metadata.
 - Supported authentication schemes are `bearer`, `header`, and `secret_ref_header`. `bearer` produces an HTTP `Authorization: Bearer <secret>` header inside the executor boundary; `header` and `secret_ref_header` require `authentication.header_name` and may use `authentication.header_value_prefix`.
 - HTTPS is required by default. `allow_insecure_http` is a development-only override and does not allow private network destinations.
-- The shared outbound HTTP executor validates every target and redirect before dispatch, disables automatic redirects, enforces a bounded redirect count, and validates DNS again at the socket connection boundary to defend against rebinding. It rejects loopback, link-local, multicast, cloud metadata style, private, and carrier-grade NAT destinations unless explicitly allowed by a named connector boundary, and applies timeout and maximum response byte limits.
+- The shared outbound HTTP executor validates every target and redirect before dispatch, disables automatic redirects, enforces a bounded redirect count, and validates DNS again at the socket connection boundary to defend against rebinding. It rejects loopback, link-local, multicast, cloud metadata style, private, and carrier-grade NAT destinations unless explicitly allowed by a named connector boundary, and applies timeout plus maximum request and response byte limits.
 - Failure semantics are explicit: DNS resolution failure, blocked egress target, redirect policy denial, authentication failure, timeout, non-success HTTP status, invalid URL, and response-size overflow all fail the step unless `on_error: continue` is set.
 - Direct `http_request` and named HTTP connectors share the same hardened `IOutboundHttpRequestExecutor`. The authoring models differ: `http_request` owns the concrete URL/method/options in workflow YAML, while a named HTTP connector owns reusable base URL, path allowlists, and centralized governance in `connectors.json` or a future Team Connector catalog.
 - Ergonomic aliases normalize to `http_request`:
@@ -707,6 +707,7 @@ steps:
         scheme: bearer
         secret_ref: q1000_bridge_token
       timeout_ms: "20000"
+      max_request_bytes: "65536"
       max_response_bytes: "65536"
       max_redirects: "2"
     retry:

@@ -43,6 +43,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
                     new PrimitiveParameterDescriptor("body", "string", false, "Raw request body when body_mode is raw."),
                     new PrimitiveParameterDescriptor("authentication", "object", false, "Authentication object containing scheme and secret_ref."),
                     new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Request timeout in milliseconds.", DefaultValue: "30000"),
+                    new PrimitiveParameterDescriptor("max_request_bytes", "int", false, "Maximum request body bytes.", DefaultValue: "65536"),
                     new PrimitiveParameterDescriptor("max_response_bytes", "int", false, "Maximum response body bytes.", DefaultValue: "65536"),
                     new PrimitiveParameterDescriptor("max_redirects", "int", false, "Maximum validated redirects.", DefaultValue: "3"),
                     new PrimitiveParameterDescriptor("retry", "int", false, "Retry count for failed attempts.", DefaultValue: "0"),

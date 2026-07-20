@@ -158,6 +158,8 @@ public sealed class HttpRequestOptionsDefinition
 
     public int TimeoutMs { get; init; }
 
+    public int MaxRequestBytes { get; init; }
+
     public int MaxResponseBytes { get; init; }
 
     public int MaxRedirects { get; init; }

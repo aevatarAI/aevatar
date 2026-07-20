@@ -149,6 +149,10 @@ public sealed class HttpConnector : IConnector
                                    int.TryParse(rawMaxResponseBytes, out var parsedMaxResponseBytes)
                 ? parsedMaxResponseBytes
                 : DefaultOutboundHttpRequestExecutor.DefaultMaxResponseBytes;
+            var maxRequestBytes = request.Parameters.TryGetValue("max_request_bytes", out var rawMaxRequestBytes) &&
+                                  int.TryParse(rawMaxRequestBytes, out var parsedMaxRequestBytes)
+                ? parsedMaxRequestBytes
+                : DefaultOutboundHttpRequestExecutor.DefaultMaxRequestBytes;
             var maxRedirects = request.Parameters.TryGetValue("max_redirects", out var rawMaxRedirects) &&
                                int.TryParse(rawMaxRedirects, out var parsedMaxRedirects)
                 ? parsedMaxRedirects
@@ -165,6 +169,7 @@ public sealed class HttpConnector : IConnector
                     Body = request.Payload ?? string.Empty,
                     ContentType = contentType,
                     TimeoutMs = timeoutMs,
+                    MaxRequestBytes = maxRequestBytes,
                     MaxResponseBytes = maxResponseBytes,
                     MaxRedirects = maxRedirects,
                     AllowInsecureHttp = string.Equals(targetUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase),

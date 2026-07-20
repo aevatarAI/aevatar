@@ -249,7 +249,7 @@ Actor audit facts. Recovery then revokes both protected request and completion m
 - 可用 `allowedInputKeys` 校验 payload JSON key；
 - 返回 HTTP 状态和耗时元数据。
 - `defaultHeaders` 只用于非 secret 静态 header。secret-bearing header 必须使用 `auth.type=secret_ref_header`，避免 raw secret 被复制进 connector config、workflow 参数、annotations、read model 或通用 bag。
-- Named HTTP Connector and direct `http_request` share the same hardened outbound transport executor. The connector adds reusable base URL, path, method, input-key, and connector credential policy before delegating transport.
+- Named HTTP Connector and direct `http_request` share the same hardened outbound transport executor. The connector adds reusable base URL, path, method, input-key, and connector credential policy before delegating transport, where request and response byte limits are enforced.
 
 `secret_ref_header` 配置形状：
 

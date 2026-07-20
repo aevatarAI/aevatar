@@ -48,6 +48,7 @@ public sealed class ConnectorCallModuleHttpRequestTests
                     Method = "GET",
                     Url = "https://api.example.com/q1000",
                     TimeoutMs = 20_000,
+                    MaxRequestBytes = 4096,
                     MaxResponseBytes = 65_536,
                     MaxRedirects = 2,
                     Authentication = new WorkflowHttpRequestAuthentication
@@ -70,6 +71,7 @@ public sealed class ConnectorCallModuleHttpRequestTests
         outbound.Headers.Should().Contain("X-Trace", "trace-123");
         outbound.Headers.Should().NotContainKey("Authorization");
         outbound.IdempotencyKey.Should().Be("idem-http");
+        outbound.MaxRequestBytes.Should().Be(4096);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
@@ -150,6 +152,7 @@ public sealed class ConnectorCallModuleHttpRequestTests
                     Body = """{"source":"test"}""",
                     BodyMode = "raw",
                     TimeoutMs = 10_000,
+                    MaxRequestBytes = 2048,
                     MaxResponseBytes = 1024,
                     MaxRedirects = 1,
                     Authentication = new WorkflowHttpRequestAuthentication
@@ -179,6 +182,7 @@ public sealed class ConnectorCallModuleHttpRequestTests
         executor.Requests.Should().HaveCount(2);
         executor.Requests.Select(sent => sent.Url).Should().OnlyContain(url => url == "https://api.example.com/retry");
         executor.Requests.Select(sent => sent.Authorization).Should().OnlyContain(value => value == "Bearer retry-token");
+        executor.Requests.Select(sent => sent.MaxRequestBytes).Should().OnlyContain(value => value == 2048);
 
         var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.Success.Should().BeTrue();
