@@ -1,9 +1,8 @@
-using System.Diagnostics;
 using System.Net.Http.Headers;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Core.Connectors;
 
 namespace Aevatar.Bootstrap.Connectors;
 
@@ -12,11 +11,16 @@ namespace Aevatar.Bootstrap.Connectors;
 /// </summary>
 public sealed class HttpConnector : IConnector
 {
-    private static readonly HttpClient SharedHttpClient = new();
+    private static readonly HttpClient SharedHttpClient = new(
+        new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+        });
     private readonly HttpClient? _client;
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly string _httpClientName;
     private readonly IConnectorRequestAuthorizationProvider? _authorizationProvider;
+    private readonly IOutboundHttpRequestExecutor? _outboundHttpRequestExecutor;
     private readonly Uri _baseUri;
     private readonly HashSet<string> _allowedMethods;
     private readonly string[] _allowedPathPatterns;
@@ -35,7 +39,8 @@ public sealed class HttpConnector : IConnector
         IHttpClientFactory? httpClientFactory = null,
         string? httpClientName = null,
         IConnectorRequestAuthorizationProvider? authorizationProvider = null,
-        HttpClient? client = null)
+        HttpClient? client = null,
+        IOutboundHttpRequestExecutor? outboundHttpRequestExecutor = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
         if (string.IsNullOrWhiteSpace(baseUrl)) throw new ArgumentException("baseUrl is required", nameof(baseUrl));
@@ -57,6 +62,7 @@ public sealed class HttpConnector : IConnector
         _httpClientFactory = httpClientFactory;
         _httpClientName = string.IsNullOrWhiteSpace(httpClientName) ? Name : httpClientName.Trim();
         _authorizationProvider = authorizationProvider;
+        _outboundHttpRequestExecutor = outboundHttpRequestExecutor;
     }
 
     /// <inheritdoc />
@@ -132,72 +138,50 @@ public sealed class HttpConnector : IConnector
             };
         }
 
-        var sw = Stopwatch.StartNew();
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
-
         try
         {
-            using var msg = new HttpRequestMessage(new HttpMethod(method), targetUri);
-            foreach (var (key, value) in _defaultHeaders)
-                msg.Headers.TryAddWithoutValidation(key, value);
+            var outboundHeaders = await BuildOutboundHeadersAsync(method, targetUri, request, ct);
+            var contentType = request.Parameters.TryGetValue("content_type", out var configuredContentType) &&
+                              !string.IsNullOrWhiteSpace(configuredContentType)
+                ? configuredContentType.Trim()
+                : "application/json";
+            var maxResponseBytes = request.Parameters.TryGetValue("max_response_bytes", out var rawMaxResponseBytes) &&
+                                   int.TryParse(rawMaxResponseBytes, out var parsedMaxResponseBytes)
+                ? parsedMaxResponseBytes
+                : DefaultOutboundHttpRequestExecutor.DefaultMaxResponseBytes;
+            var maxRedirects = request.Parameters.TryGetValue("max_redirects", out var rawMaxRedirects) &&
+                               int.TryParse(rawMaxRedirects, out var parsedMaxRedirects)
+                ? parsedMaxRedirects
+                : DefaultOutboundHttpRequestExecutor.DefaultMaxRedirects;
 
-            if (_authorizationProvider != null)
-                await _authorizationProvider.ApplyAsync(msg, timeoutCts.Token);
-
-            ApplyRequestAuthorization(msg, request.HttpAuthorization);
-            ApplyIdempotencyKey(msg, request.IdempotencyKey);
-
-            if (request.Parameters.TryGetValue("content_type", out var contentType) &&
-                !string.IsNullOrWhiteSpace(contentType))
-            {
-                msg.Content = new StringContent(request.Payload ?? "", Encoding.UTF8, contentType);
-            }
-            else if (method is not "GET" and not "HEAD")
-            {
-                msg.Content = new StringContent(request.Payload ?? "", Encoding.UTF8, "application/json");
-            }
-
-            if (!msg.Headers.Accept.Any())
-                msg.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-            using var response = await ResolveClient().SendAsync(msg, timeoutCts.Token);
-            var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
-            sw.Stop();
+            var response = await ResolveExecutor().ExecuteAsync(
+                new OutboundHttpRequest
+                {
+                    Method = method,
+                    Url = targetUri.ToString(),
+                    Headers = outboundHeaders.Headers,
+                    Authorization = outboundHeaders.Authorization,
+                    IdempotencyKey = request.IdempotencyKey,
+                    Body = request.Payload ?? string.Empty,
+                    ContentType = contentType,
+                    TimeoutMs = timeoutMs,
+                    MaxResponseBytes = maxResponseBytes,
+                    MaxRedirects = maxRedirects,
+                    AllowInsecureHttp = string.Equals(targetUri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase),
+                    AllowPrivateNetwork = true,
+                },
+                ct);
 
             return new ConnectorResponse
             {
-                Success = response.IsSuccessStatusCode,
-                Output = body,
-                Error = response.IsSuccessStatusCode ? "" : BuildHttpErrorMessage(response, body),
-                Metadata = new Dictionary<string, string>
-                {
-                    ["connector.http.status_code"] = ((int)response.StatusCode).ToString(),
-                    ["connector.http.reason"] = response.ReasonPhrase ?? "",
-                    ["connector.http.method"] = method,
-                    ["connector.http.url"] = targetUri.ToString(),
-                    ["connector.http.duration_ms"] = sw.Elapsed.TotalMilliseconds.ToString("F2"),
-                },
+                Success = response.Success,
+                Output = response.Output,
+                Error = response.Error,
+                Metadata = response.Metadata,
             };
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            sw.Stop();
-            return new ConnectorResponse
-            {
-                Success = false,
-                Error = $"http timeout after {timeoutMs}ms",
-                Metadata = new Dictionary<string, string>
-                {
-                    ["connector.http.method"] = method,
-                    ["connector.http.url"] = targetUri.ToString(),
-                    ["connector.http.duration_ms"] = sw.Elapsed.TotalMilliseconds.ToString("F2"),
-                },
-            };
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
             return new ConnectorResponse
             {
                 Success = false,
@@ -206,7 +190,6 @@ public sealed class HttpConnector : IConnector
                 {
                     ["connector.http.method"] = method,
                     ["connector.http.url"] = targetUri.ToString(),
-                    ["connector.http.duration_ms"] = sw.Elapsed.TotalMilliseconds.ToString("F2"),
                 },
             };
         }
@@ -292,6 +275,44 @@ public sealed class HttpConnector : IConnector
     {
         var trimmed = body.Trim();
         return trimmed.Length <= 200 ? trimmed : $"{trimmed[..200]}...";
+    }
+
+    private async Task<(Dictionary<string, string> Headers, string Authorization)> BuildOutboundHeadersAsync(
+        string method,
+        Uri targetUri,
+        ConnectorRequest request,
+        CancellationToken ct)
+    {
+        using var message = new HttpRequestMessage(new HttpMethod(method), targetUri);
+        foreach (var (key, value) in _defaultHeaders)
+            message.Headers.TryAddWithoutValidation(key, value);
+
+        if (_authorizationProvider != null)
+            await _authorizationProvider.ApplyAsync(message, ct);
+
+        ApplyRequestAuthorization(message, request.HttpAuthorization);
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var header in message.Headers)
+        {
+            if (string.Equals(header.Key, "Authorization", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            headers[header.Key] = string.Join(",", header.Value);
+        }
+
+        return (headers, message.Headers.Authorization?.ToString() ?? string.Empty);
+    }
+
+    private IOutboundHttpRequestExecutor ResolveExecutor()
+    {
+        if (_outboundHttpRequestExecutor != null)
+            return _outboundHttpRequestExecutor;
+
+        if (_client == null && _httpClientFactory == null)
+            return new DefaultOutboundHttpRequestExecutor();
+
+        return new DefaultOutboundHttpRequestExecutor(ResolveClient());
     }
 
     private HttpClient ResolveClient()

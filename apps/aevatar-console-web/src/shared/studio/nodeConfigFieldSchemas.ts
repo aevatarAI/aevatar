@@ -256,6 +256,13 @@ const STEP_TYPE_OPTIONS = [
   },
   {
     label: message(
+      'shared.studio.nodeConfiguration.stepType.option.httpRequest',
+      'HTTP Request',
+    ),
+    value: 'http_request',
+  },
+  {
+    label: message(
       'shared.studio.nodeConfiguration.stepType.option.emit',
       'Emit',
     ),
@@ -519,6 +526,195 @@ const SCHEMAS_BY_STEP_TYPE: Record<string, StudioNodeConfigurationSchemaDefiniti
         ),
         name: 'onError',
         options: SHARED_OPTIONS.onFailure,
+        parameterName: 'on_error',
+      },
+    ],
+  },
+  http_request: {
+    stepType: 'http_request',
+    fields: [
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.method.label',
+          'Method',
+        ),
+        name: 'method',
+        options: [
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.method.option.get',
+              'GET',
+            ),
+            value: 'GET',
+          },
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.method.option.post',
+              'POST',
+            ),
+            value: 'POST',
+          },
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.method.option.put',
+              'PUT',
+            ),
+            value: 'PUT',
+          },
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.method.option.patch',
+              'PATCH',
+            ),
+            value: 'PATCH',
+          },
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.method.option.delete',
+              'DELETE',
+            ),
+            value: 'DELETE',
+          },
+        ],
+        parameterName: 'method',
+        required: true,
+      },
+      {
+        kind: 'single-line',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.url.label',
+          'URL',
+        ),
+        name: 'url',
+        parameterName: 'url',
+        placeholder: message(
+          'shared.studio.nodeConfiguration.httpRequest.url.placeholder',
+          'https://api.example.com/items',
+        ),
+        required: true,
+      },
+      {
+        kind: 'object',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.query.label',
+          'Query parameters',
+        ),
+        name: 'query',
+        parameterName: 'query',
+      },
+      {
+        kind: 'object',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.headers.label',
+          'Headers',
+        ),
+        name: 'headers',
+        parameterName: 'headers',
+      },
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.bodyMode.label',
+          'Body mode',
+        ),
+        name: 'bodyMode',
+        options: [
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.bodyMode.option.none',
+              'None',
+            ),
+            value: 'none',
+          },
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.bodyMode.option.raw',
+              'Raw body',
+            ),
+            value: 'raw',
+          },
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.bodyMode.option.input',
+              'Workflow input',
+            ),
+            value: 'input',
+          },
+        ],
+        parameterName: 'body_mode',
+      },
+      {
+        kind: 'multi-line',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.body.label',
+          'Body',
+        ),
+        name: 'body',
+        parameterName: 'body',
+      },
+      {
+        kind: 'object',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.authentication.label',
+          'Authentication',
+        ),
+        name: 'authentication',
+        parameterName: 'authentication',
+      },
+      {
+        kind: 'number',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.timeout.label',
+          'Timeout ms',
+        ),
+        name: 'timeoutMs',
+        parameterName: 'timeout_ms',
+        validation: { integer: true, min: 100, max: 300000 },
+      },
+      {
+        kind: 'number',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.maxResponseBytes.label',
+          'Max response bytes',
+        ),
+        name: 'maxResponseBytes',
+        parameterName: 'max_response_bytes',
+        validation: { integer: true, min: 1, max: 10485760 },
+      },
+      {
+        kind: 'number',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.retry.label',
+          'Retries',
+        ),
+        name: 'retry',
+        parameterName: 'retry',
+        validation: { integer: true, min: 0, max: 5 },
+      },
+      {
+        kind: 'select',
+        label: message(
+          'shared.studio.nodeConfiguration.httpRequest.onError.label',
+          'On error',
+        ),
+        name: 'onError',
+        options: [
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.onError.option.fail',
+              'Fail the run',
+            ),
+            value: 'fail',
+          },
+          {
+            label: message(
+              'shared.studio.nodeConfiguration.httpRequest.onError.option.continue',
+              'Continue with input',
+            ),
+            value: 'continue',
+          },
+        ],
         parameterName: 'on_error',
       },
     ],

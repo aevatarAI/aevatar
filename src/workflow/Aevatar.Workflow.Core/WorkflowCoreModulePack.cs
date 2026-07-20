@@ -20,7 +20,7 @@ public sealed class WorkflowCoreModulePack : IWorkflowModulePack
         WorkflowModuleRegistration.Create<MapReduceModule>("map_reduce", "mapreduce"),
         WorkflowModuleRegistration.Create<LLMCallModule>("llm_call"),
         WorkflowModuleRegistration.Create<ToolCallModule>("tool_call"),
-        WorkflowModuleRegistration.Create<ConnectorCallModule>("connector_call", "bridge_call", "secure_connector_call", "secure_connector"),
+        WorkflowModuleRegistration.Create<ConnectorCallModule>("connector_call", "bridge_call", "secure_connector_call", "secure_connector", "http_request"),
         WorkflowModuleRegistration.Create<TransformModule>("transform"),
         WorkflowModuleRegistration.Create<RetrieveFactsModule>("retrieve_facts"),
         WorkflowModuleRegistration.Create<WaitSignalModule>("wait_signal", "wait"),

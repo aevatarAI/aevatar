@@ -21,6 +21,7 @@ public sealed class WorkflowCatalogCurrentStateProjector
         "wait_signal",
         "connector_call",
         "secure_connector_call",
+        "http_request",
     };
 
     private readonly IProjectionWriteDispatcher<WorkflowCatalogCurrentStateDocument> _writeDispatcher;

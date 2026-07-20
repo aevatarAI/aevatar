@@ -43,6 +43,8 @@ public sealed class StepDefinition
 
     public ConnectorApprovalOptionsDefinition? ConnectorApprovalOptions { get; init; }
 
+    public HttpRequestOptionsDefinition? HttpRequestOptions { get; init; }
+
     /// <summary>
     /// 下一步骤 ID，用于线性流程控制。
     /// </summary>
@@ -136,6 +138,42 @@ public sealed class ConnectorApprovalOptionsDefinition
     public string? PublishedServiceId { get; init; }
 
     public string? PolicyReason { get; init; }
+}
+
+public sealed class HttpRequestOptionsDefinition
+{
+    public string? Method { get; init; }
+
+    public string? Url { get; init; }
+
+    public Dictionary<string, string> Query { get; init; } = new(StringComparer.Ordinal);
+
+    public Dictionary<string, string> Headers { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public string? BodyMode { get; init; }
+
+    public string? Body { get; init; }
+
+    public HttpRequestAuthenticationDefinition? Authentication { get; init; }
+
+    public int TimeoutMs { get; init; }
+
+    public int MaxResponseBytes { get; init; }
+
+    public int MaxRedirects { get; init; }
+
+    public bool AllowInsecureHttp { get; init; }
+}
+
+public sealed class HttpRequestAuthenticationDefinition
+{
+    public string? Scheme { get; init; }
+
+    public string? SecretRef { get; init; }
+
+    public string? HeaderName { get; init; }
+
+    public string? HeaderValuePrefix { get; init; }
 }
 
 public sealed class StepRetryPolicy

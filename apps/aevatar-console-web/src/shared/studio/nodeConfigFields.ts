@@ -181,6 +181,101 @@ const CONNECTOR_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
   },
 ];
 
+const HTTP_REQUEST_FIELDS: readonly NodeConfigFieldSource[] = [
+  {
+    name: 'method',
+    label: message('shared.studio.nodeConfigFields.httpRequest.method.label', 'Method'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.method.description',
+      'HTTP method for this direct request.',
+    ),
+    enumValues: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    type: 'string',
+    default: 'GET',
+  },
+  {
+    name: 'url',
+    label: message('shared.studio.nodeConfigFields.httpRequest.url.label', 'URL'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.url.description',
+      'Absolute HTTPS URL called by this workflow step.',
+    ),
+    required: true,
+    type: 'string',
+  },
+  {
+    name: 'query',
+    label: message('shared.studio.nodeConfigFields.httpRequest.query.label', 'Query parameters'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.query.description',
+      'Query parameter object appended to the URL.',
+    ),
+    type: 'object',
+  },
+  {
+    name: 'headers',
+    label: message('shared.studio.nodeConfigFields.httpRequest.headers.label', 'Headers'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.headers.description',
+      'Request headers. Use authentication.secret_ref instead of raw Authorization values.',
+    ),
+    type: 'object',
+  },
+  {
+    name: 'authentication',
+    label: message('shared.studio.nodeConfigFields.httpRequest.authentication.label', 'Authentication'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.authentication.description',
+      'Object such as {"scheme":"bearer","secret_ref":"saved-secret"}.',
+    ),
+    type: 'object',
+  },
+  {
+    name: 'timeout_ms',
+    label: message('shared.studio.nodeConfigFields.httpRequest.timeoutMs.label', 'Timeout ms'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.timeoutMs.description',
+      'Direct HTTP request timeout in milliseconds.',
+    ),
+    type: 'number',
+    default: '30000',
+  },
+  {
+    name: 'max_response_bytes',
+    label: message(
+      'shared.studio.nodeConfigFields.httpRequest.maxResponseBytes.label',
+      'Max response bytes',
+    ),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.maxResponseBytes.description',
+      'Maximum response body size accepted by the workflow.',
+    ),
+    type: 'number',
+    default: '65536',
+  },
+  {
+    name: 'retry',
+    label: message('shared.studio.nodeConfigFields.httpRequest.retry.label', 'Retry'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.retry.description',
+      'Retry count for failed HTTP attempts.',
+    ),
+    type: 'number',
+    default: '0',
+  },
+  {
+    name: 'on_error',
+    label: message('shared.studio.nodeConfigFields.httpRequest.onError.label', 'On error'),
+    description: message(
+      'shared.studio.nodeConfigFields.httpRequest.onError.description',
+      'Failure behavior when the HTTP request cannot complete.',
+    ),
+    enumValues: ['fail', 'continue'],
+    type: 'string',
+    default: 'fail',
+  },
+];
+
 const LLM_CALL_FIELDS: readonly NodeConfigFieldSource[] = [
   {
     name: PROMPT_PREFIX_PARAMETER,
@@ -479,6 +574,8 @@ function createKnownFieldSources(
   switch (normalizeStepType(stepType)) {
     case 'connector_call':
       return [...CONNECTOR_CALL_FIELDS];
+    case 'http_request':
+      return [...HTTP_REQUEST_FIELDS];
     case LLM_CALL_STEP_TYPE:
       return [...LLM_CALL_FIELDS];
     default:

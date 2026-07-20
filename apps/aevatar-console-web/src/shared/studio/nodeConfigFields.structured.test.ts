@@ -124,6 +124,85 @@ describe('studio node configuration semantics', () => {
     });
   });
 
+  it('presents http_request as a first-class direct HTTP node with secret-backed auth fields', () => {
+    const schema = getStudioNodeConfigurationSchema('http_request');
+    const values = readStudioNodeConfigurationValues('http_request', {
+      method: 'GET',
+      url: 'https://api.example.com/q1000',
+      authentication: { scheme: 'bearer', secret_ref: 'q1000-token' },
+      timeout_ms: '20000',
+      max_response_bytes: '65536',
+    });
+
+    expect(schema.fields.map((field) => field.parameterName)).toEqual(
+      expect.arrayContaining([
+        'method',
+        'url',
+        'query',
+        'headers',
+        'body_mode',
+        'body',
+        'authentication',
+        'timeout_ms',
+        'max_response_bytes',
+        'retry',
+        'on_error',
+      ]),
+    );
+    expect(schema.fields.find((field) => field.name === 'url')).toEqual(
+      expect.objectContaining({
+        label: expect.objectContaining({ defaultMessage: 'URL' }),
+        required: true,
+      }),
+    );
+    expect(schema.fields.find((field) => field.name === 'authentication')).toEqual(
+      expect.objectContaining({
+        kind: 'object',
+        parameterName: 'authentication',
+      }),
+    );
+    expect(values).toEqual(
+      expect.objectContaining({
+        authentication: '{\n  "scheme": "bearer",\n  "secret_ref": "q1000-token"\n}',
+        maxResponseBytes: '65536',
+        method: 'GET',
+        timeoutMs: '20000',
+        url: 'https://api.example.com/q1000',
+      }),
+    );
+
+    expect(
+      applyStudioNodeConfigurationValues(
+        'http_request',
+        { method: 'GET', url: 'https://api.example.com/q1000' },
+        {
+          authentication: '{ "scheme": "bearer", "secret_ref": "q1000-token" }',
+          body: '',
+          bodyMode: 'none',
+          headers: '{}',
+          maxResponseBytes: '65536',
+          method: 'POST',
+          onError: 'fail',
+          query: '{}',
+          retry: '1',
+          timeoutMs: '20000',
+          url: 'https://api.example.com/q1000',
+        },
+      ),
+    ).toEqual({
+      authentication: { scheme: 'bearer', secret_ref: 'q1000-token' },
+      body_mode: 'none',
+      headers: {},
+      max_response_bytes: 65536,
+      method: 'POST',
+      on_error: 'fail',
+      query: {},
+      retry: 1,
+      timeout_ms: 20000,
+      url: 'https://api.example.com/q1000',
+    });
+  });
+
   it('presents llm_call prompt_prefix as an Instruction field while preserving runtime parameters', () => {
     const schema = getStudioNodeConfigurationSchema('llm_call');
     const values = readStudioNodeConfigurationValues('llm_call', {
