@@ -6,6 +6,86 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "user_config_messages.proto";
 
+message ContentArtifactCitationDocument {
+  string citation_id = 1;
+  string label = 2;
+  string locator_section = 3;
+  int64 locator_start_offset = 4;
+  int64 locator_end_offset = 5;
+  string locator_selector = 6;
+  string source_artifact_id = 7;
+  string source_artifact_revision_id = 8;
+  string source_artifact_content_hash = 9;
+  string source_artifact_media_type = 10;
+  string external_source_uri = 11;
+  string external_stable_id = 12;
+  string external_document_revision = 13;
+  string external_content_hash = 14;
+  google.protobuf.Timestamp external_published_at_utc = 15;
+  google.protobuf.Timestamp external_fetched_at_utc = 16;
+}
+
+message ContentArtifactRevisionDocument {
+  string revision_id = 1;
+  int64 revision_number = 2;
+  string parent_revision_id = 3;
+  string media_type = 4;
+  int64 byte_length = 5;
+  string content_hash = 6;
+  string availability = 7;
+  string content_location_kind = 8;
+  bytes inline_content = 9;
+  string backing_provider = 10;
+  string backing_object_key = 11;
+  string provenance_scope_id = 12;
+  string provenance_team_id = 13;
+  string provenance_member_id = 14;
+  string provenance_workflow_id = 15;
+  string provenance_published_service_id = 16;
+  string provenance_run_id = 17;
+  string provenance_work_order_id = 18;
+  repeated ContentArtifactCitationDocument citations = 19;
+  google.protobuf.Timestamp created_at_utc = 20;
+  string redaction_reason = 21;
+  google.protobuf.Timestamp redacted_at_utc = 22;
+  google.protobuf.Timestamp retention_expired_at_utc = 23;
+  string supersession_reason = 24;
+}
+
+// Actor-scoped current-state replica for ContentArtifactGAgent. Immutable
+// revision facts are copied from the authoritative actor state; projection
+// never reconstructs or advances artifact lifecycle state.
+message ContentArtifactCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string artifact_id = 20;
+  string dedup_key = 21;
+  string scope_id = 22;
+  string team_id = 23;
+  string kind = 24;
+  string title = 25;
+  string classification = 26;
+  string lifecycle_status = 27;
+  string current_revision_id = 28;
+  int64 concurrency_version = 29;
+  string owner_principal_id = 30;
+  string owner_principal_kind = 31;
+  repeated string reader_principal_ids = 32;
+  repeated string writer_principal_ids = 33;
+  string retention_policy_id = 34;
+  google.protobuf.Timestamp retention_expires_at_utc = 35;
+  string work_order_id = 36;
+  repeated ContentArtifactRevisionDocument revisions = 37;
+  repeated string provenance_run_ids = 38;
+  google.protobuf.Timestamp created_at_utc = 39;
+  google.protobuf.Timestamp artifact_updated_at_utc = 40;
+  string tombstone_reason = 41;
+  google.protobuf.Timestamp tombstoned_at_utc = 42;
+}
+
 message WorkOrderArtifactReferenceDocument {
   string artifact_id = 1;
   string artifact_kind = 2;

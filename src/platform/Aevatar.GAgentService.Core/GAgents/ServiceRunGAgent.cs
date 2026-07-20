@@ -1,5 +1,6 @@
 using System.Globalization;
 using Aevatar.AI.Abstractions;
+using Aevatar.ContentArtifacts.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -65,6 +66,29 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             command,
             sourceTerminalAt: null,
             implementationTerminalEvidence: false);
+
+    [EventHandler]
+    public async Task HandleAttachResultArtifactsAsync(AttachServiceRunResultArtifactsRequested command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var record = GetRegisteredRun(command.RunId, "result artifact attachment");
+        var additions = SelectNewResultArtifacts(record.ResultArtifacts, command.ResultArtifacts);
+        if (additions.Count == 0)
+            return;
+        if (State.LastAppliedEventVersion != command.ExpectedStateVersion)
+        {
+            throw new InvalidOperationException(
+                $"Service run state version is {State.LastAppliedEventVersion}, not {command.ExpectedStateVersion}.");
+        }
+
+        var attached = new ServiceRunResultArtifactsAttachedEvent
+        {
+            RunId = record.RunId,
+            AttachedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        attached.ResultArtifacts.Add(additions);
+        await PersistDomainEventAsync(attached);
+    }
 
     [EventHandler]
     public Task HandleRoleChatCompletedAsync(RoleChatSessionCompletedEvent terminal)
@@ -192,6 +216,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var existing = GetRegisteredRunForStatusUpdate(command);
+        var resultArtifactAdditions = SelectNewResultArtifacts(existing.ResultArtifacts, command.ResultArtifacts);
 
         if (command.Status == ServiceRunStatus.Unspecified)
             return;
@@ -206,13 +231,14 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
                             !string.Equals(existing.LastOutput ?? string.Empty, command.LastOutput ?? string.Empty, StringComparison.Ordinal);
         var errorChanged = command.LastError != null &&
                            !string.Equals(existing.LastError ?? string.Empty, command.LastError ?? string.Empty, StringComparison.Ordinal);
+        var resultArtifactsChanged = resultArtifactAdditions.Count > 0;
         var shouldPrepareTerminalNotification =
             implementationTerminalEvidence &&
             IsTerminal(command.Status) &&
             HasCompletionNotificationTarget(existing.CompletionNotificationTarget) &&
             State.PendingTerminalNotification == null &&
             State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.Unspecified;
-        if (existing.Status == command.Status && !outputChanged && !errorChanged)
+        if (existing.Status == command.Status && !outputChanged && !errorChanged && !resultArtifactsChanged)
         {
             if (shouldPrepareTerminalNotification)
             {
@@ -236,6 +262,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             LastOutput = command.LastOutput,
             LastError = command.LastError,
         };
+        statusEvent.ResultArtifacts.Add(resultArtifactAdditions);
         if (shouldPrepareTerminalNotification)
         {
             await PersistDomainEventsAsync(
@@ -255,20 +282,23 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         await DeliverPendingTerminalNotificationAsync();
     }
 
-    private ServiceRunRecord GetRegisteredRunForStatusUpdate(UpdateServiceRunStatusRequested command)
+    private ServiceRunRecord GetRegisteredRunForStatusUpdate(UpdateServiceRunStatusRequested command) =>
+        GetRegisteredRun(command.RunId, "status update");
+
+    private ServiceRunRecord GetRegisteredRun(string? runId, string operation)
     {
         var existing = State.Record;
         if (existing == null || string.IsNullOrWhiteSpace(existing.RunId))
         {
             throw new InvalidOperationException(
-                $"Service run actor '{Id}' has no registered run; status update rejected.");
+                $"Service run actor '{Id}' has no registered run; {operation} rejected.");
         }
 
-        if (!string.IsNullOrWhiteSpace(command.RunId) &&
-            !string.Equals(existing.RunId, command.RunId, StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(runId) &&
+            !string.Equals(existing.RunId, runId, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                $"Service run actor '{Id}' is bound to run '{existing.RunId}' and cannot update run '{command.RunId}'.");
+                $"Service run actor '{Id}' is bound to run '{existing.RunId}' and cannot apply {operation} for run '{runId}'.");
         }
 
         return existing;
@@ -279,6 +309,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             .Match(current, evt)
             .On<ServiceRunRegisteredEvent>(ApplyRegistered)
             .On<ServiceRunStatusUpdatedEvent>(ApplyStatusUpdated)
+            .On<ServiceRunResultArtifactsAttachedEvent>(ApplyResultArtifactsAttached)
             .On<ServiceRunTerminalNotificationPreparedEvent>(ApplyTerminalNotificationPrepared)
             .On<ServiceRunTerminalNotificationRetryScheduledEvent>(ApplyTerminalNotificationRetryScheduled)
             .On<ServiceRunTerminalNotificationDispatchedEvent>(ApplyTerminalNotificationDispatched)
@@ -305,8 +336,22 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             next.Record.LastOutput = evt.LastOutput ?? string.Empty;
         if (evt.LastError != null)
             next.Record.LastError = evt.LastError ?? string.Empty;
+        MergeResultArtifacts(next.Record.ResultArtifacts, evt.ResultArtifacts);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record.RunId}:status:{(int)evt.Status}";
+        return next;
+    }
+
+    private static ServiceRunState ApplyResultArtifactsAttached(
+        ServiceRunState state,
+        ServiceRunResultArtifactsAttachedEvent evt)
+    {
+        var next = state.Clone();
+        next.Record ??= new ServiceRunRecord();
+        MergeResultArtifacts(next.Record.ResultArtifacts, evt.ResultArtifacts);
+        next.Record.UpdatedAt = evt.AttachedAt?.Clone() ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = $"{next.Record.RunId}:result-artifacts:attached";
         return next;
     }
 
@@ -562,8 +607,9 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
     private static ServiceRunTerminalNotification CreateTerminalNotification(
         ServiceRunRecord existing,
         UpdateServiceRunStatusRequested command,
-        Timestamp terminalAt) =>
-        new()
+        Timestamp terminalAt)
+    {
+        var notification = new ServiceRunTerminalNotification
         {
             DeliveryId = existing.CompletionNotificationTarget.DeliveryId.Trim(),
             RunId = existing.RunId,
@@ -575,6 +621,73 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             Error = command.LastError ?? existing.LastError ?? string.Empty,
             TerminalAt = terminalAt.Clone(),
         };
+        notification.ResultArtifacts.Add(existing.ResultArtifacts.Select(static artifact => artifact.Clone()));
+        MergeResultArtifacts(notification.ResultArtifacts, command.ResultArtifacts);
+        return notification;
+    }
+
+    private static IReadOnlyList<ContentArtifactReference> SelectNewResultArtifacts(
+        IEnumerable<ContentArtifactReference> existing,
+        IEnumerable<ContentArtifactReference> incoming)
+    {
+        var known = existing.ToDictionary(ResultArtifactKey, static artifact => artifact, StringComparer.Ordinal);
+        var additions = new List<ContentArtifactReference>();
+        foreach (var artifact in incoming)
+        {
+            ValidateResultArtifact(artifact);
+            var key = ResultArtifactKey(artifact);
+            if (known.TryGetValue(key, out var current))
+            {
+                if (!string.Equals(current.ContentHash, artifact.ContentHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"ContentArtifact '{artifact.ArtifactId}' revision '{artifact.RevisionId}' has a conflicting content hash.");
+                }
+                if (!string.Equals(current.MediaType, artifact.MediaType, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"ContentArtifact '{artifact.ArtifactId}' revision '{artifact.RevisionId}' has a conflicting media type.");
+                }
+                continue;
+            }
+
+            var clone = artifact.Clone();
+            known.Add(key, clone);
+            additions.Add(clone);
+        }
+        return additions;
+    }
+
+    private static void MergeResultArtifacts(
+        Google.Protobuf.Collections.RepeatedField<ContentArtifactReference> destination,
+        IEnumerable<ContentArtifactReference> incoming)
+    {
+        destination.Add(SelectNewResultArtifacts(destination, incoming));
+    }
+
+    private static void ValidateResultArtifact(ContentArtifactReference artifact)
+    {
+        if (artifact == null || string.IsNullOrWhiteSpace(artifact.ArtifactId))
+            throw new InvalidOperationException("ContentArtifact result reference artifact_id is required.");
+        if (string.IsNullOrWhiteSpace(artifact.RevisionId))
+            throw new InvalidOperationException("ContentArtifact result reference revision_id is required.");
+        if (string.IsNullOrWhiteSpace(artifact.MediaType))
+            throw new InvalidOperationException("ContentArtifact result reference media_type is required.");
+        if (artifact.ContentHash?.Length != 64)
+            throw new InvalidOperationException("ContentArtifact result reference content_hash must be a SHA-256 hex digest.");
+        try
+        {
+            _ = Convert.FromHexString(artifact.ContentHash);
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidOperationException(
+                "ContentArtifact result reference content_hash must be a SHA-256 hex digest.", ex);
+        }
+    }
+
+    private static string ResultArtifactKey(ContentArtifactReference artifact) =>
+        $"{artifact.ArtifactId}\n{artifact.RevisionId}";
 
     private async Task DeliverPendingTerminalNotificationAsync(
         CancellationToken ct = default,
