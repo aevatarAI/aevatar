@@ -43,7 +43,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();
         services.TryAddSingleton<IStudioMemberWorkflowBindingPort, StudioMemberWorkflowBindingPort>();
         services.TryAddSingleton(new StudioMemberWorkflowSchedulePolicy());
-        services.TryAddSingleton<IStudioMemberWorkflowSchedulePort, StudioMemberWorkflowSchedulePort>();
+        services.TryAddSingleton<StudioMemberWorkflowSchedulePort>();
+        services.TryAddSingleton<IStudioMemberWorkflowSchedulePort>(provider =>
+            provider.GetRequiredService<StudioMemberWorkflowSchedulePort>());
+        services.TryAddSingleton<IStudioMemberAutomationQueryPort>(provider =>
+            provider.GetRequiredService<IStudioMemberWorkflowSchedulePort>());
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.TryAddSingleton<IWorkflowBoardClock, SystemWorkflowBoardClock>();
         services.TryAddSingleton<IWorkflowBoardRosterQueryPort, StudioWorkflowBoardRosterQueryPort>();

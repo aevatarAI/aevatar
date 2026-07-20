@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Services;
@@ -10,6 +11,23 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class StudioApplicationServiceCollectionExtensionsTests
 {
+    [Fact]
+    public void AddStudioApplication_ShouldAliasAutomationQueryAndMutationPortsToOneSingleton()
+    {
+        var services = new ServiceCollection();
+        services.AddStudioApplication();
+
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(StudioMemberWorkflowSchedulePort) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStudioMemberAutomationQueryPort) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IStudioMemberWorkflowSchedulePort) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+    }
+
     [Fact]
     public void AddStudioApplication_ShouldRegisterAuthoritativeTeamEntryMemberResolver()
     {
