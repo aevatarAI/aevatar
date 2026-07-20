@@ -35,4 +35,5 @@ public sealed record StoredChatMessage(
     string? Error = null,
     string? Thinking = null,
     string? AuthorId = null,
-    string? AuthorName = null);
+    string? AuthorName = null,
+    string? TurnId = null);

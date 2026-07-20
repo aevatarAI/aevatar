@@ -57,6 +57,21 @@ internal sealed record NyxIdApiErrorEnvelope(
     int? RawErrorCode,
     TimeSpan? RetryAfter);
 
+internal sealed record NyxIdProxyError(
+    int HttpStatus,
+    string ErrorKey,
+    int ErrorCode,
+    string Message)
+{
+    public bool IsAuthorizationRequired =>
+        (HttpStatus == 401 &&
+         ErrorCode == 1001 &&
+         string.Equals(ErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase)) ||
+        (HttpStatus == 403 &&
+         ErrorCode == 1002 &&
+         string.Equals(ErrorKey, "forbidden", StringComparison.OrdinalIgnoreCase));
+}
+
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 {
@@ -77,6 +92,48 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     private readonly NyxIdToolOptions _options;
     private readonly ILogger _logger;
     private readonly bool _ownsHttpClient;
+
+    internal static bool TryParseProxyError(string? response, out NyxIdProxyError? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var outerDocument = JsonDocument.Parse(response);
+            var outer = outerDocument.RootElement;
+            if (outer.ValueKind != JsonValueKind.Object ||
+                !outer.TryGetProperty("error", out var errorMarker) ||
+                errorMarker.ValueKind != JsonValueKind.True ||
+                !outer.TryGetProperty("status", out var statusProperty) ||
+                !statusProperty.TryGetInt32(out var status) ||
+                !outer.TryGetProperty("body", out var bodyProperty) ||
+                bodyProperty.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var body = bodyProperty.GetString();
+            if (string.IsNullOrWhiteSpace(body))
+                return false;
+
+            using var bodyDocument = JsonDocument.Parse(body);
+            var bodyRoot = bodyDocument.RootElement;
+            var errorKey = TryGetString(bodyRoot, "error");
+            var errorCode = TryGetInt(bodyRoot, "error_code");
+            var message = TryGetString(bodyRoot, "message");
+            if (string.IsNullOrWhiteSpace(errorKey) || errorCode is null || message is null)
+                return false;
+
+            error = new NyxIdProxyError(status, errorKey, errorCode.Value, message);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
 
     public NyxIdApiClient(
         NyxIdToolOptions options,

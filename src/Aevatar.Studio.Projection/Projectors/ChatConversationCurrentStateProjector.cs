@@ -92,6 +92,7 @@ public sealed class ChatConversationCurrentStateProjector
             ChatTurnTerminalStatus.Completed => "complete",
             ChatTurnTerminalStatus.Failed => "error",
             ChatTurnTerminalStatus.Stopped => "stopped",
+            ChatTurnTerminalStatus.Blocked => "blocked",
             _ => string.Empty,
         };
 }

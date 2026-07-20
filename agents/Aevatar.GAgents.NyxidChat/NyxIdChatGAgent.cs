@@ -426,6 +426,23 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
         var prompt = request.Prompt ?? completedSession.Prompt ?? string.Empty;
         var completion = completedSession.FinalContent ?? string.Empty;
+        var assistantStatus = completedSession.Outcome switch
+        {
+            RoleChatSessionOutcome.Blocked => "blocked",
+            RoleChatSessionOutcome.Failed => "error",
+            _ => "completed",
+        };
+        var safeError = completedSession.Outcome switch
+        {
+            RoleChatSessionOutcome.Blocked => completedSession.AuthorizationRequired?.SafeMessage,
+            RoleChatSessionOutcome.Failed => completedSession.SafeMessage,
+            _ => null,
+        };
+        var archivedCompletion = completedSession.Outcome is RoleChatSessionOutcome.Blocked or RoleChatSessionOutcome.Failed
+            ? string.IsNullOrWhiteSpace(safeError)
+                ? "The chat request failed. Please try again."
+                : safeError
+            : completion;
         var completedAt = _timeProvider.GetUtcNow();
         var timestamp = completedAt.ToUnixTimeMilliseconds();
         var messages = new[]
@@ -435,16 +452,19 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 Role: "user",
                 Content: prompt,
                 Timestamp: timestamp,
-                Status: "completed"),
+                Status: "completed",
+                TurnId: request.SessionId),
             new StoredChatMessage(
                 Id: $"{request.SessionId}-assistant",
                 Role: "assistant",
-                Content: completion,
+                Content: archivedCompletion,
                 Timestamp: timestamp,
-                Status: "completed",
+                Status: assistantStatus,
+                Error: string.IsNullOrWhiteSpace(safeError) ? null : safeError,
                 Thinking: string.IsNullOrWhiteSpace(completedSession.FinalReasoningContent)
                     ? null
-                    : completedSession.FinalReasoningContent),
+                    : completedSession.FinalReasoningContent,
+                TurnId: request.SessionId),
         };
         var meta = new ConversationMeta(
             Id: Id,

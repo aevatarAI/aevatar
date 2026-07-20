@@ -253,6 +253,7 @@ enum AgentToolReceiptStatus {
   AGENT_TOOL_RECEIPT_STATUS_APPROVAL_REQUIRED = 2;
   AGENT_TOOL_RECEIPT_STATUS_DENIED = 3;
   AGENT_TOOL_RECEIPT_STATUS_ERROR = 4;
+  AGENT_TOOL_RECEIPT_STATUS_AUTHORIZATION_REQUIRED = 5;
 }
 
 enum AgentToolReceiptApprovalMode {
@@ -260,6 +261,14 @@ enum AgentToolReceiptApprovalMode {
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_NEVER_REQUIRE = 1;
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_ALWAYS_REQUIRE = 2;
   AGENT_TOOL_RECEIPT_APPROVAL_MODE_AUTO = 3;
+}
+
+message NyxIdAuthorizationRequiredEvent {
+  string service_slug = 1;
+  optional string service_label = 2;
+  optional string resource_uri = 3;
+  string reason_code = 4;
+  string safe_message = 5;
 }
 
 message AgentToolReceipt {
@@ -279,6 +288,7 @@ message AgentToolReceipt {
   string result_json = 14;
   ManagedWorkflowHandoffReceipt managed_workflow_handoff = 15;
   WorkflowRunBackgroundDeliveryReceipt workflow_run_delivery = 16;
+  NyxIdAuthorizationRequiredEvent authorization_required = 17;
 }
 
 message ManagedWorkflowHandoffReceipt {
@@ -327,6 +337,26 @@ message RoleChatSessionStartedEvent {
   string prompt = 2;
   repeated ChatContentPart input_parts = 3;
 }
+
+enum RoleChatSessionConflictReason {
+  ROLE_CHAT_SESSION_CONFLICT_REASON_UNSPECIFIED = 0;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_PROMPT_MISMATCH = 1;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_INPUT_PARTS_MISMATCH = 2;
+}
+
+message RoleChatSessionConflictEvent {
+  string session_id = 1;
+  RoleChatSessionConflictReason reason = 2;
+  string safe_message = 3;
+}
+
+enum RoleChatSessionOutcome {
+  ROLE_CHAT_SESSION_OUTCOME_UNSPECIFIED = 0;
+  ROLE_CHAT_SESSION_OUTCOME_COMPLETED = 1;
+  ROLE_CHAT_SESSION_OUTCOME_FAILED = 2;
+  ROLE_CHAT_SESSION_OUTCOME_BLOCKED = 3;
+}
+
 message RoleChatSessionCompletedEvent {
   string session_id = 1;
   string content = 2;
@@ -339,6 +369,10 @@ message RoleChatSessionCompletedEvent {
   TokenUsagePayload usage = 9;
   string model = 10;
   repeated AgentToolReceipt tool_receipts = 11;
+  RoleChatSessionOutcome outcome = 12;
+  string failure_code = 13;
+  string safe_message = 14;
+  NyxIdAuthorizationRequiredEvent authorization_required = 15;
 }
 
 message InitializeRoleAgentEvent {
@@ -427,9 +461,11 @@ message ToolApprovalRequestEvent {
 // 前端 → Agent：审批决策
 message ToolApprovalDecisionEvent {
   string request_id = 1;
-  string session_id = 2;
+  reserved 2;
+  reserved "session_id";
   bool approved = 3;
   string reason = 4;
+  string continuation_turn_id = 5;
 }
 
 message RoleChatSessionState {
@@ -445,6 +481,10 @@ message RoleChatSessionState {
   TokenUsagePayload usage = 10;
   string model = 11;
   repeated AgentToolReceipt tool_receipts = 12;
+  RoleChatSessionOutcome outcome = 13;
+  NyxIdAuthorizationRequiredEvent authorization_required = 14;
+  string failure_code = 15;
+  string safe_message = 16;
 }
 
 message RoleGAgentState {
@@ -487,6 +527,7 @@ message PendingToolApprovalState {
   reserved "remote_status_check_callback_id";
   int32 remote_status_check_attempt = 12;
   int64 remote_approval_expires_at_unix_ms = 13;
+  string scope_id = 15;
 }
 
 // Domain event: approval pending persisted.

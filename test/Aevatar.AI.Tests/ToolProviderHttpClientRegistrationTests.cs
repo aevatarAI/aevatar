@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -80,9 +81,51 @@ public sealed class ToolProviderHttpClientRegistrationTests
         var names = tools.Select(tool => tool.Name).ToList();
 
         names.Should().Contain("nyxid_proxy");
+        names.Should().Contain("nyxid_require_service");
         names.Should().NotContain("nyxid_search_capabilities");
         names.Should().NotContain("nyxid_proxy_execute");
         tools.Should().ContainSingle(tool => tool is NyxIdProxyTool);
+        tools.Should().ContainSingle(tool => tool is NyxIdRequireServiceTool);
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldCreateDeterministicAuthorizationReceipt()
+    {
+        var tool = new NyxIdRequireServiceTool();
+        const string arguments =
+            """{"service_slug":"api-github","service_label":"GitHub","resource_uri":"/repos/private?token=bearer-secret"}""";
+
+        var result = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+        receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
+        receipt.AuthorizationRequired.ServiceLabel.Should().Be("GitHub");
+        receipt.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
+        receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_SERVICE_NOT_CONNECTED");
+        receipt.AuthorizationRequired.SafeMessage.Should().Be("Connect api-github to continue.");
+        receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("token=");
+    }
+
+    [Fact]
+    public void NyxIdProxyTool_AuthorizationError_ShouldCreateCredentialFreeTypedReceipt()
+    {
+        using var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" });
+        var tool = new NyxIdProxyTool(client);
+        const string arguments =
+            """{"slug":"api-github","path":"/repos/private?access_token=bearer-secret#details"}""";
+        const string result =
+            """{"error":true,"status":401,"body":"{\"error\":\"unauthorized\",\"error_code\":1001,\"message\":\"expired bearer-secret\"}"}""";
+
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+        receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
+        receipt.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
+        receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
+        receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("access_token");
     }
 
     [Fact]

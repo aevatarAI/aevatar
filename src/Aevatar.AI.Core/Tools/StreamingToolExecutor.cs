@@ -11,6 +11,8 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
@@ -23,6 +25,20 @@ public readonly record struct ToolExecutionResult(
     string Result,
     bool IsError,
     AgentToolReceipt? Receipt = null);
+
+internal static class ToolExecutionResultHistory
+{
+    public static string ResolveSafeContent(ToolExecutionResult result)
+    {
+        if (result.Receipt?.Status != AgentToolReceiptStatus.AuthorizationRequired)
+            return result.Result;
+
+        var safeMessage = result.Receipt.AuthorizationRequired?.SafeMessage;
+        return string.IsNullOrWhiteSpace(safeMessage)
+            ? "Authorization is required to use this service."
+            : safeMessage.Trim();
+    }
+}
 
 /// <summary>
 /// Streaming tool executor that starts executing tools as soon as they appear,
@@ -37,18 +53,21 @@ public sealed class StreamingToolExecutor
     private readonly AgentHookPipeline? _hooks;
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly AgentToolExecutionContext? _toolContext;
+    private readonly ILogger _logger;
 
     public StreamingToolExecutor(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
         IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
         IReadOnlyDictionary<string, string>? requestMetadata = null,
-        AgentToolExecutionContext? toolContext = null)
+        AgentToolExecutionContext? toolContext = null,
+        ILogger? logger = null)
     {
         // Refactor (issue1574): Old pattern: streaming tool execution promoted request Metadata into tool control.
         // New principle: streaming tool control is typed; request Metadata remains external annotations only.
         _tools = tools;
         _hooks = hooks;
+        _logger = logger ?? NullLogger.Instance;
         _toolMiddlewares = toolMiddlewares ?? [];
         _toolContext = toolContext
             ?? AgentToolRequestContext.Current
@@ -315,7 +334,14 @@ public sealed class StreamingToolExecutor
                 ToolCallId = call.Id,
             };
             try { if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct); }
-            catch { /* Hook failures must not crash tool execution */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Tool execution start hook failed for tool {ToolName} and call {CallId}",
+                    call.Name,
+                    call.Id);
+            }
             var toolStartedAt = Stopwatch.GetTimestamp();
 
             // Re-resolve tool after hooks — hooks may have rewritten the tool name.
@@ -391,13 +417,23 @@ public sealed class StreamingToolExecutor
                               effectiveTool,
                               toolCallContext.ToolCallId,
                               toolCallContext.ToolName,
-                              toolResult);
-            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied;
+                              toolResult,
+                              toolCallContext.ArgumentsJson);
+            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or
+                AgentToolReceiptStatus.Denied or
+                AgentToolReceiptStatus.AuthorizationRequired;
 
             toolCtx.ToolResult = toolResult;
             toolCtx.Duration = Stopwatch.GetElapsedTime(toolStartedAt);
             try { if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct); }
-            catch { /* Hook failures must not crash tool execution */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Tool execution end hook failed for tool {ToolName} and call {CallId}",
+                    toolCallContext.ToolName,
+                    toolCallContext.ToolCallId);
+            }
 
             if (ct.IsCancellationRequested)
                 return new ToolExecutionCompletion(

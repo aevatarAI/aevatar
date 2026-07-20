@@ -52,6 +52,10 @@ internal static class NyxIdChatAguiSseEventWriter
                 return null;
             case AGUIEvent.EventOneofCase.RunError:
                 await writer.WriteRunErrorAsync(
+                    string.IsNullOrWhiteSpace(aguiEvent.RunError.RunId)
+                        ? messageId
+                        : aguiEvent.RunError.RunId,
+                    aguiEvent.RunError.Code ?? string.Empty,
                     ClassifyError(aguiEvent.RunError.Message ?? string.Empty),
                     ct);
                 return "RUN_ERROR";
@@ -65,7 +69,12 @@ internal static class NyxIdChatAguiSseEventWriter
                     ct);
                 return null;
             case AGUIEvent.EventOneofCase.RunFinished:
-                await writer.WriteRunFinishedAsync(ct);
+                await writer.WriteRunFinishedAsync(
+                    string.IsNullOrWhiteSpace(aguiEvent.RunFinished.RunId)
+                        ? messageId
+                        : aguiEvent.RunFinished.RunId,
+                    aguiEvent.RunFinished.Status,
+                    ct);
                 return "RUN_FINISHED";
             default:
                 return null;
@@ -81,6 +90,15 @@ internal static class NyxIdChatAguiSseEventWriter
             customEvent.Payload?.Is(MediaContentEvent.Descriptor) == true)
         {
             await writer.WriteMediaContentAsync(customEvent.Payload.Unpack<MediaContentEvent>(), ct);
+            return;
+        }
+
+        if (string.Equals(customEvent.Name, "nyxid.authorization.required", StringComparison.Ordinal) &&
+            customEvent.Payload?.Is(NyxIdAuthorizationRequiredEvent.Descriptor) == true)
+        {
+            await writer.WriteAuthorizationRequiredAsync(
+                customEvent.Payload.Unpack<NyxIdAuthorizationRequiredEvent>(),
+                ct);
             return;
         }
 
