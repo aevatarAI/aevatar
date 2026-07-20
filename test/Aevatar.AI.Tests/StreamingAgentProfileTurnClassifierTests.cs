@@ -119,7 +119,7 @@ public sealed class StreamingAgentProfileTurnClassifierTests
     }
 
     [Fact]
-    public async Task ClassifyAsync_ShouldFailClosedForToolMalformedUnknownAndOversizedOutput()
+    public async Task ClassifyAsync_ShouldFailClosedForRejectedOutputShapes()
     {
         var cases = new[]
         {
@@ -130,8 +130,32 @@ public sealed class StreamingAgentProfileTurnClassifierTests
                 }],
                 Failure: "tool_call_not_allowed"),
             (
+                Chunks: (IReadOnlyList<LLMStreamChunk>)[],
+                Failure: "empty_output"),
+            (
+                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk { DeltaContent = " \t\n" }],
+                Failure: "empty_output"),
+            (
                 Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk { DeltaContent = "not-json" }],
                 Failure: "malformed_output"),
+            (
+                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
+                {
+                    DeltaContent = "{\"status\":\"matched\",\"intent_id\":\"intent-a\",\"extra\":true}",
+                }],
+                Failure: "unexpected_output_field"),
+            (
+                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
+                {
+                    DeltaContent = "{\"intent_id\":\"intent-a\"}",
+                }],
+                Failure: "status_missing"),
+            (
+                Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
+                {
+                    DeltaContent = "{\"status\":1,\"intent_id\":\"intent-a\"}",
+                }],
+                Failure: "status_missing"),
             (
                 Chunks: (IReadOnlyList<LLMStreamChunk>)[new LLMStreamChunk
                 {
@@ -153,8 +177,7 @@ public sealed class StreamingAgentProfileTurnClassifierTests
 
             var result = await classifier.ClassifyAsync(NewRequest());
 
-            result.Status.Should().Be(AgentProfileTurnClassificationStatus.Failed);
-            result.FailureCode.Should().Be(testCase.Failure);
+            result.Should().Be(AgentProfileTurnClassificationResult.Failed(testCase.Failure));
         }
     }
 

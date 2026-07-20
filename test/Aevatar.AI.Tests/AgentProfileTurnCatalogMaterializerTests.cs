@@ -381,6 +381,62 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_HumanSessionToolWithoutToken_ShouldBeRejected()
+    {
+        var humanSessionTool = new CapabilityTool(
+            "task",
+            [AgentToolCapabilities.RequiresHumanSession]);
+        var tools = new IAgentTool[] { humanSessionTool };
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                accessToken: null,
+                tools,
+                ToolContext(accessToken: null),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected &&
+            diagnostic.Detail == "task");
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_HumanSessionToolWithToken_ShouldBeAdmittedWhenPoliciesAllow()
+    {
+        var humanSessionTool = new CapabilityTool(
+            "task",
+            [AgentToolCapabilities.RequiresHumanSession]);
+        var tools = new IAgentTool[] { humanSessionTool };
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var catalog = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                fetcher)
+            .MaterializeAsync(
+                SealProfile(BuildProfile(withAlias: true)),
+                "/alpha",
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEquivalentTo("task");
+        catalog.SelectedIntentId.Should().Be("intent-alpha");
+        catalog.Diagnostics.Should().NotContain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolCapabilityRejected);
+        fetcher.CallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task MaterializeAsync_TaskToolSetFailure_ShouldDiscardSelectionAndUseRecovery()
     {
         var tools = NewTools("recovery", "task", "extra");
@@ -462,10 +518,10 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "hash-alpha",
             SkillMarkdown);
 
-    private static AgentToolExecutionContext ToolContext() =>
+    private static AgentToolExecutionContext ToolContext(string? accessToken = "token") =>
         AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentials("token", null, null),
+            Credentials = new AgentToolCredentials(accessToken, null, null),
         };
 
     private static IReadOnlyList<IAgentTool> NewTools(params string[] names) =>
