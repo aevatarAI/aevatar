@@ -32,16 +32,26 @@ public sealed partial class OrnnExactRemoteSkillFetcher : IExactRemoteSkillFetch
 
         try
         {
-            var detail = await _client.GetExactSkillDetailAsync(
+            var detailRead = await _client.GetExactSkillDetailAsync(
                 accessToken,
                 skillRef.Guid,
                 skillRef.LiteralVersion,
                 ct);
-            var skillJson = await _client.GetExactSkillJsonAsync(
+            var detailFailure = MapReadFailure(detailRead);
+            if (detailFailure is not null)
+                return detailFailure;
+
+            var skillJsonRead = await _client.GetExactSkillJsonAsync(
                 accessToken,
                 skillRef.Guid,
                 skillRef.LiteralVersion,
                 ct);
+            var skillJsonFailure = MapReadFailure(skillJsonRead);
+            if (skillJsonFailure is not null)
+                return skillJsonFailure;
+
+            var detail = detailRead.Value;
+            var skillJson = skillJsonRead.Value;
             if (detail is null || skillJson is null)
             {
                 return ExactRemoteSkillFetchResult.Failed(
@@ -101,6 +111,22 @@ public sealed partial class OrnnExactRemoteSkillFetcher : IExactRemoteSkillFetch
         Guid.TryParseExact(value, "D", out var parsed) &&
         parsed != Guid.Empty &&
         string.Equals(parsed.ToString("D"), value, StringComparison.Ordinal);
+
+    private static ExactRemoteSkillFetchResult? MapReadFailure<T>(OrnnExactSkillReadResult<T> readResult)
+        where T : class =>
+        readResult.ProxyStatus switch
+        {
+            403 => ExactRemoteSkillFetchResult.Failed(
+                ExactRemoteSkillFetchFailureCode.AccessDenied,
+                readResult.FailureDetail),
+            404 => ExactRemoteSkillFetchResult.Failed(
+                ExactRemoteSkillFetchFailureCode.NotFound,
+                readResult.FailureDetail),
+            null => null,
+            _ => ExactRemoteSkillFetchResult.Failed(
+                ExactRemoteSkillFetchFailureCode.InvalidResponse,
+                readResult.FailureDetail),
+        };
 
     [GeneratedRegex("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$", RegexOptions.CultureInvariant)]
     private static partial Regex LiteralVersionPattern();

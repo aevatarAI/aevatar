@@ -57,15 +57,32 @@ internal static class ChatRuntimeRequestBuilder
         };
     }
 
+    internal static AuthorizationFence CaptureAuthorizationFence(LLMRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return new AuthorizationFence(
+            request.Tools?.Select(static tool => tool.Name) ?? [],
+            (request.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(request)).ToolVisibility);
+    }
+
     private static AgentToolVisibilityScope IntersectVisibility(
         AgentToolVisibilityScope existing,
         IReadOnlySet<string> profileAllowedNames)
+        => IntersectVisibility(
+            existing,
+            AgentToolVisibilityScope.FromAllowedToolNames(profileAllowedNames));
+
+    private static AgentToolVisibilityScope IntersectVisibility(
+        AgentToolVisibilityScope existing,
+        AgentToolVisibilityScope ceiling)
     {
         if (!existing.IsRestricted)
-            return AgentToolVisibilityScope.FromAllowedToolNames(profileAllowedNames);
+            return ceiling;
+        if (!ceiling.IsRestricted)
+            return existing;
 
         return AgentToolVisibilityScope.FromAllowedToolNames(
-            profileAllowedNames.Where(existing.Allows));
+            ceiling.AllowedToolNames!.Where(existing.Allows));
     }
 
     private static IReadOnlyList<IAgentTool>? FilterVisibleTools(
@@ -106,5 +123,65 @@ internal static class ChatRuntimeRequestBuilder
         }
 
         return merged;
+    }
+
+    internal sealed class AuthorizationFence
+    {
+        private readonly IReadOnlySet<string> _schemaToolNames;
+        private readonly AgentToolVisibilityScope _toolVisibility;
+
+        public AuthorizationFence(
+            IEnumerable<string> schemaToolNames,
+            AgentToolVisibilityScope toolVisibility)
+        {
+            _schemaToolNames = new HashSet<string>(
+                schemaToolNames
+                    .Where(static name => !string.IsNullOrWhiteSpace(name))
+                    .Select(static name => name.Trim()),
+                StringComparer.OrdinalIgnoreCase);
+            _toolVisibility = toolVisibility.IsRestricted
+                ? AgentToolVisibilityScope.FromAllowedToolNames(toolVisibility.AllowedToolNames)
+                : AgentToolVisibilityScope.Unrestricted;
+        }
+
+        public LLMRequest Apply(LLMRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            var toolContext = request.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(request);
+            var visibility = IntersectVisibility(toolContext.ToolVisibility, _toolVisibility);
+            var tools = request.Tools?
+                .Where(tool => _schemaToolNames.Contains(tool.Name.Trim()) && visibility.Allows(tool.Name))
+                .ToList();
+            var toolsWereAttenuated = (request.Tools?.Count ?? 0) != (tools?.Count ?? 0);
+            var visibilityWasAttenuated = !HasSameVisibility(toolContext.ToolVisibility, visibility);
+            if (!toolsWereAttenuated && !visibilityWasAttenuated && ReferenceEquals(request.ToolContext, toolContext))
+                return request;
+
+            return new LLMRequest
+            {
+                Messages = request.Messages,
+                RequestId = request.RequestId,
+                Metadata = request.Metadata,
+                CallerContext = request.CallerContext,
+                ToolContext = toolContext with { ToolVisibility = visibility },
+                RoutingContext = request.RoutingContext,
+                LlmControl = request.LlmControl,
+                Tools = tools is { Count: > 0 } ? tools : null,
+                Model = request.Model,
+                Temperature = request.Temperature,
+                MaxTokens = request.MaxTokens,
+                ResponseFormat = request.ResponseFormat,
+            };
+        }
+
+        private static bool HasSameVisibility(
+            AgentToolVisibilityScope left,
+            AgentToolVisibilityScope right)
+        {
+            if (left.IsRestricted != right.IsRestricted)
+                return false;
+
+            return !left.IsRestricted || left.AllowedToolNames!.SetEquals(right.AllowedToolNames!);
+        }
     }
 }

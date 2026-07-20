@@ -1,9 +1,9 @@
+using System.Net;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Microsoft.Extensions.Time.Testing;
-using System.Net;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 

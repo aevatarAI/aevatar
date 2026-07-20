@@ -75,7 +75,7 @@ public sealed class AgentProfileTurnRuntimeTests
             toolContext: null,
             CancellationToken.None);
 
-        request.Tools.Should().ContainSingle(tool => tool.Name == "visible");
+        request.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
         hidden.ExecuteCount.Should().Be(0);
         visible.ExecuteCount.Should().Be(1);
     }
@@ -128,7 +128,7 @@ public sealed class AgentProfileTurnRuntimeTests
             CancellationToken.None);
 
         var providerRequest = provider.Requests.Should().ContainSingle().Subject;
-        providerRequest.Tools.Should().ContainSingle(tool => tool.Name == "visible");
+        providerRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
         providerRequest.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
         providerRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
     }
@@ -284,6 +284,12 @@ public sealed class AgentProfileTurnRuntimeTests
     {
         public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
         {
+            if (context.Request.ToolContext?.ToolVisibility.AllowedToolNames is ISet<string> allowedToolNames)
+            {
+                foreach (var tool in tools)
+                    allowedToolNames.Add(tool.Name);
+            }
+
             context.Request = new LLMRequest
             {
                 Messages = context.Request.Messages,

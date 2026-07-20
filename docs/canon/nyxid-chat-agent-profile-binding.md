@@ -47,6 +47,6 @@ create resolver 继续以 `CHAT_SOURCE_KIND_DIRECT` 的 chat-route decision 为�
 
 NyxID materializer 先从 route-owned tool set、当前已注册工具、既有 typed visibility、maximum policy 和 recovery policy 取交集，再执行 alias 或 bounded streaming classifier。`ENFORCED` 只有在 exact GUID、literal version、expected name、reviewed publisher、hash evidence、唯一 `SKILL.md` 和 UTF-8 正文上限全部通过后，才加入 selected-skill prompt layer，并把 member task policy 与 recovery policy 的并集继续限制在上述交集内。Ornn adapter 只读取两个 version-pinned GUID endpoint，不按 name、latest 或 search 回退。
 
-非空 catalog 即使没有任何工具名，也表示 restricted-empty。`ChatRuntimeRequestBuilder` 让 main 与 step 共用同一份 `FinalAllowedToolNames`：一边过滤模型可见 schema，一边写入 executor admission 使用的 `AgentToolVisibilityScope`；既有 visibility 只会继续取交集，不能被 profile 扩大。模型伪造不可见 tool call 时，executor 在工具执行前拒绝。
+非空 catalog 即使没有任何工具名，也表示 restricted-empty。`ChatRuntimeRequestBuilder` 让 main 与 step 共用同一份 `FinalAllowedToolNames`：一边过滤模型可见 schema，一边写入 executor admission 使用的 `AgentToolVisibilityScope`；既有 visibility 只会继续取交集，不能被 profile 扩大。每次 LLM call 都在 middleware 运行前冻结该 request 的 schema 与 visibility 上限，并在调用 provider 前再次取交集，因此 middleware 只能继续缩权，不能恢复 catalog 外工具。模型伪造不可见 tool call 时，executor 在工具执行前拒绝。
 
 `SHADOW` 只保留当前请求的 candidate identity 与 bounded diagnostic，权限和 prompt body 固定为 recovery，不读取、解析或注入 candidate skill body，也不解析 candidate task tool set。profile digest、classifier、registry、tool discovery、collision、capability、exact fetch、identity、integrity或正文校验任一失败，都只能降为继续取交集后的 recovery；若交集为空则保持 restricted-empty，不能退回 unrestricted。

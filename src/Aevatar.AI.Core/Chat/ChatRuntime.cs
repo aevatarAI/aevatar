@@ -838,6 +838,7 @@ public sealed class ChatRuntime
         var llmHookContext = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmHookContext, ct);
         var llmStartedAt = Stopwatch.GetTimestamp();
+        var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
 
         var llmCallContext = new LLMCallContext
         {
@@ -867,6 +868,7 @@ public sealed class ChatRuntime
 
         if (readyTask == coreTurnTask && !llmCallContext.Terminate)
         {
+            llmCallContext.Request = authorizationFence.Apply(llmCallContext.Request);
             var full = new StringBuilder();
             var fullReasoning = new StringBuilder();
             TokenUsage? usage = null;

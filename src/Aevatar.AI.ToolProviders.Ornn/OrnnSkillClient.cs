@@ -141,7 +141,7 @@ public sealed class OrnnSkillClient
         }
     }
 
-    public Task<OrnnExactSkillDetail?> GetExactSkillDetailAsync(
+    internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(
         string accessToken,
         string guid,
         string literalVersion,
@@ -152,7 +152,7 @@ public sealed class OrnnSkillClient
             guid,
             ct);
 
-    public Task<OrnnSkillJson?> GetExactSkillJsonAsync(
+    internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(
         string accessToken,
         string guid,
         string literalVersion,
@@ -163,7 +163,7 @@ public sealed class OrnnSkillClient
             guid,
             ct);
 
-    private async Task<T?> GetExactAsync<T>(
+    private async Task<OrnnExactSkillReadResult<T>> GetExactAsync<T>(
         string accessToken,
         string path,
         string guid,
@@ -182,11 +182,11 @@ public sealed class OrnnSkillClient
                 body: null,
                 extraHeaders: null,
                 ct: linkedCts.Token);
-            if (TryUnwrapNyxIdProxyError(response, out _))
-                return default;
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return OrnnExactSkillReadResult<T>.ProxyFailure(proxyError.Status, proxyError.Detail);
 
             var envelope = JsonSerializer.Deserialize<OrnnApiResponse<T>>(response, JsonOptions);
-            return envelope?.Data;
+            return OrnnExactSkillReadResult<T>.Success(envelope?.Data);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -562,6 +562,15 @@ public sealed class OrnnExactSkillDetail
     public string? Name { get; set; }
     public string? SkillHash { get; set; }
     public string? CreatedBy { get; set; }
+}
+
+internal sealed record OrnnExactSkillReadResult<T>(T? Value, int? ProxyStatus, string? FailureDetail)
+    where T : class
+{
+    public static OrnnExactSkillReadResult<T> Success(T? value) => new(value, null, null);
+
+    public static OrnnExactSkillReadResult<T> ProxyFailure(int status, string detail) =>
+        new(null, status, detail);
 }
 
 public sealed class OrnnSkillMetadata
