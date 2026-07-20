@@ -1,8 +1,12 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Net;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions;
@@ -325,7 +329,89 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_AuthorizationBlockedTurn_ShouldArchiveBlockerAndAdmitNextTurn()
+    public async Task HandleChatRequest_ReplayedTurn_ShouldReuseTerminalHistoryAndContinueLaterTurn()
+    {
+        var history = new RecordingChatHistoryCommandPort();
+        var clock = new MutableTimeProvider(DateTimeOffset.Parse("2026-07-20T01:02:03Z"));
+        using var services = BuildServiceProvider(historyCommandPort: history);
+        var llmProviderFactory = new StreamingToolLoopProviderFactory(
+            [
+                [
+                    new LLMStreamChunk
+                    {
+                        DeltaToolCall = new ToolCall
+                        {
+                            Id = "call-once",
+                            Name = "count_once",
+                            ArgumentsJson = "{}",
+                        },
+                    },
+                ],
+                [new LLMStreamChunk { DeltaContent = "first answer" }],
+                [new LLMStreamChunk { DeltaContent = "later answer" }],
+            ]);
+        var toolCallCount = 0;
+        var agent = CreateAgent(
+            services,
+            "nyxid-chat-idempotent-history",
+            llmProviderFactory,
+            [new StaticToolSource([new DelegateTool("count_once", _ =>
+            {
+                toolCallCount++;
+                return "ok";
+            })])],
+            timeProvider: clock);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        var replayedRequest = new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "first prompt",
+            SessionId = "turn-client-request-1",
+        };
+        await agent.HandleChatRequest(replayedRequest);
+        var providerCallsAfterFirstTurn = llmProviderFactory.StreamRequests.Count;
+        clock.Advance(TimeSpan.FromMinutes(1));
+
+        await agent.HandleChatRequest(replayedRequest.Clone());
+
+        llmProviderFactory.StreamRequests.Should().HaveCount(providerCallsAfterFirstTurn);
+        toolCallCount.Should().Be(1);
+        publisher.Published.OfType<TextMessageEndEvent>()
+            .Should().HaveCount(2)
+            .And.OnlyContain(evt => evt.SessionId == "turn-client-request-1");
+        history.Saved.Should().HaveCount(2);
+        history.Saved[0].Messages.Select(static message => message.Timestamp)
+            .Should().Equal(history.Saved[1].Messages.Select(static message => message.Timestamp));
+        history.Saved[0].Messages.Should().OnlyContain(static message => message.TurnId == "turn-client-request-1");
+        history.Saved[1].Messages.Should().OnlyContain(static message => message.TurnId == "turn-client-request-1");
+
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "later prompt",
+            SessionId = "turn-client-request-2",
+        });
+
+        llmProviderFactory.StreamRequests.Should().HaveCount(providerCallsAfterFirstTurn + 1);
+        llmProviderFactory.StreamRequests[^1].Messages
+            .Where(static message => message.Role != "system")
+            .Select(static message => (message.Role, message.Content))
+            .Should().ContainInOrder(
+                ("user", "first prompt"),
+                ("assistant", "first answer"),
+                ("user", "later prompt"));
+        toolCallCount.Should().Be(1);
+        agent.State.MessageCount.Should().Be(2);
+        history.Saved.Should().HaveCount(3);
+        history.Saved[^1].Messages.Should().OnlyContain(static message => message.TurnId == "turn-client-request-2");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_DisconnectedService_ShouldArchiveBlockerAndAdmitNextTurn()
     {
         var history = new RecordingChatHistoryCommandPort();
         using var provider = BuildServiceProvider(historyCommandPort: history);
@@ -337,8 +423,9 @@ public class NyxIdChatGAgentTests
                         DeltaToolCall = new ToolCall
                         {
                             Id = "call-auth",
-                            Name = "authorization_required_history_tool",
-                            ArgumentsJson = "{}",
+                            Name = "nyxid_require_service",
+                            ArgumentsJson =
+                                """{"service_slug":"api-github","resource_uri":"/repos/private?token=bearer-secret"}""",
                         },
                     },
                 ],
@@ -348,7 +435,7 @@ public class NyxIdChatGAgentTests
             provider,
             "nyxid-chat-blocked-history",
             llmProviderFactory,
-            [new StaticToolSource([new AuthorizationRequiredHistoryTool()])]);
+            [new StaticToolSource([new NyxIdRequireServiceTool()])]);
 
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -382,12 +469,155 @@ public class NyxIdChatGAgentTests
             .ContainSingle(static message => message.Role == "assistant").Which;
         blockedAssistant.Id.Should().Be("turn-blocked-assistant");
         blockedAssistant.Status.Should().Be("blocked");
-        blockedAssistant.Error.Should().Be("Connect or reauthorize api-github to continue.");
+        blockedAssistant.Error.Should().Be("Connect api-github to continue.");
         blockedAssistant.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
         history.Saved[1].Messages.Should().ContainSingle(message =>
             message.Role == "assistant" &&
             message.Status == "completed" &&
             message.Content == "follow-up answer");
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_NyxId401_ShouldCommitAndProjectCredentialFreeAuthorizationBlocker()
+    {
+        const string actorId = "nyxid-chat-real-unauthorized";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        using var services = BuildServiceProvider(historyCommandPort: history, eventStore: eventStore);
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            new HttpClient(new FixedNyxIdResponseHandler(
+                HttpStatusCode.Unauthorized,
+                """{"error":"unauthorized","error_code":1001,"message":"expired bearer-secret"}""")));
+        var llmProviderFactory = new StreamingToolLoopProviderFactory(
+            [[new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-unauthorized",
+                    Name = "nyxid_proxy",
+                    ArgumentsJson =
+                        """{"slug":"api-github","path":"/repos/private?access_token=query-secret"}""",
+                },
+            }]]);
+        var agent = CreateAgent(
+            services,
+            actorId,
+            llmProviderFactory,
+            [new StaticToolSource([new NyxIdProxyTool(client)])]);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "read private repository",
+            SessionId = "turn-real-unauthorized",
+            LlmControl = new LLMControlContextPayload { NyxIdAccessToken = "request-token-secret" },
+        });
+
+        var completed = (await eventStore.GetEventsAsync(actorId))
+            .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(evt => evt.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should().ContainSingle().Which;
+        completed.Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+        completed.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
+        completed.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
+        completed.ToolReceipts.Should().ContainSingle(receipt =>
+            receipt.Status == AgentToolReceiptStatus.AuthorizationRequired);
+        completed.ToString().Should()
+            .NotContain("bearer-secret")
+            .And.NotContain("query-secret")
+            .And.NotContain("request-token-secret")
+            .And.NotContain("access_token");
+        publisher.Published.OfType<ToolResultEvent>().Should().ContainSingle().Which.ToString()
+            .Should().NotContain("bearer-secret").And.NotContain("query-secret");
+        var frames = NyxIdChatCompletionAguiFrameBuilder.Build(
+            new NyxIdChatSessionProjectionContext
+            {
+                RootActorId = actorId,
+                SessionId = completed.SessionId,
+                ProjectionKind = "nyxid-chat-session",
+            },
+            completed);
+        frames.Any(frame => frame.Custom != null && frame.Custom.Name == "nyxid.authorization.required")
+            .Should().BeTrue();
+        frames.Any(frame => frame.RunFinished != null &&
+                            frame.RunFinished.Status == Aevatar.AGUI.Contracts.RunCompletionStatus.Blocked)
+            .Should().BeTrue();
+        frames.Select(frame => frame.ToString()).Should()
+            .NotContain(text => text.Contains("secret", StringComparison.OrdinalIgnoreCase));
+        history.Saved.Should().ContainSingle();
+        history.Saved.Single().Messages.Select(message => message.ToString()).Should()
+            .NotContain(text => text.Contains("secret", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_NyxId403_ShouldRemainNormalTypedToolFailure()
+    {
+        const string actorId = "nyxid-chat-real-forbidden";
+        var eventStore = new InMemoryEventStoreForTests();
+        var history = new RecordingChatHistoryCommandPort();
+        using var services = BuildServiceProvider(historyCommandPort: history, eventStore: eventStore);
+        using var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            new HttpClient(new FixedNyxIdResponseHandler(
+                HttpStatusCode.Forbidden,
+                """{"error":"forbidden","error_code":1002,"message":"approval timed out bearer-secret"}""")));
+        var llmProviderFactory = new StreamingToolLoopProviderFactory(
+            [
+                [new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-forbidden",
+                        Name = "nyxid_proxy",
+                        ArgumentsJson = """{"slug":"api-github","path":"/repos/private"}""",
+                    },
+                }],
+                [new LLMStreamChunk { DeltaContent = "The service request was denied." }],
+            ]);
+        var agent = CreateAgent(
+            services,
+            actorId,
+            llmProviderFactory,
+            [new StaticToolSource([new NyxIdProxyTool(client)])]);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "read private repository",
+            SessionId = "turn-real-forbidden",
+            LlmControl = new LLMControlContextPayload { NyxIdAccessToken = "request-token-secret" },
+        });
+
+        var completed = (await eventStore.GetEventsAsync(actorId))
+            .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(evt => evt.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should().ContainSingle().Which;
+        completed.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+        completed.AuthorizationRequired.Should().BeNull();
+        completed.ToolReceipts.Should().ContainSingle(receipt =>
+            receipt.Status == AgentToolReceiptStatus.Error &&
+            receipt.ErrorCode == "NYXID_PROXY_FORBIDDEN");
+        completed.ToString().Should().NotContain("bearer-secret").And.NotContain("request-token-secret");
+        NyxIdChatCompletionAguiFrameBuilder.Build(
+                new NyxIdChatSessionProjectionContext
+                {
+                    RootActorId = actorId,
+                    SessionId = completed.SessionId,
+                    ProjectionKind = "nyxid-chat-session",
+                },
+                completed)
+            .Any(frame => frame.Custom != null && frame.Custom.Name == "nyxid.authorization.required")
+            .Should().BeFalse();
+        history.Saved.Should().ContainSingle();
+        history.Saved.Single().Messages.Should().ContainSingle(message =>
+            message.Role == "assistant" &&
+            message.Status == "completed" &&
+            message.Content == "The service request was denied.");
     }
 
     [Fact]
@@ -515,10 +745,12 @@ public class NyxIdChatGAgentTests
     private static ServiceProvider BuildServiceProvider(
         IGAgentActorRegistryCommandPort? registryCommandPort = null,
         IActorRuntime? actorRuntime = null,
-        IChatHistoryCommandPort? historyCommandPort = null)
+        IChatHistoryCommandPort? historyCommandPort = null,
+        IEventStore? eventStore = null)
     {
+        eventStore ??= new InMemoryEventStoreForTests();
         var services = new ServiceCollection()
-            .AddSingleton<IEventStore, InMemoryEventStoreForTests>()
+            .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
@@ -627,6 +859,15 @@ public class NyxIdChatGAgentTests
     private sealed class FixedTimeProvider(DateTimeOffset value) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => value;
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset value) : TimeProvider
+    {
+        private DateTimeOffset _value = value;
+
+        public override DateTimeOffset GetUtcNow() => _value;
+
+        public void Advance(TimeSpan amount) => _value = _value.Add(amount);
     }
 
     private sealed class NoopRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
@@ -760,6 +1001,17 @@ public class NyxIdChatGAgentTests
         }
     }
 
+    private sealed class FixedNyxIdResponseHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+    }
+
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
@@ -774,34 +1026,6 @@ public class NyxIdChatGAgentTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
-    }
-
-    private sealed class AuthorizationRequiredHistoryTool : IAgentTool
-    {
-        public string Name => "authorization_required_history_tool";
-        public string Description => "Returns a typed authorization blocker.";
-        public string ParametersSchema => "{}";
-
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("""{"error":true,"status":403,"credential":"bearer-secret"}""");
-
-        public AgentToolReceipt? CreateResultReceipt(
-            string callId,
-            string toolName,
-            string argumentsJson,
-            string resultJson) =>
-            new()
-            {
-                CallId = callId,
-                ToolName = toolName,
-                Status = AgentToolReceiptStatus.AuthorizationRequired,
-                AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
-                {
-                    ServiceSlug = "api-github",
-                    ReasonCode = "NYXID_FORBIDDEN",
-                    SafeMessage = "Connect or reauthorize api-github to continue.",
-                },
-            };
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher

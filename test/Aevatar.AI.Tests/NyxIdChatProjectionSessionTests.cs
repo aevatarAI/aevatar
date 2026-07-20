@@ -555,7 +555,7 @@ public sealed class NyxIdChatProjectionSessionTests
             ServiceSlug = "api-github",
             ServiceLabel = "GitHub",
             ResourceUri = "/repos/private",
-            ReasonCode = "NYXID_FORBIDDEN",
+            ReasonCode = "NYXID_UNAUTHORIZED",
             SafeMessage = "Connect or reauthorize api-github to continue.",
         };
 

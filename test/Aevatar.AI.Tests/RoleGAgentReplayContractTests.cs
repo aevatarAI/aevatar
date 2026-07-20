@@ -190,7 +190,9 @@ public class RoleGAgentReplayContractTests
         var provider = new CountingLlmProviderFactory("cached answer");
         var services = BuildServices(store);
 
+        var terminalPublisher = new RecordingEventPublisher();
         var agent1 = CreateAgent(services, "role-session-replay", provider);
+        agent1.EventPublisher = terminalPublisher;
         await agent1.ActivateAsync();
         await agent1.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
@@ -220,9 +222,8 @@ public class RoleGAgentReplayContractTests
             .Should()
             .Be("role-assistant");
 
-        var replayPublisher = new RecordingEventPublisher();
         var agent2 = CreateAgent(services, "role-session-replay", provider);
-        agent2.EventPublisher = replayPublisher;
+        agent2.EventPublisher = terminalPublisher;
         await agent2.ActivateAsync();
 
         await agent2.HandleChatRequest(new ChatRequestEvent
@@ -232,29 +233,36 @@ public class RoleGAgentReplayContractTests
         });
 
         provider.StreamCallCount.Should().Be(1);
-        replayPublisher.Published
+        terminalPublisher.Published
             .OfType<TextMessageStartEvent>()
             .Should()
-            .ContainSingle(x => x.SessionId == "session-1");
-        replayPublisher.Published
+            .HaveCount(2)
+            .And.OnlyContain(x => x.SessionId == "session-1");
+        terminalPublisher.Published
             .OfType<TextMessageContentEvent>()
             .Should()
-            .ContainSingle(x => x.Delta == "cached answer" && x.SessionId == "session-1");
-        replayPublisher.Published
+            .HaveCount(2)
+            .And.OnlyContain(x => x.Delta == "cached answer" && x.SessionId == "session-1");
+        terminalPublisher.Published
             .OfType<TextMessageEndEvent>()
             .Should()
-            .ContainSingle(x => x.Content == "cached answer");
+            .HaveCount(2)
+            .And.OnlyContain(x => x.Content == "cached answer" && x.SessionId == "session-1");
 
         var replayedEvents = await store.GetEventsAsync("role-session-replay");
-        replayedEvents
+        var completions = replayedEvents
             .Where(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
             .Select(x => x.EventData.Unpack<RoleChatSessionCompletedEvent>())
-            .Should()
+            .ToArray();
+        completions.Should()
             .HaveCount(2)
             .And.OnlyContain(x =>
                 x.SessionId == "session-1" &&
                 x.Prompt == "hello" &&
                 x.Content == "cached answer");
+        completions[0].TerminalTime.Should().NotBeNull();
+        completions[1].TerminalTime.Should().Be(completions[0].TerminalTime);
+        agent2.State.Sessions["session-1"].TerminalTime.Should().Be(completions[0].TerminalTime);
     }
 
     [Fact]
@@ -414,7 +422,7 @@ public class RoleGAgentReplayContractTests
         var blocked = completions.Should().ContainSingle(evt => evt.SessionId == "turn-blocked").Which;
         blocked.Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
         blocked.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
-        blocked.AuthorizationRequired.ReasonCode.Should().Be("NYXID_FORBIDDEN");
+        blocked.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
         blocked.AuthorizationRequired.SafeMessage.Should().Be("Connect or reauthorize api-github to continue.");
         blocked.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
         completions.Should().ContainSingle(evt =>
@@ -1256,7 +1264,7 @@ public class RoleGAgentReplayContractTests
         public string ParametersSchema => "{}";
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult("""{"error":true,"status":403}""");
+            Task.FromResult("""{"error":true,"status":401}""");
 
         public AgentToolReceipt? CreateResultReceipt(
             string callId,
@@ -1272,7 +1280,7 @@ public class RoleGAgentReplayContractTests
                 {
                     ServiceSlug = "api-github",
                     ResourceUri = "/repos/private",
-                    ReasonCode = "NYXID_FORBIDDEN",
+                    ReasonCode = "NYXID_UNAUTHORIZED",
                     SafeMessage = "Connect or reauthorize api-github to continue.",
                 },
             };

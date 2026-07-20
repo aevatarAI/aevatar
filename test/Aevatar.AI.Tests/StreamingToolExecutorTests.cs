@@ -793,6 +793,32 @@ public class StreamingToolExecutorTests
         receipt.ErrorMessage.Should().Contain("boom");
     }
 
+    [Fact]
+    public async Task ProviderFailureReceipt_ShouldReplaceRawToolResultWithSafeResult()
+    {
+        var tools = new ToolManager();
+        tools.Register(new SafeFailureReceiptTool());
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall
+        {
+            Id = "tc-safe-failure",
+            Name = "safe_failure",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var failure = results.Should().ContainSingle().Which;
+        failure.IsError.Should().BeTrue();
+        failure.Result.Should().Be("""{"error":"SAFE_FAILURE","message":"The tool request failed."}""");
+        failure.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
+        failure.Receipt.Should().NotBeNull();
+        failure.Receipt!.ResultJson.Should().Be(failure.Result);
+    }
+
     // ─── Test helpers ───
 
     private sealed class ConcurrencyTrackingTool : IAgentTool
@@ -860,6 +886,32 @@ public class StreamingToolExecutorTests
         public string ParametersSchema => "{}";
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
+    }
+
+    private sealed class SafeFailureReceiptTool : IAgentTool
+    {
+        public string Name => "safe_failure";
+        public string Description => "safe failure fixture";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"error":"forbidden","message":"credential bearer-secret rejected"}""");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "SAFE_FAILURE",
+                ErrorMessage = "The tool request failed.",
+                ResultJson = """{"error":"SAFE_FAILURE","message":"The tool request failed."}""",
+            };
     }
 
     private sealed class DelegateToolCallMiddleware(

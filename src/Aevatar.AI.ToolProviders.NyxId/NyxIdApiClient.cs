@@ -60,16 +60,12 @@ internal sealed record NyxIdApiErrorEnvelope(
 internal sealed record NyxIdProxyError(
     int HttpStatus,
     string ErrorKey,
-    int ErrorCode,
-    string Message)
+    int ErrorCode)
 {
     public bool IsAuthorizationRequired =>
-        (HttpStatus == 401 &&
-         ErrorCode == 1001 &&
-         string.Equals(ErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase)) ||
-        (HttpStatus == 403 &&
-         ErrorCode == 1002 &&
-         string.Equals(ErrorKey, "forbidden", StringComparison.OrdinalIgnoreCase));
+        HttpStatus == 401 &&
+        ErrorCode == 1001 &&
+        string.Equals(ErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
@@ -107,26 +103,31 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 !outer.TryGetProperty("error", out var errorMarker) ||
                 errorMarker.ValueKind != JsonValueKind.True ||
                 !outer.TryGetProperty("status", out var statusProperty) ||
-                !statusProperty.TryGetInt32(out var status) ||
-                !outer.TryGetProperty("body", out var bodyProperty) ||
-                bodyProperty.ValueKind != JsonValueKind.String)
+                !statusProperty.TryGetInt32(out var status))
             {
                 return false;
             }
 
-            var body = bodyProperty.GetString();
-            if (string.IsNullOrWhiteSpace(body))
-                return false;
+            var errorKey = string.Empty;
+            var errorCode = 0;
+            if (outer.TryGetProperty("body", out var bodyProperty) &&
+                bodyProperty.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(bodyProperty.GetString()))
+            {
+                try
+                {
+                    using var bodyDocument = JsonDocument.Parse(bodyProperty.GetString()!);
+                    var bodyRoot = bodyDocument.RootElement;
+                    errorKey = TryGetString(bodyRoot, "error") ?? string.Empty;
+                    errorCode = TryGetInt(bodyRoot, "error_code") ?? 0;
+                }
+                catch (JsonException)
+                {
+                    // The typed outer envelope is sufficient to classify an upstream HTTP failure.
+                }
+            }
 
-            using var bodyDocument = JsonDocument.Parse(body);
-            var bodyRoot = bodyDocument.RootElement;
-            var errorKey = TryGetString(bodyRoot, "error");
-            var errorCode = TryGetInt(bodyRoot, "error_code");
-            var message = TryGetString(bodyRoot, "message");
-            if (string.IsNullOrWhiteSpace(errorKey) || errorCode is null || message is null)
-                return false;
-
-            error = new NyxIdProxyError(status, errorKey, errorCode.Value, message);
+            error = new NyxIdProxyError(status, errorKey, errorCode);
             return true;
         }
         catch (JsonException)
@@ -1031,8 +1032,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning(
-                    "NyxID API request failed: {Method} {Url} -> {Status}",
-                    request.Method, request.RequestUri, (int)response.StatusCode);
+                    "NyxID API request failed: {Method} -> {Status}",
+                    request.Method, (int)response.StatusCode);
                 var retryAfter = response.Headers.RetryAfter?.Delta;
                 var retryAfterJson = retryAfter.HasValue
                     ? $", \"retry_after_seconds\": {(int)Math.Ceiling(retryAfter.Value.TotalSeconds)}"
@@ -1053,8 +1054,11 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "NyxID API request exception: {Method} {Url}", request.Method, request.RequestUri);
-            return $"{{\"error\": true, \"message\": {EscapeJsonString(ex.Message)}}}";
+            _logger.LogWarning(
+                "NyxID API request exception: {Method} exceptionType={ExceptionType}",
+                request.Method,
+                ex.GetType().Name);
+            return """{"error":true,"status":0,"body":""}""";
         }
     }
 
@@ -1079,8 +1083,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     Math.Min(maxBytes, 64 * 1024),
                     ct);
                 _logger.LogWarning(
-                    "NyxID binary proxy request failed: {Method} {Url} -> {Status}",
-                    request.Method, request.RequestUri, (int)response.StatusCode);
+                    "NyxID binary proxy request failed: {Method} -> {Status}",
+                    request.Method, (int)response.StatusCode);
                 return new NyxIdProxyBinaryResponse(
                     false,
                     [],
@@ -1094,8 +1098,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 contentLength > maxBytes)
             {
                 _logger.LogWarning(
-                    "NyxID binary proxy response content length exceeded max bytes: {Method} {Url} length={Length} max={MaxBytes}",
-                    request.Method, request.RequestUri, contentLength, maxBytes);
+                    "NyxID binary proxy response content length exceeded max bytes: {Method} length={Length} max={MaxBytes}",
+                    request.Method, contentLength, maxBytes);
                 return new NyxIdProxyBinaryResponse(
                     false,
                     [],
@@ -1109,8 +1113,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             if (content.Exceeded)
             {
                 _logger.LogWarning(
-                    "NyxID binary proxy response exceeded max bytes while reading: {Method} {Url} max={MaxBytes}",
-                    request.Method, request.RequestUri, maxBytes);
+                    "NyxID binary proxy response exceeded max bytes while reading: {Method} max={MaxBytes}",
+                    request.Method, maxBytes);
                 return new NyxIdProxyBinaryResponse(
                     false,
                     [],
@@ -1133,11 +1137,14 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "NyxID binary proxy request exception: {Method} {Url}", request.Method, request.RequestUri);
+            _logger.LogWarning(
+                "NyxID binary proxy request exception: {Method} exceptionType={ExceptionType}",
+                request.Method,
+                ex.GetType().Name);
             return new NyxIdProxyBinaryResponse(
                 false,
                 [],
-                Detail: ex.Message);
+                Detail: "binary_proxy_transport_failure");
         }
     }
 

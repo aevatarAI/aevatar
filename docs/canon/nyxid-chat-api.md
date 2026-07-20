@@ -73,7 +73,7 @@ If the projection never produces a terminal fact, the server closes the stream w
 
 ## Authorization required
 
-NyxID proxy responses are classified only from the structured HTTP status, `error`, and `error_code` contract. Aevatar maps a confirmed authorization failure to `NyxIdAuthorizationRequiredEvent` and emits:
+NyxID proxy responses are classified only from the structured HTTP status, `error`, and `error_code` contract. Only the exact invalid-credential tuple HTTP `401` + `unauthorized` + `1001` is a proxy authorization failure. Aevatar maps that confirmed failure to `NyxIdAuthorizationRequiredEvent` and emits:
 
 ```json
 {
@@ -84,14 +84,16 @@ NyxID proxy responses are classified only from the structured HTTP status, `erro
       "serviceSlug": "api-github",
       "serviceLabel": "GitHub",
       "resourceUri": "/repos/private",
-      "reasonCode": "NYXID_FORBIDDEN",
+      "reasonCode": "NYXID_UNAUTHORIZED",
       "safeMessage": "Connect or reauthorize api-github to continue."
     }
   }
 }
 ```
 
-If the required service is absent from connected services and no operation tool exists, the model must call `nyxid_require_service`. That tool produces the same typed blocker without fabricating a tool call to a missing service.
+HTTP `403` / `forbidden` / `1002` is not sufficient evidence that reconnecting can resolve the failure. Approval-policy denial, approval timeout, scoped permission denial, and ordinary upstream `403` responses remain safe typed tool failures and do not emit `nyxid.authorization.required`.
+
+If the required service is absent from connected services and no operation tool exists, the model must call `nyxid_require_service`. That positive Aevatar-owned discovery result produces the typed connection blocker without fabricating a tool call to a missing service. Classification never inspects unstable human-readable messages. Failed, denied, or blocked calls retain only safe typed results: their raw proxy error bodies and secret-bearing arguments do not enter receipts, actor state, history, SSE frames, or logs, and resource URIs omit query/fragment values.
 
 Authorization blocks only the current turn. It does not deactivate the conversation actor, create pending tool approval, or schedule automatic replay. After connecting the service, submit a new turn on the same `actorId` to retry the request explicitly.
 
@@ -118,6 +120,8 @@ Content-Type: application/json
 ## Conversation history
 
 All turns sent to the same `actorId` share the actor's conversation history, including after actor passivation and reactivation. The runtime transcript is rebuilt from committed per-turn session facts rather than process memory. Each archived user and assistant message carries its typed `turnId`, and its message ID is derived from that turn. A blocked turn is archived with terminal status `blocked` and a safe blocker summary. It remains part of the conversation transcript and does not prevent the next turn.
+
+RoleGAgent assigns the terminal timestamp once when it commits the authoritative completion and persists that typed value with the session state. A completed-session replay republishes the same timestamp, so a retry with the same `actorId + clientRequestId` still receives terminal SSE output while the history actor sees an identical duplicate append. The provider and tools are not re-executed, message counts do not change, and no history conflict is committed. A new `clientRequestId` creates a normal continuation turn over the existing conversation history.
 
 ## Caller migration
 

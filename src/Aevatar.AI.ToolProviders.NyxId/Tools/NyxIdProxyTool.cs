@@ -65,7 +65,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (args.HasParseError)
             return null;
 
-        return NyxIdAuthorizationReceiptFactory.TryCreate(
+        return NyxIdProxyReceiptFactory.TryCreate(
             callId,
             toolName,
             args.Str("slug") ?? args.Str("service") ?? string.Empty,
@@ -114,13 +114,11 @@ public sealed class NyxIdProxyTool : IAgentTool
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
         //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
-        _logger.LogDebug("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
-
         var args = ToolArgs.Parse(argumentsJson);
         if (args.HasParseError)
         {
-            _logger.LogWarning("[nyxid_proxy] Argument parse failed: {Error}, raw={Raw}", args.ParseError, args.Raw);
-            return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{System.Text.Json.JsonSerializer.Serialize(args.ParseError)},\"received\":{System.Text.Json.JsonSerializer.Serialize(args.Raw)}}}";
+            _logger.LogWarning("[nyxid_proxy] Argument parse failed");
+            return """{"error":"Failed to parse tool arguments"}""";
         }
 
         var responseMode = ResolveResponseMode(args.Str("response_mode"));
@@ -148,17 +146,17 @@ public sealed class NyxIdProxyTool : IAgentTool
             if (responseMode == FileArtifactResponseMode)
                 return FileArtifactError("file_artifact_requires_slug", "response_mode=file_artifact requires slug.");
 
-            _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery. raw={Raw}", args.Raw);
+            _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery");
             return await DiscoverMergedServicesAsync(token, orgToken, ct);
         }
 
         if (string.IsNullOrWhiteSpace(path))
         {
-            _logger.LogWarning("[nyxid_proxy] Missing path. slug={Slug}, raw={Raw}", slug, args.Raw);
+            _logger.LogWarning("[nyxid_proxy] Missing path. slug={Slug}", slug);
             if (responseMode == FileArtifactResponseMode)
                 return FileArtifactError("file_artifact_requires_path", "response_mode=file_artifact requires path.");
 
-            return $"{{\"error\":\"'path' is required when 'slug' is provided\",\"received\":{args.Raw}}}";
+            return """{"error":"'path' is required when 'slug' is provided"}""";
         }
 
         if (responseMode == FileArtifactResponseMode)
@@ -178,8 +176,8 @@ public sealed class NyxIdProxyTool : IAgentTool
         // Resolve which token owns the target service: user token first, fallback to org token
         var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, slug, ct);
 
-        _logger.LogInformation("[nyxid_proxy] {Method} slug={Slug} path={Path} tokenSource={Source}",
-            method, slug, path, effectiveToken == token ? "user" : "org");
+        _logger.LogInformation("[nyxid_proxy] {Method} slug={Slug} tokenSource={Source}",
+            method, slug, effectiveToken == token ? "user" : "org");
         var result = await _client.ProxyRequestAsync(effectiveToken, slug, path, method, body, headers, ct);
 
         if (IsApprovalError(result, out var approvalCode, out var approvalRequestId))
@@ -221,9 +219,8 @@ public sealed class NyxIdProxyTool : IAgentTool
 
         var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, slug, ct);
         _logger.LogInformation(
-            "[nyxid_proxy] GET file_artifact slug={Slug} path={Path} maxBytes={MaxBytes} tokenSource={Source}",
+            "[nyxid_proxy] GET file_artifact slug={Slug} maxBytes={MaxBytes} tokenSource={Source}",
             slug,
-            path,
             _fileArtifactMaxBytes,
             effectiveToken == token ? "user" : "org");
 
@@ -263,7 +260,7 @@ public sealed class NyxIdProxyTool : IAgentTool
                 response.Content,
                 FileArtifactSourceKind.ConnectedServiceResource,
                 SourceMessageId: $"nyxid_proxy:{slug}",
-                SourceResourceKey: path,
+                SourceResourceKey: SanitizeResourcePath(path),
                 FileName: response.FileName,
                 MediaType: response.ContentType,
                 OwnerRunId: ownerRunId,
@@ -271,7 +268,10 @@ public sealed class NyxIdProxyTool : IAgentTool
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "[nyxid_proxy] File artifact ingress failed. slug={Slug} path={Path}", slug, path);
+            _logger.LogWarning(
+                "[nyxid_proxy] File artifact ingress failed. slug={Slug} exceptionType={ExceptionType}",
+                slug,
+                ex.GetType().Name);
             return FileArtifactError("artifact_ingress_failed", "Downloaded resource could not be stored.", response.HttpStatus, response.ContentType);
         }
 
@@ -280,7 +280,7 @@ public sealed class NyxIdProxyTool : IAgentTool
                 true,
                 FileArtifactResponseMode,
                 slug,
-                path,
+                SanitizeResourcePath(path),
                 response.HttpStatus,
                 response.ContentType,
                 response.FileName,
@@ -557,6 +557,13 @@ public sealed class NyxIdProxyTool : IAgentTool
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string SanitizeResourcePath(string path)
+    {
+        var normalized = path.Trim();
+        var delimiter = normalized.IndexOfAny(['?', '#']);
+        return delimiter >= 0 ? normalized[..delimiter] : normalized;
+    }
 
     /// <summary>
     /// Constant-time equality for two access tokens. Comparing secrets with <c>==</c> is

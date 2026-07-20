@@ -11,6 +11,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
@@ -143,6 +144,26 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task ExecuteTool_ShouldNotLogQueryValues()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.SpecsByServiceId["svc-1"] = ShopSpec;
+        var logger = new RecordingLogger<NyxIdConnectedServiceToolSource>();
+        var (source, _) = CreateSource(handler, logger: logger);
+
+        using var _scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync())
+            .Single(candidate => candidate.Name == "nyxid_api-shop__get_order");
+
+        await tool.ExecuteAsync("""{ "orderId": "o-1", "expand": "query-secret" }""");
+
+        logger.Output.Should()
+            .NotContain("query-secret")
+            .And.NotContain("expand=");
+    }
+
+    [Fact]
     public async Task ExecuteTool_MissingRequiredBody_ReturnsErrorWithoutCallingProxy()
     {
         var handler = new FakeNyxIdHandler();
@@ -178,21 +199,15 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Should().BeEmpty("a missing required path parameter must not reach the proxy");
     }
 
-    [Theory]
-    [InlineData(HttpStatusCode.Unauthorized, "unauthorized", 1001, "NYXID_UNAUTHORIZED")]
-    [InlineData(HttpStatusCode.Forbidden, "forbidden", 1002, "NYXID_FORBIDDEN")]
-    public async Task ExecuteTool_AuthorizationError_ShouldCreateCredentialFreeTypedReceipt(
-        HttpStatusCode status,
-        string errorKey,
-        int errorCode,
-        string reasonCode)
+    [Fact]
+    public async Task ExecuteTool_AuthorizationError_ShouldCreateCredentialFreeTypedReceipt()
     {
         var handler = new FakeNyxIdHandler
         {
-            ProxyResponseFactory = () => new HttpResponseMessage(status)
+            ProxyResponseFactory = () => new HttpResponseMessage(HttpStatusCode.Unauthorized)
             {
                 Content = new StringContent(
-                    $$"""{"error":"{{errorKey}}","error_code":{{errorCode}},"message":"credential bearer-secret rejected"}""",
+                    """{"error":"unauthorized","error_code":1001,"message":"credential bearer-secret rejected"}""",
                     Encoding.UTF8,
                     "application/json"),
             },
@@ -216,9 +231,50 @@ public class NyxIdConnectedServiceToolSourceTests
         receipt.AuthorizationRequired.Should().NotBeNull();
         receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-shop");
         receipt.AuthorizationRequired.ResourceUri.Should().Be("/orders/o-1");
-        receipt.AuthorizationRequired.ReasonCode.Should().Be(reasonCode);
+        receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
         receipt.AuthorizationRequired.SafeMessage.Should().NotBeNullOrWhiteSpace();
+        receipt.ResultJson.Should().NotBeNullOrWhiteSpace();
         receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
+    }
+
+    [Theory]
+    [InlineData("{\"error\":\"forbidden\",\"error_code\":1002,\"message\":\"approval denied bearer-secret\"}")]
+    [InlineData("{\"message\":\"ordinary upstream 403 bearer-secret\",\"documentation_url\":\"https://example.test?token=query-secret\"}")]
+    public async Task ExecuteTool_ForbiddenFailure_ShouldCreateSafeErrorReceiptWithoutAuthorizationBlocker(
+        string responseBody)
+    {
+        var handler = new FakeNyxIdHandler
+        {
+            ProxyResponseFactory = () => new HttpResponseMessage(HttpStatusCode.Forbidden)
+            {
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
+            },
+        };
+        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.SpecsByServiceId["svc-1"] = ShopSpec;
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync())
+            .Single(candidate => candidate.Name == "nyxid_api-shop__get_order");
+        var result = await tool.ExecuteAsync("""{ "orderId": "o-1" }""");
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            """{ "orderId": "o-1" }""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.AuthorizationRequired.Should().BeNull();
+        receipt.ErrorCode.Should().Be("NYXID_PROXY_FORBIDDEN");
+        receipt.ErrorMessage.Should().Be("The service request was denied.");
+        receipt.ResultJson.Should().Contain("NYXID_PROXY_FORBIDDEN");
+        receipt.ToString().Should()
+            .NotContain("bearer-secret")
+            .And.NotContain("credential")
+            .And.NotContain("query-secret")
+            .And.NotContain("token=");
     }
 
     [Fact]
@@ -274,11 +330,12 @@ public class NyxIdConnectedServiceToolSourceTests
 
     private static (NyxIdConnectedServiceToolSource Source, NyxIdApiClient Client) CreateSource(
         FakeNyxIdHandler handler,
-        string? baseUrl = "https://nyx.test")
+        string? baseUrl = "https://nyx.test",
+        ILogger<NyxIdConnectedServiceToolSource>? logger = null)
     {
         var options = new NyxIdToolOptions { BaseUrl = baseUrl };
         var client = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
-        return (new NyxIdConnectedServiceToolSource(options, client), client);
+        return (new NyxIdConnectedServiceToolSource(options, client, logger), client);
     }
 
     private static AgentToolContextScope PushContext(string userToken, string? orgToken = null) =>
@@ -294,6 +351,25 @@ public class NyxIdConnectedServiceToolSourceTests
             new Dictionary<string, string>(StringComparer.Ordinal)));
 
     private sealed record ProxyRequestRecord(string Method, string RelativePath, string Query, string Body, string Token);
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        private readonly List<string> _entries = [];
+
+        public string Output => string.Join('\n', _entries);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            _entries.Add(formatter(state, exception));
+    }
 
     private sealed class FakeNyxIdHandler : HttpMessageHandler
     {
