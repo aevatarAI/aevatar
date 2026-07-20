@@ -599,7 +599,7 @@ public sealed class ChatEndpointsInternalTests
             {
                 capturedCommand = command;
                 return Task.FromResult(
-                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
                         .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
             },
         };
