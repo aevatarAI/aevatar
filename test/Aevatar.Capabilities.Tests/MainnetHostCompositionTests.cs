@@ -17,6 +17,7 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Audit.Core.Identity;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
@@ -451,7 +452,11 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
         workspace.Sources.Should().Contain(source => source is ProvisionWorkflowScheduleToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioTeamQueryToolSource);
         workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioMemberQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioScheduleQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is WorkflowCatalogAgentToolSource);
         workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
@@ -465,6 +470,9 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
         workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
+        var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
+        scheduleQueries.Should().BeSameAs(scheduleMutations);
         app.Services.GetRequiredService<LarkToolOptions>()
             .EnableWorkflowFileSubmit.Should().BeFalse();
         app.Services.GetServices<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowConnectedServiceResourceFetchAdapter>()

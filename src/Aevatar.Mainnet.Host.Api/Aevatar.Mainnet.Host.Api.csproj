@@ -54,6 +54,7 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.StudioProvisioning\Aevatar.AI.ToolProviders.StudioProvisioning.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ToolSetRegistry\Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
     <ProjectReference Include="..\Aevatar.AI.Infrastructure.OpenSandbox\Aevatar.AI.Infrastructure.OpenSandbox.csproj" />
   </ItemGroup>
   <ItemGroup>

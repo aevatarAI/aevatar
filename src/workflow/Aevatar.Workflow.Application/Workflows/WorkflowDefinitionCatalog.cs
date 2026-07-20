@@ -189,6 +189,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_get_member
               - aevatar_list_schedules
               - aevatar_get_schedule
+              - aevatar_list_workflows
+              - aevatar_get_workflow
               - aevatar_bind_member_workflow
               - aevatar_schedule_member_workflow
               - aevatar_provision_workflow_schedule
