@@ -139,7 +139,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             implementationTerminalEvidence: true);
     }
 
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public Task HandleTerminalNotificationRetryFiredAsync(
         ServiceRunTerminalNotificationRetryFiredEvent retry)
     {
@@ -154,10 +154,15 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         var matchesScheduledAttempt =
             State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled &&
             retry.Attempt == State.TerminalNotificationAttempt;
+        var matchesScheduledNextAttemptRecovery =
+            State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled &&
+            retry.Attempt == State.TerminalNotificationAttempt + 1;
         var matchesScheduleBeforeCommitRecovery =
             State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.Prepared &&
             retry.Attempt == State.TerminalNotificationAttempt + 1;
-        return matchesScheduledAttempt || matchesScheduleBeforeCommitRecovery
+        return matchesScheduledAttempt ||
+               matchesScheduledNextAttemptRecovery ||
+               matchesScheduleBeforeCommitRecovery
             ? DeliverPendingTerminalNotificationAsync(failedAttempt: retry.Attempt)
             : Task.CompletedTask;
     }

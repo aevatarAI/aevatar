@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -406,7 +408,116 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
-    public async Task RetryFired_WhenAttemptIsStale_ShouldNotSend()
+    public async Task RetryCallbackEnvelope_WhenSelf_ShouldDispatchAndCommitDispatched()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+        publisher.SendException = null;
+        var callbackEnvelope = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+
+        await actor.HandleEventAsync(callbackEnvelope);
+
+        publisher.Sends.Should().ContainSingle();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        actor.State.PendingTerminalNotification.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RetryCallbackEnvelope_WhenNotSelf_ShouldNotDispatch()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+        publisher.SendException = null;
+        var foreignEnvelope = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope.Clone();
+        foreignEnvelope.Route = EnvelopeRouteSemantics.CreateDirect("foreign-actor", actor.Id);
+        var version = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleEventAsync(foreignEnvelope);
+
+        publisher.Sends.Should().BeEmpty();
+        actor.State.LastAppliedEventVersion.Should().Be(version);
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
+    }
+
+    [Fact]
+    public async Task RetryCallbackEnvelope_WhenNextScheduledCommitFails_ShouldRecoverAndAdvanceMonotonically()
+    {
+        var eventStore = new FailOnceRetryScheduledEventStore(failedAttempt: 2);
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ServiceRunState>(eventStore);
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+        var retryOneEnvelope = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+
+        var retryOne = () => actor.HandleEventAsync(retryOneEnvelope);
+
+        await retryOne.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated retry-scheduled commit failure");
+        eventStore.FailureObserved.Should().BeTrue();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
+        actor.State.TerminalNotificationAttempt.Should().Be(1);
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        var retryTwoEnvelope = scheduler.TimeoutRequests[1].TriggerEnvelope;
+        retryTwoEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
+            .Attempt.Should().Be(2);
+
+        await actor.HandleEventAsync(retryTwoEnvelope);
+
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
+        actor.State.TerminalNotificationAttempt.Should().Be(3);
+        scheduler.TimeoutRequests.Should().HaveCount(3);
+        var retryThreeEnvelope = scheduler.TimeoutRequests[2].TriggerEnvelope;
+        retryThreeEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
+            .Attempt.Should().Be(3);
+        publisher.SendException = null;
+
+        await actor.HandleEventAsync(retryThreeEnvelope);
+
+        publisher.Sends.Should().ContainSingle();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    public async Task RetryFired_WhenAttemptIsStale_ShouldNotSend(int staleAttempt)
     {
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var publisher = new RecordingEventPublisher
@@ -427,7 +538,7 @@ public sealed class ServiceRunGAgentTests
         await actor.HandleTerminalNotificationRetryFiredAsync(new ServiceRunTerminalNotificationRetryFiredEvent
         {
             DeliveryId = "delivery-1",
-            Attempt = 2,
+            Attempt = staleAttempt,
         });
 
         publisher.Sends.Should().BeEmpty();
@@ -789,5 +900,47 @@ public sealed class ServiceRunGAgentTests
 
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class FailOnceRetryScheduledEventStore(int failedAttempt) : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+
+        public bool FailureObserved { get; private set; }
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var buffered = events.ToArray();
+            if (!FailureObserved && buffered.Any(IsFailedRetryScheduledEvent))
+            {
+                FailureObserved = true;
+                throw new InvalidOperationException("simulated retry-scheduled commit failure");
+            }
+
+            return _inner.AppendAsync(agentId, buffered, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+
+        private bool IsFailedRetryScheduledEvent(StateEvent stateEvent) =>
+            stateEvent.EventData.Is(ServiceRunTerminalNotificationRetryScheduledEvent.Descriptor) &&
+            stateEvent.EventData.Unpack<ServiceRunTerminalNotificationRetryScheduledEvent>().Attempt == failedAttempt;
     }
 }
