@@ -385,6 +385,9 @@ steps:
 - 常用参数：`tool`。
 - 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
 - 当前 step 的 typed input file refs 会随 `WorkflowToolExecutionRequest` 传给 workflow tool。工具若同时支持 arguments `fileRef` 与当前输入文件上下文，显式 `fileRef` 优先；未显式选择时，只能在恰好 1 个当前输入文件时 fallback，多文件必须 fail closed 并要求调用方显式选择。
+- workflow tool 的成功或失败是 typed outcome。外部协议的 provider/adapter 负责把 HTTP 非 2xx、第三方错误 envelope 或 provider receipt 归一化为 typed failure；Workflow Core 与前端不得根据任意 output JSON 中的 `error`、`status` 等字段猜测执行结果。
+- typed failure 会发布 `WorkflowToolCallCompletedEvent.Success=false` 与 `StepCompletedEvent.Success=false`，保留 provider 提供的安全结果输出，并进入与异常失败相同的 retry、`on_error`、saga compensation 和 terminal run failure 链路。未被 provider 分类的普通返回值保持成功，即使业务 payload 恰好包含名为 `error` 的字段。
+- 升级后，过去以 success-wrapped error 返回的 tool 若已由 provider/adapter 分类，会从“步骤成功”变为正确的失败或进入 workflow 配置的恢复策略。workflow 作者应检查依赖旧假成功输出分支的定义，并改用 `on_error`、retry 或 compensation 表达恢复语义。
 - `tool_call` side effect 是 at-least-once。workflow actor 在 dispatch seam 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 tool invocation envelope。审批 replay / crash replay 会复用同一个 key；该 key 只用于 callee-side 幂等建议，不表示 engine-side dedup 或 exactly-once。
 - 需要人工审批的 direct `tool_call` 不把 `ApprovalPending` 当作失败完成。`ToolCallModule` 将原始 tool name、arguments、`execution_id`、`tool_call_id`、`approval_request_id` 持久化到 workflow actor state，并发布 `WorkflowSuspendedEvent.tool_approval`。该 suspension 只暴露审批对账键，不暴露工具参数。
 - tool approval resume 使用 `WorkflowResumedEvent.tool_approval` nested payload，仅携带 `execution_id`、`tool_call_id`、`approval_request_id`。客户端不得在 resume payload 中提交 tool name 或 arguments；approved replay 必须从 actor pending state 读取原始工具和参数，并向 tool middleware 传递 typed `ToolApprovalGrant`。

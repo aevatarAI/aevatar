@@ -22,6 +22,7 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.InvalidConversationId, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.ConversationNotFound, StatusCodes.Status404NotFound)]
     [InlineData(WorkflowChatRunStartError.ChatHistoryReservationUnavailable, StatusCodes.Status503ServiceUnavailable)]
+    [InlineData(WorkflowChatRunStartError.IdempotencyConflict, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.None, StatusCodes.Status400BadRequest)]
     public void ToHttpStatusCode_ShouldMapExpectedCode(
         WorkflowChatRunStartError error,

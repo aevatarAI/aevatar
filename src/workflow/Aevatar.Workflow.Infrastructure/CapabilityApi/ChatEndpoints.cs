@@ -323,6 +323,16 @@ public static class WorkflowCapabilityEndpoints
                 },
                 ct);
 
+            if (result is { Succeeded: true, Receipt: not null } && !writer.Started)
+            {
+                CapabilityTraceContext.ApplyCorrelationHeader(http.Response, result.Receipt.Run.CorrelationId);
+                await writer.StartAsync(ct);
+                if (result.Receipt.ChatContext != null)
+                    await writer.WriteAsync(BuildChatContextFrame(result.Receipt.ChatContext), ct);
+                await writer.WriteAsync(BuildRunContextFrame(result.Receipt.Run), ct);
+                scope.RecordFirstResponse();
+            }
+
             if (!result.Succeeded && !writer.Started)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(result.Error);

@@ -192,10 +192,13 @@ public sealed class WorkflowConnectedServiceResourceFetchToolSource(
                 fileRef.OwnerRunId,
                 fileRef.OwnerScopeId);
 
-        private static WorkflowToolExecutionResult Error(string error, string detail) =>
-            WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+        private static WorkflowToolExecutionResult Error(string error, string detail)
+        {
+            var resultJson = JsonSerializer.Serialize(
                 new WorkflowConnectedServiceResourceFetchError(false, error, detail),
-                JsonOptions));
+                JsonOptions);
+            return WorkflowToolExecutionResult.Failed(resultJson, error, detail);
+        }
 
         private static string? Normalize(string? value) =>
             string.IsNullOrWhiteSpace(value) ? null : value.Trim();

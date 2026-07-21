@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Middleware;
@@ -292,6 +293,63 @@ public sealed class AgentWorkflowToolSourceAdapterTests
         AgentToolRequestContext.Current.Should().BeNull();
     }
 
+    [Fact]
+    public async Task WorkflowTool_WhenProviderReceiptIsError_ShouldReturnTypedFailure()
+    {
+        const string rawResult = """{"error":true,"status":503}""";
+        const string safeResult = """{"error":"PROVIDER_HTTP_503","message":"The service request failed."}""";
+        var agentTool = new ResultReceiptAgentTool(
+            rawResult,
+            new AgentToolReceipt
+            {
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "PROVIDER_HTTP_503",
+                ErrorMessage = "The service request failed.",
+                ResultJson = safeResult,
+            });
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await workflowTool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be(safeResult);
+        result.Failure.Should().NotBeNull();
+        result.Failure!.ErrorCode.Should().Be("PROVIDER_HTTP_503");
+        result.Failure.ErrorMessage.Should().Be("The service request failed.");
+    }
+
+    [Fact]
+    public async Task WorkflowTool_WhenUnclassifiedResultContainsErrorField_ShouldRemainSuccessful()
+    {
+        const string resultJson = """{"error":true,"status":503,"historical":true}""";
+        var agentTool = new ResultReceiptAgentTool(resultJson, receipt: null);
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(agentTool)]);
+        var workflowTool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+
+        var result = await workflowTool.ExecuteAsync(
+            new WorkflowToolExecutionRequest(
+                ArgumentsJson: "{}",
+                RunId: "run-1",
+                StepId: "step-1",
+                ExecutionId: "exec-1",
+                CallId: "call-1",
+                ScopeId: "scope-1",
+                CallerCredential: new WorkflowCallerCredential()),
+            CancellationToken.None);
+
+        result.ResultJson.Should().Be(resultJson);
+        result.Failure.Should().BeNull();
+    }
+
     private sealed class CapturingAgentTool(ToolApprovalMode approvalMode = ToolApprovalMode.NeverRequire) : IAgentTool
     {
         public string Name => "capture_context";
@@ -353,6 +411,30 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ?? new Dictionary<string, string>(StringComparer.Ordinal);
             ObservedWorkflowRuntime = AgentToolRequestContext.Current?.WorkflowRuntime
                 ?? AgentWorkflowRuntimeContext.Empty;
+        }
+    }
+
+    private sealed class ResultReceiptAgentTool(
+        string resultJson,
+        AgentToolReceipt? receipt) : IAgentTool
+    {
+        public string Name => "result_receipt";
+
+        public string Description => "Return a provider-classified result";
+
+        public string ParametersSchema => "{}";
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            receipt?.Clone();
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(resultJson);
         }
     }
 

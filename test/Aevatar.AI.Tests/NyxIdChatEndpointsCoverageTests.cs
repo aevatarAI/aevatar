@@ -3952,12 +3952,12 @@ public partial class NyxIdChatEndpointsCoverageTests
             return Task.CompletedTask;
         }
 
-        public Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
         {
             if (DeleteConversationException is not null)
                 throw DeleteConversationException;
             DeletedConversations.Add((scopeId, conversationId));
-            return Task.CompletedTask;
+            return Task.FromResult(ChatHistoryDeleteResult.Accepted());
         }
     }
 

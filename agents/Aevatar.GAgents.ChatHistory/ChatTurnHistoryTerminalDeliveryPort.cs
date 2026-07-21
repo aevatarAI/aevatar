@@ -48,13 +48,22 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
 
         var deliveryId = request.DeliveryId.Trim();
         var scopeId = request.ScopeId.Trim();
-        var conversationResolution = await ResolveConversationAsync(scopeId, request.Conversation, ct).ConfigureAwait(false);
+        var workflowCommandId = request.WorkflowCommandId.Trim();
+        var conversationResolution = await ResolveConversationAsync(
+                scopeId,
+                workflowCommandId,
+                request.Conversation,
+                ct)
+            .ConfigureAwait(false);
         if (conversationResolution.Failure != WorkflowChatHistoryTerminalDeliveryReservationFailure.None)
             return new WorkflowChatHistoryTerminalDeliveryReservationResult(null, null, conversationResolution.Failure);
 
-        var turnId = CreateIdentity();
+        var turnId = conversationResolution.CreateConversationIfMissing
+            ? ChatHistoryActorIds.CreateTurnId(scopeId, workflowCommandId)
+            : CreateIdentity();
         var deliveryActorId = ChatTurnHistoryDeliveryActorIds.FromDeliveryId(deliveryId);
-        if (!await _actorRuntime.ExistsAsync(deliveryActorId).ConfigureAwait(false))
+        var deliveryActorExists = await _actorRuntime.ExistsAsync(deliveryActorId).ConfigureAwait(false);
+        if (!deliveryActorExists)
             await _actorRuntime.CreateAsync<ChatTurnHistoryDeliveryGAgent>(deliveryActorId, ct).ConfigureAwait(false);
 
         var command = new ChatTurnHistoryDeliveryReserveRequested
@@ -65,9 +74,10 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             TurnId = turnId,
             UserText = request.UserText.Trim(),
             WorkflowActorId = request.WorkflowActorId.Trim(),
-            WorkflowCommandId = request.WorkflowCommandId.Trim(),
+            WorkflowCommandId = workflowCommandId,
             WorkflowCorrelationId = request.WorkflowCorrelationId,
             CreateConversationIfMissing = conversationResolution.CreateConversationIfMissing,
+            RequestFingerprint = request.RequestFingerprint?.Trim() ?? string.Empty,
         };
         await DispatchAsync(deliveryActorId, command, request.WorkflowCorrelationId, $"chat-history-delivery-reserve:{deliveryActorId}", ct)
             .ConfigureAwait(false);
@@ -76,13 +86,14 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             "Reserved chat history terminal delivery: deliveryActorId={DeliveryActorId} workflowActorId={WorkflowActorId} commandId={CommandId}",
             deliveryActorId,
             request.WorkflowActorId,
-            request.WorkflowCommandId);
+            workflowCommandId);
 
         var reservation = new WorkflowChatHistoryTerminalDeliveryReservation(
             deliveryActorId,
             deliveryId,
             request.WorkflowActorId.Trim(),
-            request.WorkflowCommandId.Trim());
+            workflowCommandId,
+            ExistingReservation: deliveryActorExists);
         return WorkflowChatHistoryTerminalDeliveryReservationResult.Success(
             reservation,
             new WorkflowChatContext(scopeId, conversationResolution.ConversationId, turnId));
@@ -90,12 +101,14 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
 
     private async Task<ConversationIdentityResolution> ResolveConversationAsync(
         string scopeId,
+        string workflowCommandId,
         WorkflowChatConversationIntent conversation,
         CancellationToken ct)
     {
         return conversation.Intent switch
         {
-            WorkflowChatConversationIntentKind.Create => ConversationIdentityResolution.Create(CreateIdentity()),
+            WorkflowChatConversationIntentKind.Create =>
+                ConversationIdentityResolution.Create(ChatHistoryActorIds.CreateConversationId(scopeId, workflowCommandId)),
             WorkflowChatConversationIntentKind.Continue => await ResolveExistingConversationAsync(scopeId, conversation.ConversationId, ct)
                 .ConfigureAwait(false),
             _ => ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable),
