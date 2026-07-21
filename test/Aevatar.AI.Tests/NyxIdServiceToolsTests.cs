@@ -40,6 +40,15 @@ public sealed class NyxIdServiceToolsTests
         { NyxIdServiceHeaderName.IfMatch, "etag\r\nInjected: value", "invalid_conditional_header" },
     };
 
+    public static TheoryData<string, bool, bool, bool> RequestMethodCases => new()
+    {
+        { "HEAD", false, false, false },
+        { "OPTIONS", true, false, false },
+        { "PUT", true, true, true },
+        { "PATCH", true, true, true },
+        { "DELETE", true, true, true },
+    };
+
     [Fact]
     public async Task DiscoverToolsAsync_ShouldExposeFiveFixedToolsAndOneMultiInstanceOperation()
     {
@@ -94,6 +103,51 @@ public sealed class NyxIdServiceToolsTests
             .Should().NotContain("user_service_id");
         var result = await inventory.ExecuteAsync("{}");
         result.Should().Contain("us-personal-7").And.Contain("us-personal-8");
+    }
+
+    [Fact]
+    public async Task InventoryTool_AuthorizedInstanceSelection_ShouldReturnOnlyTheSelectedInstance()
+    {
+        var handler = new ServiceHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop", true),
+            Instance("us-personal-8", "api-shop", "svc-shop", true));
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-8"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var inventory = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_inventory");
+
+        var result = await inventory.ExecuteAsync(
+            """{ "user_service_id": "us-personal-8" }""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("instances").EnumerateArray()
+            .Select(static instance => instance.GetProperty("userServiceId").GetString())
+            .Should().ContainSingle().Which.Should().Be("us-personal-8");
+    }
+
+    [Fact]
+    public async Task InventoryTool_UnauthorizedInstanceSelection_ShouldFailClosed()
+    {
+        var handler = new ServiceHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop", true));
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var inventory = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_inventory");
+
+        var result = await inventory.ExecuteAsync(
+            """{ "user_service_id": "us-forged" }""");
+
+        ErrorCode(result).Should().Be("identity_not_authorized");
+        handler.ExactReads.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -501,6 +555,85 @@ public sealed class NyxIdServiceToolsTests
         using var body = JsonDocument.Parse(mutation.Body);
         body.RootElement.GetProperty("is_active").GetBoolean().Should().BeFalse();
         body.RootElement.TryGetProperty("active", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UpdateTool_EndpointUrl_ShouldUseExactNyxIdWireContract()
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-personal-7"] = instance;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var update = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_update");
+
+        var result = await update.ExecuteAsync(
+            """{ "user_service_id": "us-personal-7", "endpoint_url": "https://api.shop.test/v2" }""");
+
+        result.Should().Contain("\"accepted\": true");
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-personal-7");
+        var mutation = handler.Requests.Should().ContainSingle().Subject;
+        mutation.Method.Should().Be("PUT");
+        mutation.Path.Should().Be("/api/v1/keys/us-personal-7");
+        using var body = JsonDocument.Parse(mutation.Body);
+        body.RootElement.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("endpoint_url");
+        body.RootElement.GetProperty("endpoint_url").GetString()
+            .Should().Be("https://api.shop.test/v2");
+    }
+
+    [Theory]
+    [MemberData(nameof(RequestMethodCases))]
+    public async Task RequestTool_PublicHttpMethod_ShouldPreserveTransportAndApprovalContract(
+        string method,
+        bool shouldSendBody,
+        bool shouldAddIdempotencyKey,
+        bool requiresApproval)
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-personal-7"] = instance;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var requestTool = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_request");
+        var arguments = $$"""
+            {
+              "user_service_id": "us-personal-7",
+              "method": "{{method}}",
+              "relative_path": "orders",
+              "json_body": { "sku": "sku-1" }
+            }
+            """;
+
+        requestTool.RequiresApproval(arguments).Should().Be(requiresApproval);
+        var result = await requestTool.ExecuteAsync(arguments);
+
+        ResponseErrorCode(result).Should().BeNull();
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-personal-7");
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(method);
+        request.Path.Should().Be("/api/v1/proxy/svc-shop/orders");
+        request.Authorization.Should().Be("user-token");
+        request.IdempotencyKey.Should().Be(shouldAddIdempotencyKey ? "idem-1" : null);
+        if (shouldSendBody)
+        {
+            using var body = JsonDocument.Parse(request.Body);
+            body.RootElement.GetProperty("sku").GetString().Should().Be("sku-1");
+            request.ContentType.Should().Be("application/json; charset=utf-8");
+        }
+        else
+        {
+            request.Body.Should().BeEmpty();
+            request.ContentType.Should().BeNull();
+        }
     }
 
     [Fact]
