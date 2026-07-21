@@ -89,30 +89,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         if (fact == null)
             return;
 
-        if (string.IsNullOrWhiteSpace(fact.PermissionDigest) ||
-            string.IsNullOrWhiteSpace(fact.PolicyVersion) ||
-            string.IsNullOrWhiteSpace(fact.Owner.Authority) ||
-            string.IsNullOrWhiteSpace(fact.Owner.OwnerSubject) ||
-            string.IsNullOrWhiteSpace(fact.Scopes) ||
-            fact.ExpiresAt <= _timeProvider.GetUtcNow() ||
-            fact.Authority.CatalogStateVersion <= 0 ||
-            fact.ServiceGrants.Any(static grant =>
-                string.IsNullOrWhiteSpace(grant.ServiceId)) ||
-            fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
-            fact.NodeGrants.Any(static grant =>
-                string.IsNullOrWhiteSpace(grant.UserServiceId) ||
-                string.IsNullOrWhiteSpace(grant.NodeId) ||
-                string.IsNullOrWhiteSpace(grant.Role) ||
-                string.IsNullOrWhiteSpace(grant.EdgeKind)) ||
-            fact.ServiceGrants.Any(grant =>
-                !grant.NodeGrantsNotRequired &&
-                !fact.NodeGrants.Any(node => string.Equals(
-                    node.UserServiceId,
-                    grant.ServiceId,
-                    StringComparison.Ordinal))) ||
-            !fact.Disclosure.DedicatedToSchedule ||
-            !fact.Disclosure.SecretManagedByAevatar ||
-            fact.Disclosure.BrowserReceivesRawKey)
+        if (IsCoreAuthorizationFactInvalid(fact, _timeProvider.GetUtcNow()) ||
+            IsCatalogAuthorityInvalid(fact.Authority) ||
+            AreServiceGrantsInvalid(fact) ||
+            IsDisclosureInvalid(fact.Disclosure))
         {
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid,
@@ -128,6 +108,39 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 "Scheduled invocation authorization fact requires a constrained scheduled agent key.");
         }
     }
+
+    private static bool IsCoreAuthorizationFactInvalid(
+        ScheduledInvocationAuthorizationFact fact,
+        DateTimeOffset now) =>
+        string.IsNullOrWhiteSpace(fact.PermissionDigest) ||
+        string.IsNullOrWhiteSpace(fact.PolicyVersion) ||
+        string.IsNullOrWhiteSpace(fact.Owner.Authority) ||
+        string.IsNullOrWhiteSpace(fact.Owner.OwnerSubject) ||
+        string.IsNullOrWhiteSpace(fact.Scopes) ||
+        fact.ExpiresAt <= now;
+
+    private static bool IsCatalogAuthorityInvalid(ScheduledInvocationAuthorizationAuthority authority) =>
+        authority.CatalogStateVersion <= 0 ||
+        string.IsNullOrWhiteSpace(authority.CatalogContentDigest) ||
+        string.IsNullOrWhiteSpace(authority.CatalogContractVersion) ||
+        string.IsNullOrWhiteSpace(authority.CatalogPolicyVersion) ||
+        authority.CatalogEvaluatedAt == default;
+
+    private static bool AreServiceGrantsInvalid(ScheduledInvocationAuthorizationFact fact) =>
+        fact.ServiceGrants.Count == 0 && !fact.ServiceGrantsNotRequired ||
+        fact.ServiceGrants.Any(IsServiceGrantInvalid);
+
+    private static bool IsServiceGrantInvalid(ScheduledInvocationAuthorizationServiceGrant grant) =>
+        string.IsNullOrWhiteSpace(grant.ServiceId) ||
+        grant.NodeIds == null ||
+        grant.NodeIds.Any(string.IsNullOrWhiteSpace) ||
+        grant.NodeGrantsNotRequired && grant.NodeIds.Count != 0 ||
+        !grant.NodeGrantsNotRequired && grant.NodeIds.Count == 0;
+
+    private static bool IsDisclosureInvalid(ScheduledInvocationAuthorizationDisclosure disclosure) =>
+        !disclosure.DedicatedToSchedule ||
+        !disclosure.SecretManagedByAevatar ||
+        disclosure.BrowserReceivesRawKey;
 
     private async Task<PreparedInvocationRequest> BuildInvocationRequestAsync(
         ScheduledServiceInvocationDispatchRequest dispatch,

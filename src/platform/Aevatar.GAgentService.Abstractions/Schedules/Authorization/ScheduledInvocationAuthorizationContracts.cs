@@ -6,8 +6,8 @@ namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 public static class ScheduledInvocationAuthorizationContractVersions
 {
-    public const string Schema = "scheduled-invocation-authorization/v1";
-    public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v1";
+    public const string Schema = "scheduled-invocation-authorization/v2";
+    public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v2";
 }
 
 public sealed record AuthenticatedAuthorizationOwnerContext(
@@ -120,7 +120,9 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     long StateVersion,
     DateTimeOffset ObservedAtUtc,
     DateTimeOffset FreshUntilUtc,
-    string ExternalRevision,
+    string ContractVersion,
+    string PolicyVersion,
+    DateTimeOffset EvaluatedAtUtc,
     string ContentDigest,
     IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
     bool Invalidated = false,
@@ -135,12 +137,14 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
 
 public sealed record NyxIdAuthorizationCatalogObservation(
     AuthorizationOwnerIdentity Owner,
+    string RefreshId,
     DateTimeOffset ObservedAtUtc,
     DateTimeOffset FreshUntilUtc,
-    string ExternalRevision,
+    string ContractVersion,
+    string PolicyVersion,
+    DateTimeOffset EvaluatedAtUtc,
     string ContentDigest,
-    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
-    long ExpectedLifecycleFence = 0);
+    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services);
 
 public enum NyxIdAuthorizationCatalogRefreshStatus
 {
@@ -151,7 +155,6 @@ public enum NyxIdAuthorizationCatalogRefreshStatus
     ObservationTimedOut = 4,
     OwnerNotSupported = 5,
     CatalogUnstable = 6,
-    PublishedContractMissing = 7,
 }
 
 public sealed record NyxIdAuthorizationCatalogRefreshResult(
@@ -207,16 +210,30 @@ public interface INyxIdAuthorizationCatalogCommandPort
         DateTimeOffset activatedAtUtc,
         CancellationToken ct = default);
 
+    Task BeginRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset startedAtUtc,
+        CancellationToken ct = default);
+
     Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default);
 
     Task RecordRefreshFailureAsync(
         AuthorizationOwnerIdentity owner,
+        string refreshId,
         DateTimeOffset failedAtUtc,
         string failureCode,
         CancellationToken ct = default);
 
     Task InvalidateAsync(
         AuthorizationOwnerIdentity owner,
+        DateTimeOffset invalidatedAtUtc,
+        string reason,
+        CancellationToken ct = default);
+
+    Task InvalidateRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
         DateTimeOffset invalidatedAtUtc,
         string reason,
         CancellationToken ct = default);

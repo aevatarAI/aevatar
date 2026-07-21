@@ -20,7 +20,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     private static readonly DateTimeOffset ObservedAt = DateTimeOffset.Parse("2026-07-16T00:00:00Z");
 
     [Fact]
-    public async Task CommandHandlers_ShouldPersistLifecycleAndIgnoreDuplicateOrStaleFacts()
+    public async Task CommandHandlers_ShouldOwnRefreshLifecycleAndRecoverAfterInvalidation()
     {
         var owner = Owner();
         var agent = CreateAgent(owner);
@@ -37,28 +37,24 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             ActivatedAt = activatedAt.Clone(),
         });
 
-        var observation = ObservationCommand(owner, ObservedAt.AddMinutes(1));
+        await BeginRefreshAsync(agent, owner, "refresh-1", ObservedAt.AddSeconds(1));
+        var observation = ObservationCommand(owner, "refresh-1", ObservedAt.AddMinutes(1));
         await agent.HandleObserveAsync(observation);
-        await agent.HandleObserveAsync(observation.Clone());
-        var staleObservation = ObservationCommand(owner, ObservedAt);
-        await agent.HandleObserveAsync(staleObservation);
+        agent.State.ActiveRefreshId.Should().BeEmpty();
 
-        var conflictingObservation = observation.Clone();
-        conflictingObservation.ExternalRevision = "revision-conflict";
-        var conflict = () => agent.HandleObserveAsync(conflictingObservation);
-        await conflict.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*cannot identify conflicting content*");
-
+        await BeginRefreshAsync(agent, owner, "refresh-failure", ObservedAt.AddMinutes(2));
         var refreshFailure = new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
         {
             Owner = owner.Clone(),
+            RefreshId = "refresh-failure",
             FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)),
             FailureCode = "provider_unavailable",
         };
         await agent.HandleRefreshFailureAsync(refreshFailure);
-        await agent.HandleRefreshFailureAsync(refreshFailure.Clone());
         agent.State.LastRefreshFailureCode.Should().Be("provider_unavailable");
+        agent.State.ActiveRefreshId.Should().BeEmpty();
 
+        await BeginRefreshAsync(agent, owner, "refresh-invalidated", ObservedAt.AddMinutes(3));
         var invalidation = new InvalidateNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
@@ -68,11 +64,22 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         await agent.HandleInvalidateAsync(invalidation);
         await agent.HandleInvalidateAsync(invalidation.Clone());
         agent.State.LifecycleFence.Should().Be(1);
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+
+        await BeginRefreshAsync(agent, owner, "refresh-recovery", ObservedAt.AddMinutes(4));
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-recovery", ObservedAt.AddMinutes(5)));
+
+        agent.State.Invalidated.Should().BeFalse();
+        agent.State.LifecycleFence.Should().Be(1);
+        agent.State.ContractVersion.Should().Be("1");
+        agent.State.PolicyVersion.Should().Be("api-key-scope-v1");
+        agent.State.EvaluatedAt.Should().Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(4)));
 
         var cleanup = new CleanupNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
-            CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(4)),
+            CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(6)),
             Reason = "owner_unbound",
         };
         await agent.HandleCleanupAsync(cleanup);
@@ -84,12 +91,93 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         agent.State.LifecycleFence.Should().Be(2);
     }
 
+    [Fact]
+    public async Task RefreshSession_ShouldRejectSupersededObservation()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        });
+        await BeginRefreshAsync(agent, owner, "refresh-old", ObservedAt.AddSeconds(1));
+        await BeginRefreshAsync(agent, owner, "refresh-current", ObservedAt.AddSeconds(2));
+
+        var superseded = () => agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-old", ObservedAt.AddMinutes(1)));
+
+        await superseded.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*active refresh*");
+        agent.State.ActiveRefreshId.Should().Be("refresh-current");
+
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-current", ObservedAt.AddMinutes(1)));
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshSession_ShouldRejectSupersededRefreshInvalidation()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        });
+        await BeginRefreshAsync(agent, owner, "refresh-old", ObservedAt.AddSeconds(1));
+        await BeginRefreshAsync(agent, owner, "refresh-current", ObservedAt.AddSeconds(2));
+
+        var superseded = () => agent.HandleInvalidateAsync(
+            new InvalidateNyxIdAuthorizationCatalogCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-old",
+                InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                Reason = "api_key_scope_plan_denied",
+            });
+
+        await superseded.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*active refresh*");
+        agent.State.ActiveRefreshId.Should().Be("refresh-current");
+        agent.State.Invalidated.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Invalidation_ShouldEndActiveRefreshWithoutAdvancingAnUnchangedFence()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        });
+        var invalidation = new InvalidateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+            Reason = "credential_revoked",
+        };
+        await agent.HandleInvalidateAsync(invalidation);
+        await BeginRefreshAsync(agent, owner, "refresh-after-invalidation", ObservedAt.AddMinutes(2));
+
+        invalidation.InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(3));
+        await agent.HandleInvalidateAsync(invalidation);
+
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.LifecycleFence.Should().Be(1);
+    }
+
     [Theory]
     [InlineData("duplicate_service", "*service identities must be unique*")]
-    [InlineData("binding_without_id", "*node authorization evidence is invalid*")]
-    [InlineData("required_without_primary", "*require exactly one primary node*")]
+    [InlineData("resource_owner_missing", "*resource owner identity is incomplete*")]
+    [InlineData("required_without_nodes", "*require at least one node identity*")]
     [InlineData("direct_with_nodes", "*cannot carry node authorization evidence*")]
-    public async Task ObserveHandler_ShouldRejectInvalidTypedTopology(
+    [InlineData("duplicate_nodes", "*node identities must be ordinal-sorted and unique*")]
+    [InlineData("unsorted_nodes", "*node identities must be ordinal-sorted and unique*")]
+    public async Task ObserveHandler_ShouldRejectInvalidTypedPermissionSets(
         string scenario,
         string expectedMessage)
     {
@@ -100,21 +188,30 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             Owner = owner.Clone(),
             ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
         });
-        var command = ObservationCommand(owner, ObservedAt.AddMinutes(1));
+        await BeginRefreshAsync(agent, owner, "refresh-invalid", ObservedAt.AddSeconds(1));
+        var command = ObservationCommand(owner, "refresh-invalid", ObservedAt.AddMinutes(1));
 
         switch (scenario)
         {
             case "duplicate_service":
                 command.Services.Add(command.Services[0].Clone());
                 break;
-            case "binding_without_id":
-                command.Services[0].Nodes[1].BindingId = string.Empty;
+            case "resource_owner_missing":
+                command.Services[0].ResourceOwner = null;
                 break;
-            case "required_without_primary":
-                command.Services[0].Nodes.RemoveAt(0);
+            case "required_without_nodes":
+                command.Services[0].NodeIds.Clear();
                 break;
             case "direct_with_nodes":
                 command.Services[0].NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired;
+                break;
+            case "duplicate_nodes":
+                command.Services[0].NodeIds.Add("node-z");
+                break;
+            case "unsorted_nodes":
+                command.Services[0].NodeIds.Clear();
+                command.Services[0].NodeIds.Add("node-z");
+                command.Services[0].NodeIds.Add("node-a");
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
@@ -158,19 +255,6 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         refreshed.InvalidationReason.Should().BeEmpty();
         refreshed.ContentDigest.Should().Be("digest-2");
         refreshed.LastRefreshFailureCode.Should().Be("provider_unavailable");
-    }
-
-    [Fact]
-    public void ObservationFence_ShouldRejectResultStartedBeforeLifecycleChange()
-    {
-        var act = () => NyxIdAuthorizationCatalogGAgent.EnsureLifecycleFence(
-            currentLifecycleFence: 4,
-            expectedLifecycleFence: 3);
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*superseded by a lifecycle change*");
-        var current = () => NyxIdAuthorizationCatalogGAgent.EnsureLifecycleFence(4, 4);
-        current.Should().NotThrow();
     }
 
     [Fact]
@@ -279,6 +363,50 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
+    public void AuthorizationContracts_ShouldPublishPermissionSetsAndReserveRemovedTopologyFields()
+    {
+        ScheduledInvocationAuthorizationContractVersions.Schema.Should()
+            .Be("scheduled-invocation-authorization/v2");
+        ScheduledInvocationAuthorizationContractVersions.CredentialPolicy.Should()
+            .Be("nyxid-api-key/scheduled-invocation/v2");
+
+        var evidence = NyxIdAuthorizationServiceEvidence.Descriptor;
+        evidence.FindFieldByName("resource_owner").Should().NotBeNull();
+        evidence.FindFieldByName("node_ids").Should().NotBeNull();
+        evidence.FindFieldByName("nodes").Should().BeNull();
+        evidence.FindFieldByNumber(6).Should().BeNull();
+        evidence.ToProto().ReservedName.Should().Contain("nodes");
+        evidence.ToProto().ReservedRange.Should().Contain(static range => range.Start == 6 && range.End == 7);
+
+        var serviceGrant = NyxIdServiceGrant.Descriptor;
+        serviceGrant.FindFieldByName("resource_owner").Should().NotBeNull();
+        serviceGrant.FindFieldByName("node_grant_requirement").Should().NotBeNull();
+        serviceGrant.FindFieldByName("node_ids").Should().NotBeNull();
+
+        var plan = ScheduledInvocationAuthorizationPlan.Descriptor;
+        plan.FindFieldByName("nyx_id_node_grants").Should().BeNull();
+        plan.FindFieldByNumber(5).Should().BeNull();
+        plan.ToProto().ReservedName.Should().Contain("nyx_id_node_grants");
+        plan.ToProto().ReservedRange.Should().Contain(static range => range.Start == 5 && range.End == 6);
+
+        var authority = NyxIdCatalogAuthorityStamp.Descriptor;
+        authority.FindFieldByName("external_revision").Should().BeNull();
+        authority.FindFieldByName("contract_version").Should().NotBeNull();
+        authority.FindFieldByName("policy_version").Should().NotBeNull();
+        authority.FindFieldByName("evaluated_at").Should().NotBeNull();
+        authority.ToProto().ReservedName.Should().Contain("external_revision");
+
+        var state = NyxIdAuthorizationCatalogState.Descriptor;
+        state.FindFieldByName("active_refresh_id").Should().NotBeNull();
+        state.FindFieldByName("active_refresh_started_at").Should().NotBeNull();
+        state.DescriptorForType("BeginNyxIdAuthorizationCatalogRefreshCommand").Should().NotBeNull();
+        state.DescriptorForType("NyxIdAuthorizationCatalogRefreshBeganEvent").Should().NotBeNull();
+
+        NyxIdAuthorizationCatalogDocument.Descriptor.FindFieldByName("active_refresh_id").Should().BeNull();
+        NyxIdAuthorizationCatalogDocument.Descriptor.FindFieldByName("active_refresh_started_at").Should().BeNull();
+    }
+
+    [Fact]
     public async Task ProjectorAndQuery_ShouldRoundTripOwnerScopedCommittedState()
     {
         var owner = Owner();
@@ -305,13 +433,13 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         snapshot!.Owner.Should().BeEquivalentTo(owner);
         snapshot.StateVersion.Should().Be(19);
         snapshot.ContentDigest.Should().Be("digest-19");
+        snapshot.ContractVersion.Should().Be("1");
+        snapshot.PolicyVersion.Should().Be("api-key-scope-v1");
+        snapshot.EvaluatedAtUtc.Should().Be(ObservedAt.AddMinutes(-1));
         var service = snapshot.Services.Should().ContainSingle().Subject;
         service.UserServiceId.Should().Be("svc-alpha");
-        service.Nodes.Select(static node => (node.NodeId, node.BindingId, node.RoutePriority))
-            .Should().Equal(
-                ("node-primary", string.Empty, 0),
-                ("node-fallback", "binding-a", 7),
-                ("node-fallback", "binding-b", 7));
+        service.ResourceOwner.Should().BeEquivalentTo(ResourceOwner());
+        service.NodeIds.Should().Equal("node-a", "node-z");
     }
 
     private static AuthorizationOwnerIdentity Owner() => new()
@@ -319,6 +447,13 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         Authority = NyxIdAuthorizationAuthorities.NyxId,
         OwnerKind = AuthorizationOwnerKind.Personal,
         OwnerSubject = "owner-alpha",
+    };
+
+    private static AuthorizationOwnerIdentity ResourceOwner() => new()
+    {
+        Authority = NyxIdAuthorizationAuthorities.NyxId,
+        OwnerKind = AuthorizationOwnerKind.Organization,
+        OwnerSubject = "org-alpha",
     };
 
     private static NyxIdAuthorizationCatalogGAgent CreateAgent(AuthorizationOwnerIdentity owner) =>
@@ -331,15 +466,18 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
 
     private static ObserveNyxIdAuthorizationCatalogCommand ObservationCommand(
         AuthorizationOwnerIdentity owner,
+        string refreshId,
         DateTimeOffset observedAt)
     {
         var command = new ObserveNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
+            RefreshId = refreshId,
             ObservedAt = Timestamp.FromDateTimeOffset(observedAt),
             FreshUntil = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(15)),
-            ExternalRevision = "revision-1",
-            ExpectedLifecycleFence = 0,
+            ContractVersion = "1",
+            PolicyVersion = "api-key-scope-v1",
+            EvaluatedAt = Timestamp.FromDateTimeOffset(observedAt.AddMinutes(-1)),
         };
         command.Services.Add(ServiceEvidence());
         command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
@@ -355,9 +493,12 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         var observed = new NyxIdAuthorizationCatalogObservedEvent
         {
             Owner = owner.Clone(),
+            RefreshId = "refresh-transition",
             ObservedAt = Timestamp.FromDateTimeOffset(ObservedAt),
             FreshUntil = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(15)),
-            ExternalRevision = "revision-1",
+            ContractVersion = "1",
+            PolicyVersion = "api-key-scope-v1",
+            EvaluatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(-1)),
             ContentDigest = digest,
         };
         observed.Services.Add(ServiceEvidence());
@@ -373,34 +514,24 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             DisplayName = "Calendar",
             Access = NyxIdAuthorizationAccess.Permitted,
             NodeGrantRequirement = AuthorizationGrantRequirement.Required,
+            ResourceOwner = ResourceOwner(),
         };
-        service.Nodes.Add(new NyxIdAuthorizationNodeEvidence
-        {
-            NodeId = "node-primary",
-            DisplayName = "Primary",
-            Role = NyxIdNodeRole.Primary,
-            EdgeKind = NyxIdNodeEdgeKind.UserServicePrimary,
-        });
-        service.Nodes.Add(new NyxIdAuthorizationNodeEvidence
-        {
-            NodeId = "node-fallback",
-            DisplayName = "Fallback",
-            Role = NyxIdNodeRole.Fallback,
-            EdgeKind = NyxIdNodeEdgeKind.NodeBinding,
-            BindingId = "binding-a",
-            RoutePriority = 7,
-        });
-        service.Nodes.Add(new NyxIdAuthorizationNodeEvidence
-        {
-            NodeId = "node-fallback",
-            DisplayName = "Fallback",
-            Role = NyxIdNodeRole.Fallback,
-            EdgeKind = NyxIdNodeEdgeKind.NodeBinding,
-            BindingId = "binding-b",
-            RoutePriority = 7,
-        });
+        service.NodeIds.Add("node-a");
+        service.NodeIds.Add("node-z");
         return service;
     }
+
+    private static Task BeginRefreshAsync(
+        NyxIdAuthorizationCatalogGAgent agent,
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset startedAt) => agent.HandleBeginRefreshAsync(
+        new BeginNyxIdAuthorizationCatalogRefreshCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = refreshId,
+            StartedAt = Timestamp.FromDateTimeOffset(startedAt),
+        });
 
     private static NyxIdAuthorizationCatalogState Transition(
         NyxIdAuthorizationCatalogGAgent agent,
@@ -433,4 +564,11 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             StateRoot = Any.Pack(state),
         }),
     };
+}
+
+file static class ProtobufDescriptorTestExtensions
+{
+    public static Google.Protobuf.Reflection.MessageDescriptor? DescriptorForType(
+        this Google.Protobuf.Reflection.MessageDescriptor descriptor,
+        string name) => descriptor.File.MessageTypes.SingleOrDefault(candidate => candidate.Name == name);
 }

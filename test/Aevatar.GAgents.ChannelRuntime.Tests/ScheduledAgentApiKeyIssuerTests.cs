@@ -13,68 +13,17 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ScheduledAgentApiKeyIssuerTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-16T00:00:00Z");
+    private const string TargetedScopePlanDigest =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     [Fact]
-    public async Task IssueAsync_WithValidatedPlan_CopiesExactServiceAndNodeOrderAndMultiplicity()
+    public async Task IssueAsync_WithMatchingTargetedScopePlan_CreatesWithReturnedCanonicalGrantsAndDigest()
     {
-        var handler = new RoutingJsonHandler("""{"id":"key-1","full_key":"secret"}""");
+        var handler = new RoutingJsonHandler(
+            PersonalScopePlanJson(),
+            """{"id":"key-1","full_key":"secret"}""");
         var issuer = CreateIssuer(handler);
-        var plan = new ScheduledInvocationAuthorizationPlan
-        {
-            Owner = new AuthorizationOwnerIdentity
-            {
-                Authority = NyxIdAuthorizationAuthorities.NyxId,
-                OwnerKind = AuthorizationOwnerKind.Personal,
-                OwnerSubject = "owner-alpha",
-            },
-            CredentialPolicy = new ScheduledInvocationCredentialPolicy
-            {
-                Scopes = { NyxIdCredentialScope.Read, NyxIdCredentialScope.Proxy },
-                AllowAllServices = false,
-                AllowAllNodes = false,
-                ServiceGrantRequirement = AuthorizationGrantRequirement.Required,
-                NodeGrantRequirement = AuthorizationGrantRequirement.Required,
-                ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-21T00:00:00Z")),
-                PolicyVersion = "scheduled-invocation-auth/v1",
-            },
-            PermissionDigest = "digest-alpha",
-        };
-        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
-        {
-            UserServiceId = "us-alpha",
-            ServiceSlug = "alpha",
-            DisplayName = "Alpha Connector",
-        });
-        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
-        {
-            UserServiceId = "us-beta",
-            ServiceSlug = "beta",
-            DisplayName = "Beta Connector",
-        });
-        plan.NyxIdNodeGrants.Add(new NyxIdNodeGrant
-        {
-            UserServiceId = "us-alpha",
-            NodeId = "node-shared",
-            Role = NyxIdNodeRole.Primary,
-            EdgeKind = NyxIdNodeEdgeKind.UserServicePrimary,
-        });
-        plan.NyxIdNodeGrants.Add(new NyxIdNodeGrant
-        {
-            UserServiceId = "us-beta",
-            NodeId = "node-fallback",
-            Role = NyxIdNodeRole.Fallback,
-            EdgeKind = NyxIdNodeEdgeKind.NodeBinding,
-            BindingId = "binding-beta-fallback",
-            RoutePriority = -1,
-        });
-        plan.NyxIdNodeGrants.Add(new NyxIdNodeGrant
-        {
-            UserServiceId = "us-beta",
-            NodeId = "node-shared",
-            Role = NyxIdNodeRole.Primary,
-            EdgeKind = NyxIdNodeEdgeKind.UserServicePrimary,
-        });
-        plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
+        var plan = ValidPlan();
 
         var result = await issuer.IssueAsync(
             "session-token",
@@ -84,27 +33,48 @@ public sealed class ScheduledAgentApiKeyIssuerTests
 
         result.Success.Should().BeTrue();
         result.ApiKeyId.Should().Be("key-1");
-        result.KeyExpiresAtUnixMs.Should().Be(DateTimeOffset.Parse("2026-07-21T00:00:00Z").ToUnixTimeMilliseconds());
-        handler.RequestBodies.Should().ContainSingle();
-        using var body = System.Text.Json.JsonDocument.Parse(handler.RequestBodies.Single());
-        body.RootElement.GetProperty("name").GetString().Should().Be("scheduled-key");
-        body.RootElement.GetProperty("scopes").GetString().Should().Be("read proxy");
-        body.RootElement.GetProperty("platform").GetString().Should().Be("generic");
-        body.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static value => value.GetString())
+        result.KeyExpiresAtUnixMs.Should().Be(Now.AddDays(30).ToUnixTimeMilliseconds());
+        handler.Requests.Should().Equal(
+            "/api/v1/api-keys/scope-plan",
+            "/api/v1/api-keys");
+        handler.RequestMethods.Should().Equal(HttpMethod.Post, HttpMethod.Post);
+        handler.RequestBodies.Should().HaveCount(2);
+
+        using var scopeRequest = System.Text.Json.JsonDocument.Parse(handler.RequestBodies[0]);
+        scopeRequest.RootElement.GetProperty("selected_service_ids")
+            .EnumerateArray()
+            .Select(static value => value.GetString())
             .Should().Equal("us-alpha", "us-beta");
-        body.RootElement.GetProperty("allowed_node_ids").EnumerateArray().Select(static value => value.GetString())
-            .Should().Equal("node-shared", "node-fallback", "node-shared");
-        body.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
-        body.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
-        body.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
-        DateTimeOffset.Parse(body.RootElement.GetProperty("expires_at").GetString()!).Should()
-            .Be(DateTimeOffset.Parse("2026-07-21T00:00:00Z"));
+        scopeRequest.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
+
+        using var createRequest = System.Text.Json.JsonDocument.Parse(handler.RequestBodies[1]);
+        createRequest.RootElement.GetProperty("name").GetString().Should().Be("scheduled-key");
+        createRequest.RootElement.GetProperty("scopes").GetString().Should().Be("read proxy");
+        createRequest.RootElement.GetProperty("platform").GetString().Should().Be("generic");
+        createRequest.RootElement.GetProperty("allowed_service_ids")
+            .EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("us-alpha", "us-beta");
+        createRequest.RootElement.GetProperty("allowed_node_ids")
+            .EnumerateArray()
+            .Select(static value => value.GetString())
+            .Should().Equal("node-a", "node-shared");
+        createRequest.RootElement.GetProperty("scope_plan_digest").GetString().Should().Be(TargetedScopePlanDigest);
+        createRequest.RootElement.GetProperty("scope_plan_digest").GetString().Should()
+            .NotBe(plan.CatalogAuthority.ContentDigest);
+        createRequest.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+        createRequest.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+        createRequest.RootElement.TryGetProperty("target_org_id", out _).Should().BeFalse();
+        DateTimeOffset.Parse(createRequest.RootElement.GetProperty("expires_at").GetString()!).Should()
+            .Be(Now.AddDays(30));
     }
 
     [Fact]
     public async Task IssueAsync_ForOrganizationOwner_ShouldMapExactTargetOrganization()
     {
-        var handler = new RoutingJsonHandler("""{"id":"key-org","full_key":"secret"}""");
+        var handler = new RoutingJsonHandler(
+            OrganizationScopePlanJson(),
+            """{"id":"key-org","full_key":"secret"}""");
         var issuer = CreateIssuer(handler);
         var plan = ValidPlan();
         plan.Owner.OwnerKind = AuthorizationOwnerKind.Organization;
@@ -118,10 +88,125 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        using var body = System.Text.Json.JsonDocument.Parse(handler.RequestBodies.Single());
-        body.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
-        body.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
-        body.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+        handler.RequestBodies.Should().HaveCount(2);
+        using var scopeRequest = System.Text.Json.JsonDocument.Parse(handler.RequestBodies[0]);
+        using var createRequest = System.Text.Json.JsonDocument.Parse(handler.RequestBodies[1]);
+        scopeRequest.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
+        createRequest.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
+        createRequest.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
+        createRequest.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IssueAsync_WhenTargetedScopePlanChanges_FailsBeforeCreate()
+    {
+        var changedPlan = PersonalScopePlanJson().Replace(
+            "\"node_ids\": [\"node-a\", \"node-shared\"]",
+            "\"node_ids\": [\"node-other\"]",
+            StringComparison.Ordinal).Replace(
+            "\"allowed_node_ids\": [\"node-a\", \"node-shared\"]",
+            "\"allowed_node_ids\": [\"node-other\"]",
+            StringComparison.Ordinal);
+        var handler = new RoutingJsonHandler(changedPlan);
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("authorization_plan_changed");
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
+    }
+
+    [Theory]
+    [InlineData("contract_version")]
+    [InlineData("policy_version")]
+    [InlineData("principal")]
+    [InlineData("service_identity")]
+    [InlineData("resource_owner")]
+    [InlineData("node_requirement")]
+    public async Task IssueAsync_WhenCurrentScopeFactDiffersFromValidatedPlan_FailsBeforeCreate(
+        string mismatch)
+    {
+        var plan = ValidPlan();
+        var scopePlanJson = PersonalScopePlanJson();
+        switch (mismatch)
+        {
+            case "contract_version":
+                plan.CatalogAuthority.ContractVersion = "2";
+                break;
+            case "policy_version":
+                plan.CatalogAuthority.PolicyVersion = "api-key-scope-v2";
+                break;
+            case "principal":
+                scopePlanJson = scopePlanJson
+                    .Replace(
+                        "\"authenticated_actor\": { \"id\": \"owner-alpha\", \"type\": \"personal\" }",
+                        "\"authenticated_actor\": { \"id\": \"owner-other\", \"type\": \"personal\" }",
+                        StringComparison.Ordinal)
+                    .Replace(
+                        "\"intended_key_owner\": { \"id\": \"owner-alpha\", \"type\": \"personal\" }",
+                        "\"intended_key_owner\": { \"id\": \"owner-other\", \"type\": \"personal\" }",
+                        StringComparison.Ordinal);
+                break;
+            case "service_identity":
+                scopePlanJson = scopePlanJson.Replace("us-beta", "us-other", StringComparison.Ordinal);
+                break;
+            case "resource_owner":
+                scopePlanJson = scopePlanJson.Replace("resource-org", "resource-other", StringComparison.Ordinal);
+                break;
+            case "node_requirement":
+                scopePlanJson = scopePlanJson
+                    .Replace(
+                        "\"node_grant\": { \"type\": \"required\", \"node_ids\": [\"node-a\", \"node-shared\"] }",
+                        "\"node_grant\": { \"type\": \"not_required\" }",
+                        StringComparison.Ordinal)
+                    .Replace(
+                        "\"allowed_node_ids\": [\"node-a\", \"node-shared\"]",
+                        "\"allowed_node_ids\": []",
+                        StringComparison.Ordinal);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mismatch), mismatch, null);
+        }
+        plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
+        var handler = new RoutingJsonHandler(scopePlanJson);
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(plan),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("authorization_plan_changed");
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
+    }
+
+    [Fact]
+    public async Task IssueAsync_WhenScopePlanProviderFails_ReturnsSanitizedErrorBeforeCreate()
+    {
+        var handler = new RoutingJsonHandler(
+            """
+            {"error":true,"status":503,"body":"{\"error\":\"secret/token\",\"error_code\":1006,\"message\":\"bearer-secret\"}"}
+            """);
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("nyxid_scope_plan_failed");
+        result.HttpStatus.Should().Be(503);
+        result.ToErrorJson().Should().NotContain("bearer-secret").And.NotContain("secret/token");
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
     [Fact]
@@ -267,7 +352,9 @@ public sealed class ScheduledAgentApiKeyIssuerTests
     [Fact]
     public async Task IssueAsync_ShouldUsePrivateValidatedSnapshot_WhenCallerMutatesExposedClone()
     {
-        var handler = new RoutingJsonHandler("""{"id":"key-1","full_key":"secret"}""");
+        var handler = new RoutingJsonHandler(
+            PersonalScopePlanJson(),
+            """{"id":"key-1","full_key":"secret"}""");
         var issuer = CreateIssuer(handler);
         var validated = new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan());
         validated.Plan.NyxIdServiceGrants[0].UserServiceId = "tampered";
@@ -279,7 +366,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        using var body = System.Text.Json.JsonDocument.Parse(handler.RequestBodies.Single());
+        using var body = System.Text.Json.JsonDocument.Parse(handler.RequestBodies[1]);
         body.RootElement.GetProperty("allowed_service_ids")[0].GetString().Should().Be("us-alpha");
     }
 
@@ -305,8 +392,14 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             InvalidPlan(static plan => plan.CredentialPolicy.AllowAllServices = true),
             InvalidPlan(static plan => plan.CredentialPolicy.AllowAllNodes = true),
             InvalidPlan(static plan => plan.Owner.Authority = "https://nyx.example.com"),
+            InvalidPlan(static plan => plan.Owner.Authority = " nyxid "),
             InvalidPlan(static plan => plan.Owner.OwnerSubject = " "),
+            InvalidPlan(static plan => plan.Owner.OwnerSubject = " owner-alpha "),
             InvalidPlan(static plan => plan.Owner.OwnerKind = AuthorizationOwnerKind.Unspecified),
+            InvalidPlan(static plan =>
+                plan.CredentialPolicy.ServiceGrantRequirement = AuthorizationGrantRequirement.Unspecified),
+            InvalidPlan(static plan =>
+                plan.CredentialPolicy.NodeGrantRequirement = AuthorizationGrantRequirement.Unspecified),
             InvalidPlan(static plan => plan.CredentialPolicy.ExpiresAt = Timestamp.FromDateTimeOffset(Now)),
         };
         var handler = new RoutingJsonHandler("""{"id":"key-1","full_key":"secret"}""");
@@ -405,9 +498,19 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             {
                 Scopes = { NyxIdCredentialScope.Read, NyxIdCredentialScope.Proxy },
                 ServiceGrantRequirement = AuthorizationGrantRequirement.Required,
-                NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+                NodeGrantRequirement = AuthorizationGrantRequirement.Required,
                 ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddDays(30)),
-                PolicyVersion = "scheduled-invocation-auth/v1",
+                PolicyVersion = ScheduledInvocationAuthorizationContractVersions.CredentialPolicy,
+            },
+            CatalogAuthority = new NyxIdCatalogAuthorityStamp
+            {
+                ActorStateVersion = 7,
+                ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-5)),
+                FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(10)),
+                ContentDigest = "local-protobuf-content-digest",
+                ContractVersion = NyxIdApiAccessResponseParser.ScopePlanContractVersion,
+                PolicyVersion = NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
+                EvaluatedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-6)),
             },
         };
         plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
@@ -415,10 +518,83 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             UserServiceId = "us-alpha",
             ServiceSlug = "alpha",
             DisplayName = "Alpha Connector",
+            ResourceOwner = Owner(
+                AuthorizationOwnerKind.Personal,
+                "owner-alpha"),
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
         });
+        var beta = new NyxIdServiceGrant
+        {
+            UserServiceId = "us-beta",
+            ServiceSlug = "beta",
+            DisplayName = "Beta Connector",
+            ResourceOwner = Owner(
+                AuthorizationOwnerKind.Organization,
+                "resource-org"),
+            NodeGrantRequirement = AuthorizationGrantRequirement.Required,
+        };
+        beta.NodeIds.Add("node-a");
+        beta.NodeIds.Add("node-shared");
+        plan.NyxIdServiceGrants.Add(beta);
         plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
         return plan;
     }
+
+    private static AuthorizationOwnerIdentity Owner(
+        AuthorizationOwnerKind ownerKind,
+        string ownerSubject) => new()
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = ownerKind,
+            OwnerSubject = ownerSubject,
+        };
+
+    private static string PersonalScopePlanJson() => $$"""
+        {
+          "authority": "nyxid",
+          "contract_version": "1",
+          "policy_version": "api-key-scope-v1",
+          "authenticated_actor": { "id": "owner-alpha", "type": "personal" },
+          "intended_key_owner": { "id": "owner-alpha", "type": "personal" },
+          "services": [
+            {
+              "user_service_id": "us-alpha",
+              "resource_owner": { "id": "owner-alpha", "type": "personal" },
+              "node_grant": { "type": "not_required" }
+            },
+            {
+              "user_service_id": "us-beta",
+              "resource_owner": { "id": "resource-org", "type": "organization" },
+              "node_grant": { "type": "required", "node_ids": ["node-a", "node-shared"] }
+            }
+          ],
+          "allowed_service_ids": ["us-alpha", "us-beta"],
+          "allowed_node_ids": ["node-a", "node-shared"],
+          "evaluated_at": "2026-07-16T00:00:01Z",
+          "normalized_grant_digest": "{{TargetedScopePlanDigest}}",
+          "freshness": {
+            "mode": "mutation_revalidated_snapshot",
+            "precondition_field": "scope_plan_digest",
+            "post_creation_drift": "fail_closed"
+          },
+          "completeness": {
+            "list_complete": true,
+            "no_duplicates": true,
+            "route_candidate_basis": "active_configured_routes",
+            "transient_node_state_excluded": true
+          }
+        }
+        """;
+
+    private static string OrganizationScopePlanJson() => PersonalScopePlanJson()
+        .Replace(
+            "\"authenticated_actor\": { \"id\": \"owner-alpha\", \"type\": \"personal\" }",
+            "\"authenticated_actor\": { \"id\": \"organization-admin\", \"type\": \"personal\" }",
+            StringComparison.Ordinal)
+        .Replace(
+            "\"intended_key_owner\": { \"id\": \"owner-alpha\", \"type\": \"personal\" }",
+            "\"intended_key_owner\": { \"id\": \"org-alpha\", \"type\": \"organization\" }",
+            StringComparison.Ordinal);
 
     private static ScheduledInvocationAuthorizationPlan InvalidPlan(
         Action<ScheduledInvocationAuthorizationPlan> mutate)

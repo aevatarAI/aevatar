@@ -272,7 +272,7 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration)
     {
         services.AddScheduledInvocationAuthorization();
-        services.AddHttpClient();
+        services.AddNyxIdApiAccess(configuration);
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
         services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();

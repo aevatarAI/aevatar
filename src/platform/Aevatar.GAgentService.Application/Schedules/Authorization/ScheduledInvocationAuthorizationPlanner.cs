@@ -50,6 +50,14 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "nyxid_catalog_snapshot_invalidated");
         if (snapshot.ObservedAtUtc > request.EvaluatedAtUtc || snapshot.FreshUntilUtc <= request.EvaluatedAtUtc)
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotStale, "nyxid_catalog_snapshot_stale");
+        if (string.IsNullOrWhiteSpace(snapshot.ContractVersion) ||
+            string.IsNullOrWhiteSpace(snapshot.PolicyVersion) ||
+            snapshot.EvaluatedAtUtc == default)
+        {
+            return Failed(
+                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                "nyxid_catalog_contract_evidence_invalid");
+        }
 
         var grants = ResolveGrants(
             evidence.RequiredServiceIds,
@@ -69,9 +77,10 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 AllowAllServices = false,
                 AllowAllNodes = false,
                 ServiceGrantRequirement = evidence.ServiceGrantRequirement,
-                NodeGrantRequirement = grants.NodeGrants.Count == 0
-                    ? AuthorizationGrantRequirement.NotRequired
-                    : AuthorizationGrantRequirement.Required,
+                NodeGrantRequirement = grants.ServiceGrants.Any(static grant =>
+                    grant.NodeGrantRequirement == AuthorizationGrantRequirement.Required)
+                        ? AuthorizationGrantRequirement.Required
+                        : AuthorizationGrantRequirement.NotRequired,
                 ExpiresAt = Timestamp.FromDateTimeOffset(request.ExpiresAtUtc),
                 PolicyVersion = PolicyVersion,
             },
@@ -80,14 +89,15 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 ActorStateVersion = snapshot.StateVersion,
                 ObservedAt = Timestamp.FromDateTimeOffset(snapshot.ObservedAtUtc),
                 FreshUntil = Timestamp.FromDateTimeOffset(snapshot.FreshUntilUtc),
-                ExternalRevision = snapshot.ExternalRevision,
                 ContentDigest = snapshot.ContentDigest,
+                ContractVersion = snapshot.ContractVersion,
+                PolicyVersion = snapshot.PolicyVersion,
+                EvaluatedAt = Timestamp.FromDateTimeOffset(snapshot.EvaluatedAtUtc),
             },
         };
         plan.CredentialPolicy.Scopes.Add(NyxIdCredentialScope.Read);
         plan.CredentialPolicy.Scopes.Add(NyxIdCredentialScope.Proxy);
         plan.NyxIdServiceGrants.Add(grants.ServiceGrants);
-        plan.NyxIdNodeGrants.Add(grants.NodeGrants);
         plan.SourceStamps.Add(evidence.SourceStamps);
         plan.Disclosures.Add(new[]
         {
@@ -343,6 +353,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                     $"nyxid_service_slug_ambiguous:{slug}"));
             selectedIds.Add(matches[0]);
         }
+        selectedIds = NormalizeStrings(selectedIds).ToList();
 
         if (selectedIds.Count == 0 && serviceGrantRequirement == AuthorizationGrantRequirement.Required)
         {
@@ -352,7 +363,6 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         }
 
         var serviceGrants = new List<NyxIdServiceGrant>();
-        var nodeGrants = new List<NyxIdNodeGrant>();
         foreach (var serviceId in selectedIds)
         {
             if (!servicesById.TryGetValue(serviceId, out var service))
@@ -364,27 +374,18 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                     ScheduledInvocationAuthorizationFailureCode.ServiceAccessDenied,
                     $"nyxid_service_access_denied:{serviceId}"));
 
-            serviceGrants.Add(new NyxIdServiceGrant
+            var grant = new NyxIdServiceGrant
             {
                 UserServiceId = serviceId,
                 ServiceSlug = service.ServiceSlug.Trim(),
                 DisplayName = service.DisplayName.Trim(),
-            });
-            foreach (var node in service.Nodes)
-            {
-                nodeGrants.Add(new NyxIdNodeGrant
-                {
-                    UserServiceId = serviceId,
-                    NodeId = node.NodeId.Trim(),
-                    DisplayName = node.DisplayName.Trim(),
-                    Role = node.Role,
-                    EdgeKind = node.EdgeKind,
-                    BindingId = node.BindingId.Trim(),
-                    RoutePriority = node.RoutePriority,
-                });
-            }
+                ResourceOwner = service.ResourceOwner.Clone(),
+                NodeGrantRequirement = service.NodeGrantRequirement,
+            };
+            grant.NodeIds.Add(service.NodeIds);
+            serviceGrants.Add(grant);
         }
-        return new GrantResolution(serviceGrants, nodeGrants, null);
+        return new GrantResolution(serviceGrants, null);
     }
 
     private static bool TryValidateServiceEvidence(
@@ -393,7 +394,9 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     {
         detail = string.Empty;
         if (string.IsNullOrWhiteSpace(service.UserServiceId) ||
+            !string.Equals(service.UserServiceId, service.UserServiceId.Trim(), StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(service.ServiceSlug) ||
+            !string.Equals(service.ServiceSlug, service.ServiceSlug.Trim(), StringComparison.Ordinal) ||
             service.Access == NyxIdAuthorizationAccess.Unspecified ||
             !Enum.IsDefined(service.Access) ||
             service.NodeGrantRequirement == AuthorizationGrantRequirement.Unspecified ||
@@ -403,34 +406,34 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return false;
         }
 
-        var primaryNodeIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var node in service.Nodes)
+        if (!TryValidateOwner(service.ResourceOwner))
         {
-            if (string.IsNullOrWhiteSpace(node.NodeId) ||
-                node.Role == NyxIdNodeRole.Unspecified ||
-                !Enum.IsDefined(node.Role) ||
-                node.EdgeKind == NyxIdNodeEdgeKind.Unspecified ||
-                !Enum.IsDefined(node.EdgeKind) ||
-                node.EdgeKind == NyxIdNodeEdgeKind.NodeBinding &&
-                string.IsNullOrWhiteSpace(node.BindingId) ||
-                node.EdgeKind == NyxIdNodeEdgeKind.UserServicePrimary &&
-                (!string.IsNullOrWhiteSpace(node.BindingId) || node.Role != NyxIdNodeRole.Primary))
-            {
-                detail = $"nyxid_node_evidence_invalid:{service.UserServiceId.Trim()}";
-                return false;
-            }
-            if (node.Role == NyxIdNodeRole.Primary)
-                primaryNodeIds.Add(node.NodeId.Trim());
-        }
-        if (service.NodeGrantRequirement == AuthorizationGrantRequirement.Required &&
-            (service.Nodes.Count == 0 || primaryNodeIds.Count != 1))
-        {
-            detail = $"nyxid_node_primary_invalid:{service.UserServiceId.Trim()}";
+            detail = $"nyxid_resource_owner_invalid:{service.UserServiceId}";
             return false;
         }
-        if (service.NodeGrantRequirement == AuthorizationGrantRequirement.NotRequired && service.Nodes.Count != 0)
+
+        string? previousNodeId = null;
+        foreach (var nodeId in service.NodeIds)
         {
-            detail = $"nyxid_direct_service_has_node_evidence:{service.UserServiceId.Trim()}";
+            if (string.IsNullOrWhiteSpace(nodeId) ||
+                !string.Equals(nodeId, nodeId.Trim(), StringComparison.Ordinal) ||
+                previousNodeId != null && string.CompareOrdinal(previousNodeId, nodeId) >= 0)
+            {
+                detail = $"nyxid_node_ids_not_canonical:{service.UserServiceId}";
+                return false;
+            }
+            previousNodeId = nodeId;
+        }
+
+        if (service.NodeGrantRequirement == AuthorizationGrantRequirement.Required &&
+            service.NodeIds.Count == 0)
+        {
+            detail = $"nyxid_node_grant_missing:{service.UserServiceId}";
+            return false;
+        }
+        if (service.NodeGrantRequirement == AuthorizationGrantRequirement.NotRequired && service.NodeIds.Count != 0)
+        {
+            detail = $"nyxid_direct_service_has_node_evidence:{service.UserServiceId}";
             return false;
         }
         return true;
@@ -520,7 +523,18 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     private static string[] NormalizeStrings(IEnumerable<string> values) =>
         values.Where(static value => !string.IsNullOrWhiteSpace(value))
             .Select(static value => value.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static value => value, StringComparer.Ordinal)
             .ToArray();
+
+    private static bool TryValidateOwner(AuthorizationOwnerIdentity? owner) =>
+        owner != null &&
+        !string.IsNullOrWhiteSpace(owner.Authority) &&
+        string.Equals(owner.Authority, owner.Authority.Trim(), StringComparison.Ordinal) &&
+        owner.OwnerKind != AuthorizationOwnerKind.Unspecified &&
+        Enum.IsDefined(owner.OwnerKind) &&
+        !string.IsNullOrWhiteSpace(owner.OwnerSubject) &&
+        string.Equals(owner.OwnerSubject, owner.OwnerSubject.Trim(), StringComparison.Ordinal);
 
     private static bool OwnerEquals(AuthorizationOwnerIdentity left, AuthorizationOwnerIdentity right) =>
         string.Equals(left.Authority.Trim(), right.Authority.Trim(), StringComparison.Ordinal) &&
@@ -544,11 +558,10 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
     private sealed record GrantResolution(
         IReadOnlyList<NyxIdServiceGrant> ServiceGrants,
-        IReadOnlyList<NyxIdNodeGrant> NodeGrants,
         ScheduledInvocationAuthorizationPlanResult? Failure)
     {
         public static GrantResolution Failed(ScheduledInvocationAuthorizationPlanResult failure) =>
-            new([], [], failure);
+            new([], failure);
     }
 
     private sealed record SourceStampResolution(

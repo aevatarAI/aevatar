@@ -430,6 +430,58 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> CreateApiKeyAsync(string token, string requestBody, CancellationToken ct) =>
         PostAsync(token, "/api/v1/api-keys", requestBody, ct);
 
+    /// <summary>
+    /// Returns the authenticated actor's permission-scoped personal and organization
+    /// <c>UserService</c> inventory from NyxID's published API.
+    /// </summary>
+    public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/user-services", ct);
+
+    /// <summary>
+    /// Requests NyxID's authoritative constrained API-key grants for an exact service set.
+    /// The raw response is parsed by <see cref="NyxIdApiAccessResponseParser"/> at this adapter boundary.
+    /// </summary>
+    public Task<string> PlanApiKeyScopeAsync(
+        string token,
+        IReadOnlyCollection<string> selectedServiceIds,
+        string? targetOrganizationId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(selectedServiceIds);
+        var serviceIds = selectedServiceIds.ToArray();
+        if (serviceIds.Any(static id =>
+                string.IsNullOrWhiteSpace(id) ||
+                !string.Equals(id, id.Trim(), StringComparison.Ordinal)))
+        {
+            throw new ArgumentException(
+                "Selected NyxID service ids must be non-empty normalized values.",
+                nameof(selectedServiceIds));
+        }
+        if (serviceIds.Distinct(StringComparer.Ordinal).Count() != serviceIds.Length)
+        {
+            throw new ArgumentException(
+                "Selected NyxID service ids must not contain duplicates.",
+                nameof(selectedServiceIds));
+        }
+        if (targetOrganizationId is not null &&
+            (string.IsNullOrWhiteSpace(targetOrganizationId) ||
+             !string.Equals(targetOrganizationId, targetOrganizationId.Trim(), StringComparison.Ordinal)))
+        {
+            throw new ArgumentException(
+                "The NyxID target organization id must be a normalized value when provided.",
+                nameof(targetOrganizationId));
+        }
+
+        var requestBody = targetOrganizationId is null
+            ? JsonSerializer.Serialize(new { selected_service_ids = serviceIds })
+            : JsonSerializer.Serialize(new
+            {
+                selected_service_ids = serviceIds,
+                target_org_id = targetOrganizationId,
+            });
+        return PostAsync(token, "/api/v1/api-keys/scope-plan", requestBody, ct);
+    }
+
     // ─── Nodes ───
 
     public Task<string> ListNodesAsync(string token, CancellationToken ct) =>

@@ -327,6 +327,27 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invocationPort.Requests.Should().ContainSingle();
     }
 
+    [Fact]
+    public void ScheduledInvocationAuthorizationFact_ShouldExposeOnlyPerServiceNodeGrants()
+    {
+        typeof(ScheduledInvocationAuthorizationFact).GetProperties()
+            .Should().NotContain(property => property.Name == "NodeGrants");
+        typeof(ScheduledInvocationAuthorizationFact).Assembly
+            .GetType("Aevatar.GAgentService.Abstractions.Schedules.ScheduledInvocationAuthorizationNodeGrant")
+            .Should().BeNull();
+
+        var authorityProperties = typeof(ScheduledInvocationAuthorizationAuthority)
+            .GetProperties()
+            .Select(property => property.Name);
+        authorityProperties.Should().NotContain("CatalogExternalRevision");
+        authorityProperties.Should().Contain([
+            "CatalogContentDigest",
+            "CatalogContractVersion",
+            "CatalogPolicyVersion",
+            "CatalogEvaluatedAt",
+        ]);
+    }
+
     [Theory]
     [MemberData(nameof(InvalidAuthorizationFactCases))]
     public async Task ScheduledServiceInvocationDispatchPort_WithInvalidAuthorizationFact_ShouldRejectBeforeInvocation(
@@ -1332,6 +1353,32 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 }
             },
             {
+                "blank-service-node-id",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ServiceGrants =
+                        [
+                            new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", [" "], false),
+                        ],
+                    },
+                }
+            },
+            {
+                "unexpected-node-id-when-node-grants-not-required",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        ServiceGrants =
+                        [
+                            new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha"], true),
+                        ],
+                    },
+                }
+            },
+            {
                 "missing-service-id",
                 dispatch => dispatch with
                 {
@@ -1358,6 +1405,46 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     AuthorizationFact = dispatch.AuthorizationFact! with
                     {
                         Authority = dispatch.AuthorizationFact.Authority with { CatalogStateVersion = 0 },
+                    },
+                }
+            },
+            {
+                "missing-catalog-content-digest",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogContentDigest = " " },
+                    },
+                }
+            },
+            {
+                "missing-catalog-contract-version",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogContractVersion = " " },
+                    },
+                }
+            },
+            {
+                "missing-catalog-policy-version",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogPolicyVersion = " " },
+                    },
+                }
+            },
+            {
+                "missing-catalog-evaluated-at",
+                dispatch => dispatch with
+                {
+                    AuthorizationFact = dispatch.AuthorizationFact! with
+                    {
+                        Authority = dispatch.AuthorizationFact.Authority with { CatalogEvaluatedAt = default },
                     },
                 }
             },
@@ -1436,21 +1523,10 @@ public sealed class ScheduledDispatchServiceInvocationTests
                     15,
                     now.AddMinutes(-1),
                     now.AddMinutes(30),
-                    "catalog-rev-alpha",
-                    "catalog-digest-alpha"))
-            {
-                NodeGrants =
-                [
-                    new ScheduledInvocationAuthorizationNodeGrant(
-                        "svc-alpha",
-                        "node-alpha",
-                        "Primary node",
-                        "Primary",
-                        "UserServicePrimary",
-                        "binding-alpha",
-                        0),
-                ],
-            });
+                    "catalog-digest-alpha",
+                    "scope-plan-contract/v1",
+                    "scope-plan-policy/v1",
+                    now.AddMinutes(-2))));
     }
 
     private static ScheduledServiceInvocationAuth CreateScheduledAgentKeyAuth(DateTimeOffset expiresAt) =>

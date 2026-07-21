@@ -13,72 +13,49 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-16T08:00:00Z");
 
     [Fact]
-    public async Task PlanAsync_ShouldPreserveExactServiceAndNodeOrderAndMultiplicity()
+    public async Task PlanAsync_ShouldCanonicalizeServiceAndNodePermissionSets()
     {
         var catalog = new MutableCatalogQueryPort(Snapshot(
             Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired),
             Service("svc-a", "provider-a", AuthorizationGrantRequirement.Required,
-                Node("node-z", NyxIdNodeRole.Fallback),
-                Node("node-a", NyxIdNodeRole.Primary))));
+                "node-a",
+                "node-z")));
         var planner = NewPlanner(catalog);
 
         var result = await planner.PlanAsync(Request(["svc-b", "svc-a", "svc-a"]));
 
         result.Success.Should().BeTrue();
         result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
-            .Should().Equal("svc-b", "svc-a", "svc-a");
-        result.Plan.NyxIdNodeGrants.Select(static grant => grant.NodeId)
-            .Should().Equal("node-z", "node-a", "node-z", "node-a");
-        result.Plan.NyxIdNodeGrants.Select(static grant => grant.EdgeKind)
-            .Should().Equal(
-                NyxIdNodeEdgeKind.NodeBinding,
-                NyxIdNodeEdgeKind.UserServicePrimary,
-                NyxIdNodeEdgeKind.NodeBinding,
-                NyxIdNodeEdgeKind.UserServicePrimary);
+            .Should().Equal("svc-a", "svc-b");
+        result.Plan.NyxIdServiceGrants[0].NodeIds.Should().Equal("node-a", "node-z");
+        result.Plan.NyxIdServiceGrants[0].ResourceOwner.Should().BeEquivalentTo(ResourceOwner());
+        result.Plan.NyxIdServiceGrants[0].NodeGrantRequirement.Should()
+            .Be(AuthorizationGrantRequirement.Required);
+        result.Plan.NyxIdServiceGrants[1].NodeIds.Should().BeEmpty();
+        result.Plan.NyxIdServiceGrants[1].NodeGrantRequirement.Should()
+            .Be(AuthorizationGrantRequirement.NotRequired);
         result.Plan.CredentialPolicy.AllowAllServices.Should().BeFalse();
         result.Plan.CredentialPolicy.AllowAllNodes.Should().BeFalse();
         result.Plan.PermissionDigest.Should().Be(
             ScheduledInvocationAuthorizationPlanner.ComputeDigest(result.Plan));
-        JsonFormatter.Default.Format(result.Plan).Should().NotContain("binding-a");
+        JsonFormatter.Default.Format(result.Plan).Should().NotContain("binding");
     }
 
     [Fact]
-    public async Task ComputeDigest_ShouldChangeForGrantSwapAndDuplicateMultiplicity()
+    public async Task PlanAsync_ShouldProduceSameDigestForEquivalentPermissionSets()
     {
         var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
             Service("svc-a", "provider-a", AuthorizationGrantRequirement.Required,
-                Node("node-primary", NyxIdNodeRole.Primary),
-                Node("node-fallback", NyxIdNodeRole.Fallback)),
+                "node-a",
+                "node-z"),
             Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired))));
-        var original = (await planner.PlanAsync(Request(["svc-a", "svc-b", "svc-a"]))).Plan!;
-        var originalDigest = ScheduledInvocationAuthorizationPlanner.ComputeDigest(original);
+        var first = await planner.PlanAsync(Request(["svc-b", "svc-a", "svc-a"]));
+        var second = await planner.PlanAsync(Request(["svc-a", "svc-b"]));
 
-        var serviceSwap = original.Clone();
-        serviceSwap.NyxIdServiceGrants[0] = original.NyxIdServiceGrants[1].Clone();
-        serviceSwap.NyxIdServiceGrants[1] = original.NyxIdServiceGrants[0].Clone();
-
-        var serviceDuplicateAdded = original.Clone();
-        serviceDuplicateAdded.NyxIdServiceGrants.Add(original.NyxIdServiceGrants[0].Clone());
-
-        var serviceDuplicateRemoved = original.Clone();
-        serviceDuplicateRemoved.NyxIdServiceGrants.RemoveAt(2);
-
-        var nodeSwap = original.Clone();
-        (nodeSwap.NyxIdNodeGrants[0], nodeSwap.NyxIdNodeGrants[1]) =
-            (nodeSwap.NyxIdNodeGrants[1], nodeSwap.NyxIdNodeGrants[0]);
-
-        var nodeDuplicateAdded = original.Clone();
-        nodeDuplicateAdded.NyxIdNodeGrants.Add(original.NyxIdNodeGrants[1].Clone());
-
-        new[]
-        {
-            serviceSwap,
-            serviceDuplicateAdded,
-            serviceDuplicateRemoved,
-            nodeSwap,
-            nodeDuplicateAdded,
-        }.Should().OnlyContain(plan =>
-            ScheduledInvocationAuthorizationPlanner.ComputeDigest(plan) != originalDigest);
+        first.Success.Should().BeTrue();
+        second.Success.Should().BeTrue();
+        first.Plan!.ToByteArray().Should().Equal(second.Plan!.ToByteArray());
+        first.Plan.PermissionDigest.Should().Be(second.Plan.PermissionDigest);
     }
 
     [Fact]
@@ -86,8 +63,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     {
         var catalog = new MutableCatalogQueryPort(Snapshot(
             Service("svc-a", "provider-a", AuthorizationGrantRequirement.Required,
-                Node("node-primary", NyxIdNodeRole.Primary),
-                Node("node-fallback", NyxIdNodeRole.Fallback))));
+                "node-a",
+                "node-z")));
         var planner = NewPlanner(catalog);
         var request = Request(["svc-a", "svc-a"]);
 
@@ -98,8 +75,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         second.Success.Should().BeTrue();
         first.Plan!.ToByteArray().Should().Equal(second.Plan!.ToByteArray());
         first.Plan!.PermissionDigest.Should().Be(second.Plan!.PermissionDigest);
-        first.Plan.PermissionDigest.Should().Be(
-            "c827239c72a763cec54d3f68f4332649a6f2a98a42e0dfcb8ca3b364cdc01d87");
+        first.Plan.SchemaVersion.Should().Be("scheduled-invocation-authorization/v2");
+        first.Plan.CredentialPolicy.PolicyVersion.Should().Be("nyxid-api-key/scheduled-invocation/v2");
     }
 
     [Fact]
@@ -118,6 +95,11 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             static plan => plan.CatalogAuthority.ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
             static plan => plan.CatalogAuthority.FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(30)),
             static plan => plan.CatalogAuthority.ContentDigest = "digest-other",
+            static plan => plan.CatalogAuthority.ContractVersion = "contract-other",
+            static plan => plan.CatalogAuthority.PolicyVersion = "provider-policy-other",
+            static plan => plan.CatalogAuthority.EvaluatedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-3)),
+            static plan => plan.NyxIdServiceGrants[0].ResourceOwner.OwnerSubject = "resource-owner-other",
+            static plan => plan.NyxIdServiceGrants[0].NodeIds.Add("node-other"),
             static plan => plan.CredentialPolicy.ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddDays(31)),
             static plan => plan.CredentialPolicy.PolicyVersion = "policy-other",
             static plan => plan.CredentialPolicy.AllowAllServices = true,
@@ -139,14 +121,14 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     {
         var invalidAccess = Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired);
         invalidAccess.Access = (NyxIdAuthorizationAccess)999;
-        var invalidNode = Service(
+        var invalidRequirement = Service(
             "svc-a",
             "provider-a",
             AuthorizationGrantRequirement.Required,
-            Node("node-primary", NyxIdNodeRole.Primary));
-        invalidNode.Nodes[0].Role = (NyxIdNodeRole)999;
+            "node-a");
+        invalidRequirement.NodeGrantRequirement = (AuthorizationGrantRequirement)999;
 
-        foreach (var service in new[] { invalidAccess, invalidNode })
+        foreach (var service in new[] { invalidAccess, invalidRequirement })
         {
             var result = await NewPlanner(new MutableCatalogQueryPort(Snapshot(service)))
                 .PlanAsync(Request(["svc-a"]));
@@ -404,7 +386,16 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
     private static NyxIdAuthorizationCatalogSnapshot Snapshot(
         params NyxIdAuthorizationServiceEvidence[] services) =>
-        new(Owner(), 7, Now.AddMinutes(-1), Now.AddMinutes(15), "revision-7", "digest-7", services);
+        new(
+            Owner(),
+            7,
+            Now.AddMinutes(-1),
+            Now.AddMinutes(15),
+            "1",
+            "api-key-scope-v1",
+            Now.AddMinutes(-2),
+            "digest-7",
+            services);
 
     private static AuthorizationOwnerIdentity Owner() => new()
     {
@@ -413,11 +404,18 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         OwnerSubject = "user-alpha",
     };
 
+    private static AuthorizationOwnerIdentity ResourceOwner() => new()
+    {
+        Authority = NyxIdAuthorizationAuthorities.NyxId,
+        OwnerKind = AuthorizationOwnerKind.Organization,
+        OwnerSubject = "org-alpha",
+    };
+
     private static NyxIdAuthorizationServiceEvidence Service(
         string id,
         string slug,
         AuthorizationGrantRequirement nodeRequirement,
-        params NyxIdAuthorizationNodeEvidence[] nodes)
+        params string[] nodeIds)
     {
         var service = new NyxIdAuthorizationServiceEvidence
         {
@@ -426,22 +424,11 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             DisplayName = slug,
             Access = NyxIdAuthorizationAccess.Permitted,
             NodeGrantRequirement = nodeRequirement,
+            ResourceOwner = ResourceOwner(),
         };
-        service.Nodes.Add(nodes);
+        service.NodeIds.Add(nodeIds);
         return service;
     }
-
-    private static NyxIdAuthorizationNodeEvidence Node(string id, NyxIdNodeRole role) => new()
-    {
-        NodeId = id,
-        DisplayName = id,
-        Role = role,
-        EdgeKind = role == NyxIdNodeRole.Primary
-            ? NyxIdNodeEdgeKind.UserServicePrimary
-            : NyxIdNodeEdgeKind.NodeBinding,
-        BindingId = role == NyxIdNodeRole.Primary ? string.Empty : $"binding-{id}",
-        RoutePriority = role == NyxIdNodeRole.Primary ? 0 : 1,
-    };
 
     private sealed class MutableCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
         : INyxIdAuthorizationCatalogQueryPort

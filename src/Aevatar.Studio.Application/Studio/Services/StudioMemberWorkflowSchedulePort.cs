@@ -923,20 +923,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var catalog = plan.CatalogAuthority
             ?? throw new InvalidOperationException("scheduled_authorization_catalog_authority_missing");
         var disclosure = plan.Disclosures.ToHashSet();
-        var grants = plan.NyxIdServiceGrants.Select(grant =>
-        {
-            var nodeIds = plan.NyxIdNodeGrants
-                .Where(node => string.Equals(
-                    node.UserServiceId,
-                    grant.UserServiceId,
-                    StringComparison.Ordinal))
-                .Select(static node => node.NodeId)
-                .ToArray();
-            return new ScheduledInvocationAuthorizationServiceGrant(
+        var grants = plan.NyxIdServiceGrants.Select(static grant =>
+            new ScheduledInvocationAuthorizationServiceGrant(
                 grant.UserServiceId,
-                nodeIds,
-                nodeIds.Length == 0);
-        }).ToArray();
+                grant.NodeIds.ToArray(),
+                grant.NodeGrantRequirement == AuthorizationGrantRequirement.NotRequired))
+            .ToArray();
         return new ScheduledInvocationAuthorizationFact(
             plan.PermissionDigest,
             policy.PolicyVersion,
@@ -962,19 +954,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 catalog.ActorStateVersion,
                 catalog.ObservedAt.ToDateTimeOffset(),
                 catalog.FreshUntil.ToDateTimeOffset(),
-                catalog.ExternalRevision,
-                catalog.ContentDigest))
-        {
-            NodeGrants = plan.NyxIdNodeGrants.Select(static node =>
-                new ScheduledInvocationAuthorizationNodeGrant(
-                    node.UserServiceId,
-                    node.NodeId,
-                    node.DisplayName,
-                    node.Role.ToString(),
-                    node.EdgeKind.ToString(),
-                    node.BindingId,
-                    node.RoutePriority)).ToArray(),
-        };
+                catalog.ContentDigest,
+                catalog.ContractVersion,
+                catalog.PolicyVersion,
+                catalog.EvaluatedAt.ToDateTimeOffset()));
     }
 
     private static string ToScopeName(NyxIdCredentialScope scope) => scope switch

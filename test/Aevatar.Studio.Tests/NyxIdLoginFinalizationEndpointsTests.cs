@@ -65,11 +65,11 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     [Fact]
-    public async Task AuthorizationCatalogRefresh_WhenPublishedContractIsMissing_ShouldExposeStableBlocker()
+    public async Task AuthorizationCatalogRefresh_WhenPublishedScopePlanIsUnstable_ShouldExposeStableFailure()
     {
         var lifecycle = new RecordingCatalogRefreshLifecycle(new NyxIdAuthorizationCatalogRefreshResult(
-            NyxIdAuthorizationCatalogRefreshStatus.PublishedContractMissing,
-            "nyxid_catalog_published_contract_missing"));
+            NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
+            "nyxid_scope_plan_catalog_mismatch"));
         var http = NewHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim("sub", "nyx-owner-alpha")],
@@ -84,8 +84,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
             false,
-            "published_contract_missing",
-            "nyxid_catalog_published_contract_missing"));
+            "catalog_unstable",
+            "nyxid_scope_plan_catalog_mismatch"));
         JsonSerializer.Serialize(payload).Should().NotContain("bearer-secret");
     }
 

@@ -2522,19 +2522,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 fact.Authority?.CatalogStateVersion ?? 0,
                 fact.Authority?.CatalogObservedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
                 fact.Authority?.CatalogFreshUntil?.ToDateTimeOffset() ?? DateTimeOffset.MinValue,
-                fact.Authority?.CatalogExternalRevision ?? string.Empty,
-                fact.Authority?.CatalogContentDigest ?? string.Empty))
-        {
-            NodeGrants = fact.NodeGrants.Select(static grant =>
-                new ScheduledInvocationAuthorizationNodeGrant(
-                    grant.UserServiceId,
-                    grant.NodeId,
-                    grant.DisplayName,
-                    grant.Role,
-                    grant.EdgeKind,
-                    grant.BindingId,
-                    grant.RoutePriority)).ToArray(),
-        };
+                fact.Authority?.CatalogContentDigest ?? string.Empty,
+                fact.Authority?.CatalogContractVersion ?? string.Empty,
+                fact.Authority?.CatalogPolicyVersion ?? string.Empty,
+                fact.Authority?.CatalogEvaluatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue));
     }
 
     private static EventEnvelope NormalizeTriggerEnvelope(EventEnvelope triggerEnvelope)

@@ -72,7 +72,10 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             3, 5, 7, 11, 13,
             DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
             DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
-            "catalog-revision-alpha", "catalog-digest-alpha"));
+            "catalog-digest-alpha",
+            "scope-plan-contract/v1",
+            "scope-plan-policy/v1",
+            DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
     }
 
     [Fact]
@@ -158,7 +161,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     public void ToScheduleAuthorizationFact_ShouldMapMixedDirectAndNodeBackedServicesPerService()
     {
         var plan = new RecordingAuthorizationPlanner().Result.Plan!.Clone();
-        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant { UserServiceId = "nyx-service-direct" });
+        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
+        {
+            UserServiceId = "nyx-service-direct",
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        });
 
         var fact = StudioMemberWorkflowSchedulePort.ToScheduleAuthorizationFact(plan);
 
@@ -169,9 +176,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         fact.ServiceGrants[1].ServiceId.Should().Be("nyx-service-direct");
         fact.ServiceGrants[1].NodeIds.Should().BeEmpty();
         fact.ServiceGrants[1].NodeGrantsNotRequired.Should().BeTrue();
-        fact.NodeGrants.Should().ContainSingle(node =>
-            node.UserServiceId == "nyx-service-alpha" &&
-            node.NodeId == "nyx-node-alpha");
+        fact.GetType().GetProperties().Should()
+            .NotContain(property => property.Name == "NodeGrants");
     }
 
     [Fact]
@@ -811,16 +817,17 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     ActorStateVersion = 13,
                     ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
                     FreshUntil = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-                    ExternalRevision = "catalog-revision-alpha",
                     ContentDigest = "catalog-digest-alpha",
+                    ContractVersion = "scope-plan-contract/v1",
+                    PolicyVersion = "scope-plan-policy/v1",
+                    EvaluatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
                 },
             };
-            plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant { UserServiceId = "nyx-service-alpha" });
-            plan.NyxIdNodeGrants.Add(new NyxIdNodeGrant
+            plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
             {
                 UserServiceId = "nyx-service-alpha",
-                NodeId = "nyx-node-alpha",
-                Role = NyxIdNodeRole.Primary,
+                NodeGrantRequirement = AuthorizationGrantRequirement.Required,
+                NodeIds = { "nyx-node-alpha" },
             });
             plan.Disclosures.Add(new[]
             {

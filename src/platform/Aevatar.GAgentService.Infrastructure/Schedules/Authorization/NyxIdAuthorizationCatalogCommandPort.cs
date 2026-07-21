@@ -27,17 +27,31 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             ActivatedAt = Timestamp.FromDateTimeOffset(activatedAtUtc),
         }, ct);
 
+    public Task BeginRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset startedAtUtc,
+        CancellationToken ct = default) =>
+        DispatchAsync(owner, new BeginNyxIdAuthorizationCatalogRefreshCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = refreshId ?? string.Empty,
+            StartedAt = Timestamp.FromDateTimeOffset(startedAtUtc),
+        }, ct);
+
     public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(observation);
         var command = new ObserveNyxIdAuthorizationCatalogCommand
         {
             Owner = observation.Owner.Clone(),
+            RefreshId = observation.RefreshId,
             ObservedAt = Timestamp.FromDateTimeOffset(observation.ObservedAtUtc),
             FreshUntil = Timestamp.FromDateTimeOffset(observation.FreshUntilUtc),
-            ExternalRevision = observation.ExternalRevision,
+            ContractVersion = observation.ContractVersion,
+            PolicyVersion = observation.PolicyVersion,
+            EvaluatedAt = Timestamp.FromDateTimeOffset(observation.EvaluatedAtUtc),
             ContentDigest = observation.ContentDigest,
-            ExpectedLifecycleFence = observation.ExpectedLifecycleFence,
         };
         command.Services.Add(observation.Services.Select(static service => service.Clone()));
         return DispatchAsync(observation.Owner, command, ct);
@@ -45,12 +59,14 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
 
     public Task RecordRefreshFailureAsync(
         AuthorizationOwnerIdentity owner,
+        string refreshId,
         DateTimeOffset failedAtUtc,
         string failureCode,
         CancellationToken ct = default) =>
         DispatchAsync(owner, new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
         {
             Owner = owner.Clone(),
+            RefreshId = refreshId ?? string.Empty,
             FailedAt = Timestamp.FromDateTimeOffset(failedAtUtc),
             FailureCode = failureCode ?? string.Empty,
         }, ct);
@@ -60,9 +76,26 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         DateTimeOffset invalidatedAtUtc,
         string reason,
         CancellationToken ct = default) =>
+        InvalidateCoreAsync(owner, string.Empty, invalidatedAtUtc, reason, ct);
+
+    public Task InvalidateRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset invalidatedAtUtc,
+        string reason,
+        CancellationToken ct = default) =>
+        InvalidateCoreAsync(owner, refreshId, invalidatedAtUtc, reason, ct);
+
+    private Task InvalidateCoreAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset invalidatedAtUtc,
+        string reason,
+        CancellationToken ct) =>
         DispatchAsync(owner, new InvalidateNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
+            RefreshId = refreshId ?? string.Empty,
             InvalidatedAt = Timestamp.FromDateTimeOffset(invalidatedAtUtc),
             Reason = reason ?? string.Empty,
         }, ct);
