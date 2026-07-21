@@ -53,6 +53,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     {
         ArgumentNullException.ThrowIfNull(command);
         if (State.Status is ChatTurnHistoryDeliveryStatus.AppendDispatched
+            or ChatTurnHistoryDeliveryStatus.AppendCommitted
+            or ChatTurnHistoryDeliveryStatus.AppendRejected
             or ChatTurnHistoryDeliveryStatus.Abandoned
             or ChatTurnHistoryDeliveryStatus.Failed)
         {
