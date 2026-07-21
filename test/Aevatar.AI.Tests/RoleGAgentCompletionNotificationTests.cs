@@ -8,6 +8,10 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Deduplication;
+using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
+using Aevatar.Foundation.Runtime.Persistence;
+using Aevatar.Foundation.Runtime.Streaming;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -62,6 +66,19 @@ public sealed class RoleGAgentCompletionNotificationTests
             TimeSpan.FromSeconds(8),
             TimeSpan.FromSeconds(16),
             TimeSpan.FromSeconds(30));
+        scheduler.TimeoutRequests.Select(static request => request.CallbackId)
+            .Should().OnlyContain(callbackId => callbackId == callback.CallbackId);
+        var retryOperationIds = scheduler.TimeoutRequests
+            .Select(static request => request.TriggerEnvelope.Runtime!.Deduplication!.OperationId)
+            .ToArray();
+        retryOperationIds.Should().OnlyHaveUniqueItems();
+        var deduplicator = new MemoryCacheDeduplicator();
+        foreach (var retryEnvelope in scheduler.TimeoutRequests.Select(static request => request.TriggerEnvelope))
+        {
+            RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, retryEnvelope, out var dedupKey)
+                .Should().BeTrue();
+            (await deduplicator.TryRecordAsync(dedupKey)).Should().BeTrue();
+        }
 
         var deadlineScheduler = new RecordingRuntimeCallbackScheduler();
         var deadlineActor = await CreateInitializedActorAsync(
@@ -328,11 +345,10 @@ public sealed class RoleGAgentCompletionNotificationTests
         retry.DeliveryId.Should().Be("delivery-session-1");
         retry.Attempt.Should().Be(1);
         recovery.Options!.Delivery!.DeduplicationOperationId.Should()
-            .Be("role-chat-completion-retry:session-1:delivery-session-1");
+            .Be("role-chat-completion-retry:session-1:delivery-session-1:1");
 
         scheduler.ScheduleException = null;
-        publisher.FailurePredicate = null;
-        await actor.HandleEventAsync(new EventEnvelope
+        var recoveryEnvelope = new EventEnvelope
         {
             Id = "self-recovery-1",
             Payload = Any.Pack(retry),
@@ -344,12 +360,36 @@ public sealed class RoleGAgentCompletionNotificationTests
                     OperationId = recovery.Options.Delivery.DeduplicationOperationId,
                 },
             },
-        });
+        };
+        var deduplicator = new MemoryCacheDeduplicator();
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryDedupKey)
+            .Should().BeTrue();
+        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeTrue();
+        (await deduplicator.TryRecordAsync(recoveryDedupKey)).Should().BeFalse();
+
+        await actor.HandleEventAsync(recoveryEnvelope);
+
+        var durableAttempt2 = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        durableAttempt2.CallbackId.Should().Be("role-chat-completion-retry:session-1:delivery-session-1");
+        durableAttempt2.TriggerEnvelope.Payload.Unpack<RoleChatCompletionNotificationRetryFiredEvent>()
+            .Attempt.Should().Be(2);
+        var durableAttempt2OperationId = durableAttempt2.TriggerEnvelope.Runtime!.Deduplication!.OperationId;
+        durableAttempt2OperationId.Should().Be("role-chat-completion-retry:session-1:delivery-session-1:2");
+        durableAttempt2OperationId.Should().NotBe(recovery.Options.Delivery.DeduplicationOperationId);
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(
+                actor.Id,
+                durableAttempt2.TriggerEnvelope,
+                out var durableAttempt2DedupKey)
+            .Should().BeTrue();
+        (await deduplicator.TryRecordAsync(durableAttempt2DedupKey)).Should().BeTrue();
+
+        publisher.FailurePredicate = null;
+        await actor.HandleEventAsync(durableAttempt2.TriggerEnvelope);
 
         publisher.SuccessfulSends.Should().ContainSingle();
         actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
             .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
-        actor.State.Sessions["session-1"].CompletionNotificationAttempt.Should().Be(1);
+        actor.State.Sessions["session-1"].CompletionNotificationAttempt.Should().Be(2);
     }
 
     [Theory]
@@ -377,6 +417,29 @@ public sealed class RoleGAgentCompletionNotificationTests
             });
         }
         var before = actor.State.Sessions["session-1"].Clone();
+        var streams = new InMemoryStreamProvider();
+        var committedPublisher = new LocalActorPublisher(actor.Id, static () => null, static () => 0, streams);
+        typeof(GAgentBase)
+            .GetProperty("CommittedStateEventPublisher", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(actor, committedPublisher);
+        var publishedCompletions = new List<RoleChatSessionCompletedEvent>();
+        await using var committedSubscription = await streams.GetStream(actor.Id)
+            .SubscribeAsync<EventEnvelope>(envelope =>
+            {
+                if (envelope.Payload?.Is(CommittedStateEventPublished.Descriptor) == true)
+                {
+                    var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+                    if (published.StateEvent?.EventData?.Is(RoleChatSessionCompletedEvent.Descriptor) == true)
+                    {
+                        publishedCompletions.Add(
+                            published.StateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>());
+                    }
+                }
+
+                return Task.CompletedTask;
+            });
+        var completionCountBefore = (await store.GetEventsAsync(actor.Id)).Count(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
 
         await actor.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
@@ -385,6 +448,10 @@ public sealed class RoleGAgentCompletionNotificationTests
             Approved = true,
         });
 
+        var completionCountAfter = (await store.GetEventsAsync(actor.Id)).Count(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
+        completionCountAfter.Should().Be(completionCountBefore);
+        publishedCompletions.Should().BeEmpty();
         var after = actor.State.Sessions["session-1"];
         after.RunContext.Should().BeEquivalentTo(before.RunContext);
         after.CompletionNotificationDeliveryStatus.Should()
@@ -395,6 +462,44 @@ public sealed class RoleGAgentCompletionNotificationTests
         after.CompletionNotificationRetryAt.Should().Be(before.CompletionNotificationRetryAt);
         after.FinalContent.Should().Be("original terminal content");
         after.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+    }
+
+    [Fact]
+    public async Task ApprovalDenialContinuationCollision_ShouldNotCommitConflictingCompletion()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var actor = await CreateInitializedActorAsync(
+            store,
+            new RecordingRuntimeCallbackScheduler(),
+            new RecordingEventPublisher(),
+            "role-approval-denial-collision");
+        await PersistPreparedCompletionAsync(actor, "session-1");
+        actor.State.PendingApproval = new PendingToolApprovalState
+        {
+            RequestId = "request-pending",
+            SessionId = "approval-origin-session",
+            ScopeId = "scope-a",
+            ToolName = "dangerous_tool",
+            ToolCallId = "tool-call-1",
+            ArgumentsJson = "{}",
+        };
+        var before = actor.State.Sessions["session-1"].Clone();
+        var completionCountBefore = (await store.GetEventsAsync(actor.Id)).Count(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
+
+        await actor.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+        {
+            RequestId = "request-pending",
+            ContinuationTurnId = "session-1",
+            Approved = false,
+            Reason = "denied",
+        });
+
+        var completionCountAfter = (await store.GetEventsAsync(actor.Id)).Count(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
+        completionCountAfter.Should().Be(completionCountBefore);
+        actor.State.PendingApproval.Should().BeNull();
+        actor.State.Sessions["session-1"].Should().BeEquivalentTo(before);
     }
 
     [Fact]

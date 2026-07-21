@@ -7,6 +7,7 @@
 // 3. Logs stable ids, lengths, status, and redaction markers for observability
 // ─────────────────────────────────────────────────────────────
 
+using System.Globalization;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
@@ -1550,11 +1551,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         string reasonMessage,
         string? terminalTurnId = null)
     {
-        var resolvedTurnId = string.IsNullOrWhiteSpace(terminalTurnId)
+        var hasCallerSelectedTurnId = !string.IsNullOrWhiteSpace(terminalTurnId);
+        var resolvedTurnId = !hasCallerSelectedTurnId
             ? pending.SessionId
-            : terminalTurnId.Trim();
+            : terminalTurnId!.Trim();
         if (string.IsNullOrWhiteSpace(resolvedTurnId))
             return;
+
+        if (State.Sessions.TryGetValue(resolvedTurnId, out var existingSession) &&
+            (hasCallerSelectedTurnId || existingSession.Completed))
+        {
+            Logger.LogWarning(
+                "[{Role}] Approval terminal turn collides with an existing session; skipping conflicting completion. session={SessionId} reasonCode={ReasonCode}",
+                RoleName,
+                resolvedTurnId,
+                reasonCode);
+            return;
+        }
 
         var safeReason = string.IsNullOrWhiteSpace(reasonMessage)
             ? "Tool approval failed."
@@ -1593,6 +1606,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
     private async Task PersistApprovalRequestNotPendingAsync(string continuationTurnId)
     {
+        if (State.Sessions.ContainsKey(continuationTurnId))
+        {
+            Logger.LogWarning(
+                "[{Role}] Approval continuation turn collides with an existing session; skipping request-not-pending completion. session={SessionId}",
+                RoleName,
+                continuationTurnId);
+            return;
+        }
+
         var completion = new RoleChatSessionCompletedEvent
         {
             RoleId = RoleId,
@@ -1897,7 +1919,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             DeliveryId = deliveryId,
             Attempt = attempt,
         };
-        var retryOptions = BuildCompletionNotificationRetryOptions(callbackId);
+        var retryOptions = BuildCompletionNotificationRetryOptions(callbackId, attempt);
         try
         {
             await ScheduleSelfDurableTimeoutAsync(
@@ -1946,12 +1968,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             sessionId,
             deliveryId);
 
-    private static EventEnvelopePublishOptions BuildCompletionNotificationRetryOptions(string callbackId) =>
+    private static EventEnvelopePublishOptions BuildCompletionNotificationRetryOptions(
+        string callbackId,
+        int attempt) =>
         new()
         {
             Delivery = new EventEnvelopeDeliveryOptions
             {
-                DeduplicationOperationId = callbackId,
+                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    callbackId,
+                    attempt.ToString(CultureInfo.InvariantCulture)),
             },
         };
 
