@@ -1267,6 +1267,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-1",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
