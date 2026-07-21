@@ -3343,7 +3343,41 @@ var SKILL_STATE={ selected:null, search:'', loaded:false, loading:false,
   sched:{displayName:'',cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false},
   mobileDetail:false };
 var SKILL_CONFIRM=null;
+var SKILL_TEAM_STATE={loaded:false,loading:false,err:null,scope:'',items:[]};
 function skillSelected(){ return SKILLS_DATA.filter(function(s){return s.guid===SKILL_STATE.selected;})[0]||SKILLS_DATA[0]||null; }
+function skillTeamScope(){ return String((ACCOUNT&&ACCOUNT.scope)||'').trim(); }
+function skillTeamItems(){ return SKILL_TEAM_STATE.scope===skillTeamScope()?(SKILL_TEAM_STATE.items||[]):[]; }
+function skillSelectedTeamId(){
+  var teamId=String((SKILL_STATE.sched&&SKILL_STATE.sched.teamId)||'').trim();
+  if(teamId)return teamId;
+  var teams=skillTeamItems();
+  return teams.length?teams[0].teamId:'';
+}
+function loadSkillTeams(done){
+  var scope=skillTeamScope();
+  if(!scope||SKILL_TEAM_STATE.loading){ if(done)done(); return; }
+  if(SKILL_TEAM_STATE.scope!==scope){
+    SKILL_TEAM_STATE.loaded=false; SKILL_TEAM_STATE.err=null; SKILL_TEAM_STATE.items=[]; SKILL_TEAM_STATE.scope=scope;
+  }
+  if(SKILL_TEAM_STATE.loaded){ if(done)done(); return; }
+  SKILL_TEAM_STATE.loading=true; SKILL_TEAM_STATE.err=null;
+  adminJson('/api/scopes/'+encodeURIComponent(scope)+'/teams?pageSize=100')
+    .then(function(j){
+      SKILL_TEAM_STATE.loading=false;
+      if(j&&j.forbidden){ SKILL_TEAM_STATE.err='forbidden'; SKILL_TEAM_STATE.items=[]; if(done)done(); return; }
+      SKILL_TEAM_STATE.loaded=true;
+      SKILL_TEAM_STATE.items=(j&&Array.isArray(j.teams))?j.teams:[];
+      if(!SKILL_STATE.sched.teamId&&SKILL_TEAM_STATE.items.length)SKILL_STATE.sched.teamId=SKILL_TEAM_STATE.items[0].teamId;
+      if(done)done();
+    })
+    .catch(function(err){
+      SKILL_TEAM_STATE.loading=false;
+      if(err&&err.unauthorized){ if(done)done(); return; }
+      SKILL_TEAM_STATE.err=(err&&(err.body||err.message))||'Team load failed';
+      SKILL_TEAM_STATE.items=[];
+      if(done)done();
+    });
+}
 
 function skillListSkeleton(){ var r='<div class="skill-row skel"><span class="sk-line w70"></span><span class="sk-line w90"></span><span class="sk-line w40"></span></div>'; return r+r+r+r+r; }
 function skillList(){
@@ -3405,15 +3439,22 @@ function skillSchedulePanel(s){
   var tzs=['Asia/Shanghai','UTC','America/Los_Angeles','浏览器默认'];
   var auth=sc.authErr?'<div class="auth-banner">⚠ 需要重新登录 / NyxID owner 未绑定（401 / 403）<button class="btn" data-act="skSchedRetry" style="height:28px;margin-left:auto">重试</button></div>':'';
   var ok=sc.result?'<div class="invoke-result ok" style="margin-top:10px">✓ 已创建排班 · scheduleId <b class="tnum">'+esc(sc.result)+'</b></div>':'';
+  var teams=skillTeamItems(), selectedTeam=skillSelectedTeamId();
+  var teamField;
+  if(SKILL_TEAM_STATE.loading) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-help" data-team-owner-select>Loading Teams for this scope...</span></div>';
+  else if(SKILL_TEAM_STATE.err) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-err" data-team-owner-select>Could not load Teams for this scope.</span></div>';
+  else if(!teams.length) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-help" data-team-owner-select>No Teams are available in this scope. Create a Team before scheduling this skill.</span></div>';
+  else teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><select id="sk-team-owner" data-team-owner-select>'+teams.map(function(t){return '<option value="'+esc(t.teamId)+'"'+(t.teamId===selectedTeam?' selected':'')+'>'+esc(t.displayName||t.teamId)+'</option>';}).join('')+'</select><span class="field-help">The scheduled workflow member will be created under this Team.</span></div>';
   return '<div class="panel" style="margin-top:14px"><div class="panel-title">配排班 Schedule <span class="src src-ready">202 异步</span></div>'+
     '<div class="wz-field"><label>displayName</label><input id="sk-dispname" value="'+esc(sc.displayName||s.name)+'"></div>'+
+    teamField+
     '<div class="cron-editor sk-cron"><div class="cron-fields">'+cronInputs+'</div>'+
       '<div class="cron-presets">'+presetBtns+'</div>'+
       '<div class="cron-meta"><span>表达式 <code class="cron-expr-show">'+esc(sc.cron)+'</code> <span class="cron-err">非法 cron（5 段）</span></span>'+
         '<span>时区 <select class="cron-tz" id="sk-tz">'+tzs.map(function(t){return '<option'+(sc.tz===t?' selected':'')+'>'+t+'</option>';}).join('')+'</select></span></div>'+
       '<div class="cron-preview"><div class="cron-preview-h">未来 5 次触发 · <b>'+esc(sc.tz)+'</b></div><ol class="cron-preview-list"></ol></div></div>'+
     '<label class="auto-toggle" style="margin-top:12px"><input type="checkbox" id="sk-enablenow"'+(sc.enableNow?' checked':'')+'> 创建后立即启用</label>'+
-    '<div class="reg-actions" style="margin-top:10px"><button class="btn btn-primary" id="sk-sched-create" data-act="skSchedCreate">创建排班</button>'+
+    '<div class="reg-actions" style="margin-top:10px"><button class="btn btn-primary" id="sk-sched-create" data-act="skSchedCreate"'+(selectedTeam?'':' disabled')+'>创建排班</button>'+
       '<button class="link-btn" data-act="skSchedAuth">模拟 owner 未绑定(403)</button></div>'+auth+ok+
     skillMySchedules(s)+'</div>';
 }
@@ -3472,13 +3513,14 @@ function bindSchedEditor(root){
     var show=ed.querySelector('.cron-expr-show'); if(show) show.textContent=expr;
     var errEl=ed.querySelector('.cron-err'), prev=ed.querySelector('.cron-preview'), list=ed.querySelector('.cron-preview-list'),
         createBtn=root.querySelector('#sk-sched-create');
-    if(!allValid){ if(errEl)errEl.style.display='inline'; if(prev)prev.style.display='none'; if(createBtn)createBtn.setAttribute('disabled','disabled'); return; }
+    if(!allValid||!skillSelectedTeamId()){ if(errEl)errEl.style.display=allValid?'none':'inline'; if(prev)prev.style.display=allValid?'':'none'; if(createBtn)createBtn.setAttribute('disabled','disabled'); return; }
     if(errEl)errEl.style.display='none'; if(prev)prev.style.display=''; if(createBtn)createBtn.removeAttribute('disabled');
     var times=cronPreview(expr,5);
     if(list) list.innerHTML=(times&&times.length)?times.map(function(d){return '<li>'+fmtDateTime(d)+' · <span class="rel">'+relTime(d)+'</span></li>';}).join(''):'<li class="cron-bad">未来一年内无触发</li>';
   }
   Array.prototype.forEach.call(ed.querySelectorAll('[data-sc]'),function(i){ i.addEventListener('input',recompute); });
   var tz=root.querySelector('#sk-tz'); if(tz) tz.addEventListener('change',function(){ SKILL_STATE.sched.tz=tz.value; var h=ed.querySelector('.cron-preview-h b'); if(h)h.textContent=tz.value; });
+  var team=root.querySelector('#sk-team-owner'); if(team) team.addEventListener('change',function(){ SKILL_STATE.sched.teamId=team.value; recompute(); });
   recompute();
 }
 function bindSkills(root){
@@ -3490,6 +3532,7 @@ function bindSkills(root){
     Array.prototype.forEach.call(root.querySelectorAll('[data-si]'),function(i){ SKILL_STATE.invoke.inputs[i.getAttribute('data-si')]=i.value; });
     var ex=root.querySelector('#sk-extra'); if(ex) SKILL_STATE.invoke.extra=ex.value;
     var dn=root.querySelector('#sk-dispname'); if(dn) SKILL_STATE.sched.displayName=dn.value;
+    var team=root.querySelector('#sk-team-owner'); if(team) SKILL_STATE.sched.teamId=team.value;
     var tz=root.querySelector('#sk-tz'); if(tz) SKILL_STATE.sched.tz=tz.value;
     var en=root.querySelector('#sk-enablenow'); if(en) SKILL_STATE.sched.enableNow=en.checked;
     var sg=root.querySelectorAll('[data-sc]'); if(sg.length===5) SKILL_STATE.sched.cron=Array.prototype.map.call(sg,function(i){return i.value.trim()||'*';}).join(' ');
@@ -3498,7 +3541,7 @@ function bindSkills(root){
     var s=SKILLS_DATA.filter(function(x){return x.guid===guid;})[0]||SKILLS_DATA[0]||null;
     SKILL_STATE.selected=guid; SKILL_STATE.mobileDetail=true; SKILL_CONFIRM=null;
     SKILL_STATE.invoke={state:'idle',prompt:'',inputs:{},extra:'',result:null,promptErr:false};
-    SKILL_STATE.sched={displayName:(s?s.name:''),cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false};
+    SKILL_STATE.sched={displayName:(s?s.name:''),cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false,teamId:skillSelectedTeamId()};
   }
   function runInvoke(){
     var iv=SKILL_STATE.invoke, s=skillSelected(); if(!s) return;
@@ -3516,7 +3559,8 @@ function bindSkills(root){
     var sc=SKILL_STATE.sched, segs=String(sc.cron).split(/\s+/);
     if(!(segs.length===5 && segs.every(cronSegValid))) return;
     var s=skillSelected(); if(!s) return; sc.authErr=false; sc.result=null;
-    var body={ prompt:String(SKILL_STATE.invoke.prompt||'').trim()||undefined, cronExpression:sc.cron, timezone:sc.tz, displayName:(sc.displayName||s.name) };
+    var teamId=skillSelectedTeamId(); if(!teamId) return;
+    var body={ prompt:String(SKILL_STATE.invoke.prompt||'').trim()||undefined, cronExpression:sc.cron, timezone:sc.tz, displayName:(sc.displayName||s.name), teamId:teamId };
     adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(res){
         if(res&&res.forbidden){ sc.authErr=true; reDetail(); return; }
@@ -3529,6 +3573,9 @@ function bindSkills(root){
       if(SKILL_STATE.selected){ SKILL_STATE.sched.displayName=SKILL_STATE.sched.displayName||((skillSelected()||{}).name||''); loadSkillDetail(SKILL_STATE.selected, reDetail); }
       loadMySchedules(reDetail); });
   }
+  var currentTeamScope=skillTeamScope();
+  if(currentTeamScope&&SKILL_TEAM_STATE.scope!==currentTeamScope&&!SKILL_TEAM_STATE.loading) loadSkillTeams(reDetail);
+  else if(!SKILL_TEAM_STATE.loaded&&!SKILL_TEAM_STATE.loading&&!SKILL_TEAM_STATE.err) loadSkillTeams(reDetail);
   bindSchedEditor(root);
   var se=root.querySelector('#skill-search'); se&&se.addEventListener('input',function(){ SKILL_STATE.search=se.value; reList(); });
   root.addEventListener('click',function(ev){

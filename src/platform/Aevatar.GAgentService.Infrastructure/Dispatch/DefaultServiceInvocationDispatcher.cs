@@ -143,7 +143,9 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             string.IsNullOrWhiteSpace(request.RunOrigin)
                 ? WorkflowRunOrigins.ServiceInvoke
                 : request.RunOrigin.Trim(),
-            request.ScheduleId?.Trim() ?? string.Empty);
+            request.ScheduleId?.Trim() ?? string.Empty,
+            "service_revision",
+            plan.CapabilityAdmissionPlan?.Clone());
         var requestedRunId = request.RequestedRunId?.Trim() ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(requestedRunId))
         {

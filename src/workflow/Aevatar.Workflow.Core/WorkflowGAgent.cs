@@ -24,6 +24,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
         string? sourceKind = null,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
         CancellationToken ct = default)
     {
         EnsureWorkflowNameCanBind(workflowName);
@@ -34,14 +35,25 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             ScopeId = scopeId?.Trim() ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
         };
-        var compilation = EvaluateWorkflowCompilation(bindDefinitionEvent.WorkflowYaml);
-        if (compilation.Compiled)
-            bindDefinitionEvent.AuthorizationDependencies =
-                WorkflowAuthorizationDependencyEvaluator.Evaluate(compilation.Workflow!);
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
                 bindDefinitionEvent.InlineWorkflowYamls[key] = value;
+        }
+
+        var compilation = EvaluateWorkflowCompilation(bindDefinitionEvent.WorkflowYaml);
+        if (compilation.Compiled)
+        {
+            var dependencies = EvaluateDefinitionAuthorizationDependencies(
+                compilation.Workflow!,
+                bindDefinitionEvent.InlineWorkflowYamls);
+            ValidateCapabilityAdmissionPlan(
+                bindDefinitionEvent.WorkflowYaml,
+                bindDefinitionEvent.InlineWorkflowYamls,
+                dependencies,
+                capabilityAdmissionPlan);
+            bindDefinitionEvent.AuthorizationDependencies = dependencies;
+            bindDefinitionEvent.CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone();
         }
 
         await PersistDomainEventAsync(bindDefinitionEvent, ct);
@@ -49,7 +61,13 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 
     [EventHandler]
     public Task HandleBindWorkflowDefinition(BindWorkflowDefinitionEvent request) =>
-        BindWorkflowDefinitionAsync(request.WorkflowYaml, request.WorkflowName, request.InlineWorkflowYamls, request.ScopeId, request.SourceKind);
+        BindWorkflowDefinitionAsync(
+            request.WorkflowYaml,
+            request.WorkflowName,
+            request.InlineWorkflowYamls,
+            request.ScopeId,
+            request.SourceKind,
+            request.CapabilityAdmissionPlan);
 
     [EventHandler]
     public Task HandleSubWorkflowDefinitionResolveRequested(SubWorkflowDefinitionResolveRequestedEvent request) =>
@@ -95,6 +113,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             ? "builtin"
             : evt.SourceKind.Trim();
         next.AuthorizationDependencies = evt.AuthorizationDependencies?.Clone();
+        next.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan?.Clone();
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
@@ -109,6 +128,65 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         return compilation.Compiled
             ? WorkflowAuthorizationDependencyEvaluator.Evaluate(compilation.Workflow!)
             : null;
+    }
+
+    private WorkflowAuthorizationDependencies EvaluateDefinitionAuthorizationDependencies(
+        WorkflowDefinition root,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls)
+    {
+        var all = new List<WorkflowAuthorizationDependencies>
+        {
+            WorkflowAuthorizationDependencyEvaluator.Evaluate(root),
+        };
+        foreach (var (name, yaml) in inlineWorkflowYamls.OrderBy(static item => item.Key, StringComparer.Ordinal))
+        {
+            var compilation = EvaluateWorkflowCompilation(yaml);
+            if (!compilation.Compiled)
+            {
+                throw new InvalidOperationException(
+                    $"Inline workflow '{name}' is invalid: {compilation.CompilationError}");
+            }
+
+            all.Add(WorkflowAuthorizationDependencyEvaluator.Evaluate(compilation.Workflow!));
+        }
+
+        var capabilities = all
+            .SelectMany(static dependencies => dependencies.ExternalCapabilities)
+            .GroupBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
+            .Select(static group => group.First().Clone())
+            .OrderBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
+            .ToArray();
+        var result = new WorkflowAuthorizationDependencies
+        {
+            OwnerLlmRouteRequired = all.Any(static dependencies => dependencies.OwnerLlmRouteRequired),
+            ServiceGrantPolicy = capabilities.Any(static capability =>
+                capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+                ? WorkflowServiceGrantPolicy.Required
+                : WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+        };
+        result.ExternalCapabilities.Add(capabilities);
+        return result;
+    }
+
+    private static void ValidateCapabilityAdmissionPlan(
+        string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        WorkflowAuthorizationDependencies dependencies,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
+    {
+        if (capabilityAdmissionPlan is null)
+        {
+            if (dependencies.ExternalCapabilities.Count > 0)
+                throw new InvalidOperationException("Workflow external capabilities require an admission plan.");
+            return;
+        }
+
+        WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            capabilityAdmissionPlan,
+            workflowYaml,
+            inlineWorkflowYamls,
+            capabilityAdmissionPlan.ExecutionMode,
+            dependencies.ExternalCapabilities);
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

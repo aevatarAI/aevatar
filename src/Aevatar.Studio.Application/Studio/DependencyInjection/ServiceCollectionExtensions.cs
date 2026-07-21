@@ -6,6 +6,7 @@ using Aevatar.Studio.Application.Studio.Authoring;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Application.Studio.WorkflowBoards.Services;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -21,6 +22,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkspaceService>();
         services.AddSingleton<ExecutionService>();
         services.AddSingleton<ConnectorService>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IExternalWorkflowCapabilitySource,
+            ConnectorExternalWorkflowCapabilitySource>());
         services.AddSingleton<RoleCatalogService>();
         services.AddSingleton<SettingsService>();
         // Refactor (iter21/cluster-001):

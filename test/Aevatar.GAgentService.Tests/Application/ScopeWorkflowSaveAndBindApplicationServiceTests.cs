@@ -1,6 +1,8 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -12,7 +14,8 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
     {
         var workflowPort = new RecordingScopeWorkflowCommandPort();
         var bindingPort = new RecordingScopeBindingCommandPort();
-        var service = new ScopeWorkflowSaveAndBindApplicationService(workflowPort, bindingPort);
+        var admission = new RecordingAdmissionService();
+        var service = new ScopeWorkflowSaveAndBindApplicationService(workflowPort, bindingPort, admission);
 
         var result = await service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
             "scope-a",
@@ -40,6 +43,11 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
         bindingPort.Request.ServiceId.Should().BeNull();
         bindingPort.Request.AppId.Should().Be("studio");
         bindingPort.Request.ExposureDesired.Should().BeTrue();
+        admission.Requests.Should().ContainSingle();
+        workflowPort.Request.CapabilityAdmission!.ExistingPlan!.AdmissionDigest.Should()
+            .Be(admission.Plan.AdmissionDigest);
+        bindingPort.Request.CapabilityAdmission!.ExistingPlan!.AdmissionDigest.Should()
+            .Be(admission.Plan.AdmissionDigest);
     }
 
     [Fact]
@@ -47,7 +55,10 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
     {
         var workflowPort = new RecordingScopeWorkflowCommandPort();
         var bindingPort = new RecordingScopeBindingCommandPort();
-        var service = new ScopeWorkflowSaveAndBindApplicationService(workflowPort, bindingPort);
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            new RecordingAdmissionService());
 
         var result = await service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
             "scope-a",
@@ -64,7 +75,10 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
     {
         var workflowPort = new RecordingScopeWorkflowCommandPort();
         var bindingPort = new RecordingScopeBindingCommandPort("rev-other");
-        var service = new ScopeWorkflowSaveAndBindApplicationService(workflowPort, bindingPort);
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            new RecordingAdmissionService());
 
         var act = () => service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
             "scope-a",
@@ -73,6 +87,56 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*revision identity must match*");
+    }
+
+    [Fact]
+    public async Task SaveAndBindAsync_WhenAdmissionFails_ShouldDispatchNoMutations()
+    {
+        var workflowPort = new RecordingScopeWorkflowCommandPort();
+        var bindingPort = new RecordingScopeBindingCommandPort();
+        var service = new ScopeWorkflowSaveAndBindApplicationService(
+            workflowPort,
+            bindingPort,
+            new RecordingAdmissionService(new InvalidOperationException("not ready")));
+
+        var act = () => service.SaveAndBindAsync(new ScopeWorkflowSaveAndBindRequest(
+            "scope-a",
+            "wf-alpha",
+            "name: main\nsteps: []\n"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("not ready");
+        workflowPort.Request.Should().BeNull();
+        bindingPort.Request.Should().BeNull();
+    }
+
+    private sealed class RecordingAdmissionService : IWorkflowExternalCapabilityAdmissionService
+    {
+        private readonly Exception? _exception;
+
+        public RecordingAdmissionService(Exception? exception = null)
+        {
+            _exception = exception;
+            Plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                "name: main\nsteps: []",
+                new Dictionary<string, string> { ["child"] = "name: child\nsteps: []" },
+                ExternalCapabilityExecutionMode.Interactive,
+                [],
+                []);
+        }
+
+        public WorkflowCapabilityAdmissionPlan Plan { get; }
+
+        public List<WorkflowExternalCapabilityAdmissionRequest> Requests { get; } = [];
+
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return _exception is null
+                ? Task.FromResult(Plan.Clone())
+                : Task.FromException<WorkflowCapabilityAdmissionPlan>(_exception);
+        }
     }
 
     private sealed class RecordingScopeWorkflowCommandPort : IScopeWorkflowCommandPort

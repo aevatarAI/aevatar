@@ -1,8 +1,8 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
@@ -10,10 +10,14 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 public sealed class WorkflowServiceImplementationAdapter : IServiceImplementationAdapter
 {
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
 
-    public WorkflowServiceImplementationAdapter(IWorkflowDefinitionParser workflowDefinitionParser)
+    public WorkflowServiceImplementationAdapter(
+        IWorkflowDefinitionParser workflowDefinitionParser,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService)
     {
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _capabilityAdmissionService = capabilityAdmissionService ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
     }
 
     public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Workflow;
@@ -42,65 +46,26 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
             throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
         }
 
-        var authorizationEvidence = MapAuthorizationEvidence(parse.AuthorizationDependencies);
+        var authorizationDependencies = parse.AuthorizationDependencies
+            ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
+        var executionMode = spec.CapabilityAdmissionPlan?.ExecutionMode
+            ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+            new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    request.Spec.Identity?.TenantId ?? string.Empty,
+                    request.Spec.Identity?.AppId ?? string.Empty),
+                spec.WorkflowYaml,
+                spec.InlineWorkflowYamls,
+                "service_revision_prepare",
+                executionMode,
+                spec.CapabilityAdmissionPlan),
+            ct);
 
-        return new PreparedServiceRevisionArtifact
-        {
-            Identity = request.Spec.Identity.Clone(),
-            RevisionId = request.Spec.RevisionId,
-            ImplementationKind = ServiceImplementationKind.Workflow,
-            Endpoints =
-            {
-                new ServiceEndpointDescriptor
-                {
-                    EndpointId = "chat",
-                    DisplayName = "chat",
-                    Kind = ServiceEndpointKind.Chat,
-                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
-                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
-                    Description = "Workflow chat endpoint.",
-                },
-            },
-            DeploymentPlan = new ServiceDeploymentPlan
-            {
-                WorkflowPlan = new WorkflowServiceDeploymentPlan
-                {
-                    WorkflowName = resolvedWorkflowName,
-                    WorkflowYaml = spec.WorkflowYaml,
-                    DefinitionActorId = spec.DefinitionActorId ?? string.Empty,
-                    InlineWorkflowYamls = { spec.InlineWorkflowYamls },
-                    AuthorizationEvidence = authorizationEvidence,
-                },
-            },
-        };
+        return WorkflowServiceRevisionArtifactBuilder.Build(
+            request.Spec,
+            resolvedWorkflowName,
+            authorizationDependencies,
+            capabilityAdmissionPlan);
     }
-
-    private static WorkflowRevisionAuthorizationEvidence MapAuthorizationEvidence(
-        WorkflowAuthorizationDependencies? dependencies)
-    {
-        if (dependencies == null ||
-            dependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Unspecified ||
-            !Enum.IsDefined(dependencies.ServiceGrantPolicy))
-        {
-            throw new InvalidOperationException("workflow authorization dependencies are required.");
-        }
-
-        var evidence = new WorkflowRevisionAuthorizationEvidence
-        {
-            OwnerLlmRouteRequired = dependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement = dependencies.ServiceGrantPolicy switch
-            {
-                WorkflowServiceGrantPolicy.Required => AuthorizationGrantRequirement.Required,
-                WorkflowServiceGrantPolicy.NotRequiredNoExternalService => AuthorizationGrantRequirement.NotRequired,
-                _ => AuthorizationGrantRequirement.Unspecified,
-            },
-        };
-        evidence.ConnectorCapabilityRefs.Add(dependencies.ConnectorCapabilityRefs);
-        evidence.NyxIdServiceIds.Add(dependencies.NyxIdServiceIds);
-        evidence.NyxIdServiceSlugs.Add(dependencies.NyxIdServiceSlugs);
-        return evidence;
-    }
-
-    private static string GetTypeUrl(Google.Protobuf.Reflection.MessageDescriptor descriptor) =>
-        $"type.googleapis.com/{descriptor.FullName}";
 }

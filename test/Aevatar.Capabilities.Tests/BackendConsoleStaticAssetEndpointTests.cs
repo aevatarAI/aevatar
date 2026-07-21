@@ -94,6 +94,40 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().NotContain("delete OBS_DETAIL[selected.id]");
     }
 
+    [Fact]
+    public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
+    {
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var workflowSkills = await client.GetStringAsync("/workflow/skills");
+        var admin = await client.GetStringAsync("/admin");
+
+        workflowSkills.Should().Contain("loadSkillTeams");
+        workflowSkills.Should().Contain("data-team-owner-select");
+        ScheduleRequestSnippet(
+                workflowSkills,
+                "apiSend(\"/api/workflow/skills/\"+encodeURIComponent(guid)+\"/schedule\"")
+            .Should()
+            .Contain("teamId:");
+
+        admin.Should().Contain("loadSkillTeams");
+        admin.Should().Contain("data-team-owner-select");
+        ScheduleRequestSnippet(
+                admin,
+                "adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule'")
+            .Should()
+            .Contain("teamId:");
+    }
+
+    private static string ScheduleRequestSnippet(string html, string scheduleCall)
+    {
+        var index = html.IndexOf(scheduleCall, StringComparison.Ordinal);
+        index.Should().BeGreaterThanOrEqualTo(0, $"static producer should call {scheduleCall}");
+        var start = Math.Max(0, index - 300);
+        var length = Math.Min(html.Length - start, 700);
+        return html.Substring(start, length);
+    }
+
     private static async Task<WebApplication> CreateAppAsync()
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions

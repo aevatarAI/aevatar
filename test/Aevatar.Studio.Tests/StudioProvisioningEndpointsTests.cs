@@ -1,8 +1,10 @@
 using System.Reflection;
 using System.Security.Claims;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -28,6 +30,7 @@ namespace Aevatar.Studio.Tests;
 public sealed class StudioProvisioningEndpointsTests
 {
     private const string ScopeId = "scope-1";
+    private const string TeamId = "team-alpha";
     private const string ScheduleId = "schedule-xyz";
 
     private static ProvisionWorkflowCallerCredential Caller =>
@@ -43,7 +46,10 @@ public sealed class StudioProvisioningEndpointsTests
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
             new ProvisionWorkflowRequest(
-                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go", Caller: Caller),
+                DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
             service,
             CancellationToken.None);
 
@@ -67,7 +73,10 @@ public sealed class StudioProvisioningEndpointsTests
                 DisplayName: "Monitor",
                 WorkflowYaml: "name: monitor",
                 Caller: new ProvisionWorkflowCallerCredential(
-                    Platform: "lark", ExternalUserId: "ou-1", Scope: "proxy", Tenant: "t-1")),
+                    Platform: "lark", ExternalUserId: "ou-1", Scope: "proxy", Tenant: "t-1"))
+            {
+                TeamId = TeamId,
+            },
             service,
             CancellationToken.None);
 
@@ -76,6 +85,32 @@ public sealed class StudioProvisioningEndpointsTests
         service.ProvisionCaller.ExternalUserId.Should().Be("ou-1");
         service.ProvisionCaller.Scope.Should().Be("proxy");
         service.ProvisionCaller.Tenant.Should().Be("t-1");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldAttachTransientBearerAdmissionContext()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+        var http = CreateAuthenticatedContext(ScopeId);
+        ((ClaimsIdentity)http.User.Identity!).AddClaim(new Claim("sub", "caller-alpha"));
+        http.Request.Headers.Authorization = "Bearer runtime-caller-credential";
+
+        await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        var context = service.ProvisionRequest!.CapabilityAdmission;
+        context.Should().NotBeNull();
+        context!.CallerId.Should().Be("caller-alpha");
+        context.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        context.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        context.ToString().Should().NotContain("runtime-caller-credential");
     }
 
     [Fact]
@@ -90,11 +125,30 @@ public sealed class StudioProvisioningEndpointsTests
                 DisplayName: "Monitor",
                 WorkflowYaml: "name: monitor",
                 Caller: new ProvisionWorkflowCallerCredential(
-                    Platform: "nyxid", ExternalUserId: "user-42", Scope: "")),
+                    Platform: "nyxid", ExternalUserId: "user-42", Scope: ""))
+            {
+                TeamId = TeamId,
+            },
             service,
             CancellationToken.None);
 
         service.ProvisionCaller!.Scope.Should().Be(ProvisionWorkflowCallerCredential.DefaultScope);
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldReturnBadRequest_WhenTeamIdMissing()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+
+        var result = await InvokeHandle<IResult>(
+            CreateAuthenticatedContext(ScopeId),
+            ScopeId,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller),
+            service,
+            CancellationToken.None);
+
+        service.ProvisionInvoked.Should().BeFalse();
+        AssertBadRequestResult(result, "INVALID_PROVISION_WORKFLOW_REQUEST");
     }
 
     [Fact]
@@ -105,7 +159,10 @@ public sealed class StudioProvisioningEndpointsTests
         var result = await InvokeHandle<IResult>(
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: null),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: null)
+            {
+                TeamId = TeamId,
+            },
             service,
             CancellationToken.None);
 
@@ -127,7 +184,10 @@ public sealed class StudioProvisioningEndpointsTests
             CreateAuthenticatedContext(ScopeId),
             ScopeId,
             new ProvisionWorkflowRequest(
-                DisplayName: "Monitor", WorkflowYaml: string.Empty, Caller: Caller),
+                DisplayName: "Monitor", WorkflowYaml: string.Empty, Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
             service,
             CancellationToken.None);
 
@@ -142,7 +202,10 @@ public sealed class StudioProvisioningEndpointsTests
         var result = await InvokeHandle<IResult>(
             CreateAuthenticatedContext("other-scope"),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
             service,
             CancellationToken.None);
 
@@ -159,7 +222,10 @@ public sealed class StudioProvisioningEndpointsTests
         var result = await InvokeHandle<IResult>(
             CreateUnauthenticatedContext(),
             ScopeId,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller),
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
             service,
             CancellationToken.None);
 
@@ -170,6 +236,7 @@ public sealed class StudioProvisioningEndpointsTests
     private static ProvisionWorkflowResponse NewResponse() => new(
         MemberId: "member-1",
         ScopeId: ScopeId,
+        TeamId: TeamId,
         BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
         ObservatoryUrl: "/workflow/observatory")
     {

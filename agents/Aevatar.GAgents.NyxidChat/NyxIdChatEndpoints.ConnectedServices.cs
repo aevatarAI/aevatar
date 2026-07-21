@@ -42,7 +42,7 @@ public static partial class NyxIdChatEndpoints
             }
 
             var specSource = http.RequestServices.GetService<IConnectedServiceSpecSource>();
-            var context = await BuildConnectedServicesContextAsync(servicesJson, specSource, accessToken, ct);
+            var context = await BuildConnectedServicesContextAsync(servicesJson, specSource, accessToken, ct, logger);
             if (!string.IsNullOrWhiteSpace(context))
                 metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = context;
         }
@@ -56,7 +56,8 @@ public static partial class NyxIdChatEndpoints
         string servicesJson,
         IConnectedServiceSpecSource? specSource,
         string accessToken,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<connected-services>");
@@ -99,15 +100,21 @@ public static partial class NyxIdChatEndpoints
 
                     hintRequests.Add(new ServiceHintRequest(slug, serviceId, name, openapiUrl));
 
-                    sb.Append($"- **{name ?? slug}** (slug: `{slug}`)");
+                    sb.Append($"- **{name ?? slug}** (");
+                    if (!string.IsNullOrWhiteSpace(serviceId))
+                        sb.Append($"user_service_id: `{serviceId}`, ");
+                    else
+                        sb.Append("user_service_id: unavailable, ");
+                    sb.Append($"slug: `{slug}`)");
                     if (!string.IsNullOrWhiteSpace(baseUrl))
                         sb.Append($" — base: {baseUrl}");
                     sb.AppendLine();
                 }
             }
         }
-        catch
+        catch (JsonException ex)
         {
+            logger?.LogWarning(ex, "Failed to parse connected services response; using an empty capability context");
         }
 
         if (hintRequests.Count == 0)
@@ -115,7 +122,7 @@ public static partial class NyxIdChatEndpoints
             sb.AppendLine("No services connected yet. Use nyxid_catalog to browse and connect services.");
         }
 
-        sb.AppendLine("Use nyxid_proxy with slug + path to call any service. Use code_execute for sandbox.");
+        sb.AppendLine("Use nyxid_proxy with exact user_service_id + slug + path to call a service; never infer an id from a slug. Use code_execute for sandbox.");
         sb.AppendLine("</connected-services>");
 
         string hints;

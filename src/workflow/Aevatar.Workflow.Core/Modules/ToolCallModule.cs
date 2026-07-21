@@ -99,30 +99,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 return;
             }
 
-            var completed = new WorkflowToolCallCompletedEvent
-            {
-                CallId = callId,
-                Success = true,
-                ResultJson = result.ResultJson,
-                RunId = request.RunId,
-                StepId = request.StepId,
-            };
-            if (result.ManagedHandoff != null)
-                completed.ManagedHandoff = result.ManagedHandoff.Clone();
-
-            await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
-
-            if (result.ManagedHandoff != null)
-                return;
-
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = request.StepId,
-                RunId = request.RunId,
-                ExecutionId = request.ExecutionId,
-                Success = true,
-                Output = result.ResultJson,
-            }, TopologyAudience.Self, ct);
+            await PublishToolOutcomeAsync(ctx, request, toolName, callId, result, ct);
         }
         catch (Exception ex)
         {
@@ -235,7 +212,13 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
                 return;
             }
 
-            await PublishToolSuccessAsync(ctx, pending, result, ct);
+            await PublishToolOutcomeAsync(
+                ctx,
+                ToStepRequest(pending),
+                pending.ToolName,
+                pending.ToolCallId,
+                result,
+                ct);
         }
         catch (Exception ex)
         {
@@ -322,33 +305,39 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }, TopologyAudience.ParentAndChildren, ct);
     }
 
-    private static Task PublishToolSuccessAsync(
+    private static async Task PublishToolOutcomeAsync(
         IWorkflowExecutionContext ctx,
-        PendingToolCallApprovalState pending,
+        StepRequestEvent request,
+        string toolName,
+        string callId,
         WorkflowToolExecutionResult result,
         CancellationToken ct)
     {
+        if (result.Failure != null)
+        {
+            await PublishToolFailureAsync(
+                ctx,
+                request,
+                toolName,
+                result.Failure.ErrorMessage,
+                result.Failure.ErrorCode,
+                result.ResultJson,
+                callId,
+                ct);
+            return;
+        }
+
         var completed = new WorkflowToolCallCompletedEvent
         {
-            CallId = pending.ToolCallId,
+            CallId = callId,
             Success = true,
             ResultJson = result.ResultJson,
-            RunId = pending.RunId,
-            StepId = pending.StepId,
+            RunId = request.RunId,
+            StepId = request.StepId,
         };
         if (result.ManagedHandoff != null)
             completed.ManagedHandoff = result.ManagedHandoff.Clone();
 
-        return PublishToolSuccessAsync(ctx, pending, completed, result, ct);
-    }
-
-    private static async Task PublishToolSuccessAsync(
-        IWorkflowExecutionContext ctx,
-        PendingToolCallApprovalState pending,
-        WorkflowToolCallCompletedEvent completed,
-        WorkflowToolExecutionResult result,
-        CancellationToken ct)
-    {
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
 
         if (result.ManagedHandoff != null)
@@ -356,9 +345,9 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 
         await ctx.PublishAsync(new StepCompletedEvent
         {
-            StepId = pending.StepId,
-            RunId = pending.RunId,
-            ExecutionId = pending.ExecutionId,
+            StepId = request.StepId,
+            RunId = request.RunId,
+            ExecutionId = request.ExecutionId,
             Success = true,
             Output = result.ResultJson,
         }, TopologyAudience.Self, ct);
@@ -531,19 +520,42 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         return index;
     }
 
+    private static Task PublishToolFailureAsync(
+        IWorkflowExecutionContext ctx,
+        StepRequestEvent request,
+        string toolName,
+        string error,
+        CancellationToken ct) =>
+        PublishToolFailureAsync(
+            ctx,
+            request,
+            toolName,
+            error,
+            string.Empty,
+            string.Empty,
+            ComposeWorkflowToolCallId(request),
+            ct);
+
     private static async Task PublishToolFailureAsync(
         IWorkflowExecutionContext ctx,
         StepRequestEvent request,
         string toolName,
         string error,
+        string errorCode,
+        string resultJson,
+        string callId,
         CancellationToken ct)
     {
-        var errorMessage = $"tool '{toolName}' execution failed: {error}";
+        var detail = string.IsNullOrWhiteSpace(errorCode)
+            ? error
+            : $"{errorCode}: {error}";
+        var errorMessage = $"tool '{toolName}' execution failed: {detail}";
 
         await ctx.PublishAsync(new WorkflowToolCallCompletedEvent
         {
-            CallId = ComposeWorkflowToolCallId(request),
+            CallId = callId,
             Success = false,
+            ResultJson = resultJson,
             Error = errorMessage,
             RunId = request.RunId,
             StepId = request.StepId,
@@ -555,6 +567,7 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             RunId = request.RunId,
             ExecutionId = request.ExecutionId,
             Success = false,
+            Output = resultJson,
             Error = errorMessage,
         }, TopologyAudience.Self, ct);
     }

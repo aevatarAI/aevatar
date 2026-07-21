@@ -11,6 +11,8 @@ using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Microsoft.AspNetCore.Builder;
@@ -239,6 +241,81 @@ public sealed class ServiceEndpointsTests
         host.CommandPort.CreateRevisionCommand!.Spec.WorkflowSpec.Should().NotBeNull();
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.WorkflowName.Should().Be("approval");
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.InlineWorkflowYamls.Should().ContainKey("child.yaml");
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_WhenWorkflowAdmissionFails_ShouldNotDispatchRevisionCommand()
+    {
+        await using var host = await EndpointTestHost.StartAsync(
+            new InvalidOperationException("external capability is not ready"));
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/revisions",
+            new ServiceEndpoints.CreateRevisionHttpRequest(
+                "tenant",
+                "app",
+                "ns",
+                "rev-workflow",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "approval",
+                    "name: approval",
+                    "workflow-definition",
+                    new Dictionary<string, string>())));
+
+        response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+        host.CapabilityAdmission.Requests.Should().ContainSingle();
+        host.CommandPort.CreateRevisionCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateRevisionAsync_ForWorkflow_ShouldAdmitExactBundleWithTransientHttpAuthority()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/services/orders/revisions")
+        {
+            Content = JsonContent.Create(new ServiceEndpoints.CreateRevisionHttpRequest(
+                "spoof-tenant",
+                "spoof-app",
+                "spoof-ns",
+                "rev-workflow",
+                "workflow",
+                null,
+                null,
+                new ServiceEndpoints.WorkflowRevisionHttpRequest(
+                    "approval",
+                    "name: approval",
+                    "workflow-definition",
+                    new Dictionary<string, string>
+                    {
+                        ["child"] = "name: child",
+                    }))),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer",
+            "runtime-caller-credential");
+        request.Headers.Add("X-Test-Authenticated", "true");
+        request.Headers.Add("X-Test-Tenant-Id", "tenant-claim");
+        request.Headers.Add("X-Test-App-Id", "app-claim");
+        request.Headers.Add("X-Test-Namespace", "ns-claim");
+        request.Headers.Add("X-Test-Caller-Id", "caller-alpha");
+
+        var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var admissionRequest = host.CapabilityAdmission.Requests.Should().ContainSingle().Which;
+        admissionRequest.Access.ScopeId.Should().Be("tenant-claim");
+        admissionRequest.Access.CallerId.Should().Be("caller-alpha");
+        admissionRequest.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        admissionRequest.WorkflowYaml.Should().Be("name: approval");
+        admissionRequest.InlineWorkflowYamls.Should().Contain("child", "name: child");
+        admissionRequest.SourceKind.Should().Be("service_revision");
+        admissionRequest.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        host.CommandPort.CreateRevisionCommand!.Spec.WorkflowSpec.CapabilityAdmissionPlan.Should().NotBeNull();
+        host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.CapabilityAdmissionPlan.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
     }
 
     [Fact]
@@ -1486,7 +1563,8 @@ public sealed class ServiceEndpointsTests
             RecordingServiceInvocationPort invocationPort,
             FakeServiceCatalogQueryReader catalogReader,
             FakeServiceInvocationCatalogQueryReader invocationCatalogReader,
-            FakeServiceRevisionCatalogQueryReader revisionCatalog)
+            FakeServiceRevisionCatalogQueryReader revisionCatalog,
+            RecordingWorkflowCapabilityAdmissionService capabilityAdmission)
         {
             _app = app;
             Client = client;
@@ -1496,6 +1574,7 @@ public sealed class ServiceEndpointsTests
             CatalogReader = catalogReader;
             InvocationCatalogReader = invocationCatalogReader;
             RevisionCatalog = revisionCatalog;
+            CapabilityAdmission = capabilityAdmission;
         }
 
         public HttpClient Client { get; }
@@ -1512,7 +1591,9 @@ public sealed class ServiceEndpointsTests
 
         public FakeServiceRevisionCatalogQueryReader RevisionCatalog { get; }
 
-        public static async Task<EndpointTestHost> StartAsync()
+        public RecordingWorkflowCapabilityAdmissionService CapabilityAdmission { get; }
+
+        public static async Task<EndpointTestHost> StartAsync(Exception? admissionFailure = null)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -1526,6 +1607,7 @@ public sealed class ServiceEndpointsTests
             var catalogReader = new FakeServiceCatalogQueryReader();
             var invocationCatalogReader = new FakeServiceInvocationCatalogQueryReader(catalogReader);
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
+            var capabilityAdmission = new RecordingWorkflowCapabilityAdmissionService(admissionFailure);
             builder.Services.AddHttpContextAccessor();
             builder.Services.AddSingleton<IServiceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceLifecycleQueryPort>(queryPort);
@@ -1534,6 +1616,7 @@ public sealed class ServiceEndpointsTests
             builder.Services.AddSingleton<IServiceCatalogQueryReader>(catalogReader);
             builder.Services.AddSingleton<IServiceInvocationCatalogQueryReader>(invocationCatalogReader);
             builder.Services.AddSingleton<IServiceRevisionCatalogQueryReader>(revisionCatalog);
+            builder.Services.AddSingleton<IWorkflowExternalCapabilityAdmissionService>(capabilityAdmission);
             builder.Services.AddSingleton<ServiceInvokeReadinessErrorMapper>();
             builder.Services.AddSingleton<IServiceIdentityContextResolver, DefaultServiceIdentityContextResolver>();
 
@@ -1548,6 +1631,7 @@ public sealed class ServiceEndpointsTests
                     AddClaims(http, "X-Test-Tenant-Id", AevatarStandardClaimTypes.TenantId, claims);
                     AddClaims(http, "X-Test-App-Id", AevatarStandardClaimTypes.AppId, claims);
                     AddClaims(http, "X-Test-Namespace", AevatarStandardClaimTypes.Namespace, claims);
+                    AddClaims(http, "X-Test-Caller-Id", "sub", claims);
                     http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
                 }
 
@@ -1567,7 +1651,16 @@ public sealed class ServiceEndpointsTests
                 BaseAddress = new Uri(address),
             };
 
-            return new EndpointTestHost(app, client, commandPort, queryPort, invocationPort, catalogReader, invocationCatalogReader, revisionCatalog);
+            return new EndpointTestHost(
+                app,
+                client,
+                commandPort,
+                queryPort,
+                invocationPort,
+                catalogReader,
+                invocationCatalogReader,
+                revisionCatalog,
+                capabilityAdmission);
         }
 
         public async ValueTask DisposeAsync()
@@ -1585,6 +1678,35 @@ public sealed class ServiceEndpointsTests
             {
                 claims.Add(new Claim(claimType, value));
             }
+        }
+    }
+
+    private sealed class RecordingWorkflowCapabilityAdmissionService :
+        IWorkflowExternalCapabilityAdmissionService
+    {
+        private readonly Exception? _failure;
+
+        public RecordingWorkflowCapabilityAdmissionService(Exception? failure = null)
+        {
+            _failure = failure;
+        }
+
+        public List<WorkflowExternalCapabilityAdmissionRequest> Requests { get; } = [];
+
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            if (_failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+            return Task.FromResult(WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                request.WorkflowYaml,
+                request.InlineWorkflowYamls,
+                request.ExecutionMode,
+                [],
+                []));
         }
     }
 

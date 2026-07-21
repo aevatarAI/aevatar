@@ -10,6 +10,8 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -27,6 +29,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     private readonly IScopeScriptQueryPort? _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort? _scriptDefinitionSnapshotPort;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
     private readonly IServiceExternalExposureIntentPort _externalExposureIntentPort;
     private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ScopeWorkflowCapabilityOptions _options;
@@ -40,6 +43,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         IScriptDefinitionSnapshotPort? scriptDefinitionSnapshotPort,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IOptions<ScopeWorkflowCapabilityOptions> options,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         IAgentKindRegistry? agentKindRegistry = null,
         IServiceExternalExposureIntentPort? externalExposureIntentPort = null)
     {
@@ -52,6 +56,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _scopeScriptQueryPort = scopeScriptQueryPort;
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort;
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _capabilityAdmissionService = capabilityAdmissionService ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
         _externalExposureIntentPort = externalExposureIntentPort ?? new ServiceCommandExternalExposureIntentPort(serviceCommandPort);
         _agentKindRegistry = agentKindRegistry;
         ArgumentNullException.ThrowIfNull(options);
@@ -220,7 +225,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
             return false;
 
-        var expectedArtifactHash = ComputeNonScriptingArtifactHash(revisionSpec);
+        var expectedArtifactHash = await ComputeNonScriptingArtifactHashAsync(revisionSpec, ct);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -230,11 +235,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return false;
     }
 
-    private static string ComputeNonScriptingArtifactHash(ServiceRevisionSpec revisionSpec)
+    private async Task<string> ComputeNonScriptingArtifactHashAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct)
     {
         var artifact = revisionSpec.ImplementationSpecCase switch
         {
-            ServiceRevisionSpec.ImplementationSpecOneofCase.WorkflowSpec => BuildWorkflowArtifact(revisionSpec),
+            ServiceRevisionSpec.ImplementationSpecOneofCase.WorkflowSpec =>
+                await BuildWorkflowArtifactAsync(revisionSpec, ct),
             ServiceRevisionSpec.ImplementationSpecOneofCase.StaticSpec => BuildStaticArtifact(revisionSpec),
             _ => throw new InvalidOperationException(
                 $"Unsupported replay implementation spec '{revisionSpec.ImplementationSpecCase}'."),
@@ -287,38 +295,29 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return ComputeArtifactHash(artifact);
     }
 
-    private static PreparedServiceRevisionArtifact BuildWorkflowArtifact(ServiceRevisionSpec revisionSpec)
+    private async Task<PreparedServiceRevisionArtifact> BuildWorkflowArtifactAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct)
     {
         var workflowSpec = revisionSpec.WorkflowSpec
             ?? throw new InvalidOperationException("workflow implementation_spec is required.");
-        return new PreparedServiceRevisionArtifact
-        {
-            Identity = revisionSpec.Identity.Clone(),
-            RevisionId = revisionSpec.RevisionId,
-            ImplementationKind = ServiceImplementationKind.Workflow,
-            Endpoints =
-            {
-                new ServiceEndpointDescriptor
-                {
-                    EndpointId = "chat",
-                    DisplayName = "chat",
-                    Kind = ServiceEndpointKind.Chat,
-                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
-                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
-                    Description = "Workflow chat endpoint.",
-                },
-            },
-            DeploymentPlan = new ServiceDeploymentPlan
-            {
-                WorkflowPlan = new WorkflowServiceDeploymentPlan
-                {
-                    WorkflowName = workflowSpec.WorkflowName,
-                    WorkflowYaml = workflowSpec.WorkflowYaml,
-                    DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
-                    InlineWorkflowYamls = { workflowSpec.InlineWorkflowYamls },
-                },
-            },
-        };
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowSpec.WorkflowYaml, ct);
+        if (!parse.Succeeded)
+            throw new InvalidOperationException(parse.Error);
+        var resolvedWorkflowName = string.IsNullOrWhiteSpace(workflowSpec.WorkflowName)
+            ? parse.WorkflowName
+            : workflowSpec.WorkflowName;
+        if (!string.Equals(resolvedWorkflowName, parse.WorkflowName, StringComparison.Ordinal))
+            throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
+        var authorizationDependencies = parse.AuthorizationDependencies
+            ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
+        var capabilityAdmissionPlan = workflowSpec.CapabilityAdmissionPlan
+            ?? throw new InvalidOperationException("workflow capability admission plan is required.");
+        return WorkflowServiceRevisionArtifactBuilder.Build(
+            revisionSpec,
+            resolvedWorkflowName,
+            authorizationDependencies,
+            capabilityAdmissionPlan);
     }
 
     private static PreparedServiceRevisionArtifact BuildStaticArtifact(ServiceRevisionSpec revisionSpec)
@@ -375,6 +374,21 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
+        var admissionContext = request.CapabilityAdmission;
+        var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+            new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    normalizedScopeId,
+                    admissionContext?.CallerId ?? string.Empty,
+                    admissionContext?.NyxIdCallerBearerToken,
+                    admissionContext?.NyxIdOrganizationBearerToken),
+                workflowBundle.EntryWorkflowYaml,
+                workflowBundle.SubWorkflowYamls,
+                "scope_binding_upsert",
+                executionMode,
+                admissionContext?.ExistingPlan),
+            ct);
         var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
         var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
         var definitionActorIdPrefix = string.IsNullOrWhiteSpace(suppliedWorkflowId)
@@ -407,6 +421,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                         WorkflowName = workflowBundle.EntryWorkflowName,
                         WorkflowYaml = workflowBundle.EntryWorkflowYaml,
                         DefinitionActorId = definitionActorIdPrefix,
+                        CapabilityAdmissionPlan = capabilityAdmissionPlan,
                     },
                 };
                 ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(

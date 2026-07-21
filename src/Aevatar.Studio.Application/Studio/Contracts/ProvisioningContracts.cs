@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
 /// <summary>
@@ -50,10 +53,10 @@ public sealed record ProvisionWorkflowCallerCredential(
 
 /// <summary>
 /// Single-call workflow provisioning request. The caller supplies the workflow
-/// body inline (YAML) plus a prompt; the service composes member create + bind +
-/// scheduled-dispatch so a Claude Code session reaches a runnable, scope-owned
-/// workflow in one proxied call. No serviceId / memberId / workflowId is accepted
-/// — those are minted internally and returned.
+/// body inline (YAML), a target Team, and a prompt; the service composes
+/// Team-owned member create + bind + scheduled-dispatch so a Claude Code session
+/// reaches a runnable, discoverable workflow in one proxied call. No serviceId /
+/// memberId / workflowId is accepted — those are minted internally and returned.
 ///
 /// The run is produced asynchronously by a scheduled-dispatch. By default a
 /// near-future one-shot fire is created so the caller sees a single demo run;
@@ -75,6 +78,16 @@ public sealed record ProvisionWorkflowRequest(
     string? Timezone = null,
     ProvisionWorkflowCallerCredential? Caller = null)
 {
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
+    /// <summary>
+    /// Target Studio Team that owns the provisioned workflow member. Required:
+    /// Chat-created workflows must be discoverable through the Team member route
+    /// before any member, binding, or schedule side effects are created.
+    /// </summary>
+    public string? TeamId { get; init; }
+
     /// <summary>
     /// Delay ahead of "now" for the synthesized one-shot fire when no recurring
     /// <see cref="Cron"/> is supplied. Short enough to feel immediate, long enough
@@ -89,12 +102,13 @@ public sealed record ProvisionWorkflowRequest(
 /// so no run id is returned at provision time; the run appears in the Observatory
 /// (<see cref="ObservatoryUrl"/>) as the <see cref="ScheduleId"/> fires.
 /// <see cref="BindingRunId"/> lets the caller poll the bind status if desired.
-/// <see cref="StudioUrl"/> is the editable Studio member page and is null until
-/// the member is assigned to a team (a freshly provisioned member has no team).
+/// <see cref="StudioUrl"/> is the editable Studio member page under the owning
+/// Team.
 /// </summary>
 public sealed record ProvisionWorkflowResponse(
     string MemberId,
     string ScopeId,
+    string TeamId,
     string BindingStatus,
     string ObservatoryUrl)
 {
@@ -102,5 +116,5 @@ public sealed record ProvisionWorkflowResponse(
 
     public string? ScheduleId { get; init; }
 
-    public string? StudioUrl { get; init; }
+    public string StudioUrl { get; init; } = string.Empty;
 }

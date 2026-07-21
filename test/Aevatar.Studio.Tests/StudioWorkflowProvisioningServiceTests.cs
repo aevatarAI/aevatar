@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -19,7 +20,7 @@ namespace Aevatar.Studio.Tests;
 /// orchestration contract for the NON-BLOCKING design:
 /// <list type="bullet">
 ///   <item>the workflow YAML is validated synchronously through the binding
-///   parser BEFORE anything is created — invalid YAML provisions nothing;</item>
+///   admission service BEFORE anything is created — invalid YAML provisions nothing;</item>
 ///   <item>validate → create → bind → ensure-scheduled-dispatch, threading the
 ///   scope through every call;</item>
 ///   <item>member id, workflow id and schedule id derive deterministically from
@@ -42,6 +43,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
 {
     private const string ScopeId = "scope-1";
     private const string OtherScopeId = "scope-2";
+    private const string TeamId = "team-alpha";
+    private const string OtherTeamId = "team-beta";
     private const string MemberId = "member-1";
     private const string PublishedServiceId = "member-member-1";
     private const string BindingRunId = "bind-run-1";
@@ -49,6 +52,85 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
     private static ProvisionWorkflowCallerCredential Caller =>
         new(Platform: "nyxid", ExternalUserId: "user-42", Scope: "proxy", Tenant: "tenant-1");
+
+    [Fact]
+    public async Task ProvisionAsync_RejectsMissingTeamId_BeforeAdmissionOrProvisioning()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var sut = NewService(member, schedule, admission);
+
+        var act = async () => await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"));
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Be("teamId is required.");
+        admission.Requests.Should().BeEmpty();
+        member.CreateInvoked.Should().BeFalse();
+        member.BindScopeId.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_TeamOwnedProvision_CreatesMemberInTeamAndReturnsStudioUrl()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var sut = NewService(member, schedule);
+
+        var response = await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(
+                DisplayName: "Monitor",
+                WorkflowYaml: "name: monitor",
+                Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
+
+        member.CreateRequest!.TeamId.Should().Be(TeamId);
+        response.TeamId.Should().Be(TeamId);
+        response.StudioUrl.Should()
+            .Be($"/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/workflow");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenCapabilityAdmissionFails_ShouldMutateNothing()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("external capability is not ready"));
+        var sut = NewService(member, schedule, admission);
+
+        var act = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor")
+            {
+                TeamId = TeamId,
+                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                    "caller-alpha",
+                    "runtime-caller-credential"),
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("external capability is not ready");
+        var request = admission.Requests.Should().ContainSingle().Which;
+        request.Access.ScopeId.Should().Be(ScopeId);
+        request.Access.CallerId.Should().Be("caller-alpha");
+        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        request.SourceKind.Should().Be("studio_workflow_provisioning");
+        request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+    }
 
     [Fact]
     public async Task ProvisionAsync_HappyPath_CreatesBindsAndSchedulesWithoutPollingBind()
@@ -63,7 +145,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(
                 DisplayName: "Monitor",
                 WorkflowYaml: "name: monitor",
-                Prompt: "go"));
+                Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
         response.MemberId.Should().Be(MemberId);
@@ -72,9 +157,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         response.BindingRunId.Should().Be(BindingRunId);
         response.ObservatoryUrl.Should().Be("/workflow/observatory");
 
-        // create → bind, carrying the caller scope.
+        // create → bind, carrying the caller scope and Team ownership.
         member.CreateScopeId.Should().Be(ScopeId);
         member.CreateRequest!.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
+        member.CreateRequest.TeamId.Should().Be(TeamId);
         member.BindScopeId.Should().Be(ScopeId);
         member.BindRequest!.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Be("name: monitor");
         member.BindRequest.Workflow.WorkflowId.Should().NotBeNullOrWhiteSpace();
@@ -107,7 +193,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             ScopeId,
             new ProvisionWorkflowCallerCredential(
                 Platform: " Lark ", ExternalUserId: " ou-user-1 ", Scope: " proxy ", Tenant: " tenant-9 "),
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
+            {
+                TeamId = TeamId,
+            });
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth.Should().NotBeNull();
@@ -135,7 +224,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 ExternalUserId: " body-user-42 ",
                 Scope: " sender-proxy ",
                 Tenant: " body-tenant "),
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
+            {
+                TeamId = TeamId,
+            });
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth!;
         auth.SenderNyxId!.Subject.Should().BeEquivalentTo(
@@ -154,7 +246,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
+            {
+                TeamId = TeamId,
+            });
 
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
         auth!.Durable.Should().BeNull();
@@ -177,7 +272,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 WorkflowYaml: "name: monitor",
                 Prompt: "go",
                 Cron: "0 8 * * *",
-                Timezone: "Asia/Shanghai"));
+                Timezone: "Asia/Shanghai")
+            {
+                TeamId = TeamId,
+            });
 
         // The re-mintable subject reference is the only schedule credential.
         var auth = schedule.Configuration!.Target.ServiceInvocation!.Auth;
@@ -196,7 +294,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var response = await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
 
         response.BindingStatus.Should().Be(ProvisionWorkflowBindingStatusNames.Accepted);
         response.ScheduleId.Should().Be(ScheduleId);
@@ -216,7 +317,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
 
         // now=10:30:15, +30s=10:30:45, rounded up to next whole minute = 10:31.
         // Fixed-minute one-shot cron: "minute hour day month *".
@@ -239,7 +343,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 WorkflowYaml: "name: monitor",
                 Prompt: "go",
                 Cron: "*/15 * * * *",
-                Timezone: "Asia/Shanghai"));
+                Timezone: "Asia/Shanghai")
+            {
+                TeamId = TeamId,
+            });
 
         schedule.Configuration!.CronExpression.Should().Be("*/15 * * * *");
         schedule.Configuration.Timezone.Should().Be("Asia/Shanghai");
@@ -258,7 +365,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
             new ProvisionWorkflowRequest(
                 DisplayName: "Monitor",
                 WorkflowYaml: "name: monitor",
-                RunImmediately: false));
+                RunImmediately: false)
+            {
+                TeamId = TeamId,
+            });
 
         // Bind happened, but with nothing to fire there is no schedule and no run.
         member.BindScopeId.Should().Be(ScopeId);
@@ -281,7 +391,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 DisplayName: "Monitor",
                 WorkflowYaml: "name: monitor",
                 RunImmediately: false,
-                Cron: "*/15 * * * *"));
+                Cron: "*/15 * * * *")
+            {
+                TeamId = TeamId,
+            });
 
         schedule.Ensured.Should().BeTrue();
         schedule.Configuration!.CronExpression.Should().Be("*/15 * * * *");
@@ -298,7 +411,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         await sut.ProvisionAsync(
             OtherScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "p")
+            {
+                TeamId = TeamId,
+            });
 
         member.CreateScopeId.Should().Be(OtherScopeId);
         member.BindScopeId.Should().Be(OtherScopeId);
@@ -312,20 +428,21 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var parser = new RecordingWorkflowDefinitionParser
-        {
-            Error = "Unsupported workflow YAML root field 'version'.",
-        };
-        var sut = NewService(member, schedule, parser);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("Unsupported workflow YAML root field 'version'."));
+        var sut = NewService(member, schedule, admission);
 
         var act = async () => await sut.ProvisionAsync(
             ScopeId,
             Caller,
             new ProvisionWorkflowRequest(
                 DisplayName: "Monitor",
-                WorkflowYaml: "version: \"1.0\"\ninputs: {}\nname: monitor"));
+                WorkflowYaml: "version: \"1.0\"\ninputs: {}\nname: monitor")
+            {
+                TeamId = TeamId,
+            });
 
-        // The parser's message travels to the caller so an authoring agent can
+        // The admission error travels to the caller so an authoring agent can
         // repair the YAML — and nothing was provisioned: no member, no bind, no
         // schedule to fire against a member that never bound.
         (await act.Should().ThrowAsync<InvalidOperationException>())
@@ -336,20 +453,23 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_ValidatesYamlThroughBindingParser_BeforeProvisioning()
+    public async Task ProvisionAsync_AdmitsYamlThroughUnifiedService_BeforeProvisioning()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var parser = new RecordingWorkflowDefinitionParser();
-        var sut = NewService(member, schedule, parser);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var sut = NewService(member, schedule, admission);
 
         await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
 
-        parser.ParseCallCount.Should().Be(1);
-        parser.LastYaml.Should().Be("name: monitor");
+        admission.Requests.Should().ContainSingle()
+            .Which.WorkflowYaml.Should().Be("name: monitor");
     }
 
     [Fact]
@@ -362,7 +482,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var secondSchedule = new RecordingScheduleService { ScheduleId = ScheduleId };
         var second = NewService(secondMember, secondSchedule);
         var request = new ProvisionWorkflowRequest(
-            DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go");
+            DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
+        {
+            TeamId = TeamId,
+        };
 
         await first.ProvisionAsync(ScopeId, Caller, request);
         await second.ProvisionAsync(ScopeId, Caller, request);
@@ -388,11 +511,20 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var otherScope = NewMemberService();
 
         await NewService(baseline, new RecordingScheduleService()).ProvisionAsync(
-            ScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"));
+            ScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
+            {
+                TeamId = TeamId,
+            });
         await NewService(renamed, new RecordingScheduleService()).ProvisionAsync(
-            ScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Other", WorkflowYaml: "name: monitor"));
+            ScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Other", WorkflowYaml: "name: monitor")
+            {
+                TeamId = TeamId,
+            });
         await NewService(otherScope, new RecordingScheduleService()).ProvisionAsync(
-            OtherScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"));
+            OtherScopeId, Caller, new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
+            {
+                TeamId = TeamId,
+            });
 
         baseline.CreateRequest!.MemberId.Should().NotBe(renamed.CreateRequest!.MemberId);
         baseline.CreateRequest.MemberId.Should().NotBe(otherScope.CreateRequest!.MemberId);
@@ -415,7 +547,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 PublishedServiceId: PublishedServiceId,
                 LastBoundRevisionId: null,
                 CreatedAt: DateTimeOffset.UtcNow,
-                UpdatedAt: DateTimeOffset.UtcNow),
+                UpdatedAt: DateTimeOffset.UtcNow)
+            {
+                TeamId = TeamId,
+            },
             ImplementationRef: null,
             LastBinding: null);
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
@@ -424,13 +559,40 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var response = await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
 
         member.GetCallCount.Should().Be(1);
         member.CreateInvoked.Should().BeFalse();
         member.BindScopeId.Should().Be(ScopeId);
         response.MemberId.Should().Be(MemberId);
         schedule.Configuration!.Target.ServiceInvocation!.Identity.ServiceId.Should().Be(PublishedServiceId);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_SameDisplayNameInDifferentTeams_DerivesDistinctMemberIds()
+    {
+        var baseline = NewMemberService();
+        var otherTeam = NewMemberService();
+
+        await NewService(baseline, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
+            {
+                TeamId = TeamId,
+            });
+        await NewService(otherTeam, new RecordingScheduleService()).ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
+            {
+                TeamId = OtherTeamId,
+            });
+
+        baseline.CreateRequest!.MemberId.Should().NotBe(otherTeam.CreateRequest!.MemberId);
     }
 
     [Fact]
@@ -447,7 +609,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var response = await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor", Prompt: "go")
+            {
+                TeamId = TeamId,
+            });
 
         schedule.Ensured.Should().BeTrue();
         schedule.Configuration!.ScheduleId.Should().Be($"provision-{PublishedServiceId}.2");
@@ -467,7 +632,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var act = async () => await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
+            {
+                TeamId = TeamId,
+            });
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .Which.Message.Should().Contain("cron is invalid");
@@ -485,7 +653,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var act = async () => await sut.ProvisionAsync(
             ScopeId,
             Caller,
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: yaml));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: yaml)
+            {
+                TeamId = TeamId,
+            });
 
         await act.Should().ThrowAsync<InvalidOperationException>();
         member.CreateInvoked.Should().BeFalse();
@@ -502,7 +673,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
         var act = async () => await sut.ProvisionAsync(
             ScopeId,
             new ProvisionWorkflowCallerCredential(Platform: "", ExternalUserId: "", Scope: "proxy"),
-            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor"));
+            new ProvisionWorkflowRequest(DisplayName: "Monitor", WorkflowYaml: "name: monitor")
+            {
+                TeamId = TeamId,
+            });
 
         await act.Should().ThrowAsync<InvalidOperationException>();
         schedule.Ensured.Should().BeFalse();
@@ -526,28 +700,32 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule) =>
-        NewService(member, schedule, new RecordingWorkflowDefinitionParser(), out _);
+        NewService(member, schedule, new StudioWorkflowCapabilityAdmissionTestService(), out _);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        RecordingWorkflowDefinitionParser parser) =>
-        NewService(member, schedule, parser, out _);
+        StudioWorkflowCapabilityAdmissionTestService admission) =>
+        NewService(member, schedule, admission, out _);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
         out FakeTimeProvider time) =>
-        NewService(member, schedule, new RecordingWorkflowDefinitionParser(), out time);
+        NewService(member, schedule, new StudioWorkflowCapabilityAdmissionTestService(), out time);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        RecordingWorkflowDefinitionParser parser,
+        StudioWorkflowCapabilityAdmissionTestService admission,
         out FakeTimeProvider time)
     {
         time = new FakeTimeProvider();
-        return new StudioWorkflowProvisioningService(member, schedule, parser, time);
+        return new StudioWorkflowProvisioningService(
+            member,
+            schedule,
+            admission,
+            time);
     }
 
     private static RecordingMemberService NewMemberService() =>
@@ -755,28 +933,6 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
             string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
-    }
-
-    /// <summary>
-    /// Recording stand-in for the binding-path workflow parser. Succeeds by
-    /// default; set <see cref="Error"/> to simulate a parse/validation failure
-    /// (e.g. an unknown top-level YAML key rejected by the strict parser).
-    /// </summary>
-    private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
-    {
-        public string? Error { get; set; }
-        public int ParseCallCount { get; private set; }
-        public string? LastYaml { get; private set; }
-
-        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
-            string workflowYaml, CancellationToken ct = default)
-        {
-            ParseCallCount++;
-            LastYaml = workflowYaml;
-            return Task.FromResult(Error == null
-                ? WorkflowYamlParseResult.Success("monitor")
-                : WorkflowYamlParseResult.Invalid(Error));
-        }
     }
 
     /// <summary>

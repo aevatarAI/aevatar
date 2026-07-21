@@ -6,6 +6,7 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "Credentials/credential_secret_references.proto";
 import "Interactions/interaction_spec.proto";
+import "workflow_capability_admission.proto";
 import "workflow_external_action.proto";
 
 enum WorkflowChatInputPartKind {
@@ -281,6 +282,7 @@ message BindWorkflowDefinitionEvent
   string scope_id = 4;
   string source_kind = 5;
   WorkflowAuthorizationDependencies authorization_dependencies = 6;
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
 }
 
 enum WorkflowServiceGrantPolicy {
@@ -290,11 +292,11 @@ enum WorkflowServiceGrantPolicy {
 }
 
 message WorkflowAuthorizationDependencies {
-  repeated string connector_capability_refs = 1;
+  reserved 1, 3, 4;
+  reserved "connector_capability_refs", "nyx_id_service_ids", "nyx_id_service_slugs";
   bool owner_llm_route_required = 2;
-  repeated string nyx_id_service_ids = 3;
-  repeated string nyx_id_service_slugs = 4;
   WorkflowServiceGrantPolicy service_grant_policy = 5;
+  repeated ExternalWorkflowCapabilityRef external_capabilities = 6;
 }
 message WorkflowRunExecutionStartedEvent
 {

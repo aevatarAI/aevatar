@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Projection.CommandServices;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -113,6 +114,11 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         request.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
         request.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         request.Workflow!.WorkflowYamls.Should().ContainSingle().Which.Should().Contain("name: workflow-main");
+        request.CapabilityAdmission.Should().NotBeNull();
+        request.CapabilityAdmission!.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        request.CapabilityAdmission.ExistingPlan.Should().NotBeNull();
+        request.CapabilityAdmission.ExistingPlan!.AdmissionDigest.Should().Be(
+            NewWorkflowStartRequest().Request.Workflow.CapabilityAdmissionPlan.AdmissionDigest);
         request.AllowExistingRevisionReplay.Should().BeTrue();
         request.ReplayRevisionId.Should().Be("rev-platform-bind-1");
     }
@@ -591,6 +597,12 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
         {
             WorkflowId = "workflow-stable-id",
             WorkflowYamls = { "name: workflow-main\nsteps: []\n" },
+            CapabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                "name: workflow-main\nsteps: []",
+                new Dictionary<string, string>(),
+                ExternalCapabilityExecutionMode.Interactive,
+                [],
+                []),
         };
         return request;
     }

@@ -1,7 +1,9 @@
 using System.Net;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.AI.Tests;
 
@@ -55,6 +57,8 @@ public class BuildConnectedServicesContextTests
         context.Should().Contain("<connected-services>");
         context.Should().Contain("GitHub");
         context.Should().Contain("slug: `api-github`");
+        context.Should().Contain("user_service_id: `svc-github`");
+        context.Should().Contain("exact user_service_id + slug + path");
         context.Should().Contain("<api-hints>");
         context.Should().Contain("from spec");
         context.Should().Contain("GET /repos — List repositories");
@@ -108,6 +112,21 @@ public class BuildConnectedServicesContextTests
             """{ "services": [] }""", null, "", CancellationToken.None);
 
         context.Should().Contain("No services connected yet");
+    }
+
+    [Fact]
+    public async Task BuildContext_InvalidJson_LogsWarningAndShowsNoServicesMessage()
+    {
+        var logger = new RecordingLogger();
+
+        var context = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            "{ invalid", null, "", CancellationToken.None, logger);
+
+        context.Should().Contain("No services connected yet");
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Warning);
+        entry.Exception.Should().BeAssignableTo<JsonException>();
+        entry.Message.Should().Contain("Failed to parse connected services");
     }
 
     [Fact]
@@ -203,6 +222,29 @@ public class BuildConnectedServicesContextTests
             if (_responseBody is not null)
                 response.Content = new StringContent(_responseBody, System.Text.Encoding.UTF8, "application/json");
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed record LogEntry(LogLevel Level, string Message, Exception? Exception);
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<LogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull =>
+            null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
         }
     }
 }

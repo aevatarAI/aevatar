@@ -374,7 +374,10 @@ public static class ScopeServiceEndpoints
                     request.RevisionId,
                     request.AppId,
                     request.ServiceId,
-                    request.ExposureDesired),
+                    request.ExposureDesired)
+                {
+                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                },
                 ct);
             return Results.Ok(result);
         }

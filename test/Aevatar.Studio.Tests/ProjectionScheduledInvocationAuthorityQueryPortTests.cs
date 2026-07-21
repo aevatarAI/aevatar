@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
@@ -44,9 +45,27 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             OwnerLlmRouteRequired = true,
             ServiceGrantRequirement = AuthorizationGrantRequirement.Required,
         };
-        evidence.ConnectorCapabilityRefs.Add("calendar");
-        evidence.NyxIdServiceIds.Add("service-alpha");
-        evidence.NyxIdServiceSlugs.Add("service-slug-alpha");
+        evidence.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
+        {
+            HostConnector = new HostConnectorCapabilityRef
+            {
+                ConnectorCapabilityRef = "connector-calendar-alpha",
+                OperationId = "create_event",
+                ContractDigest = "connector-digest-alpha",
+            },
+        });
+        evidence.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-home-alpha",
+                ServiceSlugSnapshot = "home-assistant",
+                OperationId = "read_states",
+                HttpMethod = "GET",
+                PathTemplate = "/api/states",
+                ContractDigest = "nyxid-digest-alpha",
+            },
+        });
         var reader = new RecordingRevisionCatalogReader(CreateWorkflowRevisionCatalog(evidence));
 
         var result = await new ProjectionScheduledInvocationWorkflowQueryPort(reader)
@@ -59,12 +78,10 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         reader.Identity.ServiceId.Should().Be("svc-alpha");
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(5);
-        result.ConnectorCapabilityRefs.Should().Equal("calendar");
         result.OwnerLLMRouteRequired.Should().BeTrue();
-        result.NyxIdServiceIds.Should().Equal("service-alpha");
-        result.NyxIdServiceIds.Should().NotBeSameAs(evidence.NyxIdServiceIds);
-        result.NyxIdServiceSlugs.Should().Equal("service-slug-alpha");
-        result.NyxIdServiceSlugs.Should().NotBeSameAs(evidence.NyxIdServiceSlugs);
+        result.ExternalCapabilities.Should().Equal(evidence.ExternalCapabilities);
+        result.ExternalCapabilities.Should()
+            .OnlyContain(capability => evidence.ExternalCapabilities.All(source => !ReferenceEquals(source, capability)));
         result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
     }
 

@@ -52,6 +52,40 @@ public sealed class WorkflowTuringCompletenessTests
         await run.Should().ThrowAsync<TimeoutException>();
     }
 
+    [Fact]
+    public async Task ToolCallFailure_ShouldTerminateWorkflowAsFailed()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "tool_failure",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "call_service",
+                    Type = "tool_call",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["tool"] = "nyxid_proxy",
+                    },
+                },
+            ],
+        };
+        var toolCallModule = new ToolCallModule(
+            [new SingleToolSource(new FailingWorkflowTool())],
+            NullLogger<ToolCallModule>.Instance);
+
+        var completed = await ExecuteClosedWorldWorkflowAsync(
+            workflow,
+            maxTransitions: 16,
+            toolCallModule);
+
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("NYXID_PROXY_HTTP_503");
+        completed.Error.Should().Contain("The service request failed.");
+    }
+
     private static WorkflowDefinition BuildCounterTransferWorkflow() =>
         new()
         {
@@ -252,7 +286,8 @@ public sealed class WorkflowTuringCompletenessTests
 
     private static async Task<WorkflowCompletedEvent> ExecuteClosedWorldWorkflowAsync(
         WorkflowDefinition workflow,
-        int maxTransitions)
+        int maxTransitions,
+        IEventModule<IWorkflowExecutionContext>? toolCallModule = null)
     {
         var loop = new WorkflowLoopModule();
         loop.SetWorkflow(workflow);
@@ -265,6 +300,8 @@ public sealed class WorkflowTuringCompletenessTests
             ["transform"] = new TransformModule(),
             ["while"] = new WhileModule(),
         };
+        if (toolCallModule != null)
+            modules["tool_call"] = toolCallModule;
 
         var queue = new Queue<IMessage>();
         var workflowRunAgent = new TestWorkflowRunAgent("workflow-turing-proof-agent", "proof-run");
@@ -337,6 +374,31 @@ public sealed class WorkflowTuringCompletenessTests
             new ServiceCollection().BuildServiceProvider(),
             workflowRunAgent,
             NullLogger.Instance);
+    }
+
+    private sealed class FailingWorkflowTool : IWorkflowTool
+    {
+        public string Name => "nyxid_proxy";
+
+        public Task<WorkflowToolExecutionResult> ExecuteAsync(
+            WorkflowToolExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(WorkflowToolExecutionResult.Failed(
+                """{"error":true,"status":503}""",
+                "NYXID_PROXY_HTTP_503",
+                "The service request failed."));
+        }
+    }
+
+    private sealed class SingleToolSource(IWorkflowTool tool) : IWorkflowToolSource
+    {
+        public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<IWorkflowTool>>([tool]);
+        }
     }
 
 }

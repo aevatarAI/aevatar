@@ -350,6 +350,33 @@ public sealed class WorkflowRunActorPortBranchTests
         result.Error.Should().Contain("does_not_exist");
     }
 
+    [Theory]
+    [InlineData("{\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "service_id")]
+    [InlineData("{\"service_id\":\"us-home-alpha\",\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\",\"headers\":{\"Authorization\":\"forbidden\"}}", "sensitive header")]
+    public async Task ParseWorkflowYamlAsync_WhenNyxIdCapabilityIsNotExact_ShouldReturnInvalid(
+        string arguments,
+        string expectedError)
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+
+        var result = await port.ParseWorkflowYamlAsync(
+            $$"""
+            name: sample
+            roles: []
+            steps:
+              - id: proxy
+                type: tool_call
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{{arguments}}'
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Contain(expectedError);
+        result.AuthorizationDependencies.Should().BeNull();
+    }
+
     [Fact]
     public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsDefaultPrimary_ShouldReturnSuccess()
     {
@@ -381,6 +408,30 @@ public sealed class WorkflowRunActorPortBranchTests
         var port = CreatePort(
             new RecordingActorRuntime(),
             agentKindRegistry: CreateRoleAgentKindRegistry());
+
+        var result = await port.ParseWorkflowYamlAsync(
+            """
+            name: sample
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: step1
+                type: llm_call
+                target_role: assistant
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.WorkflowName.Should().Be("sample");
+    }
+
+    [Fact]
+    public async Task ParseWorkflowYamlAsync_WhenDefaultRoleImplementationIsNotLocallyRegistered_ShouldReturnSuccess()
+    {
+        var port = CreatePort(
+            new RecordingActorRuntime(),
+            agentKindRegistry: new AgentKindRegistry([]));
 
         var result = await port.ParseWorkflowYamlAsync(
             """
@@ -477,6 +528,15 @@ public sealed class WorkflowRunActorPortBranchTests
         var actor = new RecordingActor("definition-inline-bind", new WorkflowGAgent());
         runtime.StoredActors[actor.Id] = actor;
         var port = CreatePort(runtime);
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: direct\nroles: []\nsteps: []\n",
+            new Dictionary<string, string>
+            {
+                ["child"] = "name: child\nroles: []\nsteps: []\n",
+            },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
 
         await port.BindWorkflowDefinitionAsync(
             actor.Id,
@@ -486,6 +546,8 @@ public sealed class WorkflowRunActorPortBranchTests
             {
                 ["child"] = "name: child\nroles: []\nsteps: []\n",
             },
+            sourceKind: "service_revision",
+            capabilityAdmissionPlan: capabilityAdmissionPlan,
             ct: CancellationToken.None);
 
         actor.LastHandledEnvelope.Should().NotBeNull();
@@ -493,6 +555,8 @@ public sealed class WorkflowRunActorPortBranchTests
         var bind = actor.LastHandledEnvelope.Payload.Unpack<BindWorkflowDefinitionEvent>();
         bind.WorkflowName.Should().Be("direct");
         bind.InlineWorkflowYamls.Should().ContainKey("child");
+        bind.SourceKind.Should().Be("service_revision");
+        bind.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 
     [Fact]

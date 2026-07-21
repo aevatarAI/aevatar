@@ -43,6 +43,13 @@ internal static class ProjectionScopeStateApplier
         var next = current.Clone();
         next.LastObservedVersion = Math.Max(current.LastObservedVersion, evt.LastObservedVersion);
         next.LastSuccessfulVersion = Math.Max(current.LastSuccessfulVersion, evt.LastSuccessfulVersion);
+        if (!string.IsNullOrWhiteSpace(evt.SourceActorId) && evt.LastSuccessfulVersion > 0)
+        {
+            var previous = next.LastSuccessfulVersionsByActor.TryGetValue(evt.SourceActorId, out var version)
+                ? version
+                : 0;
+            next.LastSuccessfulVersionsByActor[evt.SourceActorId] = Math.Max(previous, evt.LastSuccessfulVersion);
+        }
         next.UpdatedAtUtc = evt.OccurredAtUtc?.Clone();
         return next;
     }

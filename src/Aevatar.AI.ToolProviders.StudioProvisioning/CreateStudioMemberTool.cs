@@ -26,7 +26,8 @@ internal sealed class CreateStudioMemberTool : IAgentTool
 
     public string Description =>
         "Create a Studio member in the caller's current Aevatar scope. " +
-        "Supply display_name, implementation_kind, and optional description, member_id, or team_id; do not provide scope_id because scope is taken from the session context.";
+        "Supply display_name, implementation_kind, and optional description, member_id, or team_id; team_id is required for workflow members. " +
+        "Do not provide scope_id because scope is taken from the session context.";
 
     public string ParametersSchema => """
         {
@@ -52,7 +53,7 @@ internal sealed class CreateStudioMemberTool : IAgentTool
             },
             "team_id": {
               "type": "string",
-              "description": "Optional existing Studio team id to assign this member to."
+              "description": "Existing Studio team id to assign this member to. Required when implementation_kind is workflow."
             }
           },
           "required": ["display_name", "implementation_kind"]
@@ -99,11 +100,15 @@ internal sealed class CreateStudioMemberTool : IAgentTool
         if (implementationKind is null)
             return ErrorJson("invalid_arguments", "implementation_kind is required.");
 
+        var teamId = Normalize(args.TeamId);
+        if (string.Equals(implementationKind, "workflow", StringComparison.OrdinalIgnoreCase) && teamId is null)
+            return ErrorJson("invalid_arguments", "team_id is required for workflow members.");
+
         var request = new StudioMemberProvisioningRequest(scopeId, displayName, implementationKind)
         {
             Description = Normalize(args.Description),
             MemberId = Normalize(args.MemberId),
-            TeamId = Normalize(args.TeamId),
+            TeamId = teamId,
         };
 
         try

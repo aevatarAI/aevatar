@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 
 namespace Aevatar.Studio.Tests;
@@ -53,6 +54,43 @@ public sealed class StudioMemberServiceBindingTests
         started.ImplementationKind.Should().Be(MemberImplementationKindNames.Workflow);
         started.Binding.Workflow!.WorkflowId.Should().Be("workflow-stable-id");
         started.Binding.Workflow!.WorkflowYamls.Should().ContainSingle();
+        started.Binding.Workflow.CapabilityAdmissionPlan.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task BindAsync_Workflow_WhenCapabilityAdmissionFails_ShouldNotDispatchBindingRun()
+    {
+        var commandPort = new RecordingCommandPort();
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("external capability is not ready"));
+        var service = NewService(
+            commandPort,
+            new ThrowingBindQueryPort(),
+            capabilityAdmissionService: admission);
+
+        var act = () => service.BindAsync(
+            ScopeId,
+            MemberId,
+            new UpdateStudioMemberBindingRequest(
+                Workflow: new StudioMemberWorkflowBindingSpec(
+                    "workflow-stable-id",
+                    ["name: root-workflow\nsteps: []\n"]))
+            {
+                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                    "caller-alpha",
+                    "runtime-caller-credential"),
+            },
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("external capability is not ready");
+        var request = admission.Requests.Should().ContainSingle().Which;
+        request.WorkflowYamls.Should().Equal("name: root-workflow\nsteps: []\n");
+        request.Access.ScopeId.Should().Be(ScopeId);
+        request.Access.CallerId.Should().Be("caller-alpha");
+        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        request.SourceKind.Should().Be("studio_member_binding_run");
+        commandPort.StartedRuns.Should().BeEmpty();
     }
 
     [Fact]
@@ -291,7 +329,8 @@ public sealed class StudioMemberServiceBindingTests
     private static StudioMemberService NewService(
         IStudioMemberCommandPort memberCommandPort,
         IStudioMemberQueryPort memberQueryPort,
-        IStudioMemberBindingRunQueryPort? bindingRunQueryPort = null) =>
+        IStudioMemberBindingRunQueryPort? bindingRunQueryPort = null,
+        StudioWorkflowCapabilityAdmissionTestService? capabilityAdmissionService = null) =>
         new(
             memberCommandPort,
             memberQueryPort,
@@ -299,7 +338,8 @@ public sealed class StudioMemberServiceBindingTests
             new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ReadyScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            capabilityAdmissionService ?? new StudioWorkflowCapabilityAdmissionTestService());
 
     private sealed class InertTeamQueryPort : IStudioTeamQueryPort
     {

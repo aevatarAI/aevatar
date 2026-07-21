@@ -232,18 +232,41 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     // ─── Proxy ───
 
-    public async Task<string> ProxyRequestAsync(
+    public Task<string> ProxyRequestAsync(
         string token,
         string slug,
         string path,
         string method,
         string? body,
         Dictionary<string, string>? extraHeaders,
+        CancellationToken ct) =>
+        ProxyRequestCoreAsync(token, slug, userServiceId: null, path, method, body, extraHeaders, ct);
+
+    public Task<string> ProxyRequestAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
         CancellationToken ct)
     {
-        var baseUrl = GetBaseUrl();
-        var normalizedPath = path.TrimStart('/');
-        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        return ProxyRequestCoreAsync(token, slug, userServiceId.Trim(), path, method, body, extraHeaders, ct);
+    }
+
+    private async Task<string> ProxyRequestCoreAsync(
+        string token,
+        string slug,
+        string? userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        var url = BuildProxyUrl(slug, userServiceId, path);
 
         var httpMethod = new HttpMethod(method.ToUpperInvariant());
         using var request = new HttpRequestMessage(httpMethod, url);
@@ -364,9 +387,26 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string path,
         Dictionary<string, string>? extraHeaders,
         CancellationToken ct) =>
-        await ProxyGetBinaryResponseAsync(
+        await ProxyGetBinaryResponseCoreAsync(
             token,
             slug,
+            userServiceId: null,
+            path,
+            extraHeaders,
+            NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes,
+            ct);
+
+    public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct) =>
+        await ProxyGetBinaryResponseCoreAsync(
+            token,
+            slug,
+            userServiceId,
             path,
             extraHeaders,
             NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes,
@@ -378,11 +418,46 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string path,
         Dictionary<string, string>? extraHeaders,
         long maxBytes,
+        CancellationToken ct) =>
+        await ProxyGetBinaryResponseCoreAsync(
+            token,
+            slug,
+            userServiceId: null,
+            path,
+            extraHeaders,
+            maxBytes,
+            ct);
+
+    public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
         CancellationToken ct)
     {
-        var baseUrl = GetBaseUrl();
-        var normalizedPath = path.TrimStart('/');
-        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        return await ProxyGetBinaryResponseCoreAsync(
+            token,
+            slug,
+            userServiceId.Trim(),
+            path,
+            extraHeaders,
+            maxBytes,
+            ct);
+    }
+
+    private async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseCoreAsync(
+        string token,
+        string slug,
+        string? userServiceId,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        var url = BuildProxyUrl(slug, userServiceId, path);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -392,6 +467,38 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
 
         return await SendBinaryResponseAsync(request, NormalizeProxyFileArtifactMaxBytes(maxBytes), ct);
+    }
+
+    private string BuildProxyUrl(string slug, string? userServiceId, string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(slug);
+        ArgumentNullException.ThrowIfNull(path);
+        var baseUrl = GetBaseUrl();
+        var normalizedPath = path.TrimStart('/');
+        var fragmentIndex = normalizedPath.IndexOf('#', StringComparison.Ordinal);
+        if (fragmentIndex >= 0)
+            normalizedPath = normalizedPath[..fragmentIndex];
+
+        var queryIndex = normalizedPath.IndexOf('?', StringComparison.Ordinal);
+        var resourcePath = queryIndex >= 0 ? normalizedPath[..queryIndex] : normalizedPath;
+        var query = queryIndex >= 0 ? normalizedPath[(queryIndex + 1)..] : string.Empty;
+        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug.Trim())}/{resourcePath}";
+        if (string.IsNullOrWhiteSpace(userServiceId))
+            return query.Length == 0 ? url : $"{url}?{query}";
+
+        // _nyxid_via is a NyxID-reserved routing fact. The exact server-selected
+        // identity must be the only value sent, because NyxID resolves the first one.
+        var businessQuery = string.Join(
+            '&',
+            query.Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Where(static part => !string.Equals(
+                    part.Split('=', 2)[0],
+                    "_nyxid_via",
+                    StringComparison.Ordinal)));
+        var exactRoute = $"_nyxid_via={Uri.EscapeDataString(userServiceId.Trim())}";
+        return businessQuery.Length == 0
+            ? $"{url}?{exactRoute}"
+            : $"{url}?{exactRoute}&{businessQuery}";
     }
 
     // ─── SSH ───

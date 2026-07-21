@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -31,6 +32,9 @@ public static class ServiceCollectionExtensions
         services.RemoveAll<NyxIdToolOptions>();
         services.AddSingleton(options);
         services.AddHttpClient<NyxIdApiClient>();
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilitySource,
+            NyxIdExternalWorkflowCapabilitySource>());
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();

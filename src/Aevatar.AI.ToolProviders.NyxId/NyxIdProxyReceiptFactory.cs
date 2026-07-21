@@ -9,6 +9,7 @@ internal static class NyxIdProxyReceiptFactory
         string callId,
         string toolName,
         string serviceSlug,
+        string? userServiceId,
         string? serviceLabel,
         string? resourceUri,
         string resultJson)
@@ -22,6 +23,7 @@ internal static class NyxIdProxyReceiptFactory
                 callId,
                 toolName,
                 normalizedSlug,
+                userServiceId,
                 serviceLabel,
                 resourceUri);
 
@@ -50,6 +52,7 @@ internal static class NyxIdProxyReceiptFactory
         string callId,
         string toolName,
         string serviceSlug,
+        string? userServiceId,
         string? serviceLabel,
         string? resourceUri)
     {
@@ -61,6 +64,9 @@ internal static class NyxIdProxyReceiptFactory
             ReasonCode = reasonCode,
             SafeMessage = safeMessage,
         };
+        var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
+        if (normalizedUserServiceId != null)
+            authorizationRequired.UserServiceId = normalizedUserServiceId;
         if (!string.IsNullOrWhiteSpace(serviceLabel))
             authorizationRequired.ServiceLabel = serviceLabel.Trim();
         var safeResourceUri = NormalizeResourceUri(resourceUri);
@@ -88,6 +94,16 @@ internal static class NyxIdProxyReceiptFactory
                    char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')
             ? normalized
             : "unknown";
+    }
+
+    private static string? NormalizeUserServiceId(string? userServiceId)
+    {
+        var normalized = userServiceId?.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) &&
+               normalized.Length <= 256 &&
+               normalized.All(static character => !char.IsControl(character))
+            ? normalized
+            : null;
     }
 
     private static string BuildSafeResult(string errorCode, string safeMessage) =>

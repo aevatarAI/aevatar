@@ -14,6 +14,7 @@ using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.Middleware;
 using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Infrastructure.Storage;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -71,6 +72,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ActorBackedChatHistoryStore>();
         services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
+        services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         // Script runtime activity reads the scripting capability's native-document read model;
         // hosts composed without scripting have no reader, and consumers of this port already
         // treat it as optional (resolved via GetService).

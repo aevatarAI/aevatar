@@ -1,5 +1,7 @@
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 
 namespace Aevatar.GAgentService.Application.Workflows;
 
@@ -7,13 +9,17 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
 {
     private readonly IScopeWorkflowCommandPort _workflowCommandPort;
     private readonly IScopeBindingCommandPort _bindingCommandPort;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
 
     public ScopeWorkflowSaveAndBindApplicationService(
         IScopeWorkflowCommandPort workflowCommandPort,
-        IScopeBindingCommandPort bindingCommandPort)
+        IScopeBindingCommandPort bindingCommandPort,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService)
     {
         _workflowCommandPort = workflowCommandPort ?? throw new ArgumentNullException(nameof(workflowCommandPort));
         _bindingCommandPort = bindingCommandPort ?? throw new ArgumentNullException(nameof(bindingCommandPort));
+        _capabilityAdmissionService = capabilityAdmissionService
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
     }
 
     public async Task<ScopeWorkflowSaveAndBindResult> SaveAndBindAsync(
@@ -27,6 +33,27 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(null);
         var workflowYaml = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var inlineWorkflowYamls = NormalizeInlineWorkflowYamls(request.InlineWorkflowYamls);
+        var admissionContext = request.CapabilityAdmission;
+        var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+            new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    normalizedScopeId,
+                    admissionContext?.CallerId ?? string.Empty,
+                    admissionContext?.NyxIdCallerBearerToken,
+                    admissionContext?.NyxIdOrganizationBearerToken),
+                workflowYaml,
+                inlineWorkflowYamls,
+                "scope_workflow_save_and_bind",
+                executionMode,
+                admissionContext?.ExistingPlan),
+            ct);
+        var trustedAdmissionContext = new WorkflowCapabilityAdmissionContext(
+            admissionContext?.CallerId ?? string.Empty,
+            admissionContext?.NyxIdCallerBearerToken,
+            admissionContext?.NyxIdOrganizationBearerToken,
+            executionMode,
+            capabilityAdmissionPlan);
 
         var workflowResult = await _workflowCommandPort.UpsertAsync(
             new ScopeWorkflowUpsertRequest(
@@ -36,7 +63,10 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
                 request.WorkflowName,
                 request.DisplayName,
                 inlineWorkflowYamls,
-                revisionId),
+                revisionId)
+            {
+                CapabilityAdmission = trustedAdmissionContext,
+            },
             ct);
 
         var workflowYamls = BuildWorkflowYamls(workflowYaml, inlineWorkflowYamls);
@@ -49,7 +79,10 @@ public sealed class ScopeWorkflowSaveAndBindApplicationService : IScopeWorkflowS
                 RevisionId: revisionId,
                 AppId: request.AppId,
                 ServiceId: ResolveBindingServiceId(request.ServiceId),
-                ExposureDesired: request.ExposureDesired),
+                ExposureDesired: request.ExposureDesired)
+            {
+                CapabilityAdmission = trustedAdmissionContext,
+            },
             ct);
 
         if (!string.Equals(workflowResult.RevisionId, revisionId, StringComparison.Ordinal) ||

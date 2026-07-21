@@ -167,6 +167,8 @@ internal static class WorkflowSkillsEndpoints
 
         if (string.IsNullOrWhiteSpace(body.CronExpression))
             return Results.BadRequest(new { code = "cron_required", message = "cronExpression is required." });
+        if (string.IsNullOrWhiteSpace(body.TeamId))
+            return Results.BadRequest(new { code = "team_id_required", message = "teamId is required." });
 
         var outcome = await runService.ScheduleAsync(
             guid,
@@ -177,6 +179,7 @@ internal static class WorkflowSkillsEndpoints
             body.CronExpression!,
             body.Timezone ?? string.Empty,
             body.DisplayName ?? string.Empty,
+            body.TeamId!,
             ct);
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);

@@ -44,7 +44,12 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                     bundle.EntryWorkflowYaml,
                     WorkflowName: bundle.EntryWorkflowName,
                     DisplayName: workflow.WorkflowId,
-                    InlineWorkflowYamls: bundle.SubWorkflowYamls),
+                    InlineWorkflowYamls: bundle.SubWorkflowYamls)
+                {
+                    CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                        request.ScopeId,
+                        request.NyxIdAccessToken),
+                },
                 ct);
 
             mounted.Add(new MountedSkillWorkflow(

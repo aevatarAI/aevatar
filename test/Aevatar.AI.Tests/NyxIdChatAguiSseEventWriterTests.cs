@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.AGUI.Contracts;
 using FluentAssertions;
+using Aevatar.Foundation.Abstractions.Tools;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using AguiTextMessageContentEvent = Aevatar.AGUI.Contracts.TextMessageContentEvent;
@@ -41,7 +42,29 @@ public class NyxIdChatAguiSseEventWriterTests
 
         await sink.WriteAsync(new AGUIEvent
         {
-            ToolCallStart = new ToolCallStartEvent { ToolName = "web.search", ToolCallId = "call-1" },
+            ToolCallStart = new ToolCallStartEvent
+            {
+                ToolName = "nyxid_api-github-work__get_repository",
+                ToolCallId = "call-1",
+                Presentation = new ToolPresentationDescriptor
+                {
+                    InvocationName = "nyxid_api-github-work__get_repository",
+                    DisplayName = "Work GitHub - Get repository",
+                    Description = "Gets one repository.",
+                    Kind = ToolPresentationKind.NyxIdOperation,
+                    Availability = ToolAvailability.Available,
+                    IconUrl = "https://cdn.example.test/github.png",
+                    NyxIdOperation = new NyxIdOperationRef
+                    {
+                        ConnectedServiceId = "connected-service-github",
+                        ServiceSlug = "api-github-work",
+                        CatalogServiceSlug = "github",
+                        ConnectionLabel = "Work GitHub",
+                        ConnectorDisplayName = "GitHub",
+                        OperationId = "get_repository",
+                    },
+                },
+            },
         }, "message-1");
         await sink.WriteAsync(new AGUIEvent
         {
@@ -51,8 +74,19 @@ public class NyxIdChatAguiSseEventWriterTests
         var frames = sink.ReadFrames();
         frames.Should().HaveCount(2);
         frames[0].GetProperty("type").GetString().Should().Be("TOOL_CALL_START");
-        frames[0].GetProperty("toolCallStart").GetProperty("toolName").GetString().Should().Be("web.search");
-        frames[0].GetProperty("toolCallStart").GetProperty("toolCallId").GetString().Should().Be("call-1");
+        var start = frames[0].GetProperty("toolCallStart");
+        start.GetProperty("toolName").GetString().Should().Be("nyxid_api-github-work__get_repository");
+        start.GetProperty("toolCallId").GetString().Should().Be("call-1");
+        var presentation = start.GetProperty("presentation");
+        presentation.GetProperty("invocationName").GetString().Should()
+            .Be("nyxid_api-github-work__get_repository");
+        presentation.GetProperty("displayName").GetString().Should().Be("Work GitHub - Get repository");
+        presentation.GetProperty("kind").GetString().Should().Be("nyxIdOperation");
+        presentation.GetProperty("availability").GetString().Should().Be("available");
+        var sourceRef = presentation.GetProperty("sourceRef");
+        sourceRef.GetProperty("type").GetString().Should().Be("nyxIdOperation");
+        sourceRef.GetProperty("nyxIdOperation").GetProperty("connectedServiceId").GetString().Should()
+            .Be("connected-service-github");
         frames[1].GetProperty("type").GetString().Should().Be("TOOL_CALL_END");
         frames[1].GetProperty("toolCallEnd").GetProperty("toolCallId").GetString().Should().Be("call-1");
         frames[1].GetProperty("toolCallEnd").GetProperty("result").GetString().Should().Be("done");
@@ -176,6 +210,7 @@ public class NyxIdChatAguiSseEventWriterTests
         var sink = new SseFrameSink();
         var blocker = new NyxIdAuthorizationRequiredEvent
         {
+            UserServiceId = "us-github-alpha",
             ServiceSlug = "api-github",
             ResourceUri = "/repos/private",
             ReasonCode = "NYXID_UNAUTHORIZED",
@@ -204,6 +239,7 @@ public class NyxIdChatAguiSseEventWriterTests
         frames[0].GetProperty("custom").GetProperty("name").GetString()
             .Should().Be("nyxid.authorization.required");
         var payload = frames[0].GetProperty("custom").GetProperty("payload");
+        payload.GetProperty("userServiceId").GetString().Should().Be("us-github-alpha");
         payload.GetProperty("serviceSlug").GetString().Should().Be("api-github");
         payload.GetProperty("resourceUri").GetString().Should().Be("/repos/private");
         payload.GetProperty("reasonCode").GetString().Should().Be("NYXID_UNAUTHORIZED");

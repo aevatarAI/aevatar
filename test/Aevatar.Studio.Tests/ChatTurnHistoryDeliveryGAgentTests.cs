@@ -58,17 +58,51 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         dispatch.Calls.Should().BeEmpty();
     }
 
-    private static ChatTurnHistoryDeliveryReserveRequested Reserve(bool createConversationIfMissing) => new()
+    [Theory]
+    [InlineData(true, ChatTurnHistoryDeliveryStatus.AppendCommitted)]
+    [InlineData(false, ChatTurnHistoryDeliveryStatus.AppendRejected)]
+    public async Task Reserve_ShouldNotMutateDelivery_WhenAppendResultIsTerminal(
+        bool appendAccepted,
+        ChatTurnHistoryDeliveryStatus expectedStatus)
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var agent = await CreateAgentAsync(runtime, dispatch);
+
+        await agent.HandleEventAsync(Envelope(Reserve(createConversationIfMissing: true), "chat-history-terminal-delivery-port"));
+        await agent.HandleEventAsync(Envelope(Bind(), "chat-history-terminal-delivery-port"));
+        await agent.HandleEventAsync(Envelope(Terminal(), WorkflowActorId));
+        await agent.HandleEventAsync(Envelope(AppendResult(appendAccepted), "chat-conversation"));
+
+        agent.State.Status.Should().Be(expectedStatus);
+
+        await agent.HandleEventAsync(Envelope(
+            Reserve(
+                createConversationIfMissing: true,
+                workflowActorId: "workflow-actor-retry",
+                requestFingerprint: "fingerprint-retry"),
+            "chat-history-terminal-delivery-port"));
+
+        agent.State.Status.Should().Be(expectedStatus);
+        agent.State.WorkflowActorId.Should().Be(WorkflowActorId);
+        agent.State.RequestFingerprint.Should().Be("fingerprint-original");
+    }
+
+    private static ChatTurnHistoryDeliveryReserveRequested Reserve(
+        bool createConversationIfMissing,
+        string workflowActorId = WorkflowActorId,
+        string requestFingerprint = "fingerprint-original") => new()
     {
         DeliveryId = DeliveryId,
         ScopeId = "scope-a",
         ConversationId = "conversation-a",
         TurnId = "turn-a",
         UserText = "original user text",
-        WorkflowActorId = WorkflowActorId,
+        WorkflowActorId = workflowActorId,
         WorkflowCommandId = WorkflowCommandId,
         WorkflowCorrelationId = "workflow-correlation",
         CreateConversationIfMissing = createConversationIfMissing,
+        RequestFingerprint = requestFingerprint,
     };
 
     private static ChatTurnHistoryDeliveryAcceptedBound Bind() => new()
@@ -89,6 +123,18 @@ public sealed class ChatTurnHistoryDeliveryGAgentTests
         Status = WorkflowRunTerminalStatus.Completed,
         Output = " terminal output ",
         TerminalAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-16T00:00:00Z")),
+    };
+
+    private static ChatTurnHistoryDeliveryAppendResultObserved AppendResult(bool accepted) => new()
+    {
+        DeliveryActorId = DeliveryActorId,
+        ConversationId = "conversation-a",
+        TurnId = "turn-a",
+        Accepted = accepted,
+        RejectionReason = accepted
+            ? ChatTurnAppendRejectionReason.Unspecified
+            : ChatTurnAppendRejectionReason.Conflict,
+        ObservedAtUnixMs = DateTimeOffset.Parse("2026-07-16T00:00:01Z").ToUnixTimeMilliseconds(),
     };
 
     private static EventEnvelope Envelope(IMessage payload, string publisherActorId) =>

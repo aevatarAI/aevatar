@@ -143,6 +143,9 @@ public sealed class WorkflowSpreadsheetExtractToolTests
         document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
         document.RootElement.GetProperty("detail").GetString()
             .Should().Contain("requires a fileRef object or exactly one input file ref");
+        output.Failure.Should().NotBeNull();
+        output.Failure!.ErrorCode.Should().Be("invalid_arguments");
+        output.Failure.ErrorMessage.Should().Contain("requires a fileRef object");
         output.ResultJson.Should().NotContain("hidden workbook");
         output.ResultJson.Should().NotContain("xl/");
     }

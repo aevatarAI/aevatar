@@ -93,6 +93,32 @@ public class ConnectedServiceToolSpecParserTests
         OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("Authorization")]
+    [InlineData("Cookie")]
+    [InlineData("X-API-Key")]
+    [InlineData("api_token")]
+    public void AdmittedOperations_SensitiveHeaderParameter_IsNeverEligible(string headerName)
+    {
+        var spec = $$"""
+            {
+              "paths": {
+                "/items": {
+                  "get": {
+                    "operationId": "list_items",
+                    "x-aevatar-tool": true,
+                    "parameters": [
+                      { "name": "{{headerName}}", "in": "header", "required": true }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Should().BeEmpty();
+    }
+
     [Fact]
     public void BuildParametersSchema_CoversPathQueryAndInlinedBody()
     {

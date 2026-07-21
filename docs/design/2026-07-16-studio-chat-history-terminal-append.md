@@ -75,9 +75,70 @@ Create versus continue is explicit in the delivery reservation. A create reserva
 
 Query paths consume this document directly. They do not unpack `state_root`, read actor internals, replay events, or prime projection during query execution.
 
+## Actor Identity And Ownership
+
+`ChatConversationGAgent` actor IDs are opaque server identities. New writes derive the conversation actor from an injective encoding of the `(scope_id, conversation_id)` tuple, so tuples such as `(tenant, admin-c1)` and `(tenant-admin, c1)` cannot resolve to the same actor.
+
+Read and delete paths do not trust the route-derived actor ID alone. Conversation detail, continuation admission, and delete first load the projected `ChatConversationCurrentStateDocument`, then admit the request only when the stored `scope_id` and `conversation_id` exactly match the requested tuple and `deleted` is false.
+
+Rollout behavior is narrow:
+
+- new conversation writes use only the opaque actor ID
+- reads, continuation admission, and deletes try the opaque actor ID first
+- legacy `chat-{scopeId}-{conversationId}` lookup is a fallback only for existing materialized conversations
+- a legacy fallback document is usable only when its stored `scope_id` and `conversation_id` match the request
+
+Callers must never parse actor IDs or infer ownership from an actor ID string.
+
+## Index Pagination
+
+`GET /api/scopes/{scopeId}/chat-history` returns a typed page result:
+
+```http
+GET /api/scopes/scope-1/chat-history?pageSize=50&cursor=opaque-cursor
+```
+
+The response contains `conversations` and `nextCursor`. `pageSize` defaults to `50` and is capped at `200`; it is independent from `ChatConversationGAgent.MaxTurns`, which remains only the per-conversation turn quota. The index query keeps the existing `scope_id` filter, excludes `deleted` conversations, orders by `updated_at_ms` descending, and uses `conversation_id` ascending as the stable tie-breaker. Clients pass `nextCursor` back as `cursor` to load the next page.
+
+The cursor is opaque. Clients must not parse it or derive conversation identity from it.
+
+## Create Idempotency And Recovery
+
+Persistent conversation create is retryable by a client-controlled typed command identity. The HTTP body uses `"commandId"`; this maps to `WorkflowChatRunRequest.CommandIdSeed` and is not carried through `Metadata`, headers, or any other business-semantic bag.
+
+To create a new persistent conversation, the client sends `conversation: {}` and a stable `"commandId"`:
+
+```json
+{
+  "prompt": "summarize the release plan",
+  "commandId": "client-create-command-1",
+  "conversation": {}
+}
+```
+
+The authenticated scope and `"commandId"` derive the create recovery identity, the new `conversationId`, the new `turnId`, and the delivery actor identity. Repeating the same create request with the same scope and `"commandId"` must not start a second workflow/chat side effect. Reusing the same scope and `"commandId"` with a materially different request returns `IDEMPOTENCY_CONFLICT` with HTTP `409`.
+
+The recovery read model is `ChatHistoryCreateRecoveryCurrentStateDocument`, materialized from committed `ChatTurnHistoryDeliveryState` for create reservations. It is keyed by the authenticated scope and workflow command identity, stores the conversation and turn identities when allocated, and exposes the recovery status plus source version. Recovery queries read only this already-materialized read model; they do not read actor internals, replay events, or prime projection.
+
+The narrow recovery endpoint is:
+
+```http
+GET /api/scopes/scope-1/chat-history/create-recovery/client-create-command-1
+```
+
+It returns `404` when no matching scope-bound recovery document exists. Otherwise it returns the stored `conversationId`, `turnId`, workflow command/correlation details, `requestFingerprint`, `stateVersion`, `updatedAt`, and one of these status values:
+
+- `reserved`
+- `bound`
+- `append_dispatched`
+- `abandoned`
+- `failed`
+- `append_committed`
+- `append_rejected`
+
 ## Console Boundary
 
-Console no longer sends remote full-transcript saves to `/api/scopes/{scopeId}/chat-history/conversations/{conversationId}`. That public `PUT` surface was removed. Console still maintains local browser fallback state for responsive UI recovery.
+Console no longer sends remote full-transcript saves to `/api/scopes/{scopeId}/chat-history/conversations/{conversationId}`. That public `PUT` surface was removed. Durable Chat History is owned by the backend `ChatConversationGAgent` and its current-state read models.
 
 `POST /api/chat` is the generic Workflow Chat HTTP/SSE capability. Its public request body treats legacy `scopeId` as ignored compatibility input; the trusted scope comes from the authenticated principal. It does not accept legacy `chatHistory`, and `chatHistory.conversationId` never selects a Conversation. Chat History persistence is an explicit opt-in through `conversation`:
 
@@ -89,14 +150,13 @@ Console no longer sends remote full-transcript saves to `/api/scopes/{scopeId}/c
 
 This is stateless Workflow Chat and does not create a `ChatConversationGAgent`, delivery reservation, or Chat History read model.
 
-To create a new persistent Conversation, the client asks for a new conversation without supplying either durable identity:
+To create a new persistent Conversation, the client asks for a new conversation without supplying `conversationId` and supplies a stable `"commandId"` for retry and recovery:
 
 ```json
 {
   "prompt": "summarize the release plan",
-  "conversation": {
-    "conversationId": null
-  }
+  "commandId": "client-create-command-1",
+  "conversation": {}
 }
 ```
 

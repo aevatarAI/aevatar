@@ -1,17 +1,19 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Workflows;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
 /// <summary>
-/// <c>aevatar_provision_workflow_schedule</c> — the channel-free, Observatory-delivered
-/// analogue of the Lark <c>scheduled_agent_creator</c>. It provisions a runnable
-/// workflow (member create → bind inline YAML → <c>ScheduleKind=Workflow</c>
-/// scheduled-dispatch) so its recurring runs surface in <c>/workflow/observatory</c>,
-/// never in a chat/bot.
+/// <c>aevatar_provision_workflow_schedule</c> — the channel-free, Team-owned,
+/// Observatory-delivered analogue of the Lark <c>scheduled_agent_creator</c>. It
+/// provisions a runnable workflow (member create inside a confirmed Team → bind
+/// inline YAML → <c>ScheduleKind=Workflow</c> scheduled-dispatch) so its recurring
+/// runs surface in <c>/workflow/observatory</c>, never in a chat/bot.
 ///
 /// The tool takes ONLY workflow/scheduling inputs from the LLM. The owning scope and
 /// caller identity come from the tool execution context (W1 threads
@@ -19,7 +21,8 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 /// forwarded NyxID access token remains a boundary input and is not persisted in
 /// schedule auth). There are NO
 /// channel / Lark / owner / scope / credential inputs, and the result carries no
-/// channel/Lark fields — only the schedule id, member id, and the Observatory link.
+/// channel/Lark fields — only the Team/member/schedule ids plus Studio and
+/// Observatory links.
 ///
 /// Because its outcome lands in the Observatory and never in a chat, it declares the
 /// <see cref="AgentToolCapabilities.ExcludeFromDirectChannelChat"/> capability so any
@@ -45,9 +48,9 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
     public string Name => "aevatar_provision_workflow_schedule";
 
     public string Description =>
-        "Schedule a runnable Aevatar workflow whose recurring runs appear in /workflow/observatory (never a chat/bot). " +
-        "Supply the workflow body inline as workflow_yaml plus a display_name; the tool creates the member, binds the YAML, " +
-        "and creates a workflow-kind scheduled dispatch under the caller's scope. " +
+        "Schedule a runnable Aevatar workflow under a confirmed Studio Team whose recurring runs appear in /workflow/observatory (never a chat/bot). " +
+        "Supply team_id, the workflow body inline as workflow_yaml, plus a display_name; the tool creates the member inside that Team, binds the YAML, " +
+        "and creates a workflow-kind scheduled dispatch under the caller's scope. Do not call this tool until the user has selected an existing Team or confirmed a new Team. " +
         "The workflow_yaml is validated synchronously before anything is created: an invalid document returns a typed error " +
         "describing the problem and provisions nothing — fix the YAML per the error message and call again. " +
         "Provisioning is idempotent per display_name: calling again with the same display_name re-binds the same member and " +
@@ -56,7 +59,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         "automation, and pick a distinct display_name for a different automation. " +
         "Provide schedule_cron + schedule_timezone for a recurring monitor; omit them for a single near-future demo run (unless run_immediately is false). " +
         "This is the Observatory-delivered alternative to scheduled_agent_creator: use it for workflow automation instead of publishing a prose skill or scheduling a bot delivery. " +
-        "Returns the schedule id, member id, and the Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
+        "Returns the Team id, member id, schedule id, Studio member workflow URL, and Observatory link; the scope and caller identity are taken from the session context, not from arguments. " +
         "A status of 'accepted' means the YAML was validated and the bind was dispatched — the bind and any run complete " +
         "asynchronously, so verify the run in the Observatory before reporting the workflow as running.";
 
@@ -65,6 +68,10 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "team_id": {
+              "type": "string",
+              "description": "Confirmed existing Studio team id that will own the provisioned workflow member. Required; ask the user to select or create a Team before calling this tool."
+            },
             "workflow_yaml": {
               "type": "string",
               "description": "The workflow definition body as inline YAML. Required. Schema (snake_case keys): the authorable top-level keys are {{WorkflowYamlRootSchema.FormatAuthorableRootFields()}}. name is required. roles is a list of {id, name, system_prompt, ...}; steps is a list of {id, type, target_role, parameters, next, branches, ...}. Do NOT use top-level keys from other workflow dialects such as {{WorkflowYamlRootSchema.FormatUnsupportedDialectRootFields()}} — the parser rejects unknown keys and the tool returns the parse error."
@@ -90,7 +97,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
               "description": "When true (default), a demo run fires shortly after the bind even without a recurring cron. Set false with no cron for a bind-only provision (no run)."
             }
           },
-          "required": ["workflow_yaml", "display_name"]
+          "required": ["team_id", "workflow_yaml", "display_name"]
         }
         """;
 
@@ -127,6 +134,10 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         if (args is null)
             return ErrorJson("invalid_arguments", "Tool arguments are required.");
 
+        var teamId = Normalize(args.TeamId);
+        if (teamId is null)
+            return ErrorJson("invalid_arguments", "team_id is required.");
+
         var workflowYaml = Normalize(args.WorkflowYaml);
         if (workflowYaml is null)
             return ErrorJson("invalid_arguments", "workflow_yaml is required.");
@@ -135,8 +146,10 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         if (displayName is null)
             return ErrorJson("invalid_arguments", "display_name is required.");
 
+        var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
+            TeamId: teamId,
             DisplayName: displayName,
             WorkflowYaml: workflowYaml)
         {
@@ -144,7 +157,15 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             ScheduleCron = Normalize(args.ScheduleCron),
             ScheduleTimezone = Normalize(args.ScheduleTimezone),
             RunImmediately = args.RunImmediately ?? true,
-            CallerSubjectExternalUserId = Normalize(AgentToolRequestContext.OwnerSubject),
+            CallerSubjectPlatform = typedAuthority.IsComplete
+                ? Normalize(typedAuthority.Platform) ?? "nyxid"
+                : "nyxid",
+            CallerSubjectTenant = typedAuthority.IsComplete ? Normalize(typedAuthority.Tenant) : null,
+            CallerSubjectExternalUserId = typedAuthority.IsComplete
+                ? Normalize(typedAuthority.ExternalUserId)
+                : Normalize(AgentToolRequestContext.OwnerSubject),
+            CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
+                ExternalCapabilityExecutionMode.Durable),
         };
 
         try
@@ -154,8 +175,10 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
                 Status: result.BindingStatus,
                 MemberId: result.MemberId,
                 ScopeId: result.ScopeId,
+                TeamId: result.TeamId,
                 ScheduleId: result.ScheduleId,
                 BindingRunId: result.BindingRunId,
+                StudioUrl: result.StudioUrl,
                 ObservatoryUrl: result.ObservatoryUrl),
                 s_jsonOptions);
         }
@@ -177,6 +200,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private sealed record ProvisionWorkflowScheduleArguments(
+        [property: JsonPropertyName("team_id")] string? TeamId,
         [property: JsonPropertyName("workflow_yaml")] string? WorkflowYaml,
         [property: JsonPropertyName("display_name")] string? DisplayName,
         [property: JsonPropertyName("prompt")] string? Prompt,
@@ -188,8 +212,10 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         string Status,
         string MemberId,
         string ScopeId,
+        string TeamId,
         string? ScheduleId,
         string? BindingRunId,
+        string StudioUrl,
         string ObservatoryUrl);
 
     private sealed record ProvisionWorkflowScheduleErrorJson(ProvisionWorkflowScheduleErrorBody Error);

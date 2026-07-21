@@ -1,10 +1,14 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -347,15 +351,36 @@ public sealed class ProvisionWorkflowScheduleToolTests
             {
               "display_name": "Alpha Member",
               "implementation_kind": "workflow",
-              "member_id": "member-alpha"
+              "member_id": "member-alpha",
+              "team_id": "team-alpha"
             }
             """);
 
         memberPort.LastRequest.Should().NotBeNull();
         memberPort.LastRequest!.ScopeId.Should().Be("owner-scope");
+        memberPort.LastRequest.TeamId.Should().Be("team-alpha");
 
         using var document = JsonDocument.Parse(output);
         document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
+    }
+
+    [Fact]
+    public async Task CreateMember_WhenWorkflowTeamIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    {
+        var memberPort = new RecordingMemberProvisioningPort();
+        var tool = await DiscoverCreateMemberToolAsync(memberPort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "display_name": "Alpha Member",
+              "implementation_kind": " Workflow "
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("team_id is required for workflow members.");
+        memberPort.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -806,6 +831,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
         bindingPort.LastRequest.MemberId.Should().Be("member-alpha");
         bindingPort.LastRequest.WorkflowYaml.Should().Contain("name: team_workflow");
         bindingPort.LastRequest.WorkflowId.Should().Be("workflow-alpha");
+        bindingPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
+        bindingPort.LastRequest.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        bindingPort.LastRequest.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        bindingPort.LastRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
+        bindingPort.LastRequest.CapabilityAdmission.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
@@ -965,6 +996,35 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         using var document = JsonDocument.Parse(output);
         document.RootElement.GetProperty("scope_id").GetString().Should().Be("owner-scope");
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenTypedNyxIdAuthorityPresent_ShouldUseItAsAuthorizationOwner()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-typed", "typed-user"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        var owner = schedulePort.LastRequest!.AuthenticatedOwner;
+        owner.Owner.OwnerSubject.Should().Be("typed-user");
+        owner.SubjectPlatform.Should().Be("nyxid");
+        owner.SubjectTenant.Should().Be("tenant-typed");
+        owner.SubjectExternalUserId.Should().Be("typed-user");
+        owner.VerifiedBindingId.Should().Be("nyxid:typed-user");
     }
 
     [Fact]
@@ -1233,8 +1293,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
             ScopeId: "scope-1",
+            TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory")
+            ObservatoryUrl: "/workflow/observatory",
+            StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
             BindingRunId = "bind-run-1",
@@ -1244,6 +1306,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: daily-tech-news\nroles: []\n",
               "display_name": "Daily Tech News",
               "prompt": "summarize today's tech news",
@@ -1256,6 +1319,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         port.LastRequest.Should().NotBeNull();
         var request = port.LastRequest!;
         request.ScopeId.Should().Be("scope-1");
+        request.GetType().GetProperty("TeamId")!.GetValue(request).Should().Be("team-alpha");
         request.DisplayName.Should().Be("Daily Tech News");
         request.WorkflowYaml.Should().Contain("name: daily-tech-news");
         request.Prompt.Should().Be("summarize today's tech news");
@@ -1264,13 +1328,22 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.RunImmediately.Should().BeFalse();
         // Caller identity is taken from the tool execution context (W1-threaded), not arguments.
         request.CallerSubjectExternalUserId.Should().Be("owner-1");
+        request.CapabilityAdmission.Should().NotBeNull();
+        request.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        request.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
+        request.CapabilityAdmission.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
 
         // Result surfaces the schedule + Observatory link.
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
         root.GetProperty("status").GetString().Should().Be("accepted");
         root.GetProperty("member_id").GetString().Should().Be("member-1");
+        root.GetProperty("team_id").GetString().Should().Be("team-alpha");
         root.GetProperty("schedule_id").GetString().Should().Be("schedule-1");
+        root.GetProperty("studio_url").GetString().Should()
+            .Be("/scopes/scope-1/teams/team-alpha/members/member-1/workflow");
         root.GetProperty("observatory_url").GetString().Should().Be("/workflow/observatory");
     }
 
@@ -1280,8 +1353,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
             ScopeId: "owner-scope",
+            TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory"));
+            ObservatoryUrl: "/workflow/observatory",
+            StudioUrl: "/scopes/owner-scope/teams/team-alpha/members/member-1/workflow"));
         var tool = await DiscoverToolAsync(port);
 
         using var _ = PushContext(
@@ -1291,6 +1366,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
             ownerScopeId: "owner-scope");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -1312,6 +1388,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -1319,6 +1396,25 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         port.LastRequest.Should().NotBeNull();
         port.LastRequest!.RunImmediately.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Execute_WhenTeamIdMissing_ShouldReturnInvalidArgumentsAndNotCallPort()
+    {
+        var port = new RecordingProvisioningPort();
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("invalid_arguments");
+        ErrorMessage(output).Should().Be("team_id is required.");
+        port.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -1330,6 +1426,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: null, ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -1348,6 +1445,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "display_name": "Demo"
             }
             """);
@@ -1369,6 +1467,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -1387,8 +1486,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var port = new RecordingProvisioningPort(new WorkflowScheduleProvisioningResult(
             MemberId: "member-1",
             ScopeId: "scope-1",
+            TeamId: "team-alpha",
             BindingStatus: "accepted",
-            ObservatoryUrl: "/workflow/observatory")
+            ObservatoryUrl: "/workflow/observatory",
+            StudioUrl: "/scopes/scope-1/teams/team-alpha/members/member-1/workflow")
         {
             ScheduleId = "schedule-1",
         });
@@ -1397,6 +1498,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
         var output = await tool.ExecuteAsync("""
             {
+              "team_id": "team-alpha",
               "workflow_yaml": "name: demo\n",
               "display_name": "Demo"
             }
@@ -1525,7 +1627,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? requestId = "request-1",
         string? callId = "call-1",
         string? idempotencyKey = null,
-        string? ownerScopeId = null)
+        string? ownerScopeId = null,
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
@@ -1536,7 +1639,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
             AgentSkillRecoveryContext.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal)));
+            new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
+        });
     }
 
     private static string? ErrorCode(string output)
@@ -1566,8 +1672,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
             _result = result ?? new WorkflowScheduleProvisioningResult(
                 MemberId: "member-default",
                 ScopeId: "scope-default",
+                TeamId: "team-alpha",
                 BindingStatus: "accepted",
-                ObservatoryUrl: "/workflow/observatory");
+                ObservatoryUrl: "/workflow/observatory",
+                StudioUrl: "/scopes/scope-default/teams/team-alpha/members/member-default/workflow");
         }
 
         public WorkflowScheduleProvisioningRequest? LastRequest { get; private set; }

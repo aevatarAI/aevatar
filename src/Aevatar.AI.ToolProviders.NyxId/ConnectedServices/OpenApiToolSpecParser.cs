@@ -20,8 +20,12 @@ public sealed record ConnectedServiceSpecParseResult(
         foreach (var operation in Operations)
         {
             var admitted = operation.Marker is { } marker ? marker.Enabled : serviceEnabled;
-            if (admitted)
+            if (admitted && !operation.Parameters.Any(static parameter =>
+                    parameter.In == ParameterLocation.Header &&
+                    NyxIdProxyHeaderPolicy.IsSensitive(parameter.Name)))
+            {
                 yield return operation;
+            }
         }
     }
 }

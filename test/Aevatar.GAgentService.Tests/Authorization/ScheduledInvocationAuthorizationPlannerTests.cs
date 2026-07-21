@@ -1,5 +1,6 @@
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -40,6 +41,56 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Plan.PermissionDigest.Should().Be(
             ScheduledInvocationAuthorizationPlanner.ComputeDigest(result.Plan));
         JsonFormatter.Default.Format(result.Plan).Should().NotContain("binding-a");
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithDuplicateSlugs_ShouldGrantEachExactUserServiceId()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired),
+            Service("us-home-beta", "home-assistant", AuthorizationGrantRequirement.NotRequired))));
+
+        var result = await planner.PlanAsync(Request([
+            NyxIdService("us-home-alpha", "home-assistant"),
+            NyxIdService("us-home-beta", "home-assistant"),
+        ]));
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
+            .Should().Equal("us-home-alpha", "us-home-beta");
+        result.Plan.NyxIdServiceGrants.Select(static grant => grant.ServiceSlug)
+            .Should().OnlyContain(slug => slug == "home-assistant");
+        result.Plan.CredentialPolicy.AllowAllServices.Should().BeFalse();
+        result.Plan.CredentialPolicy.AllowAllNodes.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithMissingExactServiceId_ShouldFailDurableAuthorization()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired))));
+        var request = Request([NyxIdService(string.Empty, "home-assistant")]);
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_exact_service_identity_unavailable");
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithMissingRequiredNodeTopology_ShouldFailDurableAuthorization()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.Required))));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_node_authorization_topology_unavailable:us-home-alpha");
     }
 
     [Fact]
@@ -234,13 +285,13 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_ForScheduledAgent_ShouldComposeOwnerLlmEvidenceFromExecutionScope()
+    public async Task PlanAsync_ForScheduledAgent_ShouldComposeExactOwnerLlmEvidenceFromExecutionScope()
     {
         var evidence = new StudioEvidencePorts
         {
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
                 11,
-                string.Empty,
+                "svc-b",
                 "provider-b",
                 AuthorizationGrantRequirement.Required),
         };
@@ -263,6 +314,31 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_ForScheduledAgent_ShouldNeverResolveOwnerLlmIdentityFromSlug()
+    {
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
+                11,
+                string.Empty,
+                "provider-b",
+                AuthorizationGrantRequirement.Required),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(
+                Service("svc-b-one", "provider-b", AuthorizationGrantRequirement.NotRequired),
+                Service("svc-b-two", "provider-b", AuthorizationGrantRequirement.NotRequired))),
+            ownerLLMQueryPort: evidence);
+
+        var result = await planner.PlanAsync(Request(["svc-a"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("owner_llm_exact_service_identity_unavailable");
+    }
+
+    [Fact]
     public async Task PlanAsync_ForStudioTarget_ShouldComposeStaticWorkflowAndOwnerLlmEvidence()
     {
         var evidence = new StudioEvidencePorts
@@ -270,15 +346,16 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             Member = new ScheduledInvocationMemberEvidence(3, "wf-alpha", "rev-alpha", "svc-alpha"),
             Workflow = new ScheduledInvocationWorkflowEvidence(
                 5,
-                ["calendar"],
+                [
+                    ConnectorCapability("calendar"),
+                    NyxIdCapability("nyx-service-a", "provider-a"),
+                ],
                 true,
-                [],
-                ["provider-a"],
                 AuthorizationGrantRequirement.Required),
             Connector = new ScheduledInvocationConnectorEvidence(7, ["calendar"]),
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
                 11,
-                string.Empty,
+                "nyx-service-b",
                 "provider-b",
                 AuthorizationGrantRequirement.Required),
         };
@@ -314,8 +391,6 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 5,
                 [],
                 false,
-                [],
-                [],
                 AuthorizationGrantRequirement.NotRequired),
         };
         var planner = new ScheduledInvocationAuthorizationPlanner(
@@ -357,6 +432,10 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             MissingEvidencePorts.Instance, NoServiceOwnerLLMEvidencePort.Instance);
 
     private static ScheduledInvocationAuthorizationRequest Request(IReadOnlyList<string> serviceIds) =>
+        Request(serviceIds.Select(static serviceId => NyxIdService(serviceId, string.Empty)).ToArray());
+
+    private static ScheduledInvocationAuthorizationRequest Request(
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> services) =>
         new(
             new ScheduledInvocationTarget
             {
@@ -369,8 +448,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             },
             new AuthenticatedAuthorizationOwnerContext(
                 Owner(), "lark", "tenant-a", "sender-a", "binding-a"),
-            serviceIds,
-            [],
+            services,
             AuthorizationGrantRequirement.Required,
             Now.AddDays(30),
             Now,
@@ -397,10 +475,30 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             new AuthenticatedAuthorizationOwnerContext(
                 Owner(), "lark", "tenant-alpha", "sender-alpha", "binding-alpha"),
             [],
-            [],
             AuthorizationGrantRequirement.NotRequired,
             Now.AddDays(30),
             Now);
+
+    private static NyxIdUserServiceCapabilityRef NyxIdService(string serviceId, string slug) => new()
+    {
+        UserServiceId = serviceId,
+        ServiceSlugSnapshot = slug,
+    };
+
+    private static ExternalWorkflowCapabilityRef NyxIdCapability(string serviceId, string slug) => new()
+    {
+        NyxIdUserService = NyxIdService(serviceId, slug),
+    };
+
+    private static ExternalWorkflowCapabilityRef ConnectorCapability(string connectorRef) => new()
+    {
+        HostConnector = new HostConnectorCapabilityRef
+        {
+            ConnectorCapabilityRef = connectorRef,
+            OperationId = "operation-alpha",
+            ContractDigest = "connector-digest-alpha",
+        },
+    };
 
     private static NyxIdAuthorizationCatalogSnapshot Snapshot(
         params NyxIdAuthorizationServiceEvidence[] services) =>
