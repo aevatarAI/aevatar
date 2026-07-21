@@ -41,7 +41,8 @@ public sealed class ActorBackedChatHistoryStoreTests
         var store = new ActorBackedChatHistoryStore(
             new RecordingBootstrap(actor),
             new StudioActorCommandDispatch(dispatch),
-            reader);
+            reader,
+            new RecordingCreateRecoveryDocumentReader());
         var now = DateTimeOffset.Parse("2026-07-20T08:00:00Z");
         var meta = new ConversationMeta(
             "conversation-a",
@@ -89,6 +90,167 @@ public sealed class ActorBackedChatHistoryStoreTests
         messages[1].Error.Should().Be("Connect api-github to continue.");
     }
 
+    [Fact]
+    public async Task GetMessagesAsync_ShouldReturnEmpty_WhenProjectedDocumentIdentityDoesNotMatchRequest()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new RecordingDocumentReader();
+        reader.Seed(actorId, new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-b",
+            ConversationId = "conversation-a",
+            Turns =
+            {
+                new ChatConversationTurnDocument
+                {
+                    TurnId = "turn-private",
+                    Sequence = 1,
+                    UserText = "private",
+                    AssistantText = "secret",
+                    TerminalStatus = "complete",
+                },
+            },
+        });
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor(actorId)),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            reader,
+            new RecordingCreateRecoveryDocumentReader());
+
+        var messages = await store.GetMessagesAsync("scope-a", "conversation-a");
+
+        messages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteConversationAsync_ShouldNotDispatch_WhenProjectedDocumentIdentityDoesNotMatchRequest()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var reader = new RecordingDocumentReader();
+        reader.Seed(actorId, new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-b",
+            ConversationId = "conversation-a",
+            Deleted = false,
+        });
+        var dispatch = new RecordingDispatchService();
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor(actorId)),
+            new StudioActorCommandDispatch(dispatch),
+            reader,
+            new RecordingCreateRecoveryDocumentReader());
+
+        await store.DeleteConversationAsync("scope-a", "conversation-a");
+
+        dispatch.Payloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetIndexAsync_ShouldUseBoundedPageRequestCursorAndDeterministicTieOrdering()
+    {
+        var reader = new RecordingDocumentReader
+        {
+            QueryResult = new ProjectionDocumentQueryResult<ChatConversationCurrentStateDocument>
+            {
+                Items =
+                [
+                    new ChatConversationCurrentStateDocument
+                    {
+                        Id = "actor-a",
+                        ActorId = "actor-a",
+                        ScopeId = "scope-a",
+                        ConversationId = "conversation-a",
+                        UpdatedAtMs = 100,
+                    },
+                    new ChatConversationCurrentStateDocument
+                    {
+                        Id = "actor-b",
+                        ActorId = "actor-b",
+                        ScopeId = "scope-a",
+                        ConversationId = "conversation-b",
+                        UpdatedAtMs = 100,
+                    },
+                ],
+                NextCursor = "opaque-next",
+            },
+        };
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor("actor-a")),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            reader,
+            new RecordingCreateRecoveryDocumentReader());
+
+        var index = await store.GetIndexAsync(new ChatHistoryPageRequest(
+            ScopeId: "scope-a",
+            Take: 2,
+            Cursor: "opaque-current"));
+
+        index.Conversations.Select(static conversation => conversation.Id)
+            .Should()
+            .Equal("conversation-a", "conversation-b");
+        index.NextCursor.Should().Be("opaque-next");
+        reader.LastQuery.Should().NotBeNull();
+        reader.LastQuery!.Take.Should().Be(2);
+        reader.LastQuery.Cursor.Should().Be("opaque-current");
+        reader.LastQuery.Sorts.Select(static sort => (sort.FieldPath, sort.Direction))
+            .Should()
+            .Equal(
+                ("updated_at_ms", ProjectionDocumentSortDirection.Desc),
+                ("conversation_id", ProjectionDocumentSortDirection.Asc));
+    }
+
+    [Fact]
+    public async Task GetCreateRecoveryAsync_ShouldResolveScopeBoundMaterializedRecord()
+    {
+        var recoveryReader = new RecordingCreateRecoveryDocumentReader
+        {
+            QueryResult = new ProjectionDocumentQueryResult<ChatCreateRecoveryCurrentStateDocument>
+            {
+                Items =
+                [
+                    new ChatCreateRecoveryCurrentStateDocument
+                    {
+                        Id = "delivery-actor",
+                        ActorId = "delivery-actor",
+                        ScopeId = "scope-a",
+                        CreateIdempotencyKey = "create-alpha",
+                        ConversationId = "conversation-a",
+                        TurnId = "turn-a",
+                        Status = "append_committed",
+                        SourceVersion = 4,
+                        DeliveryActorId = "delivery-actor",
+                    },
+                ],
+            },
+        };
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor("actor-a")),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            new RecordingDocumentReader(),
+            recoveryReader);
+
+        var recovery = await store.GetCreateRecoveryAsync(new ChatCreateRecoveryRequest(
+            ScopeId: "scope-a",
+            CreateIdempotencyKey: "create-alpha"));
+
+        recovery.Should().BeEquivalentTo(new ChatCreateRecovery(
+            ConversationId: "conversation-a",
+            TurnId: "turn-a",
+            Status: "append_committed",
+            SourceVersion: 4));
+        recoveryReader.LastQuery.Should().NotBeNull();
+        recoveryReader.LastQuery!.Filters.Should().Contain(filter =>
+            filter.FieldPath == "scope_id" &&
+            filter.Operator == ProjectionDocumentFilterOperator.Eq);
+        recoveryReader.LastQuery.Filters.Should().Contain(filter =>
+            filter.FieldPath == "create_idempotency_key" &&
+            filter.Operator == ProjectionDocumentFilterOperator.Eq);
+    }
+
     private sealed class RecordingDispatchService
         : ICommandDispatchService<StudioActorCommand, StudioActorCommandReceipt, StudioActorCommandStartError>
     {
@@ -108,17 +270,53 @@ public sealed class ActorBackedChatHistoryStoreTests
     private sealed class RecordingDocumentReader
         : IProjectionDocumentReader<ChatConversationCurrentStateDocument, string>
     {
+        private readonly Dictionary<string, ChatConversationCurrentStateDocument> _documents = new(StringComparer.Ordinal);
         public ChatConversationCurrentStateDocument? Document { get; init; }
+        public ProjectionDocumentQueryResult<ChatConversationCurrentStateDocument> QueryResult { get; init; } =
+            ProjectionDocumentQueryResult<ChatConversationCurrentStateDocument>.Empty;
+        public ProjectionDocumentQuery? LastQuery { get; private set; }
+
+        public void Seed(string key, ChatConversationCurrentStateDocument document) =>
+            _documents[key] = document;
 
         public Task<ChatConversationCurrentStateDocument?> GetAsync(
             string key,
-            CancellationToken ct = default) =>
-            Task.FromResult(Document);
+            CancellationToken ct = default)
+        {
+            if (Document != null)
+                return Task.FromResult<ChatConversationCurrentStateDocument?>(Document);
+
+            return Task.FromResult(_documents.GetValueOrDefault(key));
+        }
 
         public Task<ProjectionDocumentQueryResult<ChatConversationCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            LastQuery = query;
+            return Task.FromResult(QueryResult);
+        }
+    }
+
+    private sealed class RecordingCreateRecoveryDocumentReader
+        : IProjectionDocumentReader<ChatCreateRecoveryCurrentStateDocument, string>
+    {
+        public ProjectionDocumentQueryResult<ChatCreateRecoveryCurrentStateDocument> QueryResult { get; init; } =
+            ProjectionDocumentQueryResult<ChatCreateRecoveryCurrentStateDocument>.Empty;
+        public ProjectionDocumentQuery? LastQuery { get; private set; }
+
+        public Task<ChatCreateRecoveryCurrentStateDocument?> GetAsync(
+            string key,
             CancellationToken ct = default) =>
-            Task.FromResult(ProjectionDocumentQueryResult<ChatConversationCurrentStateDocument>.Empty);
+            Task.FromResult<ChatCreateRecoveryCurrentStateDocument?>(null);
+
+        public Task<ProjectionDocumentQueryResult<ChatCreateRecoveryCurrentStateDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default)
+        {
+            LastQuery = query;
+            return Task.FromResult(QueryResult);
+        }
     }
 
     private sealed class RecordingBootstrap(IActor actor) : IStudioActorBootstrap

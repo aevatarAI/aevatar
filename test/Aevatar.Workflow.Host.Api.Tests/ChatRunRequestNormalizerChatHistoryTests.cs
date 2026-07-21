@@ -103,6 +103,51 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
     }
 
     [Fact]
+    public void Normalize_ShouldMapCreateIdempotencyKeyToTypedCreateIdentity()
+    {
+        var input = JsonSerializer.Deserialize<HttpChatInput>(
+            """
+            {
+              "prompt": "assistant prompt",
+              "conversation": {
+                "conversationId": null,
+                "createIdempotencyKey": " create-alpha "
+              }
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ChatConversation.Should().BeEquivalentTo(
+            WorkflowChatConversationIntent.Create(new WorkflowChatCreateIdempotencyIdentity("create-alpha")));
+    }
+
+    [Fact]
+    public void Normalize_ShouldRejectBlankCreateIdempotencyKey()
+    {
+        var input = new HttpChatInput
+        {
+            Prompt = "assistant prompt",
+            Conversation = new ChatConversationInput
+            {
+                CreateIdempotencyKey = "   ",
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
+
+        result.Succeeded.Should().BeFalse();
+        result.Request.Should().BeNull();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidConversationInput);
+    }
+
+    [Fact]
     public void Normalize_ShouldMapConversationIdToContinueIntent()
     {
         var input = JsonSerializer.Deserialize<HttpChatInput>(

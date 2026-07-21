@@ -126,6 +126,7 @@ public sealed record HttpChatInput
 public sealed record ChatConversationInput
 {
     public string? ConversationId { get; init; }
+    public string? CreateIdempotencyKey { get; init; }
 }
 
 public sealed record ChatLlmControlInput

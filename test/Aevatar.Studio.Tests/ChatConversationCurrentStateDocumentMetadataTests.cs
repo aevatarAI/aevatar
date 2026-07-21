@@ -25,6 +25,23 @@ public sealed class ChatConversationCurrentStateDocumentMetadataTests
         FieldType(properties, "updated_at").Should().Be("date");
     }
 
+    [Fact]
+    public void CreateRecoveryMetadataProvider_ShouldMapRecoveryLookupFields()
+    {
+        var metadata = new ChatCreateRecoveryCurrentStateDocumentMetadataProvider().Metadata;
+
+        metadata.IndexName.Should().Be("studio-chat-create-recovery");
+        var properties = GetProperties(metadata.Mappings);
+        FieldType(properties, "scope_id").Should().Be("keyword");
+        FieldType(properties, "create_idempotency_key").Should().Be("keyword");
+        FieldType(properties, "create_request_hash").Should().Be("keyword");
+        FieldType(properties, "conversation_id").Should().Be("keyword");
+        FieldType(properties, "turn_id").Should().Be("keyword");
+        FieldType(properties, "status").Should().Be("keyword");
+        FieldType(properties, "source_version").Should().Be("long");
+        FieldType(properties, "delivery_actor_id").Should().Be("keyword");
+    }
+
     private static IReadOnlyDictionary<string, object?> GetProperties(
         IReadOnlyDictionary<string, object?> mappings)
     {

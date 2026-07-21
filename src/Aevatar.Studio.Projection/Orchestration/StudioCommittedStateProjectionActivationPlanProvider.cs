@@ -26,6 +26,7 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(RoleCatalogGAgent)] = RoleCatalogGAgent.ProjectionKind,
             [typeof(UserMemoryGAgent)] = UserMemoryGAgent.ProjectionKind,
             [typeof(ChatConversationGAgent)] = ChatConversationGAgent.ProjectionKind,
+            [typeof(ChatTurnHistoryDeliveryGAgent)] = ChatTurnHistoryDeliveryGAgent.ProjectionKind,
             [typeof(StudioMemberGAgent)] = StudioMemberGAgent.ProjectionKind,
             [typeof(StudioMemberBindingRunGAgent)] = StudioMemberBindingRunGAgent.ProjectionKind,
             [typeof(StudioTeamGAgent)] = StudioTeamGAgent.ProjectionKind,

@@ -5,15 +5,39 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 //   new=split query/command port + CQRS Core dispatch
 public interface IChatHistoryQueryPort
 {
-    Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default);
+    Task<ChatHistoryIndex> GetIndexAsync(ChatHistoryPageRequest request, CancellationToken ct = default);
+
+    Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default) =>
+        GetIndexAsync(new ChatHistoryPageRequest(scopeId), ct);
 
     Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
         string scopeId,
         string conversationId,
         CancellationToken ct = default);
+
+    Task<ChatCreateRecovery?> GetCreateRecoveryAsync(
+        ChatCreateRecoveryRequest request,
+        CancellationToken ct = default);
 }
 
-public sealed record ChatHistoryIndex(IReadOnlyList<ConversationMeta> Conversations);
+public sealed record ChatHistoryPageRequest(
+    string ScopeId,
+    int? Take = null,
+    string? Cursor = null);
+
+public sealed record ChatHistoryIndex(
+    IReadOnlyList<ConversationMeta> Conversations,
+    string? NextCursor = null);
+
+public sealed record ChatCreateRecoveryRequest(
+    string ScopeId,
+    string CreateIdempotencyKey);
+
+public sealed record ChatCreateRecovery(
+    string ConversationId,
+    string TurnId,
+    string Status,
+    long SourceVersion);
 
 public sealed record ConversationMeta(
     string Id,

@@ -43,8 +43,34 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
             "conversation-missing");
 
         canContinue.Should().BeFalse();
-        documentReader.GetKeys.Should().ContainSingle()
-            .Which.Should().Be(ChatHistoryActorIds.Conversation("scope-alpha", "conversation-missing"));
+        documentReader.GetKeys.Should().Equal(
+            ChatHistoryActorIds.Conversation("scope-alpha", "conversation-missing"),
+            ChatHistoryActorIds.LegacyConversation("scope-alpha", "conversation-missing"));
+    }
+
+    [Fact]
+    public async Task CanContinueAsync_ShouldAllowLegacyDocument_WhenStoredIdentityMatchesRequest()
+    {
+        var legacyActorId = ChatHistoryActorIds.LegacyConversation("scope-alpha", "conversation-legacy");
+        var documentReader = new RecordingConversationDocumentReader();
+        documentReader.Seed(new ChatConversationCurrentStateDocument
+        {
+            Id = legacyActorId,
+            ActorId = legacyActorId,
+            ScopeId = "scope-alpha",
+            ConversationId = "conversation-legacy",
+            Deleted = false,
+        });
+        var admissionReader = new ProjectionChatConversationContinuationAdmissionReader(documentReader);
+
+        var canContinue = await admissionReader.CanContinueAsync(
+            "scope-alpha",
+            "conversation-legacy");
+
+        canContinue.Should().BeTrue();
+        documentReader.GetKeys.Should().Equal(
+            ChatHistoryActorIds.Conversation("scope-alpha", "conversation-legacy"),
+            legacyActorId);
     }
 
     [Fact]

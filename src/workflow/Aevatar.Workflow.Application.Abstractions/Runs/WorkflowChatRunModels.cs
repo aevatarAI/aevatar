@@ -1,4 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json.Serialization;
 
 namespace Aevatar.Workflow.Application.Abstractions.Runs;
@@ -85,15 +87,50 @@ public enum WorkflowChatConversationIntentKind
     Continue = 2,
 }
 
+public sealed record WorkflowChatCreateIdempotencyIdentity
+{
+    public WorkflowChatCreateIdempotencyIdentity(string createIdempotencyKey)
+    {
+        if (string.IsNullOrWhiteSpace(createIdempotencyKey))
+            throw new ArgumentException("Create idempotency key is required.", nameof(createIdempotencyKey));
+
+        CreateIdempotencyKey = createIdempotencyKey.Trim();
+    }
+
+    public string CreateIdempotencyKey { get; }
+
+    public string BuildRequestHash(
+        string scopeId,
+        string userText,
+        string workflowActorId) =>
+        HashTuple(scopeId, CreateIdempotencyKey, userText, workflowActorId);
+
+    private static string HashTuple(params string[] parts)
+    {
+        var builder = new StringBuilder();
+        foreach (var part in parts)
+        {
+            var normalized = part.Trim();
+            var byteCount = Encoding.UTF8.GetByteCount(normalized);
+            builder.Append(byteCount).Append(':').Append(normalized);
+        }
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
+        return Convert.ToHexStringLower(hash);
+    }
+}
+
 public sealed record WorkflowChatConversationIntent(
     WorkflowChatConversationIntentKind Intent,
-    string? ConversationId = null)
+    string? ConversationId = null,
+    WorkflowChatCreateIdempotencyIdentity? CreateIdempotency = null)
 {
     public static WorkflowChatConversationIntent None() =>
         new(WorkflowChatConversationIntentKind.None);
 
-    public static WorkflowChatConversationIntent Create() =>
-        new(WorkflowChatConversationIntentKind.Create);
+    public static WorkflowChatConversationIntent Create(
+        WorkflowChatCreateIdempotencyIdentity? createIdempotency = null) =>
+        new(WorkflowChatConversationIntentKind.Create, CreateIdempotency: createIdempotency);
 
     public static WorkflowChatConversationIntent Continue(string conversationId) =>
         new(WorkflowChatConversationIntentKind.Continue, conversationId);
@@ -258,6 +295,7 @@ public enum WorkflowChatRunStartError
     InvalidConversationId = 15,
     ConversationNotFound = 16,
     ChatHistoryReservationUnavailable = 17,
+    IdempotencyConflict = 18,
 }
 
 public enum WorkflowProjectionCompletionStatus

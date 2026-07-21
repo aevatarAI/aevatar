@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.ChatHistory;
 
 /// <summary>
 /// Per-conversation actor that owns terminal chat history turns for one conversation.
-/// Actor ID: <c>chat-{scopeId}-{conversationId}</c>.
+/// Actor ID is an opaque value derived from the stored scope/conversation tuple.
 /// </summary>
 [GAgent("chat.history.conversation")]
 public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
@@ -74,11 +74,19 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
     [EventHandler(EndpointName = "deleteConversation")]
     public async Task HandleConversationDeleted(ConversationDeletedEvent evt)
     {
-        if (string.IsNullOrWhiteSpace(evt.ConversationId))
+        if (string.IsNullOrWhiteSpace(evt.ScopeId) ||
+            string.IsNullOrWhiteSpace(evt.ConversationId))
             return;
 
         if (State.Deleted || (string.IsNullOrWhiteSpace(State.ConversationId) && State.Turns.Count == 0))
             return;
+
+        if (HasEstablishedIdentity(State) &&
+            (!string.Equals(State.ScopeId, evt.ScopeId.Trim(), StringComparison.Ordinal) ||
+             !string.Equals(State.ConversationId, evt.ConversationId.Trim(), StringComparison.Ordinal)))
+        {
+            return;
+        }
 
         await PersistDomainEventAsync(evt);
     }
@@ -104,9 +112,11 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
         AppendChatTurnCommand command,
         out ChatTurnAppendRejectionReason rejectionReason)
     {
+        var scopeId = command.ScopeId?.Trim();
+        var conversationId = command.ConversationId?.Trim();
         if (command.Turn is null ||
-            string.IsNullOrWhiteSpace(command.ScopeId) ||
-            string.IsNullOrWhiteSpace(command.ConversationId) ||
+            string.IsNullOrWhiteSpace(scopeId) ||
+            string.IsNullOrWhiteSpace(conversationId) ||
             string.IsNullOrWhiteSpace(command.Turn.TurnId) ||
             command.Turn.TerminalStatus is ChatTurnTerminalStatus.Unspecified ||
             State.Deleted)
@@ -115,9 +125,22 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,
             return false;
         }
 
+        if (HasEstablishedIdentity(State) &&
+            (!string.Equals(State.ScopeId, scopeId, StringComparison.Ordinal) ||
+             !string.Equals(State.ConversationId, conversationId, StringComparison.Ordinal)))
+        {
+            rejectionReason = ChatTurnAppendRejectionReason.Invalid;
+            return false;
+        }
+
         rejectionReason = ChatTurnAppendRejectionReason.Unspecified;
         return true;
     }
+
+    private static bool HasEstablishedIdentity(ChatConversationState state) =>
+        !string.IsNullOrWhiteSpace(state.ScopeId) ||
+        !string.IsNullOrWhiteSpace(state.ConversationId) ||
+        state.Turns.Count > 0;
 
     private async Task PersistRejectionAsync(
         AppendChatTurnCommand command,

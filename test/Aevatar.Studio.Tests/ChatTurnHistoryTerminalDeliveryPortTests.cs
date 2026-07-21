@@ -48,6 +48,88 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     }
 
     [Fact]
+    public async Task ReserveAsync_ShouldReplayCreateIdentityFromRecoveryReadModel()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var recoveryReader = new RecordingChatCreateRecoveryReader();
+        var createIdentity = new WorkflowChatCreateIdempotencyIdentity("create-alpha");
+        var requestHash = createIdentity.BuildRequestHash("scope-alpha", "original user text", WorkflowActorId);
+        recoveryReader.Seed(new ChatCreateRecoveryRecord(
+            ScopeId: "scope-alpha",
+            CreateIdempotencyKey: "create-alpha",
+            ConversationId: "conversation-authoritative",
+            TurnId: "turn-authoritative",
+            Status: "append_committed",
+            SourceVersion: 3,
+            DeliveryActorId: "chat-history-delivery:existing",
+            RequestHash: requestHash));
+        var port = CreatePort(runtime, dispatch, recoveryReader: recoveryReader);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Create(createIdentity)));
+
+        result.Succeeded.Should().BeTrue();
+        result.Replayed.Should().BeTrue();
+        result.ChatContext.Should().BeEquivalentTo(
+            new WorkflowChatContext("scope-alpha", "conversation-authoritative", "turn-authoritative"));
+        result.Reservation!.DeliveryActorId.Should().Be("chat-history-delivery:existing");
+        runtime.CreatedActors.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ShouldRejectCreateIdentityConflictFromRecoveryReadModel()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var recoveryReader = new RecordingChatCreateRecoveryReader();
+        recoveryReader.Seed(new ChatCreateRecoveryRecord(
+            ScopeId: "scope-alpha",
+            CreateIdempotencyKey: "create-alpha",
+            ConversationId: "conversation-authoritative",
+            TurnId: "turn-authoritative",
+            Status: "reserved",
+            SourceVersion: 1,
+            DeliveryActorId: "chat-history-delivery:existing",
+            RequestHash: "different-request-hash"));
+        var port = CreatePort(runtime, dispatch, recoveryReader: recoveryReader);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Create(
+                new WorkflowChatCreateIdempotencyIdentity("create-alpha"))));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.IdempotencyConflict);
+        runtime.CreatedActors.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ShouldUseStableConversationTurnAndDeliveryIdsForCreateIdentity()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var createIdentity = new WorkflowChatCreateIdempotencyIdentity("create-alpha");
+        var port = CreatePort(runtime, dispatch, recoveryReader: new RecordingChatCreateRecoveryReader());
+
+        var first = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Create(createIdentity)));
+        var second = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Create(createIdentity)));
+
+        first.Succeeded.Should().BeTrue();
+        second.Succeeded.Should().BeTrue();
+        second.ChatContext.Should().BeEquivalentTo(first.ChatContext);
+        second.Reservation!.DeliveryActorId.Should().Be(first.Reservation!.DeliveryActorId);
+        dispatch.Calls.Should().HaveCount(2);
+        dispatch.Calls
+            .Select(call => call.Envelope.Payload.Unpack<ChatTurnHistoryDeliveryReserveRequested>().CreateIdempotencyKey)
+            .Should()
+            .Equal("create-alpha", "create-alpha");
+    }
+
+    [Fact]
     public async Task ReserveAsync_ShouldContinueExistingConversationAndGenerateTurn()
     {
         var runtime = new RecordingActorRuntime();
@@ -177,12 +259,14 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     private static ChatTurnHistoryTerminalDeliveryPort CreatePort(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
-        IChatConversationContinuationAdmissionReader? admissionReader = null) =>
+        IChatConversationContinuationAdmissionReader? admissionReader = null,
+        IChatCreateRecoveryReader? recoveryReader = null) =>
         new(
             runtime,
             dispatchPort,
             admissionReader ?? new RecordingChatConversationContinuationAdmissionReader(),
-            NullLogger<ChatTurnHistoryTerminalDeliveryPort>.Instance);
+            NullLogger<ChatTurnHistoryTerminalDeliveryPort>.Instance,
+            createRecoveryReader: recoveryReader);
 
     private static WorkflowChatHistoryTerminalDeliveryReservationRequest ReservationRequest(
         WorkflowChatConversationIntent conversation) =>
@@ -283,6 +367,23 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
             ct.ThrowIfCancellationRequested();
             Calls.Add((scopeId, conversationId));
             return Task.FromResult(_continuableConversations.Contains((scopeId, conversationId)));
+        }
+    }
+
+    private sealed class RecordingChatCreateRecoveryReader : IChatCreateRecoveryReader
+    {
+        private readonly Dictionary<(string ScopeId, string CreateIdempotencyKey), ChatCreateRecoveryRecord> _records = [];
+
+        public void Seed(ChatCreateRecoveryRecord record) =>
+            _records[(record.ScopeId, record.CreateIdempotencyKey)] = record;
+
+        public Task<ChatCreateRecoveryRecord?> FindAsync(
+            string scopeId,
+            string createIdempotencyKey,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(_records.GetValueOrDefault((scopeId, createIdempotencyKey)));
         }
     }
 

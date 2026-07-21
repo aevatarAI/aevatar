@@ -10,8 +10,11 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.GAgents.ChatHistory;
 
 [GAgent("chat.history.turn-delivery")]
-public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDeliveryState>
+public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDeliveryState>,
+    IProjectedActor
 {
+    public static string ProjectionKind => "chat-turn-history-delivery";
+
     private const string ConversationAppendPublisherId = "chat-history-turn-delivery";
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _dispatchPort;
@@ -51,6 +54,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
     {
         ArgumentNullException.ThrowIfNull(command);
         if (State.Status is ChatTurnHistoryDeliveryStatus.AppendDispatched
+            or ChatTurnHistoryDeliveryStatus.AppendCommitted
+            or ChatTurnHistoryDeliveryStatus.AppendRejected
             or ChatTurnHistoryDeliveryStatus.Abandoned
             or ChatTurnHistoryDeliveryStatus.Failed)
         {
@@ -85,6 +90,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             WorkflowCorrelationId = command.WorkflowCorrelationId?.Trim() ?? string.Empty,
             ReservedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             CreateConversationIfMissing = command.CreateConversationIfMissing,
+            CreateIdempotencyKey = command.CreateIdempotencyKey?.Trim() ?? string.Empty,
+            CreateRequestHash = command.CreateRequestHash?.Trim() ?? string.Empty,
         });
     }
 
@@ -146,23 +153,17 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         }
 
         var appendCommand = BuildAppendCommandFromState();
-        var conversationActorId = ChatHistoryActorIds.Conversation(State.ScopeId, State.ConversationId);
-        if (!await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false))
+        var conversationActorId = await ResolveConversationActorIdAsync(ct).ConfigureAwait(false);
+        if (conversationActorId is null)
         {
-            if (!State.CreateConversationIfMissing)
-            {
-                await PersistFailureAsync(
-                        State.DeliveryId,
-                        State.WorkflowActorId,
-                        State.WorkflowCommandId,
-                        "conversation_not_found",
-                        "Chat history conversation was not found.")
-                    .ConfigureAwait(false);
-                return;
-            }
-
-            await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct)
+            await PersistFailureAsync(
+                    State.DeliveryId,
+                    State.WorkflowActorId,
+                    State.WorkflowCommandId,
+                    "conversation_not_found",
+                    "Chat history conversation was not found.")
                 .ConfigureAwait(false);
+            return;
         }
 
         var envelope = new EventEnvelope
@@ -208,6 +209,25 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         });
     }
 
+    private async Task<string?> ResolveConversationActorIdAsync(CancellationToken ct)
+    {
+        var conversationActorId = ChatHistoryActorIds.Conversation(State.ScopeId, State.ConversationId);
+        if (await _actorRuntime.ExistsAsync(conversationActorId).ConfigureAwait(false))
+            return conversationActorId;
+
+        if (State.CreateConversationIfMissing)
+        {
+            await _actorRuntime.CreateAsync<ChatConversationGAgent>(conversationActorId, ct)
+                .ConfigureAwait(false);
+            return conversationActorId;
+        }
+
+        var legacyConversationActorId = ChatHistoryActorIds.LegacyConversation(State.ScopeId, State.ConversationId);
+        return await _actorRuntime.ExistsAsync(legacyConversationActorId).ConfigureAwait(false)
+            ? legacyConversationActorId
+            : null;
+    }
+
     [EventHandler]
     public async Task HandleAbandonedAsync(ChatTurnHistoryDeliveryAbandonedEvent command)
     {
@@ -215,6 +235,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         if (!string.Equals(State.DeliveryId, command.DeliveryId, StringComparison.Ordinal))
             return;
         if (State.Status is ChatTurnHistoryDeliveryStatus.AppendDispatched
+            or ChatTurnHistoryDeliveryStatus.AppendCommitted
+            or ChatTurnHistoryDeliveryStatus.AppendRejected
             or ChatTurnHistoryDeliveryStatus.Abandoned
             or ChatTurnHistoryDeliveryStatus.Failed)
         {
@@ -404,6 +426,18 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
             return ("workflow_actor_id_required", "Chat history delivery requires a workflow actor id.");
         if (string.IsNullOrWhiteSpace(command.WorkflowCommandId))
             return ("workflow_command_id_required", "Chat history delivery requires a workflow command id.");
+        if (!string.IsNullOrWhiteSpace(command.CreateIdempotencyKey) &&
+            string.IsNullOrWhiteSpace(command.CreateRequestHash))
+        {
+            return ("create_request_hash_required", "Chat history idempotent create delivery requires a request hash.");
+        }
+
+        if (string.IsNullOrWhiteSpace(command.CreateIdempotencyKey) &&
+            !string.IsNullOrWhiteSpace(command.CreateRequestHash))
+        {
+            return ("create_idempotency_key_required", "Chat history create request hash requires an idempotency key.");
+        }
+
         return null;
     }
 
@@ -434,6 +468,8 @@ public sealed class ChatTurnHistoryDeliveryGAgent : GAgentBase<ChatTurnHistoryDe
         next.Status = ChatTurnHistoryDeliveryStatus.Reserved;
         next.ReservedAtUnixMs = evt.ReservedAtUnixMs;
         next.CreateConversationIfMissing = evt.CreateConversationIfMissing;
+        next.CreateIdempotencyKey = evt.CreateIdempotencyKey;
+        next.CreateRequestHash = evt.CreateRequestHash;
         next.ErrorCode = string.Empty;
         next.ErrorSummary = string.Empty;
         return next;

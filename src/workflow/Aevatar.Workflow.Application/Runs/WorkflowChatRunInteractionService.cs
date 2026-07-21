@@ -131,6 +131,23 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 .Failure(MapReservationFailure(chatHistoryDelivery.Failure));
         }
 
+        if (chatHistoryDelivery is { Replayed: true, ChatContext: not null })
+        {
+            attempt.MarkAccepted();
+            var replayReceipt = CreateReplayReceipt(attempt.Request);
+            var interactionReceipt = new WorkflowChatInteractionAcceptedReceipt(
+                replayReceipt,
+                chatHistoryDelivery.ChatContext);
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(interactionReceipt, ct).ConfigureAwait(false);
+            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(
+                    interactionReceipt,
+                    new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(
+                        WorkflowProjectionCompletionStatus.Unknown,
+                        false));
+        }
+
         async ValueTask OnAcceptedAsync(WorkflowChatRunAcceptedReceipt receipt, CancellationToken token)
         {
             attempt.MarkAccepted();
@@ -213,7 +230,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     private static WorkflowChatConversationIntent? NormalizeConversationIntent(WorkflowChatRunRequest request)
     {
         if (request.ChatConversation is { Intent: WorkflowChatConversationIntentKind.Create })
-            return WorkflowChatConversationIntent.Create();
+            return WorkflowChatConversationIntent.Create(request.ChatConversation.CreateIdempotency);
 
         if (request.ChatConversation is { Intent: WorkflowChatConversationIntentKind.Continue } conversation)
         {
@@ -236,8 +253,17 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 WorkflowChatRunStartError.ConversationNotFound,
             WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable =>
                 WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
+            WorkflowChatHistoryTerminalDeliveryReservationFailure.IdempotencyConflict =>
+                WorkflowChatRunStartError.IdempotencyConflict,
             _ => WorkflowChatRunStartError.ChatHistoryReservationUnavailable,
         };
+
+    private static WorkflowChatRunAcceptedReceipt CreateReplayReceipt(WorkflowChatRunRequest request) =>
+        new(
+            request.TargetSeed?.ActorId ?? string.Empty,
+            request.TargetSeed?.WorkflowNameForRun ?? string.Empty,
+            request.CommandIdSeed ?? string.Empty,
+            request.CorrelationIdSeed ?? string.Empty);
 
     private static Application.Abstractions.Runs.WorkflowCompletionNotificationTarget CreateCompletionNotificationTarget(
         WorkflowChatHistoryTerminalDeliveryReservation reservation) =>

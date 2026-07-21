@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<
             IChatConversationContinuationAdmissionReader,
             ProjectionChatConversationContinuationAdmissionReader>());
+        services.TryAddSingleton<IChatCreateRecoveryReader, ProjectionChatCreateRecoveryReader>();
         services.AddCqrsCore();
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(
             typeof(Aevatar.GAgents.ConnectorCatalog.ConnectorCatalogGAgent).Assembly,

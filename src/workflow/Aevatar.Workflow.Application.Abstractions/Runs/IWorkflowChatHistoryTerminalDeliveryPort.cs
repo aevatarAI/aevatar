@@ -20,12 +20,14 @@ public enum WorkflowChatHistoryTerminalDeliveryReservationFailure
     None = 0,
     ConversationNotFound = 1,
     Unavailable = 2,
+    IdempotencyConflict = 3,
 }
 
 public sealed record WorkflowChatHistoryTerminalDeliveryReservationResult(
     WorkflowChatHistoryTerminalDeliveryReservation? Reservation,
     WorkflowChatContext? ChatContext,
-    WorkflowChatHistoryTerminalDeliveryReservationFailure Failure)
+    WorkflowChatHistoryTerminalDeliveryReservationFailure Failure,
+    bool Replayed = false)
 {
     public bool Succeeded =>
         Failure == WorkflowChatHistoryTerminalDeliveryReservationFailure.None &&
@@ -34,14 +36,18 @@ public sealed record WorkflowChatHistoryTerminalDeliveryReservationResult(
 
     public static WorkflowChatHistoryTerminalDeliveryReservationResult Success(
         WorkflowChatHistoryTerminalDeliveryReservation reservation,
-        WorkflowChatContext chatContext) =>
-        new(reservation, chatContext, WorkflowChatHistoryTerminalDeliveryReservationFailure.None);
+        WorkflowChatContext chatContext,
+        bool replayed = false) =>
+        new(reservation, chatContext, WorkflowChatHistoryTerminalDeliveryReservationFailure.None, replayed);
 
     public static WorkflowChatHistoryTerminalDeliveryReservationResult NotFound() =>
         new(null, null, WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
 
     public static WorkflowChatHistoryTerminalDeliveryReservationResult Unavailable() =>
         new(null, null, WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
+
+    public static WorkflowChatHistoryTerminalDeliveryReservationResult IdempotencyConflict() =>
+        new(null, null, WorkflowChatHistoryTerminalDeliveryReservationFailure.IdempotencyConflict);
 }
 
 public interface IWorkflowChatHistoryTerminalDeliveryPort

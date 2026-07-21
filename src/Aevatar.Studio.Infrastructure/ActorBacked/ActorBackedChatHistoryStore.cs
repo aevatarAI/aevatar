@@ -16,23 +16,30 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChatHistoryCommandPort
 {
     private const string PublisherId = "aevatar.studio.infrastructure.chat-history";
+    private const int DefaultPageSize = 50;
+    private const int MaxPageSize = 100;
 
     private readonly IStudioActorBootstrap _bootstrap;
     private readonly StudioActorCommandDispatch _commandDispatch;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
+    private readonly IProjectionDocumentReader<ChatCreateRecoveryCurrentStateDocument, string> _createRecoveryDocumentReader;
 
     public ActorBackedChatHistoryStore(
         IStudioActorBootstrap bootstrap,
         StudioActorCommandDispatch commandDispatch,
-        IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader)
+        IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
+        IProjectionDocumentReader<ChatCreateRecoveryCurrentStateDocument, string> createRecoveryDocumentReader)
     {
         _bootstrap = bootstrap ?? throw new ArgumentNullException(nameof(bootstrap));
         _commandDispatch = commandDispatch ?? throw new ArgumentNullException(nameof(commandDispatch));
         _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
+        _createRecoveryDocumentReader = createRecoveryDocumentReader ?? throw new ArgumentNullException(nameof(createRecoveryDocumentReader));
     }
 
-    public async Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
+    public async Task<ChatHistoryIndex> GetIndexAsync(ChatHistoryPageRequest request, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        var scopeId = NormalizeRequired(request.ScopeId);
         var result = await _conversationDocumentReader.QueryAsync(new ProjectionDocumentQuery
         {
             Filters =
@@ -57,21 +64,34 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
                     FieldPath = "updated_at_ms",
                     Direction = ProjectionDocumentSortDirection.Desc,
                 },
+                new ProjectionDocumentSort
+                {
+                    FieldPath = "conversation_id",
+                    Direction = ProjectionDocumentSortDirection.Asc,
+                },
             ],
-            Take = ChatConversationGAgent.MaxTurns,
+            Cursor = NormalizeOptional(request.Cursor),
+            Take = NormalizeTake(request.Take),
         }, ct);
 
         return new ChatHistoryIndex(result.Items
             .Select(ToConversationMeta)
             .ToList()
-            .AsReadOnly());
+            .AsReadOnly(),
+            string.IsNullOrWhiteSpace(result.NextCursor) ? null : result.NextCursor);
     }
 
     public async Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var actorId = ChatHistoryActorIds.Conversation(scopeId, conversationId);
-        var document = await _conversationDocumentReader.GetAsync(actorId, ct);
+        var normalizedScopeId = NormalizeRequired(scopeId);
+        var normalizedConversationId = NormalizeRequired(conversationId);
+        var resolved = await GetMatchingConversationDocumentAsync(
+                normalizedScopeId,
+                normalizedConversationId,
+                ct)
+            .ConfigureAwait(false);
+        var document = resolved.Document;
         if (document is null || document.Deleted)
             return [];
 
@@ -98,13 +118,45 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
     public async Task DeleteConversationAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var conversationActor = await EnsureConversationActorAsync(scopeId, conversationId, ct);
+        var normalizedScopeId = NormalizeRequired(scopeId);
+        var normalizedConversationId = NormalizeRequired(conversationId);
+        var resolved = await GetMatchingConversationDocumentAsync(
+                normalizedScopeId,
+                normalizedConversationId,
+                ct)
+            .ConfigureAwait(false);
+        if (resolved.Document is null || resolved.Document.Deleted)
+            return;
+
+        var actorId = ResolveDocumentActorId(resolved.Document, resolved.DocumentKey);
+        if (string.IsNullOrWhiteSpace(actorId))
+            return;
+
         var deleteEvt = new ConversationDeletedEvent
         {
-            ConversationId = conversationId,
-            ScopeId = scopeId,
+            ConversationId = normalizedConversationId,
+            ScopeId = normalizedScopeId,
         };
+        var conversationActor = new DispatchOnlyActor(actorId);
         await _commandDispatch.DispatchAsync(conversationActor, deleteEvt, PublisherId, ct);
+    }
+
+    public async Task<ChatCreateRecovery?> GetCreateRecoveryAsync(
+        ChatCreateRecoveryRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var scopeId = NormalizeRequired(request.ScopeId);
+        var createIdempotencyKey = NormalizeRequired(request.CreateIdempotencyKey);
+        var document = await FindCreateRecoveryDocumentAsync(scopeId, createIdempotencyKey, ct)
+            .ConfigureAwait(false);
+        return document is null
+            ? null
+            : new ChatCreateRecovery(
+                document.ConversationId,
+                document.TurnId,
+                document.Status,
+                document.SourceVersion);
     }
 
     // ── Actor resolution ───────────────────────────────────────
@@ -114,6 +166,69 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
     {
         return await _bootstrap.EnsureAsync<ChatConversationGAgent>(
             ChatHistoryActorIds.Conversation(scopeId, conversationId), ct);
+    }
+
+    private async Task<(ChatConversationCurrentStateDocument? Document, string DocumentKey)> GetMatchingConversationDocumentAsync(
+        string scopeId,
+        string conversationId,
+        CancellationToken ct)
+    {
+        foreach (var documentKey in ConversationDocumentKeys(scopeId, conversationId))
+        {
+            var document = await _conversationDocumentReader.GetAsync(documentKey, ct).ConfigureAwait(false);
+            if (IsMatchingConversationDocument(document, scopeId, conversationId))
+                return (document, documentKey);
+        }
+
+        return (null, string.Empty);
+    }
+
+    private static IEnumerable<string> ConversationDocumentKeys(string scopeId, string conversationId)
+    {
+        var current = ChatHistoryActorIds.Conversation(scopeId, conversationId);
+        yield return current;
+
+        var legacy = ChatHistoryActorIds.LegacyConversation(scopeId, conversationId);
+        if (!string.Equals(legacy, current, StringComparison.Ordinal))
+            yield return legacy;
+    }
+
+    private static bool IsMatchingConversationDocument(
+        ChatConversationCurrentStateDocument? document,
+        string scopeId,
+        string conversationId) =>
+        document is not null &&
+        string.Equals(document.ScopeId, scopeId, StringComparison.Ordinal) &&
+        string.Equals(document.ConversationId, conversationId, StringComparison.Ordinal);
+
+    private async Task<ChatCreateRecoveryCurrentStateDocument?> FindCreateRecoveryDocumentAsync(
+        string scopeId,
+        string createIdempotencyKey,
+        CancellationToken ct)
+    {
+        var result = await _createRecoveryDocumentReader.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = "scope_id",
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(scopeId),
+                },
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = "create_idempotency_key",
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString(createIdempotencyKey),
+                },
+            ],
+            Take = 1,
+        }, ct).ConfigureAwait(false);
+
+        return result.Items.FirstOrDefault(document =>
+            string.Equals(document.ScopeId, scopeId, StringComparison.Ordinal) &&
+            string.Equals(document.CreateIdempotencyKey, createIdempotencyKey, StringComparison.Ordinal));
     }
 
     // ── Mapping helpers ────────────────────────────────────────
@@ -207,4 +322,48 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryQueryPort, IChat
 
     private static DateTimeOffset FromUnixMs(long ms) =>
         ms > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : DateTimeOffset.UnixEpoch;
+
+    private static int NormalizeTake(int? take) =>
+        take is > 0
+            ? Math.Min(take.Value, MaxPageSize)
+            : DefaultPageSize;
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string NormalizeRequired(string value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+
+    private static string ResolveDocumentActorId(
+        ChatConversationCurrentStateDocument document,
+        string documentKey)
+    {
+        if (!string.IsNullOrWhiteSpace(document.ActorId))
+            return document.ActorId.Trim();
+        if (!string.IsNullOrWhiteSpace(document.Id))
+            return document.Id.Trim();
+        return documentKey;
+    }
+
+    private sealed class DispatchOnlyActor(string id) : IActor
+    {
+        public string Id { get; } = id;
+        public IAgent Agent { get; } = new DispatchOnlyAgent();
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class DispatchOnlyAgent : IAgent
+    {
+        public string Id => "chat-history-dispatch-only";
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult("chat-history-dispatch-only");
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+    }
 }

@@ -67,6 +67,24 @@ public sealed class StudioWorkflowBoardProjectionOwnershipTests
     }
 
     [Fact]
+    public void AddStudioProjectionReadModelProviders_ShouldRegisterChatCreateRecoveryDocumentStore()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddStudioProjectionComponents();
+        services.AddStudioProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IProjectionDocumentReader<ChatCreateRecoveryCurrentStateDocument, string>>()
+            .Should()
+            .BeOfType<InMemoryProjectionDocumentStore<ChatCreateRecoveryCurrentStateDocument, string>>();
+        provider.GetRequiredService<IProjectionDocumentWriter<ChatCreateRecoveryCurrentStateDocument>>()
+            .Should()
+            .BeOfType<InMemoryProjectionDocumentStore<ChatCreateRecoveryCurrentStateDocument, string>>();
+    }
+
+    [Fact]
     public void AddStudioProjectionReadModelProviders_ShouldInferElasticsearchWorkflowBoardDocumentStore()
     {
         var services = new ServiceCollection();

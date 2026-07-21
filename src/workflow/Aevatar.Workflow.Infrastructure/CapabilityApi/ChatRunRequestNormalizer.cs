@@ -246,9 +246,25 @@ internal static class ChatRunRequestNormalizer
             return new ConversationNormalizationResult(null, WorkflowChatRunStartError.None);
 
         if (source.ConversationId == null)
+        {
+            if (source.CreateIdempotencyKey == null)
+            {
+                return new ConversationNormalizationResult(
+                    WorkflowChatConversationIntent.Create(),
+                    WorkflowChatRunStartError.None);
+            }
+
+            var createIdempotencyKey = NormalizeOptional(source.CreateIdempotencyKey);
+            if (createIdempotencyKey == null)
+                return new ConversationNormalizationResult(null, WorkflowChatRunStartError.InvalidConversationInput);
+
             return new ConversationNormalizationResult(
-                WorkflowChatConversationIntent.Create(),
+                WorkflowChatConversationIntent.Create(new WorkflowChatCreateIdempotencyIdentity(createIdempotencyKey)),
                 WorkflowChatRunStartError.None);
+        }
+
+        if (source.CreateIdempotencyKey != null)
+            return new ConversationNormalizationResult(null, WorkflowChatRunStartError.InvalidConversationInput);
 
         var conversationId = NormalizeOptional(source.ConversationId);
         if (conversationId == null)

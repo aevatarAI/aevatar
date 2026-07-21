@@ -25,6 +25,7 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.InvalidConversationId => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.ConversationNotFound => StatusCodes.Status404NotFound,
             WorkflowChatRunStartError.ChatHistoryReservationUnavailable => StatusCodes.Status503ServiceUnavailable,
+            WorkflowChatRunStartError.IdempotencyConflict => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status400BadRequest,
         };
     }
@@ -49,6 +50,7 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.InvalidConversationId => ("INVALID_CONVERSATION_ID", "Conversation id is invalid."),
             WorkflowChatRunStartError.ConversationNotFound => ("CONVERSATION_NOT_FOUND", "Conversation was not found."),
             WorkflowChatRunStartError.ChatHistoryReservationUnavailable => ("CHAT_HISTORY_RESERVATION_UNAVAILABLE", "Chat history reservation is unavailable."),
+            WorkflowChatRunStartError.IdempotencyConflict => ("IDEMPOTENCY_CONFLICT", "Create idempotency key was reused with different request input."),
             _ => ("RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

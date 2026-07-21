@@ -19,6 +19,7 @@ public sealed class ChatHistoryEndpointsTests
     [Theory]
     [InlineData("HandleGetIndex")]
     [InlineData("HandleGetConversation")]
+    [InlineData("HandleGetCreateRecovery")]
     [InlineData("HandleDeleteConversation")]
     public async Task Handler_ShouldRejectDifferentCallerScopeBeforeAccessingHistory(string methodName)
     {
@@ -36,6 +37,7 @@ public sealed class ChatHistoryEndpointsTests
     [Theory]
     [InlineData("HandleGetIndex")]
     [InlineData("HandleGetConversation")]
+    [InlineData("HandleGetCreateRecovery")]
     [InlineData("HandleDeleteConversation")]
     public async Task Handler_ShouldAllowMatchingCallerScope(string methodName)
     {
@@ -61,9 +63,11 @@ public sealed class ChatHistoryEndpointsTests
             ?? throw new InvalidOperationException($"{methodName} not found.");
         object?[] arguments = methodName switch
         {
-            "HandleGetIndex" => [http, RequestedScopeId, port, CancellationToken.None],
+            "HandleGetIndex" => [http, RequestedScopeId, 25, "cursor-a", port, CancellationToken.None],
             "HandleGetConversation" =>
                 [http, RequestedScopeId, ConversationId, port, CancellationToken.None],
+            "HandleGetCreateRecovery" =>
+                [http, RequestedScopeId, "create-alpha", port, CancellationToken.None],
             "HandleDeleteConversation" =>
                 [http, RequestedScopeId, ConversationId, port, CancellationToken.None],
             _ => throw new ArgumentOutOfRangeException(nameof(methodName), methodName, null),
@@ -98,10 +102,12 @@ public sealed class ChatHistoryEndpointsTests
     {
         public List<string> Calls { get; } = [];
 
-        public Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
+        public Task<ChatHistoryIndex> GetIndexAsync(
+            ChatHistoryPageRequest request,
+            CancellationToken ct = default)
         {
-            Calls.Add($"HandleGetIndex:{scopeId}");
-            return Task.FromResult(new ChatHistoryIndex([]));
+            Calls.Add($"HandleGetIndex:{request.ScopeId}:{request.Take}:{request.Cursor}");
+            return Task.FromResult(new ChatHistoryIndex([], NextCursor: "next-cursor"));
         }
 
         public Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
@@ -111,6 +117,18 @@ public sealed class ChatHistoryEndpointsTests
         {
             Calls.Add($"HandleGetConversation:{scopeId}:{conversationId}");
             return Task.FromResult<IReadOnlyList<StoredChatMessage>>([]);
+        }
+
+        public Task<ChatCreateRecovery?> GetCreateRecoveryAsync(
+            ChatCreateRecoveryRequest request,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"HandleGetCreateRecovery:{request.ScopeId}:{request.CreateIdempotencyKey}");
+            return Task.FromResult<ChatCreateRecovery?>(new ChatCreateRecovery(
+                "conversation-a",
+                "turn-a",
+                "reserved",
+                1));
         }
 
         public Task SaveMessagesAsync(
