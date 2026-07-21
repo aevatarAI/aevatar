@@ -167,6 +167,79 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_WithToolCall_ShouldPersistAuthorizedToolIdentity()
+    {
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            new PausedReplyGenerationExecutor(),
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-authorized-tool",
+            CorrelationId = "corr-authorized-tool",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-authorized-tool",
+                CorrelationId = "corr-authorized-tool",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 1,
+                MaxToolRounds = 4,
+            },
+        });
+        var fingerprint = ByteString.CopyFrom(Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray());
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-authorized-tool",
+            CorrelationId = "corr-authorized-tool",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-authorized-tool",
+                RunId = "run-authorized-tool",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                ToolCalls =
+                {
+                    new AgentRunToolCall
+                    {
+                        Id = "call-1",
+                        Name = "use_skill",
+                        ArgumentsJson = "{}",
+                    },
+                },
+                AuthorizedTools =
+                {
+                    new AgentRunAuthorizedTool
+                    {
+                        Name = "use_skill",
+                        ContractFingerprint = fingerprint,
+                    },
+                },
+            },
+        });
+
+        runtime.State.GenerationStep!.PendingToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be("use_skill");
+        runtime.State.GenerationStep.AuthorizedTools.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(new AgentRunAuthorizedTool
+            {
+                Name = "use_skill",
+                ContractFingerprint = fingerprint,
+            });
+    }
+
+    [Fact]
     public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_RetriesOnceKeepingToolsInsteadOfFailing()
     {
         // Regression for the prod incident where a reasoning model spent the whole
