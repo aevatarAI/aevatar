@@ -115,6 +115,73 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         commands.Observations.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task RefreshPersonalAsync_WhenProviderCallTimesOut_ShouldRecordCommittedFailure(
+        int providerCallIndex)
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        QueuedResponse[] responses = providerCallIndex switch
+        {
+            0 => [ProviderTimeout()],
+            1 => [Ok(UserServicesJson()), ProviderTimeout()],
+            _ => throw new ArgumentOutOfRangeException(nameof(providerCallIndex)),
+        };
+        var handler = new RoutingJsonHandler(responses);
+        using var callerCancellation = new CancellationTokenSource();
+
+        var result = await Create(commands, handler, observation: observation)
+            .RefreshPersonalAsync(
+                "owner-alpha",
+                "bearer-secret",
+                callerCancellation.Token);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Failed);
+        result.FailureCode.Should().Be("nyxid_catalog_refresh_provider_timed_out");
+        callerCancellation.IsCancellationRequested.Should().BeFalse();
+        handler.CancellationStates.Should().OnlyContain(static canceled => !canceled);
+        handler.Requests.Should().HaveCount(providerCallIndex + 1);
+        commands.Failures.Should().ContainSingle();
+        commands.Failures[0].RefreshId.Should().Be(commands.Beginnings.Single().RefreshId);
+        commands.Failures[0].Code.Should().Be("nyxid_catalog_refresh_provider_timed_out");
+        commands.Observations.Should().BeEmpty();
+        commands.Invalidations.Should().BeEmpty();
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task RefreshPersonalAsync_WhenCallerCancelsProviderCall_ShouldRethrowCancellation(
+        int providerCallIndex)
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var handler = new CallerCancellationHandler(providerCallIndex);
+        using var callerCancellation = new CancellationTokenSource();
+
+        var refresh = Create(commands, handler, observation: observation)
+            .RefreshPersonalAsync(
+                "owner-alpha",
+                "bearer-secret",
+                callerCancellation.Token);
+        await handler.Blocked;
+        callerCancellation.Cancel();
+
+        var act = () => refresh;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        commands.Failures.Should().BeEmpty();
+        commands.Observations.Should().BeEmpty();
+        commands.Invalidations.Should().BeEmpty();
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
     [Fact]
     public async Task RefreshPersonalAsync_WhenDetachFails_ShouldStillReleaseBothScopes()
     {
@@ -323,7 +390,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
     private static NyxIdAuthorizationCatalogRefreshPort Create(
         RecordingCommandPort commands,
-        RoutingJsonHandler handler,
+        HttpMessageHandler handler,
         bool publishCommittedOutcomes = true,
         RecordingObservationRuntime? observation = null,
         TimeProvider? timeProvider = null)
@@ -394,6 +461,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             message = "sensitive provider detail",
         }));
 
+    private static QueuedResponse ProviderTimeout() =>
+        new(default, string.Empty, new TaskCanceledException("provider request timed out"));
+
     private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
     {
         public NyxIdApiClient CreateClient() => client;
@@ -407,16 +477,21 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         public List<string> AuthorizationHeaders { get; } = [];
         public List<string> RequestBodies { get; } = [];
 
+        public List<bool> CancellationStates { get; } = [];
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             Requests.Add((request.Method, request.RequestUri?.PathAndQuery ?? string.Empty));
             AuthorizationHeaders.Add(request.Headers.Authorization?.ToString() ?? string.Empty);
+            CancellationStates.Add(cancellationToken.IsCancellationRequested);
             if (request.Content != null)
                 RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
             if (!_responses.TryDequeue(out var response))
                 throw new InvalidOperationException("No queued response remains.");
+            if (response.Failure != null)
+                throw response.Failure;
             return new HttpResponseMessage(response.Status)
             {
                 Content = new StringContent(response.Body, Encoding.UTF8, "application/json"),
@@ -424,7 +499,41 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
     }
 
-    private sealed record QueuedResponse(HttpStatusCode Status, string Body);
+    private sealed record QueuedResponse(
+        HttpStatusCode Status,
+        string Body,
+        Exception? Failure = null);
+
+    private sealed class CallerCancellationHandler(int cancelAtRequestIndex) : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<bool> _blocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<HttpResponseMessage> _pendingResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _requestIndex;
+
+        public Task Blocked => _blocked.Task;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var requestIndex = _requestIndex++;
+            if (requestIndex < cancelAtRequestIndex)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(UserServicesJson(), Encoding.UTF8, "application/json"),
+                });
+            }
+
+            if (requestIndex != cancelAtRequestIndex)
+                throw new InvalidOperationException("Unexpected provider request index.");
+
+            _blocked.TrySetResult(true);
+            return _pendingResponse.Task.WaitAsync(cancellationToken);
+        }
+    }
 
     private sealed class RecordingCommandPort : INyxIdAuthorizationCatalogCommandPort
     {

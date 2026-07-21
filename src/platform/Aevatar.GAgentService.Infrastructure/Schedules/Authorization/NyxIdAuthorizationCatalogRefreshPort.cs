@@ -13,6 +13,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
     private const string OrganizationOwnerNotSupportedFailureCode =
         "nyxid_catalog_organization_owner_not_supported";
     private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
+    private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
 
     private readonly INyxIdAuthorizationCatalogCommandPort _commandPort;
     private readonly INyxIdApiClientFactory _nyxClientFactory;
@@ -171,7 +172,16 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
     {
 
         var client = _nyxClientFactory.CreateClient();
-        var inventoryResponse = await client.ListUserServicesAsync(bearerToken, ct);
+        string inventoryResponse;
+        try
+        {
+            inventoryResponse = await client.ListUserServicesAsync(bearerToken, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return await HandleProviderTimeoutAsync(normalizedOwner, refreshId, sink, ct)
+                .ConfigureAwait(false);
+        }
         var inventoryResult = NyxIdApiAccessResponseParser.ParseUserServices(inventoryResponse);
         if (!inventoryResult.Succeeded)
         {
@@ -188,11 +198,20 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
             .ToArray();
         var selectedServiceIds = eligibleServices.Select(static service => service.Id).ToArray();
-        var scopePlanResponse = await client.PlanApiKeyScopeAsync(
-            bearerToken,
-            selectedServiceIds,
-            targetOrganizationId: null,
-            ct);
+        string scopePlanResponse;
+        try
+        {
+            scopePlanResponse = await client.PlanApiKeyScopeAsync(
+                bearerToken,
+                selectedServiceIds,
+                targetOrganizationId: null,
+                ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return await HandleProviderTimeoutAsync(normalizedOwner, refreshId, sink, ct)
+                .ConfigureAwait(false);
+        }
         var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
         if (!scopePlanResult.Succeeded)
         {
@@ -232,6 +251,25 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             contentDigest,
             services), ct);
 
+        return await AwaitTerminalResultAsync(sink, refreshId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<NyxIdAuthorizationCatalogRefreshResult> HandleProviderTimeoutAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
+        CancellationToken ct)
+    {
+        await _commandPort.RecordRefreshFailureAsync(
+            owner,
+            refreshId,
+            _timeProvider.GetUtcNow(),
+            ProviderTimedOutFailureCode,
+            ct);
+        _logger.LogWarning(
+            "NyxID authorization catalog provider request timed out. ownerKind={OwnerKind} failureCode={FailureCode}",
+            owner.OwnerKind,
+            ProviderTimedOutFailureCode);
         return await AwaitTerminalResultAsync(sink, refreshId, ct).ConfigureAwait(false);
     }
 
