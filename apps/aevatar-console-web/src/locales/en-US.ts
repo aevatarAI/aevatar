@@ -63,6 +63,38 @@ const enUSMessages = {
   'pages.chat.index.reviewPlan': 'Review the plan before creating resources.',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
   'pages.chat.index.status.completed': 'Completed',
+  'pages.chat.index.statusCenter.actionRequired': 'Action required',
+  'pages.chat.index.statusCenter.approvalTool': 'Tool: {toolName}',
+  'pages.chat.index.statusCenter.completed': 'Completed',
+  'pages.chat.index.statusCenter.completedDescription':
+    'The run completed. You can continue in chat.',
+  'pages.chat.index.statusCenter.completedTextDescription':
+    'The run completed. You can continue in chat.',
+  'pages.chat.index.statusCenter.completedTitle': 'Workflow created',
+  'pages.chat.index.statusCenter.completedWithTargetDescription':
+    'Open Studio to review the created workflow.',
+  'pages.chat.index.statusCenter.confirmDescription':
+    'No resources are created until you confirm.',
+  'pages.chat.index.statusCenter.creatingDescription':
+    'The current chat run is still working.',
+  'pages.chat.index.statusCenter.creatingTitle': 'Creating workflow',
+  'pages.chat.index.statusCenter.currentStep': 'Current step: {stepName}',
+  'pages.chat.index.statusCenter.error': 'Run stopped',
+  'pages.chat.index.statusCenter.errorDescription':
+    'This run stopped or failed. You can send a follow-up message to continue.',
+  'pages.chat.index.statusCenter.reviewAction': 'Review action',
+  'pages.chat.index.statusCenter.reviewBeforeCreate':
+    'Review before creating resources',
+  'pages.chat.index.statusCenter.runInterventionFallback':
+    'This run is waiting for an operator response.',
+  'pages.chat.index.statusCenter.runInterventionWaiting':
+    'Run input or approval is waiting below.',
+  'pages.chat.index.statusCenter.runningTool': 'Running tool: {toolName}',
+  'pages.chat.index.statusCenter.stopHelp':
+    'Stop only cancels the current chat run.',
+  'pages.chat.index.statusCenter.streamingTitle': 'Working on your request',
+  'pages.chat.index.statusCenter.toolApprovalWaiting':
+    'Tool approval is waiting below.',
   'pages.chat.index.status.creating': 'Creating',
   'pages.chat.index.status.draft': 'Draft',
   'pages.chat.index.status.error': 'Error',

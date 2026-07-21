@@ -3,7 +3,6 @@ import {
   EditOutlined,
   MessageOutlined,
   PlusOutlined,
-  SendOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -68,6 +67,17 @@ type ConversationState = {
 type StudioJump = {
   href: string;
   label: string;
+};
+
+type ChatRunStatusCenter = {
+  description: string;
+  detailLines: string[];
+  primaryAction?:
+    | { kind: "confirm"; label: string }
+    | { kind: "focus-action"; label: string }
+    | { kind: "open-target"; label: string };
+  tone: "default" | "processing" | "success" | "warning" | "error";
+  title: string;
 };
 
 function readChatQueryValue(
@@ -359,6 +369,207 @@ function formatRelativeTime(isoString: string): string {
   });
 }
 
+function findLatestAssistantMessage(
+  conversation: ConversationState | null | undefined
+): ChatMessage | null {
+  if (!conversation) {
+    return null;
+  }
+
+  return (
+    [...conversation.messages]
+      .reverse()
+      .find((message) => message.role === "assistant") ?? null
+  );
+}
+
+function findPendingActionMessage(
+  conversation: ConversationState | null | undefined
+): ChatMessage | null {
+  if (!conversation) {
+    return null;
+  }
+
+  return (
+    [...conversation.messages]
+      .reverse()
+      .find(
+        (message) => message.pendingApproval || message.pendingRunIntervention
+      ) ?? null
+  );
+}
+
+function buildChatRunStatusCenter(
+  conversation: ConversationState | null,
+  studioJump: StudioJump | null
+): ChatRunStatusCenter | null {
+  if (!conversation || conversation.messages.length === 0) {
+    return null;
+  }
+
+  const latestAssistantMessage = findLatestAssistantMessage(conversation);
+  const latestRunningStep = [...(latestAssistantMessage?.steps ?? [])]
+    .reverse()
+    .find((step) => step.status === "running");
+  const latestRunningTool = [...(latestAssistantMessage?.toolCalls ?? [])]
+    .reverse()
+    .find((toolCall) => toolCall.status === "running");
+  const pendingActionMessage = findPendingActionMessage(conversation);
+
+  if (pendingActionMessage?.pendingApproval) {
+    return {
+      description: t(
+        "pages.chat.index.statusCenter.toolApprovalWaiting",
+        "Tool approval is waiting below."
+      ),
+      detailLines: [
+        t("pages.chat.index.statusCenter.approvalTool", "Tool: {toolName}", {
+          toolName:
+            pendingActionMessage.pendingApproval.toolName ||
+            pendingActionMessage.pendingApproval.toolCallId ||
+            pendingActionMessage.pendingApproval.requestId,
+        }),
+      ],
+      primaryAction: {
+        kind: "focus-action",
+        label: t("pages.chat.index.statusCenter.reviewAction", "Review action"),
+      },
+      title: t("pages.chat.index.statusCenter.actionRequired", "Action required"),
+      tone: "warning",
+    };
+  }
+
+  if (pendingActionMessage?.pendingRunIntervention) {
+    return {
+      description: t(
+        "pages.chat.index.statusCenter.runInterventionWaiting",
+        "Run input or approval is waiting below."
+      ),
+      detailLines: [
+        pendingActionMessage.pendingRunIntervention.prompt ||
+          t(
+            "pages.chat.index.statusCenter.runInterventionFallback",
+            "This run is waiting for an operator response."
+          ),
+      ],
+      primaryAction: {
+        kind: "focus-action",
+        label: t("pages.chat.index.statusCenter.reviewAction", "Review action"),
+      },
+      title: t("pages.chat.index.statusCenter.actionRequired", "Action required"),
+      tone: "warning",
+    };
+  }
+
+  switch (conversation.status) {
+    case "needs_confirmation":
+      return {
+        description: t(
+          "pages.chat.index.statusCenter.confirmDescription",
+          "No resources are created until you confirm."
+        ),
+        detailLines: [],
+        primaryAction: {
+          kind: "confirm",
+          label: t("pages.chat.index.confirmAndCreate", "Confirm and create"),
+        },
+        title: t(
+          "pages.chat.index.statusCenter.reviewBeforeCreate",
+          "Review before creating resources"
+        ),
+        tone: "warning",
+      };
+    case "creating":
+    case "streaming": {
+      const detailLines: string[] = [];
+      if (latestRunningStep?.name) {
+        detailLines.push(
+          t("pages.chat.index.statusCenter.currentStep", "Current step: {stepName}", {
+            stepName: latestRunningStep.name,
+          })
+        );
+      }
+      if (latestRunningTool?.name) {
+        detailLines.push(
+          t("pages.chat.index.statusCenter.runningTool", "Running tool: {toolName}", {
+            toolName: latestRunningTool.name,
+          })
+        );
+      }
+      detailLines.push(
+        t(
+          "pages.chat.index.statusCenter.stopHelp",
+          "Stop only cancels the current chat run."
+        )
+      );
+
+      return {
+        description: t(
+          "pages.chat.index.statusCenter.creatingDescription",
+          "The current chat run is still working."
+        ),
+        detailLines,
+        title:
+          conversation.status === "creating"
+            ? t(
+                "pages.chat.index.statusCenter.creatingTitle",
+                "Creating workflow"
+              )
+            : t(
+                "pages.chat.index.statusCenter.streamingTitle",
+                "Working on your request"
+              ),
+        tone: "processing",
+      };
+    }
+    case "completed_with_studio_target":
+      return {
+        description: studioJump
+          ? t(
+              "pages.chat.index.statusCenter.completedWithTargetDescription",
+              "Open Studio to review the created workflow."
+            )
+          : t(
+              "pages.chat.index.statusCenter.completedDescription",
+              "The run completed. You can continue in chat."
+            ),
+        detailLines: [],
+        primaryAction: studioJump
+          ? {
+              kind: "open-target",
+              label: studioJump.label,
+            }
+          : undefined,
+        title: t("pages.chat.index.statusCenter.completedTitle", "Workflow created"),
+        tone: "success",
+      };
+    case "completed_text":
+      return {
+        description: t(
+          "pages.chat.index.statusCenter.completedTextDescription",
+          "The run completed. You can continue in chat."
+        ),
+        detailLines: [],
+        title: t("pages.chat.index.statusCenter.completed", "Completed"),
+        tone: "success",
+      };
+    case "error":
+      return {
+        description: t(
+          "pages.chat.index.statusCenter.errorDescription",
+          "This run stopped or failed. You can send a follow-up message to continue."
+        ),
+        detailLines: latestAssistantMessage?.error
+          ? [latestAssistantMessage.error]
+          : [],
+        title: t("pages.chat.index.statusCenter.error", "Run stopped"),
+        tone: "error",
+      };
+    default:
+      return null;
+  }
+}
+
 const ChatPage: React.FC = () => {
   const { token } = theme.useToken();
   const activeConversationRef = useRef<ConversationState | null>(null);
@@ -391,6 +602,14 @@ const ChatPage: React.FC = () => {
     activeConversation?.status === "streaming" ||
     activeConversation?.status === "creating";
   const studioJump = resolveStudioJump(activeConversation?.target);
+  const pendingActionMessage = useMemo(
+    () => findPendingActionMessage(activeConversation),
+    [activeConversation]
+  );
+  const statusCenter = useMemo(
+    () => buildChatRunStatusCenter(activeConversation, studioJump),
+    [activeConversation, studioJump]
+  );
 
   const refreshConversations = useCallback(async () => {
     if (!scopeId) {
@@ -807,6 +1026,19 @@ const ChatPage: React.FC = () => {
 
     history.push(studioJump.href);
   }, [studioJump]);
+  const handleFocusPendingAction = useCallback(() => {
+    if (!pendingActionMessage || typeof document === "undefined") {
+      return;
+    }
+
+    const element = document.getElementById(
+      `chat-message-${pendingActionMessage.id}`
+    );
+    element?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (element instanceof HTMLElement) {
+      element.focus();
+    }
+  }, [pendingActionMessage]);
 
   const messageCount = activeConversation?.messages.length ?? 0;
 
@@ -1048,13 +1280,100 @@ const ChatPage: React.FC = () => {
                   {formatStatusLabel(activeConversation.status)}
                 </Tag>
               ) : null}
-              {studioJump ? (
-                <Button onClick={handleOpenTarget} type="primary">
-                  {studioJump.label}
-                </Button>
-              ) : null}
             </Space>
           </div>
+
+          {statusCenter ? (
+            <div
+              style={{
+                background:
+                  statusCenter.tone === "warning"
+                    ? token.colorWarningBg
+                    : statusCenter.tone === "success"
+                      ? token.colorSuccessBg
+                      : statusCenter.tone === "error"
+                        ? token.colorErrorBg
+                        : token.colorInfoBg,
+                borderBottom: `1px solid ${
+                  statusCenter.tone === "warning"
+                    ? token.colorWarningBorder
+                    : statusCenter.tone === "success"
+                      ? token.colorSuccessBorder
+                      : statusCenter.tone === "error"
+                        ? token.colorErrorBorder
+                        : token.colorInfoBorder
+                }`,
+                padding: "14px 16px",
+              }}
+            >
+              <div
+                style={{
+                  alignItems: "flex-start",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 16,
+                  justifyContent: "space-between",
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <Typography.Text
+                    strong
+                    style={{
+                      color: token.colorTextHeading,
+                      fontSize: 16,
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    {statusCenter.title}
+                  </Typography.Text>
+                  <Typography.Text
+                    style={{
+                      color: token.colorTextSecondary,
+                      fontSize: 13,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {statusCenter.description}
+                  </Typography.Text>
+                  {statusCenter.detailLines.map((line) => (
+                    <Typography.Text
+                      key={line}
+                      style={{
+                        color: token.colorTextTertiary,
+                        fontSize: 12,
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      {line}
+                    </Typography.Text>
+                  ))}
+                </div>
+
+                {statusCenter.primaryAction ? (
+                  <Button
+                    onClick={() => {
+                      switch (statusCenter.primaryAction?.kind) {
+                        case "confirm":
+                          handleConfirmCreate();
+                          break;
+                        case "focus-action":
+                          handleFocusPendingAction();
+                          break;
+                        case "open-target":
+                          handleOpenTarget();
+                          break;
+                        default:
+                          break;
+                      }
+                    }}
+                    type="primary"
+                  >
+                    {statusCenter.primaryAction.label}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           {!scopeId && !authSessionQuery.isLoading ? (
             <Alert
@@ -1119,36 +1438,10 @@ const ChatPage: React.FC = () => {
                 }}
               >
                 {activeConversation?.messages.map((message) => (
-                  <ChatMessageBubble key={message.id} message={message} />
-                ))}
-                {activeConversation?.status === "needs_confirmation" ? (
-                  <div
-                    style={{
-                      background: token.colorWarningBg,
-                      border: `1px solid ${token.colorWarningBorder}`,
-                      borderRadius: token.borderRadius,
-                      marginLeft: 34,
-                      maxWidth: 760,
-                      padding: 12,
-                    }}
-                  >
-                    <Space direction="vertical" size={10}>
-                      <Typography.Text strong>
-                        {t(
-                          "pages.chat.index.reviewPlan",
-                          "Review the plan before creating resources."
-                        )}
-                      </Typography.Text>
-                      <Button
-                        icon={<SendOutlined />}
-                        onClick={handleConfirmCreate}
-                        type="primary"
-                      >
-                        {t("pages.chat.index.confirmAndCreate", "Confirm and create")}
-                      </Button>
-                    </Space>
+                  <div id={`chat-message-${message.id}`} key={message.id} tabIndex={-1}>
+                    <ChatMessageBubble message={message} />
                   </div>
-                ) : null}
+                ))}
               </Space>
             )}
             <div ref={scrollAnchorRef} />
