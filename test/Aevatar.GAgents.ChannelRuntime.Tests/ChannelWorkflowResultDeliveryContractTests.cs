@@ -1,6 +1,7 @@
 using System.Net;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AGUI.Contracts;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -12,6 +13,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Credentials.Testing;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.EventSourcing;
@@ -25,6 +27,7 @@ using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
@@ -38,6 +41,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -199,6 +203,197 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         relayHandler.Requests[0].Body.Should().Contain("\"text\":\"invoice approved\"");
     }
 
+    [Fact]
+    public async Task RepairedHistoricalHandle_ShouldPreserveRegistrationAndDeliverWorkflowTeamResult()
+    {
+        const string rawRepairedAgentKey = "nyxid_ag_repaired_alpha";
+        const string registrationId = "reg-alpha";
+        const string requestId = "repair-alpha";
+        var secretVault = new InMemorySecretVault();
+        var relayHandler = new QueueHandler();
+        relayHandler.Enqueue("""{"message_id":"reply-repaired","platform_message_id":"platform-repaired"}""");
+        var callbackScheduler = new NoopCallbackScheduler();
+        using var actorNetwork = new ContractActorNetwork(
+            CreateOutboundPort(relayHandler),
+            new SecretVaultWorkflowResultDeliveryCredentialResolver(secretVault),
+            callbackScheduler);
+
+        var documentStore = new RegistrationDocumentStore();
+        var projector = new ChannelBotRegistrationProjector(documentStore, new SystemProjectionClock());
+        var projectionHook = new RegistrationProjectionHook(projector);
+        var registrationLogger = new RecordingLogger<ChannelBotRegistrationGAgent>();
+        using var registrationServices = BuildEventSourcingServices(callbackScheduler, projectionHook);
+        var registrationAgent = new ChannelBotRegistrationGAgent
+        {
+            Services = registrationServices,
+            EventSourcingBehaviorFactory =
+                registrationServices.GetRequiredService<IEventSourcingBehaviorFactory<ChannelBotRegistrationStoreState>>(),
+            Logger = registrationLogger,
+        };
+        SetId(registrationAgent, ChannelBotRegistrationGAgent.WellKnownId);
+        await registrationAgent.ActivateAsync();
+        actorNetwork.RegisterActivated(ChannelBotRegistrationGAgent.WellKnownId, registrationAgent);
+
+        await registrationAgent.HandleRegister(new ChannelBotRegisterCommand
+        {
+            RequestedId = registrationId,
+            Platform = "lark",
+            ScopeId = "scope-alpha",
+            NyxProviderSlug = "api-lark-bot-alpha",
+            WebhookUrl = "https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha",
+            NyxChannelBotId = "bot-alpha",
+            NyxAgentApiKeyId = "key-old-alpha",
+            NyxConversationRouteId = "route-alpha",
+            DefaultSkillName = "team-entry-alpha",
+        });
+        var stored = await secretVault.PutAsync(new StoreSecretRequest(
+            CredentialSecretPurposes.ChannelWorkflowResultDeliveryAgentKey,
+            "scope-alpha",
+            "key-new-alpha",
+            rawRepairedAgentKey,
+            "channel workflow delivery repair contract"));
+
+        await registrationAgent.HandleWorkflowResultDeliveryRepairRequest(new()
+        {
+            RegistrationId = registrationId,
+            RequestId = requestId,
+            ExpectedApiKeyId = "key-old-alpha",
+            ExpectedConversationRouteId = "route-alpha",
+            RequestedBySubjectId = "user-alpha",
+            RequestedAtUnixMs = 1784563200000,
+        });
+        await registrationAgent.HandleWorkflowResultDeliveryRepairPrepare(new()
+        {
+            RegistrationId = registrationId,
+            RequestId = requestId,
+            ExpectedApiKeyId = "key-old-alpha",
+            RotatedApiKeyId = "key-new-alpha",
+            PreparedSecretReference = stored.Reference.Clone(),
+            UpdatedAtUnixMs = 1784563201000,
+        });
+
+        var registrationQuery = new ChannelBotRegistrationQueryPort(documentStore);
+        var preparingRegistration = await registrationQuery.GetAsync(registrationId);
+        preparingRegistration.Should().NotBeNull();
+        ChannelWorkflowResultDeliveryCapability.Resolve(preparingRegistration!)
+            .Should().Be(ChannelWorkflowResultDeliveryCapabilityStatus.Repairing);
+        preparingRegistration.NyxAgentApiKeyId.Should().Be("key-old-alpha");
+
+        await registrationAgent.HandleWorkflowResultDeliveryRepairComplete(new()
+        {
+            RegistrationId = registrationId,
+            RequestId = requestId,
+            ExpectedApiKeyId = "key-old-alpha",
+            RotatedApiKeyId = "key-new-alpha",
+            PreparedSecretReference = stored.Reference.Clone(),
+            UpdatedAtUnixMs = 1784563202000,
+        });
+
+        var projectedRegistration = await registrationQuery.GetAsync(registrationId);
+        projectedRegistration.Should().NotBeNull();
+        projectedRegistration!.NyxChannelBotId.Should().Be("bot-alpha");
+        projectedRegistration.NyxConversationRouteId.Should().Be("route-alpha");
+        projectedRegistration.WebhookUrl.Should().Be(
+            "https://nyx.example/api/v1/webhooks/channel/lark/bot-alpha");
+        projectedRegistration.ScopeId.Should().Be("scope-alpha");
+        projectedRegistration.DefaultSkillName.Should().Be("team-entry-alpha");
+        projectedRegistration.NyxAgentApiKeyId.Should().Be("key-new-alpha");
+        projectedRegistration.WorkflowResultDeliveryCredential.Should().Be(stored.Reference);
+        projectedRegistration.WorkflowResultDeliveryRepair.Should().BeNull();
+        ChannelWorkflowResultDeliveryCapability.Resolve(projectedRegistration)
+            .Should().Be(ChannelWorkflowResultDeliveryCapabilityStatus.Enabled);
+
+        var safeRepairResult = new ChannelWorkflowResultDeliveryRepairResult(
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired,
+            requestId,
+            registrationId,
+            "key-new-alpha");
+        var httpShapedRepairJson = JsonSerializer.Serialize(
+            safeRepairResult,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        var turnRunner = CreateTurnRunner(registrationQuery);
+        var turn = await turnRunner.RunInboundAsync(
+            BuildInboundActivity(registrationId),
+            CancellationToken.None);
+        turn.Success.Should().BeTrue();
+        turn.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(turn.LlmReplyRequest!.ToolContext);
+        toolContext.Caller.ScopeId.Should().Be("scope-alpha");
+        toolContext.Channel.BotRegistrationId.Should().Be(registrationId);
+        toolContext.Channel.WorkflowResultDeliveryCredential.Should().NotBeNull();
+        toolContext.Channel.WorkflowResultDeliveryCredential!.SecretReference.Should().Be(stored.Reference);
+        toolContext.Channel.WorkflowResultDeliveryCredential.SubjectId.Should().Be("key-new-alpha");
+
+        var workflowDispatch = new ContractWorkflowDispatchService(actorNetwork);
+        var teamResolver = new ContractTeamEntryMemberResolver();
+        var serviceResolution = new ContractServiceInvocationResolutionPort();
+        var serviceDispatcher = new ContractWorkflowServiceInvocationDispatcher(workflowDispatch);
+        var admissionAuthorizer = new ContractInvokeAdmissionAuthorizer();
+        var deliveryRegistration = new WorkflowRunBackgroundDeliveryRegistrationPort(
+            actorNetwork,
+            actorNetwork,
+            NullLogger<WorkflowRunBackgroundDeliveryRegistrationPort>.Instance);
+        var invocationLogger = new RecordingLogger<AevatarInvocationDispatcher>();
+        var invocationDispatcher = CreateInvocationDispatcher(
+            actorNetwork,
+            workflowDispatch,
+            deliveryRegistration,
+            teamResolver,
+            serviceResolution,
+            serviceDispatcher,
+            admissionAuthorizer,
+            invocationLogger);
+
+        using var toolContextScope = AgentToolContextScope.Push(toolContext);
+        var result = await invocationDispatcher.InvokeTeamForChatRunAsync(
+            null,
+            """
+            {
+              "team_id": "team-alpha",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "invoice repaired" },
+              "wait": "stream"
+            }
+            """);
+
+        result.ErrorCode.Should().BeEmpty();
+        result.Status.Should().Be("streaming");
+        result.ServiceId.Should().Be("svc-alpha");
+        teamResolver.LastScopeId.Should().Be("scope-alpha");
+        teamResolver.LastTeamId.Should().Be("team-alpha");
+        serviceResolution.Request.Should().NotBeNull();
+        serviceResolution.Request!.Identity.ServiceId.Should().Be("svc-alpha");
+        admissionAuthorizer.Calls.Should().Be(1);
+        serviceDispatcher.Request.Should().NotBeNull();
+
+        var deliveryAgent = actorNetwork.Agents
+            .OfType<WorkflowRunDeliveryGAgent>()
+            .Should()
+            .ContainSingle()
+            .Subject;
+        deliveryAgent.State.Status.Should().Be(WorkflowRunDeliveryStatus.Delivered);
+        relayHandler.Requests.Should().ContainSingle();
+        relayHandler.Requests[0].Authorization.Should().Be($"Bearer {rawRepairedAgentKey}");
+        relayHandler.Requests[0].Body.Should().Contain("\"text\":\"invoice repaired\"");
+
+        registrationAgent.State.ToString().Should().NotContain(rawRepairedAgentKey);
+        documentStore.Documents[registrationId].ToString().Should().NotContain(rawRepairedAgentKey);
+        projectionHook.Publications.Should().OnlyContain(publication =>
+            !Encoding.UTF8.GetString(publication.ToByteArray()).Contains(
+                rawRepairedAgentKey,
+                StringComparison.Ordinal));
+        safeRepairResult.ToString().Should().NotContain(rawRepairedAgentKey)
+            .And.NotContain(stored.Reference.Ref);
+        httpShapedRepairJson.Should().NotContain(rawRepairedAgentKey)
+            .And.NotContain(stored.Reference.Ref);
+        result.ToolExecutionResultJson.Should().NotContain(rawRepairedAgentKey)
+            .And.NotContain(stored.Reference.Ref);
+        registrationLogger.Messages.Concat(invocationLogger.Messages).Should().OnlyContain(message =>
+            !message.Contains(rawRepairedAgentKey, StringComparison.Ordinal) &&
+            !message.Contains(stored.Reference.Ref, StringComparison.Ordinal));
+    }
+
     private static ServiceProvider BuildEventSourcingServices(
         IActorRuntimeCallbackScheduler callbackScheduler,
         ICommittedStatePublicationHook? publicationHook = null)
@@ -237,21 +432,26 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
         IActorDispatchPort actorDispatchPort,
         ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
             workflowDispatchService,
-        IWorkflowRunBackgroundDeliveryRegistrationPort deliveryRegistration) =>
+        IWorkflowRunBackgroundDeliveryRegistrationPort deliveryRegistration,
+        ITeamEntryMemberResolver? teamEntryMemberResolver = null,
+        IServiceInvocationResolutionPort? serviceInvocationResolutionPort = null,
+        IServiceInvocationDispatcher? serviceInvocationDispatcher = null,
+        IInvokeAdmissionAuthorizer? admissionAuthorizer = null,
+        ILogger<AevatarInvocationDispatcher>? logger = null) =>
         new(
             actorDispatchPort,
             Substitute.For<IGAgentActorRegistryQueryPort>(),
-            Substitute.For<ITeamEntryMemberResolver>(),
+            teamEntryMemberResolver ?? Substitute.For<ITeamEntryMemberResolver>(),
             Substitute.For<IStaticGAgentStreamInvocationPort<AGUIEvent>>(),
             workflowDispatchService,
-            Substitute.For<IServiceInvocationResolutionPort>(),
-            Substitute.For<IServiceInvocationDispatcher>(),
-            Substitute.For<IInvokeAdmissionAuthorizer>(),
+            serviceInvocationResolutionPort ?? Substitute.For<IServiceInvocationResolutionPort>(),
+            serviceInvocationDispatcher ?? Substitute.For<IServiceInvocationDispatcher>(),
+            admissionAuthorizer ?? Substitute.For<IInvokeAdmissionAuthorizer>(),
             Substitute.For<IServiceRunQueryPort>(),
             Substitute.For<IGAgentRunTerminalQueryPort>(),
             Substitute.For<IWorkflowExecutionQueryApplicationService>(),
             deliveryRegistration,
-            NullLogger<AevatarInvocationDispatcher>.Instance);
+            logger ?? NullLogger<AevatarInvocationDispatcher>.Instance);
 
     private static ChatActivity BuildInboundActivity(string registrationId) =>
         new()
@@ -410,6 +610,162 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
                     context.CommandId,
                     context.CorrelationId),
                 admission);
+        }
+    }
+
+    private sealed class ContractTeamEntryMemberResolver : ITeamEntryMemberResolver
+    {
+        public string? LastScopeId { get; private set; }
+        public string? LastTeamId { get; private set; }
+
+        public Task<TeamEntryMemberResolution> ResolveAsync(
+            string scopeId,
+            string teamId,
+            string endpointId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastScopeId = scopeId;
+            LastTeamId = teamId;
+            return Task.FromResult(new TeamEntryMemberResolution(
+                "scope-alpha",
+                "team-alpha",
+                "m-alpha",
+                "svc-alpha"));
+        }
+    }
+
+    private sealed class ContractServiceInvocationResolutionPort : IServiceInvocationResolutionPort
+    {
+        public ServiceInvocationRequest? Request { get; private set; }
+
+        public Task<bool> HasServiceAsync(
+            ServiceIdentity identity,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(string.Equals(identity.ServiceId, "svc-alpha", StringComparison.Ordinal));
+        }
+
+        public Task<ServiceInvocationResolvedTarget> ResolveAsync(
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Request = request.Clone();
+            var endpoint = new ServiceEndpointDescriptor
+            {
+                EndpointId = "chat",
+                DisplayName = "Workflow chat",
+                Kind = ServiceEndpointKind.Chat,
+                RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+            };
+            var artifact = new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-alpha",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "svc-alpha",
+                },
+                RevisionId = "rev-alpha",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                ArtifactHash = "artifact-alpha",
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "wf-alpha",
+                        WorkflowYaml = "name: wf-alpha\nroles: []\nsteps:\n  - id: result\n    type: transform",
+                        DefinitionActorId = "wf-definition-alpha",
+                    },
+                },
+            };
+            artifact.Endpoints.Add(endpoint.Clone());
+            return Task.FromResult(new ServiceInvocationResolvedTarget(
+                new ServiceInvocationResolvedService(
+                    "scope-alpha:default:default:svc-alpha",
+                    "rev-alpha",
+                    "deployment-alpha",
+                    "wf-definition-alpha",
+                    "Active",
+                    []),
+                artifact,
+                endpoint));
+        }
+    }
+
+    private sealed class ContractWorkflowServiceInvocationDispatcher(
+        ContractWorkflowDispatchService workflowDispatch)
+        : IServiceInvocationDispatcher
+    {
+        public ServiceInvocationRequest? Request { get; private set; }
+
+        public async Task<ServiceInvocationAcceptedReceipt> DispatchAsync(
+            ServiceInvocationResolvedTarget target,
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            Request = request.Clone();
+            var chatRequest = request.Payload?.Unpack<ChatRequestEvent>()
+                              ?? throw new InvalidOperationException(
+                                  "The contract workflow Team entry requires a ChatRequestEvent payload.");
+            var plan = target.Artifact.DeploymentPlan?.WorkflowPlan
+                       ?? throw new InvalidOperationException(
+                           "The contract workflow Team entry requires a workflow deployment plan.");
+            var notification = request.WorkflowCompletionNotificationTarget is null
+                ? null
+                : new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCompletionNotificationTarget(
+                    request.WorkflowCompletionNotificationTarget.ActorId,
+                    request.WorkflowCompletionNotificationTarget.DeliveryId,
+                    request.WorkflowCompletionNotificationTarget.ExpiresAtUnixMs);
+            var dispatched = await workflowDispatch.DispatchAsync(
+                new WorkflowChatRunRequest(
+                    Prompt: chatRequest.Prompt,
+                    Source: WorkflowChatSource.InlineYamlBundle(
+                        [plan.WorkflowYaml],
+                        plan.WorkflowName,
+                        WorkflowActorId),
+                    SessionId: chatRequest.SessionId,
+                    ScopeId: request.Identity?.TenantId ?? chatRequest.ScopeId,
+                    CommandIdSeed: request.CommandId,
+                    CorrelationIdSeed: request.CorrelationId,
+                    CompletionNotificationTarget: notification),
+                ct);
+            if (!dispatched.Succeeded || dispatched.Receipt is null)
+                throw new InvalidOperationException("The contract workflow Team entry was not accepted.");
+
+            var receipt = dispatched.Receipt;
+            return new ServiceInvocationAcceptedReceipt
+            {
+                RequestId = receipt.CommandId,
+                ServiceKey = target.Service.ServiceKey,
+                DeploymentId = target.Service.DeploymentId,
+                TargetActorId = receipt.ActorId,
+                EndpointId = target.Endpoint.EndpointId,
+                CommandId = receipt.CommandId,
+                CorrelationId = receipt.CorrelationId,
+                RunId = receipt.ActorId,
+            };
+        }
+    }
+
+    private sealed class ContractInvokeAdmissionAuthorizer : IInvokeAdmissionAuthorizer
+    {
+        public int Calls { get; private set; }
+
+        public Task AuthorizeAsync(
+            string serviceKey,
+            string deploymentId,
+            PreparedServiceRevisionArtifact artifact,
+            ServiceEndpointDescriptor endpoint,
+            ServiceInvocationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Calls++;
+            return Task.CompletedTask;
         }
     }
 
@@ -687,6 +1043,31 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
 
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) => Task.CompletedTask;
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
+
+        private sealed class NullScope : IDisposable
+        {
+            public static NullScope Instance { get; } = new();
+            public void Dispose()
+            {
+            }
+        }
     }
 
     private sealed class QueueHandler : HttpMessageHandler

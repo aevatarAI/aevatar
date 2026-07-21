@@ -453,6 +453,9 @@ internal sealed class ChannelWorkflowResultDeliveryRepairService
             ? DateTimeOffset.FromUnixTimeMilliseconds(repair.RequestedAtUnixMs)
             : DateTimeOffset.MinValue;
         var expectedName = ChannelWorkflowResultDeliveryRepairNyxPort.RelayKeyName(registration.Id);
+        var expectedKeyIsActive = keys.Any(key =>
+            key.IsActive &&
+            string.Equals(key.ApiKeyId, repair.ExpectedApiKeyId, StringComparison.Ordinal));
         var candidates = keys
             .Where(key => key.IsActive)
             .Where(key => string.Equals(key.Name, expectedName, StringComparison.Ordinal))
@@ -466,7 +469,8 @@ internal sealed class ChannelWorkflowResultDeliveryRepairService
             .ToArray();
         return candidates.Length switch
         {
-            0 => new RotationSourceResolution(repair.ExpectedApiKeyId, false),
+            0 when expectedKeyIsActive =>
+                new RotationSourceResolution(repair.ExpectedApiKeyId, false),
             1 => new RotationSourceResolution(candidates[0], false),
             _ => new RotationSourceResolution(string.Empty, true),
         };

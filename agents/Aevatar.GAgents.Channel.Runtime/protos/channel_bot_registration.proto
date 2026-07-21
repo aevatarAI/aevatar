@@ -35,7 +35,7 @@ message ChannelBotRegistrationEntry {
   // (purpose channel.workflow-result-delivery-agent-key). The vault subject is
   // nyx_agent_api_key_id. Absent when the registration was provisioned without
   // capturing the NyxID full_key; such bots fail closed for wait=stream workflow
-  // background delivery until re-registered.
+  // background delivery until the owner completes in-place repair.
   aevatar.credentials.SecretReference workflow_result_delivery_credential = 15;
   // Ornn skill this bot's plain inbound text messages are routed to. When set,
   // a non-command message is treated as an invocation of this skill with the

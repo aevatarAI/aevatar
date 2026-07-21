@@ -281,6 +281,14 @@ public sealed class ChannelWorkflowResultDeliveryRepairServiceTests
                 true,
                 Now));
         }
+        else
+        {
+            fixture.Nyx.Keys.Add(new ChannelNyxAgentKeySummary(
+                "key-old-alpha",
+                ChannelWorkflowResultDeliveryRepairNyxPort.RelayKeyName("reg-alpha"),
+                true,
+                Now.AddMinutes(-1)));
+        }
 
         var result = await fixture.Service.RepairAsync(
             "reg-alpha",
@@ -291,6 +299,28 @@ public sealed class ChannelWorkflowResultDeliveryRepairServiceTests
         result.Status.Should().Be(ChannelWorkflowResultDeliveryRepairResultStatus.Repaired);
         fixture.Nyx.ListCalls.Should().Be(1);
         fixture.Nyx.RotationSourceKeyIds.Should().Equal(expectedRotationSource);
+    }
+
+    [Fact]
+    public async Task RepairAsync_ExistingRequestedStateWithoutActiveSourceCommitsAmbiguousRecovery()
+    {
+        var entry = Registration();
+        entry.WorkflowResultDeliveryRepair = RequestedRepair();
+        var fixture = new Fixture(entry);
+
+        var result = await fixture.Service.RepairAsync(
+            "reg-alpha",
+            "scope-alpha",
+            "user-alpha",
+            "user-bearer-alpha");
+
+        result.Status.Should().Be(ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed);
+        result.FailurePhase.Should().Be(
+            ChannelWorkflowResultDeliveryRepairPhase.RotatedKeyRecovery);
+        result.FailureReason.Should().Be(
+            ChannelWorkflowResultDeliveryRepairFailureReason.AmbiguousRotatedKeyRecovery);
+        fixture.Nyx.RotationSourceKeyIds.Should().BeEmpty();
+        fixture.Commands.Failures.Should().ContainSingle();
     }
 
     [Fact]
