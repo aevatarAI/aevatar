@@ -55,13 +55,15 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode executionMode)
+        ExternalCapabilityExecutionMode executionMode,
+        WorkflowCapabilityAdmissionPlan? existingPlan = null)
     {
         Access = access ?? throw new ArgumentNullException(nameof(access));
         WorkflowYaml = workflowYaml ?? string.Empty;
         InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
         SourceKind = sourceKind?.Trim() ?? string.Empty;
         ExecutionMode = executionMode;
+        ExistingPlan = existingPlan?.Clone();
     }
 
     public ExternalWorkflowCapabilityAccessContext Access { get; }
@@ -73,6 +75,33 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
     public string SourceKind { get; }
 
     public ExternalCapabilityExecutionMode ExecutionMode { get; }
+
+    public WorkflowCapabilityAdmissionPlan? ExistingPlan { get; }
+
+    public IReadOnlyList<string>? WorkflowYamls { get; private init; }
+
+    public static WorkflowExternalCapabilityAdmissionRequest FromWorkflowYamls(
+        ExternalWorkflowCapabilityAccessContext access,
+        IReadOnlyList<string> workflowYamls,
+        string sourceKind,
+        ExternalCapabilityExecutionMode executionMode,
+        WorkflowCapabilityAdmissionPlan? existingPlan = null)
+    {
+        ArgumentNullException.ThrowIfNull(workflowYamls);
+        if (workflowYamls.Count == 0)
+            throw new InvalidOperationException("At least one workflow YAML is required.");
+
+        return new WorkflowExternalCapabilityAdmissionRequest(
+            access,
+            string.Empty,
+            new Dictionary<string, string>(),
+            sourceKind,
+            executionMode,
+            existingPlan)
+        {
+            WorkflowYamls = workflowYamls.ToArray(),
+        };
+    }
 
     public override string ToString() =>
         $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, Definition = [REDACTED] }}";
@@ -112,6 +141,28 @@ public interface IWorkflowExternalCapabilityAdmissionService
     Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
         WorkflowExternalCapabilityAdmissionRequest request,
         CancellationToken cancellationToken = default);
+}
+
+public sealed class WorkflowExternalCapabilityAdmissionException : InvalidOperationException
+{
+    public WorkflowExternalCapabilityAdmissionException(ExternalCapabilityReadiness readiness)
+        : base(BuildSafeMessage(readiness))
+    {
+        Readiness = readiness?.Clone() ?? throw new ArgumentNullException(nameof(readiness));
+    }
+
+    public ExternalCapabilityReadiness Readiness { get; }
+
+    private static string BuildSafeMessage(ExternalCapabilityReadiness? readiness)
+    {
+        if (readiness is null)
+            return "External workflow capability admission failed.";
+
+        var blocker = readiness.Blockers.FirstOrDefault();
+        return string.IsNullOrWhiteSpace(blocker?.SafeMessage)
+            ? $"External workflow capability admission failed: {readiness.Status}."
+            : $"External workflow capability admission failed: {blocker.Code}: {blocker.SafeMessage}";
+    }
 }
 
 /// <summary>Length-prefixed SHA-256 for stable capability and source contract fingerprints.</summary>

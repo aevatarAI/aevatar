@@ -14,6 +14,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -50,6 +51,7 @@ public sealed class ScopeWorkflowEndpointsTests
     public async Task HandleSaveAndBindWorkflowAsync_ShouldReturnAccepted_WithoutRequestRevisionId()
     {
         var http = CreateHttpContext();
+        http.Request.Headers.Authorization = "Bearer transient-caller-token";
         var port = new RecordingScopeWorkflowSaveAndBindPort();
 
         var result = await ScopeWorkflowEndpoints.HandleSaveAndBindWorkflowAsync(
@@ -81,6 +83,9 @@ public sealed class ScopeWorkflowEndpointsTests
         port.Request.AppId.Should().Be("studio");
         port.Request.ServiceId.Should().Be("svc-alpha");
         port.Request.ExposureDesired.Should().BeTrue();
+        port.Request.CapabilityAdmission.Should().NotBeNull();
+        port.Request.CapabilityAdmission!.CallerId.Should().Be("caller-alpha");
+        port.Request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("transient-caller-token");
         body.Should().Contain("\"revisionId\":\"rev-generated\"");
         body.Should().Contain("\"acceptanceStage\":\"accepted\"");
         body.Should().Contain("\"propagationStage\":\"readmodel_propagating\"");
@@ -898,7 +903,8 @@ public sealed class ScopeWorkflowEndpointsTests
                 ServiceAppId = "default",
                 ServiceNamespace = "default",
                 DefinitionActorIdPrefix = "scope-workflow",
-            }));
+            }),
+            new PassthroughWorkflowCapabilityAdmissionService());
     }
 
     private static IScopeWorkflowQueryPort BuildQueryPort(
@@ -932,7 +938,10 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.Body = new MemoryStream();
         http.User = new ClaimsPrincipal(
             new ClaimsIdentity(
-                [new Claim("scope_id", scopeId)],
+                [
+                    new Claim("scope_id", scopeId),
+                    new Claim("sub", "caller-alpha"),
+                ],
                 authenticationType: "test"));
         return http;
     }
@@ -1228,6 +1237,19 @@ public sealed class ScopeWorkflowEndpointsTests
             Commands.Add(command);
             return Task.FromResult(Result);
         }
+    }
+
+    private sealed class PassthroughWorkflowCapabilityAdmissionService : IWorkflowExternalCapabilityAdmissionService
+    {
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                request.WorkflowYaml,
+                request.InlineWorkflowYamls,
+                request.ExecutionMode,
+                [],
+                []));
     }
 
     private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort

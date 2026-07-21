@@ -52,6 +52,7 @@ using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
@@ -201,6 +202,7 @@ public static class ServiceCollectionExtensions
             sp.GetService<IScriptDefinitionSnapshotPort>(),
             sp.GetRequiredService<IWorkflowDefinitionParser>(),
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ScopeWorkflowCapabilityOptions>>(),
+            sp.GetRequiredService<IWorkflowExternalCapabilityAdmissionService>(),
             sp.GetService<IAgentKindRegistry>(),
             sp.GetService<IServiceExternalExposureIntentPort>()));
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();

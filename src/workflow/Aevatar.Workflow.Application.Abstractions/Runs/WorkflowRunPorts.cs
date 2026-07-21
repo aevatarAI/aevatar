@@ -32,7 +32,9 @@ public sealed record WorkflowDefinitionBinding(
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     string ScopeId = "",
     string RunOrigin = "",
-    string ScheduleId = "");
+    string ScheduleId = "",
+    string SourceKind = "",
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
@@ -55,7 +57,9 @@ public sealed record WorkflowActorBinding(
     long SourceVersion = 0,
     string SourceEventId = "",
     DateTimeOffset? CreatedAt = null,
-    DateTimeOffset? UpdatedAt = null)
+    DateTimeOffset? UpdatedAt = null,
+    string SourceKind = "",
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -208,6 +212,8 @@ public interface IWorkflowDefinitionProvisioningPort
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
+        string? sourceKind = null,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
         CancellationToken ct = default);
 }
 

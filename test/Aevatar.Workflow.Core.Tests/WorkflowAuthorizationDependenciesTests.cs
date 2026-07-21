@@ -177,17 +177,77 @@ public sealed class WorkflowAuthorizationDependenciesTests
         {
             EventSourcingBehaviorFactory = new InMemoryWorkflowEventSourcingBehaviorFactory(),
         };
+        var actual = agent.EvaluateAuthorizationDependencies(yaml)!;
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            actual.ExternalCapabilities,
+            [ReadySourceStamp()]);
 
         await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
         {
             WorkflowName = "wf-alpha",
             WorkflowYaml = yaml,
             AuthorizationDependencies = forged,
+            CapabilityAdmissionPlan = admissionPlan,
         });
 
         agent.State.AuthorizationDependencies.ExternalCapabilities.Should().ContainSingle();
         agent.State.AuthorizationDependencies.ExternalCapabilities[0]
             .NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_ShouldRejectAdmissionPlanDefinitionDigestMismatch()
+    {
+        var yaml = ExactNyxIdWorkflowYaml();
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml)!;
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: another-workflow\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            dependencies.ExternalCapabilities,
+            [ReadySourceStamp()]);
+        var agent = NewAgent();
+
+        var act = () => agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "wf-alpha",
+            WorkflowYaml = yaml,
+            CapabilityAdmissionPlan = plan,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*definition digest*");
+        agent.State.Version.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_ShouldRejectAdmissionPlanCapabilityMismatch()
+    {
+        var yaml = ExactNyxIdWorkflowYaml();
+        var dependencies = new WorkflowGAgent().EvaluateAuthorizationDependencies(yaml)!;
+        var forged = dependencies.ExternalCapabilities[0].Clone();
+        forged.NyxIdUserService.UserServiceId = "us-forged-beta";
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [forged],
+            [ReadySourceStamp()]);
+        var agent = NewAgent();
+
+        var act = () => agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "wf-alpha",
+            WorkflowYaml = yaml,
+            CapabilityAdmissionPlan = plan,
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*capabilit*");
+        agent.State.Version.Should().Be(0);
     }
 
     [Theory]
@@ -212,6 +272,36 @@ public sealed class WorkflowAuthorizationDependenciesTests
         result.ExternalCapabilities.Should().BeEmpty();
         result.ServiceGrantPolicy.Should().Be(WorkflowServiceGrantPolicy.NotRequiredNoExternalService);
     }
+
+    private static WorkflowGAgent NewAgent() =>
+        new()
+        {
+            EventSourcingBehaviorFactory = new InMemoryWorkflowEventSourcingBehaviorFactory(),
+        };
+
+    private static string ExactNyxIdWorkflowYaml() =>
+        """
+        name: wf-alpha
+        roles: []
+        steps:
+          - id: proxy
+            type: tool_call
+            parameters:
+              tool: nyxid_proxy
+              arguments: '{"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"get-state","method":"GET","path":"/states/{entity_id}","contract_digest":"operation-digest"}'
+        """;
+
+    private static ExternalCapabilitySourceStamp ReadySourceStamp() =>
+        new()
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+            SourceId = "nyxid-user-services:caller",
+            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
+            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
+            ContentDigest = "source-digest",
+        };
 
     private sealed class InMemoryWorkflowEventSourcingBehaviorFactory
         : IEventSourcingBehaviorFactory<WorkflowState>

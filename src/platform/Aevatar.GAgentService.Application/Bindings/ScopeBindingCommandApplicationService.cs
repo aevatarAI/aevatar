@@ -10,6 +10,8 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -27,6 +29,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     private readonly IScopeScriptQueryPort? _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort? _scriptDefinitionSnapshotPort;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
     private readonly IServiceExternalExposureIntentPort _externalExposureIntentPort;
     private readonly IAgentKindRegistry? _agentKindRegistry;
     private readonly ScopeWorkflowCapabilityOptions _options;
@@ -40,6 +43,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         IScriptDefinitionSnapshotPort? scriptDefinitionSnapshotPort,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IOptions<ScopeWorkflowCapabilityOptions> options,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         IAgentKindRegistry? agentKindRegistry = null,
         IServiceExternalExposureIntentPort? externalExposureIntentPort = null)
     {
@@ -52,6 +56,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _scopeScriptQueryPort = scopeScriptQueryPort;
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort;
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _capabilityAdmissionService = capabilityAdmissionService ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
         _externalExposureIntentPort = externalExposureIntentPort ?? new ServiceCommandExternalExposureIntentPort(serviceCommandPort);
         _agentKindRegistry = agentKindRegistry;
         ArgumentNullException.ThrowIfNull(options);
@@ -375,6 +380,21 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
+        var admissionContext = request.CapabilityAdmission;
+        var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+            new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    normalizedScopeId,
+                    admissionContext?.CallerId ?? string.Empty,
+                    admissionContext?.NyxIdCallerBearerToken,
+                    admissionContext?.NyxIdOrganizationBearerToken),
+                workflowBundle.EntryWorkflowYaml,
+                workflowBundle.SubWorkflowYamls,
+                "scope_binding_upsert",
+                executionMode,
+                admissionContext?.ExistingPlan),
+            ct);
         var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
         var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
         var definitionActorIdPrefix = string.IsNullOrWhiteSpace(suppliedWorkflowId)
@@ -407,6 +427,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                         WorkflowName = workflowBundle.EntryWorkflowName,
                         WorkflowYaml = workflowBundle.EntryWorkflowYaml,
                         DefinitionActorId = definitionActorIdPrefix,
+                        CapabilityAdmissionPlan = capabilityAdmissionPlan,
                     },
                 };
                 ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(

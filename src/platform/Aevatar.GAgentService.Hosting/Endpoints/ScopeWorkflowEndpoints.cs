@@ -123,7 +123,10 @@ public static class ScopeWorkflowEndpoints
                 request.WorkflowName,
                 request.DisplayName,
                 request.InlineWorkflowYamls,
-                request.RevisionId), ct);
+                request.RevisionId)
+            {
+                CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+            }, ct);
             return Results.Accepted(result.ReadModelUrl, result);
         }
         catch (InvalidOperationException ex)
@@ -158,7 +161,10 @@ public static class ScopeWorkflowEndpoints
                     request.InlineWorkflowYamls,
                     request.AppId,
                     request.ServiceId,
-                    request.ExposureDesired),
+                    request.ExposureDesired)
+                {
+                    CapabilityAdmission = WorkflowCapabilityAdmissionHttpContext.Create(http),
+                },
                 ct);
             return Results.Accepted(result.Workflow.ReadModelUrl, result);
         }

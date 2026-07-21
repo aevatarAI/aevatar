@@ -504,6 +504,15 @@ public sealed class WorkflowRunActorPortBranchTests
         var actor = new RecordingActor("definition-inline-bind", new WorkflowGAgent());
         runtime.StoredActors[actor.Id] = actor;
         var port = CreatePort(runtime);
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: direct\nroles: []\nsteps: []\n",
+            new Dictionary<string, string>
+            {
+                ["child"] = "name: child\nroles: []\nsteps: []\n",
+            },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
 
         await port.BindWorkflowDefinitionAsync(
             actor.Id,
@@ -513,6 +522,8 @@ public sealed class WorkflowRunActorPortBranchTests
             {
                 ["child"] = "name: child\nroles: []\nsteps: []\n",
             },
+            sourceKind: "service_revision",
+            capabilityAdmissionPlan: capabilityAdmissionPlan,
             ct: CancellationToken.None);
 
         actor.LastHandledEnvelope.Should().NotBeNull();
@@ -520,6 +531,8 @@ public sealed class WorkflowRunActorPortBranchTests
         var bind = actor.LastHandledEnvelope.Payload.Unpack<BindWorkflowDefinitionEvent>();
         bind.WorkflowName.Should().Be("direct");
         bind.InlineWorkflowYamls.Should().ContainKey("child");
+        bind.SourceKind.Should().Be("service_revision");
+        bind.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 
     [Fact]

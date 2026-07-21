@@ -6,6 +6,8 @@ using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 
@@ -186,7 +188,21 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             lifecyclePort,
             governanceCommandPort,
             governanceQueryPort,
-            Options.Create(options));
+            Options.Create(options),
+            new PassthroughWorkflowCapabilityAdmissionService());
+
+    private sealed class PassthroughWorkflowCapabilityAdmissionService : IWorkflowExternalCapabilityAdmissionService
+    {
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                request.WorkflowYaml,
+                request.InlineWorkflowYamls,
+                request.ExecutionMode,
+                [],
+                []));
+    }
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
         string serviceId,

@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions;
+
 namespace Aevatar.Studio.Application.Provisioning;
 
 public sealed record StudioMemberWorkflowBindingRequest(
@@ -6,6 +9,9 @@ public sealed record StudioMemberWorkflowBindingRequest(
     string WorkflowYaml)
 {
     public string? WorkflowId { get; init; }
+
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
 }
 
 public static class StudioMemberWorkflowBindingOperationNames

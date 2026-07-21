@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Workflows;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
@@ -163,6 +164,8 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             CallerSubjectExternalUserId = typedAuthority.IsComplete
                 ? Normalize(typedAuthority.ExternalUserId)
                 : Normalize(AgentToolRequestContext.OwnerSubject),
+            CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
+                ExternalCapabilityExecutionMode.Durable),
         };
 
         try

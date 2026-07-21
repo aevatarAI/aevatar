@@ -329,7 +329,13 @@ public sealed class UseSkillTool : IAgentTool
                     workflow.WorkflowId.Trim(),
                     workflowYamls[0],
                     DisplayName: workflow.WorkflowId.Trim(),
-                    InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls)),
+                    InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls))
+                {
+                    CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                        ResolveCapabilityCallerId(),
+                        AgentToolRequestContext.NyxIdAccessToken,
+                        AgentToolRequestContext.NyxIdOrgToken),
+                },
                 ct);
 
             mountedPayloads.Add(ToMountedWorkflowPayload(upsertResult));
@@ -356,6 +362,17 @@ public sealed class UseSkillTool : IAgentTool
                 workflows = mountedPayloads,
             },
             BuildMountedWorkflowsPayload(mountedPayloads));
+    }
+
+    private static string ResolveCapabilityCallerId()
+    {
+        var authority = AgentToolRequestContext.NyxIdAuthority;
+        if (authority.IsComplete)
+            return authority.ExternalUserId!;
+
+        return AgentToolRequestContext.OwnerSubject?.Trim()
+            ?? AgentToolRequestContext.SenderNyxUserId?.Trim()
+            ?? string.Empty;
     }
 
     private static UseSkillArguments ParseArguments(string argumentsJson)

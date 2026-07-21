@@ -73,7 +73,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            commandPort);
+            commandPort,
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var contract = await service.GetEndpointContractAsync(ScopeId, MemberId, "chat", CancellationToken.None);
 
@@ -135,7 +136,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new FixedScopeBindingReadinessQueryPort(ScopeBindingReadinessStatus.PreparedArtifactMissing, invokeReady: false),
-            new RecordingServiceCommandPort());
+            new RecordingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var contract = await service.GetEndpointContractAsync(ScopeId, MemberId, "chat", CancellationToken.None);
 
@@ -163,7 +165,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            new RecordingServiceCommandPort());
+            new RecordingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var contract = await service.GetEndpointContractAsync(ScopeId, MemberId, "ghost", CancellationToken.None);
 
@@ -181,7 +184,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             new InMemoryServiceLifecycleQueryPort(),
             new ReadyScopeBindingReadinessQueryPort(),
-            new RecordingServiceCommandPort());
+            new RecordingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var act = () => service.GetEndpointContractAsync(ScopeId, "m-missing", "chat");
 
@@ -204,7 +208,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            new RecordingServiceCommandPort());
+            new RecordingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var act = () => service.GetEndpointContractAsync(ScopeId, MemberId, "chat");
 
@@ -235,7 +240,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            commandPort);
+            commandPort,
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var response = await service.ActivateBindingRevisionAsync(
             ScopeId,
@@ -281,7 +287,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            commandPort);
+            commandPort,
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var act = () => service.ActivateBindingRevisionAsync(ScopeId, MemberId, "rev-r");
 
@@ -314,7 +321,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            commandPort);
+            commandPort,
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var act = () => service.ActivateBindingRevisionAsync(ScopeId, MemberId, "rev-missing");
 
@@ -345,7 +353,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            commandPort);
+            commandPort,
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var response = await service.RetireBindingRevisionAsync(
             ScopeId, MemberId, "rev-9", CancellationToken.None);
@@ -383,7 +392,8 @@ public sealed class StudioMemberServiceContractAndRevisionTests
             new InertTeamQueryPort(),
             lifecycle,
             new ReadyScopeBindingReadinessQueryPort(),
-            commandPort);
+            commandPort,
+            new StudioWorkflowCapabilityAdmissionTestService());
 
         var act = () => service.RetireBindingRevisionAsync(ScopeId, MemberId, "rev-missing");
 

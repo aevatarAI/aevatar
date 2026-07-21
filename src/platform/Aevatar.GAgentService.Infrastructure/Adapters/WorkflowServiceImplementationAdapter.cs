@@ -3,6 +3,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GAgentService.Infrastructure.Adapters;
@@ -10,10 +11,14 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 public sealed class WorkflowServiceImplementationAdapter : IServiceImplementationAdapter
 {
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
 
-    public WorkflowServiceImplementationAdapter(IWorkflowDefinitionParser workflowDefinitionParser)
+    public WorkflowServiceImplementationAdapter(
+        IWorkflowDefinitionParser workflowDefinitionParser,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService)
     {
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _capabilityAdmissionService = capabilityAdmissionService ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
     }
 
     public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Workflow;
@@ -43,6 +48,19 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
         }
 
         var authorizationEvidence = MapAuthorizationEvidence(parse.AuthorizationDependencies);
+        var executionMode = spec.CapabilityAdmissionPlan?.ExecutionMode
+            ?? ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+            new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    request.Spec.Identity?.TenantId ?? string.Empty,
+                    request.Spec.Identity?.AppId ?? string.Empty),
+                spec.WorkflowYaml,
+                spec.InlineWorkflowYamls,
+                "service_revision_prepare",
+                executionMode,
+                spec.CapabilityAdmissionPlan),
+            ct);
 
         return new PreparedServiceRevisionArtifact
         {
@@ -70,6 +88,7 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                     DefinitionActorId = spec.DefinitionActorId ?? string.Empty,
                     InlineWorkflowYamls = { spec.InlineWorkflowYamls },
                     AuthorizationEvidence = authorizationEvidence,
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 },
             },
         };

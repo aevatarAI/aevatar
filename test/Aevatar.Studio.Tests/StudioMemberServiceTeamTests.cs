@@ -181,7 +181,8 @@ public sealed class StudioMemberServiceTeamTests
             teamQueryPort ?? new InMemoryTeamQueryPort(NewTeamSummary()),
             new ThrowingServiceLifecycleQueryPort(),
             new ReadyScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
     private static StudioMemberDetailResponse NewDetail(string? currentTeamId = null)
     {

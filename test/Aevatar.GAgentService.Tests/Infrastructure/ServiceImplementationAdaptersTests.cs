@@ -7,6 +7,7 @@ using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf;
@@ -509,7 +510,9 @@ public sealed class ServiceImplementationAdaptersTests
         {
             ParseResult = WorkflowYamlParseResult.Success("inferred-workflow", dependencies),
         };
-        var adapter = new WorkflowServiceImplementationAdapter(workflowPort);
+        var adapter = new WorkflowServiceImplementationAdapter(
+            workflowPort,
+            new RecordingWorkflowCapabilityAdmissionService());
 
         var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
@@ -541,10 +544,12 @@ public sealed class ServiceImplementationAdaptersTests
     [Fact]
     public async Task WorkflowAdapter_ShouldRejectInvalidWorkflowYaml()
     {
-        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort
-        {
-            ParseResult = WorkflowYamlParseResult.Invalid("invalid yaml"),
-        });
+        var adapter = new WorkflowServiceImplementationAdapter(
+            new RecordingWorkflowRunActorPort
+            {
+                ParseResult = WorkflowYamlParseResult.Invalid("invalid yaml"),
+            },
+            new RecordingWorkflowCapabilityAdmissionService());
 
         var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
@@ -571,7 +576,14 @@ public sealed class ServiceImplementationAdaptersTests
         {
             ParseResult = CreateSuccessfulWorkflowParse("provided-workflow"),
         };
-        var adapter = new WorkflowServiceImplementationAdapter(workflowPort);
+        var admission = new RecordingWorkflowCapabilityAdmissionService();
+        var adapter = new WorkflowServiceImplementationAdapter(workflowPort, admission);
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: ignored",
+            new Dictionary<string, string> { ["child.yaml"] = "name: child" },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
 
         var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
@@ -586,22 +598,29 @@ public sealed class ServiceImplementationAdaptersTests
                     WorkflowYaml = "name: ignored",
                     DefinitionActorId = "workflow-definition-1",
                     InlineWorkflowYamls = { ["child.yaml"] = "name: child" },
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 },
             },
         });
 
         artifact.DeploymentPlan.WorkflowPlan.WorkflowName.Should().Be("provided-workflow");
         artifact.DeploymentPlan.WorkflowPlan.InlineWorkflowYamls.Should().ContainKey("child.yaml");
+        artifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.AdmissionDigest.Should()
+            .Be(capabilityAdmissionPlan.AdmissionDigest);
+        admission.Request.Should().NotBeNull();
+        admission.Request!.ExistingPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
         workflowPort.ParseCalls.Should().ContainSingle("name: ignored");
     }
 
     [Fact]
     public async Task WorkflowAdapter_ShouldRejectInvalidWorkflowYaml_WhenWorkflowNameProvided()
     {
-        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort
-        {
-            ParseResult = WorkflowYamlParseResult.Invalid("invalid yaml"),
-        });
+        var adapter = new WorkflowServiceImplementationAdapter(
+            new RecordingWorkflowRunActorPort
+            {
+                ParseResult = WorkflowYamlParseResult.Invalid("invalid yaml"),
+            },
+            new RecordingWorkflowCapabilityAdmissionService());
 
         var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
@@ -625,10 +644,12 @@ public sealed class ServiceImplementationAdaptersTests
     [Fact]
     public async Task WorkflowAdapter_ShouldRejectWorkflowNameMismatch()
     {
-        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort
-        {
-            ParseResult = CreateSuccessfulWorkflowParse("yaml-workflow"),
-        });
+        var adapter = new WorkflowServiceImplementationAdapter(
+            new RecordingWorkflowRunActorPort
+            {
+                ParseResult = CreateSuccessfulWorkflowParse("yaml-workflow"),
+            },
+            new RecordingWorkflowCapabilityAdmissionService());
 
         var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
@@ -652,7 +673,9 @@ public sealed class ServiceImplementationAdaptersTests
     [Fact]
     public async Task WorkflowAdapter_ShouldRejectMissingWorkflowYaml()
     {
-        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort());
+        var adapter = new WorkflowServiceImplementationAdapter(
+            new RecordingWorkflowRunActorPort(),
+            new RecordingWorkflowCapabilityAdmissionService());
 
         var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
@@ -676,8 +699,15 @@ public sealed class ServiceImplementationAdaptersTests
     [Fact]
     public async Task WorkflowAdapter_ShouldValidateConstructorAndMissingWorkflowSpec()
     {
-        Action nullPort = () => new WorkflowServiceImplementationAdapter(null!);
-        var adapter = new WorkflowServiceImplementationAdapter(new RecordingWorkflowRunActorPort());
+        Action nullPort = () => new WorkflowServiceImplementationAdapter(
+            null!,
+            new RecordingWorkflowCapabilityAdmissionService());
+        Action nullAdmission = () => new WorkflowServiceImplementationAdapter(
+            new RecordingWorkflowRunActorPort(),
+            null!);
+        var adapter = new WorkflowServiceImplementationAdapter(
+            new RecordingWorkflowRunActorPort(),
+            new RecordingWorkflowCapabilityAdmissionService());
         var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
             Spec = new ServiceRevisionSpec
@@ -689,6 +719,7 @@ public sealed class ServiceImplementationAdaptersTests
         });
 
         nullPort.Should().Throw<ArgumentNullException>();
+        nullAdmission.Should().Throw<ArgumentNullException>();
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("workflow implementation_spec is required.");
     }
@@ -711,6 +742,25 @@ public sealed class ServiceImplementationAdaptersTests
         {
             Calls.Add((definitionActorId, requestedRevision));
             return Task.FromResult(_snapshot);
+        }
+    }
+
+    private sealed class RecordingWorkflowCapabilityAdmissionService : IWorkflowExternalCapabilityAdmissionService
+    {
+        public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
+
+        public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+            WorkflowExternalCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(request.ExistingPlan?.Clone()
+                ?? WorkflowCapabilityAdmissionPlanIntegrity.Create(
+                    request.WorkflowYaml,
+                    request.InlineWorkflowYamls,
+                    request.ExecutionMode,
+                    [],
+                    []));
         }
     }
 
@@ -745,6 +795,8 @@ public sealed class ServiceImplementationAdaptersTests
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             string? scopeId = null,
+            string? sourceKind = null,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
             CancellationToken ct = default) =>
             Task.CompletedTask;
 

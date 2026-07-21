@@ -237,6 +237,8 @@ internal sealed class WorkflowRunActorPort :
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
+        string? sourceKind = null,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(actorId))
@@ -245,7 +247,13 @@ internal sealed class WorkflowRunActorPort :
         // Refactor (iter18/cluster-006):
         //   Old pattern: command-path projection activation facade with new actor/lifecycle phase
         //   New principle: committed-state publication hook activates existing projection scopes; no new actor/lifecycle phase
-        var envelope = CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, inlineWorkflowYamls, scopeId);
+        var envelope = CreateWorkflowDefinitionBindEnvelope(
+            workflowYaml,
+            workflowName,
+            inlineWorkflowYamls,
+            scopeId,
+            sourceKind,
+            capabilityAdmissionPlan);
         await _dispatchPort.DispatchAsync(actorId, envelope, ct);
     }
 
@@ -345,6 +353,8 @@ internal sealed class WorkflowRunActorPort :
                         definition.WorkflowName,
                         definition.InlineWorkflowYamls,
                         definition.ScopeId,
+                        definition.SourceKind,
+                        definition.CapabilityAdmissionPlan,
                         ct);
                     return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
                 }
@@ -364,6 +374,8 @@ internal sealed class WorkflowRunActorPort :
                     definition.WorkflowName,
                     definition.InlineWorkflowYamls,
                     definition.ScopeId,
+                    definition.SourceKind,
+                    definition.CapabilityAdmissionPlan,
                     ct);
             }
 
@@ -400,6 +412,8 @@ internal sealed class WorkflowRunActorPort :
                 definition.WorkflowName,
                 definition.InlineWorkflowYamls,
                 definition.ScopeId,
+                definition.SourceKind,
+                definition.CapabilityAdmissionPlan,
                 ct);
             return new DefinitionActorResolutionResult(definitionActor.Id, CreatedNow: true);
         }
@@ -433,6 +447,8 @@ internal sealed class WorkflowRunActorPort :
                 definition.WorkflowName,
                 definition.InlineWorkflowYamls,
                 definition.ScopeId,
+                definition.SourceKind,
+                definition.CapabilityAdmissionPlan,
                 ct);
         }
 
@@ -502,6 +518,14 @@ internal sealed class WorkflowRunActorPort :
             }
         }
 
+        if (!string.Equals(
+                binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -545,12 +569,20 @@ internal sealed class WorkflowRunActorPort :
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
-        string? scopeId) =>
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(BuildBindWorkflowDefinitionEvent(workflowYaml, workflowName, inlineWorkflowYamls, scopeId)),
+            Payload = Any.Pack(BuildBindWorkflowDefinitionEvent(
+                workflowYaml,
+                workflowName,
+                inlineWorkflowYamls,
+                scopeId,
+                sourceKind,
+                capabilityAdmissionPlan)),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(WorkflowRunActorPortPublisherId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation
             {
@@ -652,13 +684,17 @@ internal sealed class WorkflowRunActorPort :
         string workflowYaml,
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
-        string? scopeId)
+        string? scopeId,
+        string? sourceKind,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan)
     {
         var bind = new BindWorkflowDefinitionEvent
         {
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
             ScopeId = scopeId?.Trim() ?? string.Empty,
+            SourceKind = sourceKind?.Trim() ?? string.Empty,
+            CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
         };
 
         if (inlineWorkflowYamls != null)

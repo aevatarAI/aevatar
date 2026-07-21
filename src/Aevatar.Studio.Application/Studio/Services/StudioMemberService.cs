@@ -5,6 +5,8 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Studio.Application.Studio.Services;
 
@@ -25,6 +27,7 @@ public sealed class StudioMemberService : IStudioMemberService
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IScopeBindingReadinessQueryPort _readinessQueryPort;
     private readonly IServiceCommandPort _serviceCommandPort;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
 
     public StudioMemberService(
         IStudioMemberCommandPort memberCommandPort,
@@ -33,7 +36,8 @@ public sealed class StudioMemberService : IStudioMemberService
         IStudioTeamQueryPort teamQueryPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IScopeBindingReadinessQueryPort readinessQueryPort,
-        IServiceCommandPort serviceCommandPort)
+        IServiceCommandPort serviceCommandPort,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService)
     {
         _memberCommandPort = memberCommandPort ?? throw new ArgumentNullException(nameof(memberCommandPort));
         _memberQueryPort = memberQueryPort ?? throw new ArgumentNullException(nameof(memberQueryPort));
@@ -44,6 +48,8 @@ public sealed class StudioMemberService : IStudioMemberService
         _readinessQueryPort = readinessQueryPort ?? throw new ArgumentNullException(nameof(readinessQueryPort));
         _serviceCommandPort = serviceCommandPort
             ?? throw new ArgumentNullException(nameof(serviceCommandPort));
+        _capabilityAdmissionService = capabilityAdmissionService
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
     }
 
     public async Task<StudioMemberSummaryResponse> CreateAsync(
@@ -97,6 +103,33 @@ public sealed class StudioMemberService : IStudioMemberService
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedMemberId = NormalizeRequired(memberId, nameof(memberId));
         var implementationKindWire = ResolveBindingImplementationKind(normalizedMemberId, request);
+        if (request.Workflow is { } workflow)
+        {
+            var suppliedAdmission = request.CapabilityAdmission;
+            var existingPlan = workflow.CapabilityAdmissionPlan ?? suppliedAdmission?.ExistingPlan;
+            var executionMode = suppliedAdmission?.ExecutionMode
+                ?? existingPlan?.ExecutionMode
+                ?? ExternalCapabilityExecutionMode.Interactive;
+            var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+                WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
+                    new ExternalWorkflowCapabilityAccessContext(
+                        normalizedScopeId,
+                        suppliedAdmission?.CallerId ?? string.Empty,
+                        suppliedAdmission?.NyxIdCallerBearerToken,
+                        suppliedAdmission?.NyxIdOrganizationBearerToken),
+                    workflow.WorkflowYamls,
+                    "studio_member_binding_run",
+                    executionMode,
+                    existingPlan),
+                ct);
+            request = request with
+            {
+                Workflow = workflow with
+                {
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                },
+            };
+        }
         var bindingRunId = GenerateBindingRunId();
 
         await _memberCommandPort.StartBindingRunAsync(

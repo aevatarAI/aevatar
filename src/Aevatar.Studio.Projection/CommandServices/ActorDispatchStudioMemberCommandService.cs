@@ -347,6 +347,8 @@ internal sealed class ActorDispatchStudioMemberCommandService : IStudioMemberCom
                     WorkflowId = binding.Workflow?.WorkflowId ?? string.Empty,
                 };
                 request.Workflow.WorkflowYamls.Add(binding.Workflow?.WorkflowYamls ?? []);
+                if (binding.Workflow?.CapabilityAdmissionPlan is { } capabilityAdmissionPlan)
+                    request.Workflow.CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone();
                 break;
             case MemberImplementationKindNames.Script:
                 request.Script = new StudioMemberScriptBindingRequest

@@ -151,6 +151,12 @@ public sealed class DefaultServiceInvocationDispatcherTests
             ServiceImplementationKind.Workflow,
             endpointId: "chat",
             requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: wf",
+            new Dictionary<string, string> { ["child"] = "name: child" },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
         target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
         {
             WorkflowName = "wf",
@@ -159,6 +165,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             {
                 ["child"] = "name: child",
             },
+            CapabilityAdmissionPlan = capabilityAdmissionPlan,
         };
         var request = new ServiceInvocationRequest
         {
@@ -177,6 +184,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
         workflowPort.CreateRunCalls[0].WorkflowYaml.Should().Be("name: wf");
         workflowPort.CreateRunCalls[0].InlineWorkflowYamls.Should().ContainKey("child");
         workflowPort.CreateRunCalls[0].InlineWorkflowYamls["child"].Should().Be("name: child");
+        workflowPort.CreateRunCalls[0].CapabilityAdmissionPlan!.AdmissionDigest.Should()
+            .Be(capabilityAdmissionPlan.AdmissionDigest);
         workflowPort.RunActor.Envelopes.Should().BeEmpty();
         dispatchPort.Calls.Should().ContainSingle();
         dispatchPort.Calls[0].actorId.Should().Be("workflow-run");
@@ -1346,6 +1355,8 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             string? scopeId = null,
+            string? sourceKind = null,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
             CancellationToken ct = default) => Task.CompletedTask;
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>

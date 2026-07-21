@@ -26,6 +26,12 @@ public sealed class WorkflowActorBindingProjectorTests
             RootActorId = "actor-1",
             ProjectionKind = "workflow-binding",
         };
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: direct",
+            new Dictionary<string, string> { [" child "] = "yaml-child" },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
 
         await projector.ProjectAsync(
             context,
@@ -34,6 +40,8 @@ public sealed class WorkflowActorBindingProjectorTests
                 {
                     WorkflowName = " direct ",
                     WorkflowYaml = "name: direct",
+                    SourceKind = "service_revision",
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
                     InlineWorkflowYamls =
                     {
                         [" child "] = "yaml-child",
@@ -51,6 +59,8 @@ public sealed class WorkflowActorBindingProjectorTests
         document.WorkflowName.Should().Be("direct");
         document.WorkflowYaml.Should().Be("name: direct");
         document.InlineWorkflowYamls.Should().ContainKey("child").WhoseValue.Should().Be("yaml-child");
+        document.SourceKind.Should().Be("service_revision");
+        document.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
         document.LastEventId.Should().Be("evt-definition");
     }
 
