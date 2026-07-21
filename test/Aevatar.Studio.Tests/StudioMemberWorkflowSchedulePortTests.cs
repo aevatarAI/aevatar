@@ -6,6 +6,8 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -162,6 +164,41 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndTypedAuthorityAvailable_ShouldIssueFreshTokenAndRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found"));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var request = Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightAsync(request);
+
+        result.Success.Should().BeTrue();
+        refresh.RefreshCallCount.Should().Be(1);
+        refresh.LastBearerToken.Should().Be("issued-bearer-alpha");
+        tokenProvider.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+            });
+    }
+
+    [Fact]
     public async Task PreflightAsync_WhenCatalogSnapshotStaleWithoutBearer_ShouldReturnActionableFailureAndNotRefresh()
     {
         var planner = new RecordingAuthorizationPlanner
@@ -183,6 +220,41 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         result.Detail.Should().Be("nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale");
         refresh.RefreshCallCount.Should().Be(0);
         planner.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenBearerMissingButTypedAuthorityAvailable_ShouldIssueFreshTokenAndPersistAgentKeyOnly()
+    {
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await ScheduleAsync(port, Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        });
+
+        result.Success.Should().BeTrue();
+        tokenProvider.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+            });
+        materializer.BearerToken.Should().Be("issued-bearer-alpha");
+        var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-alpha");
+        auth.SenderNyxId.Should().BeNull();
+        auth.Durable.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
     }
 
     [Fact]
@@ -713,7 +785,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         IScheduledInvocationAuthorizationRevalidator? revalidator = null,
         IStudioScheduledCredentialMaterializer? materializer = null,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         var resolvedPlanner = planner ?? new RecordingAuthorizationPlanner();
         return new StudioMemberWorkflowSchedulePort(
@@ -723,7 +796,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             revalidator ?? new RecordingAuthorizationRevalidator(resolvedPlanner),
             materializer ?? new RecordingCredentialMaterializer(),
             timeProvider ?? new FixedTimeProvider(TestNow),
-            catalogRefresh);
+            catalogRefresh,
+            null,
+            callerAccessTokenProvider);
     }
 
     private static async Task<StudioMemberWorkflowScheduleResult> ScheduleAsync(
@@ -1002,6 +1077,20 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             string bearerToken,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingWorkflowCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
+    {
+        public List<WorkflowCallerNyxIdAuthority> Requests { get; } = [];
+        public string Token { get; init; } = "issued-bearer-alpha";
+
+        public Task<string> IssueAsync(
+            WorkflowCallerNyxIdAuthority authority,
+            CancellationToken ct = default)
+        {
+            Requests.Add(authority);
+            return Task.FromResult(Token);
+        }
     }
 
     private sealed class RecordingAuthorizationRevalidator(
