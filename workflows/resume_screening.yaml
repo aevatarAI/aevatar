@@ -15,6 +15,8 @@ when_to_use: Use when a chat message submits a candidate resume file (PDF/DOCX) 
 #   本步把 run input 原样作为 arguments —— 启动方必须把聊天附件的 fileRef 以 {"file_ref":{...}} JSON 作为 workflow input 传入。
 # TODO-verify: 契约要求 Upload Date=uploadDateMs(原 n8n 用 Date.now()); workflow 表达式无时钟函数,
 #   此处由筛选 LLM 在输出 JSON 里给出 upload_date_ms(epoch 毫秒)。
+# CAPABILITY_FIXTURE: write_bitable 的 external capability tuple 仅用于迁移示例。新准入前必须从
+# list_external_workflow_capabilities + durable READY result 整体替换 service_id/slug/operation_id/method/path/contract_digest；禁止只改 slug。
 
 roles:
   - id: resume_screener
@@ -81,7 +83,7 @@ steps:
     type: tool_call
     parameters:
       tool: nyxid_proxy
-      arguments: '{"slug":"api-lark-bot","path":"/open-apis/bitable/v1/apps/FSl0bCi9raBuLbsdTbHlgb0agwf/tables/tblgZgSqmeBag2na/records","method":"POST","body":"${json(input)}"}'
+      arguments: '{"service_id":"us-lark-bitable-resume-fixture","slug":"api-lark-bot","operation_id":"create-bitable-record","method":"POST","path":"/open-apis/bitable/v1/apps/FSl0bCi9raBuLbsdTbHlgb0agwf/tables/tblgZgSqmeBag2na/records","contract_digest":"fixture-replace-with-ready-contract-digest","body":"${json(input)}"}'
     next: route_write
 
   - id: route_write

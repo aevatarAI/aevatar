@@ -11,6 +11,8 @@ when_to_use: Use when a chat message carries invoice images (plus optional depar
 # TODO-verify: 原 n8n 经 /open-apis/contact/v3/users/batch_get_id 解析 user_id 并按部门映射负责人; 本 workflow 直接用会话内 applicant
 #   open_id, 负责人按契约默认 deptHeadId=申请人(deptHeadSource=self), 提交路径仍为契约原文 ?user_id_type=user_id。审批附件上传
 #   (/approval/v4/files/upload)不在本批范围, 契约允许无 file token 时省略 attachmentV2 widget。
+# CAPABILITY_FIXTURE: submit_approval 的 external capability tuple 仅用于迁移示例。新准入前必须从
+# list_external_workflow_capabilities + durable READY result 整体替换 service_id/slug/operation_id/method/path/contract_digest；禁止只改 slug。
 
 roles:
   - id: invoice_extractor
@@ -98,7 +100,7 @@ steps:
     type: tool_call
     parameters:
       tool: nyxid_proxy
-      arguments: '{"slug":"api-lark-bot-2","path":"/open-apis/approval/v4/instances?user_id_type=user_id","method":"POST","body":"${json(input)}"}'
+      arguments: '{"service_id":"us-lark-approval-invoice-fixture","slug":"api-lark-bot-2","operation_id":"create-approval-instance","method":"POST","path":"/open-apis/approval/v4/instances?user_id_type=user_id","contract_digest":"fixture-replace-with-ready-contract-digest","body":"${json(input)}"}'
     next: route_submit
 
   - id: route_submit

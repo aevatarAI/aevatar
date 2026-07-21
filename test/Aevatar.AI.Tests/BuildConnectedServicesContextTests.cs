@@ -55,6 +55,8 @@ public class BuildConnectedServicesContextTests
         context.Should().Contain("<connected-services>");
         context.Should().Contain("GitHub");
         context.Should().Contain("slug: `api-github`");
+        context.Should().Contain("user_service_id: `svc-github`");
+        context.Should().Contain("exact user_service_id + slug + path");
         context.Should().Contain("<api-hints>");
         context.Should().Contain("from spec");
         context.Should().Contain("GET /repos — List repositories");

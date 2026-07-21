@@ -40,7 +40,8 @@ public class ChatRunStartErrorMapperTests
         mapped.Message.Should().Be(WorkflowChatRunStartErrorGuidance.WorkflowNotFound);
         mapped.Message.Should().Contain("current scope catalog");
         mapped.Message.Should().Contain("nyxid_proxy");
-        mapped.Message.Should().Contain("slug/path");
+        mapped.Message.Should().Contain("service_id + slug + path");
+        mapped.Message.Should().NotContain("discovered slug/path");
         mapped.Message.Should().Contain("use_skill");
         mapped.Message.Should().Contain("workflow_id");
     }

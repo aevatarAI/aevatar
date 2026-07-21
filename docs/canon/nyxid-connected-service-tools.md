@@ -6,9 +6,9 @@ owner: eanzhao
 
 # NyxID Connected-Service LLM Tools
 
-把一个 Aevatar service 发布成 NyxID service 后，只要在它的 live OpenAPI operation 上加显式标记，Aevatar 就能在直连 NyxID 的会话里把这些 endpoint 动态注册成独立 LLM 工具。工具调用经 NyxID proxy 下发，凭证注入、proxy/broker 侧审计、approval、node routing、delegation 仍由 NyxID 负责；Aevatar 侧只记录自己的平台 tool invocation 与 typed receipt 审计。
+把一个 Aevatar service 发布成 NyxID service 后，只要在它的 live OpenAPI operation 上加显式标记，Aevatar 就能在直连 NyxID 的会话里把这些 endpoint 动态注册成独立 LLM 工具。每个工具绑定 exact `UserService.id`；工具调用经 NyxID proxy 下发，凭证注入、proxy/broker 侧审计、approval、node routing、delegation 仍由 NyxID 负责；Aevatar 侧只记录自己的平台 tool invocation 与 typed receipt 审计。
 
-NyxID 始终是唯一真实源：connected instance、catalog definition 与 OpenAPI spec 每次发现都从 NyxID live surface 读取，仓库内不保留 service/endpoint 影子目录，执行始终回到 NyxID proxy。
+NyxID 始终是唯一真实源：caller-visible connected instance 每次从 live `GET /api/v1/keys` 读取，catalog definition 从 `GET /api/v1/catalog` 读取，OpenAPI 每次按 exact id 从 `GET /api/v1/proxy/services/{user_service_id}/openapi.json` 读取。仓库内不保留 service/endpoint 影子目录，执行始终回到 NyxID proxy。同一个 slug 可以对应多个不同 id，任何发现、准入或执行代码都不得按 slug 合并或选择第一个实例。
 
 ## 1. 显式标记：`x-aevatar-tool`
 
@@ -67,10 +67,11 @@ paths:
 
 每个准入的 operation 映射为一个独立 `IAgentTool`：
 
-- **Name / `toolName`**：每个 operation 一个调用协议 ID，格式为 `nyxid_{service_slug}__{name|operationId}`，稳定可预测；超长时按稳定哈希截断。同名冲突时保留第一个并打 `LogWarning`，其余丢弃（避免给模型歧义工具）。它不是 connector、connection 或 catalog identity，消费方不得解析其前缀。不提供 caller-facing `slug/method/path/body` 通用代理工具，也不新增 `nyxid_service_request` / `NyxIdServiceRequestTool`。
-- **Description**：取 OpenAPI `summary`/`description`，附带 service slug + `METHOD path`。
+- **Name / `toolName`**：每个 operation 一个调用协议 ID，基础格式为 `nyxid_{service_slug}__{name|operationId}`，稳定可预测；超长时按稳定哈希截断。当多个 exact id 产生同名 operation 时，名称追加 id 派生后缀并保留所有实例；只有同一最终名称仍冲突时才保留第一个并打 `LogWarning`。它不是 connector、connection 或 catalog identity，消费方不得解析其前缀。不提供 caller-facing `slug/method/path/body` 通用代理工具，也不新增 `nyxid_service_request` / `NyxIdServiceRequestTool`。
+- **Description**：取 OpenAPI `summary`/`description`，附带 exact instance id、service slug 和 `METHOD path`。
 - **ParametersSchema**：从结构化 OpenAPI 生成，不做字符串拼装。
   - `path` / `query` / `header` 参数各自成为顶层属性；`path` 参数恒为 required。
+  - 带 `Authorization`、`Proxy-Authorization`、`Cookie`、`Set-Cookie`、API key 或 token 类 header parameter 的 operation 直接排除，不暴露成工具或 Workflow capability。
   - JSON `requestBody` 放在 `body` 属性下（若已有名为 `body` 的参数则退化为 `request_body`）。
   - `#/components/schemas/*` 的 `$ref` 会被内联成自包含 JSON Schema（带环保护）。
 - **审批语义**：默认 `ApprovalMode.Auto`；`GET`/`HEAD` 默认 `IsReadOnly=true`；写操作默认非只读。标记里的 `readOnly` / `destructive` / `approval` 可覆盖。NyxID 仍在服务端做自己的 approval 判定。
@@ -94,14 +95,21 @@ paths:
 LLM tool_call
   -> ConnectedServiceProxyTool.ExecuteAsync
        从 AgentToolRequestContext 读取 NyxID token（user / org 双 token）
+       使用工具绑定的 exact user_service_id，不按 slug 查找实例
        用 tool args 还原 path/query/header/body
-  -> NyxIdApiClient.ProxyRequestAsync(token, slug, path, method, body, headers)
-  -> NyxID /api/v1/proxy/s/{slug}/{path}
+  -> NyxIdApiClient.ProxyRequestAsync(token, slug, user_service_id, path, method, body, headers)
+  -> NyxID /api/v1/proxy/s/{slug}/{path}?_nyxid_via={user_service_id}
   -> NyxID 注入凭证 / 审计 / approval / node routing / delegation
   -> 下游 service
 ```
 
-token 可见性与 `NyxIdProxyTool` 一致：user token 优先，org-only 的 service 用 org token 下发。token 只从 `AgentToolRequestContext` 读取，不落盘、不缓存。
+token 可见性与 `NyxIdProxyTool` 一致：user token 优先，org-only 的 exact id 用 org token 下发。token 只从 `AgentToolRequestContext` 读取，不落盘、不缓存。`service_slug_snapshot` 只是当前 proxy route/display snapshot，`user_service_id` 才是实例身份；即使 query 已存在，client 也会追加一次 exact `_nyxid_via`，不会覆盖业务 query。
+
+### Workflow authoring 与 readiness
+
+Chat 在写入含 external operation 的 Workflow 前必须先调用只读工具 `list_external_workflow_capabilities`。该工具返回完整 `NyxIdUserServiceCapabilityRef`：`user_service_id`、`service_slug_snapshot`、`operation_id`、`http_method`、`path_template` 和 `contract_digest`。随后把完整 candidate 原样交给 `inspect_external_workflow_capability_readiness`，并明确 `interactive` 或 `durable` execution mode。
+
+只有 typed status `READY` 才允许进入 Workflow write。其他 status 只返回安全 blocker 和 trusted remediation locator；Chat 不接收 API key、bearer、OAuth secret、cookie 或 downstream credential。YAML 中的 `nyxid_proxy` 必须静态携带上述 exact tuple，不能只写 slug、使用 `service` alias、动态模板 identity 或添加 sensitive header。服务器端统一 admission 会再次读取 `/keys` 与 exact OpenAPI、校验 `x-aevatar-tool`、method/path/digest 和 source freshness；Definition actor 在提交前独立重算结构。
 
 ### Typed authorization blocker
 
@@ -136,16 +144,17 @@ bearer 决定。
 ## 6. 架构边界
 
 - 发现期可请求 NyxID live surface，但**不在中间层保存 service/endpoint 事实状态**；没有进程内 catalog。
-- 不新增 NyxID endpoint / 字段 / 协议；只消费现有 `/keys`、`/catalog`、`proxy/services/{connectedServiceId}/openapi.json`、`proxy/s/{slug}/...`。
+- 不新增 NyxID endpoint / 字段 / 协议；只消费现有 `/keys`、`/catalog`、`proxy/services/{user_service_id}/openapi.json`、`proxy/s/{slug}/...?_nyxid_via={user_service_id}`。
 - 不绕过 NyxID proxy 直接打下游 base URL。
 - 不引入新的投影主链或 read model。
 - 不在 Aevatar 侧维护 shadow service catalog；tool schema、path、query、header、body 均来自该 operation 的 live OpenAPI contract。
+- Generic `nyxid_proxy` 的无参数模式只用于当前 caller 的只读发现；真正 invocation 同时要求 exact `service_id` 与 slug。Workflow authoring 只允许 typed listing 中已被 `x-aevatar-tool` 准入的 operation，不提供 arbitrary raw HTTP authoring surface。
 
 ## 7. `QuotaLedger` profile
 
 审批额度账本使用同一条 connected-service 边界。`QuotaLedger` 不是 Aevatar 内部账本，也不是 NyxID 新能力；它只是一个外部 REST service profile，契约见 [approval-quota-ledger.openapi.yaml](../contracts/approval-quota-ledger.openapi.yaml)，权威口径见 [approval-quota-ledger.md](approval-quota-ledger.md)。
 
-注册时把该 OpenAPI spec 挂到现有 NyxID service 上，Aevatar 仍通过 NyxID live discovery 读取 spec，并通过 `proxy/s/{slug}/...` 调用 `GET /balances`、`POST /balances/reserve`、`POST /balances/deduct` 和 `POST /balances/release`。余额、reservation、deduction transaction 都归外部 ledger 或渠道原生账本拥有；Aevatar 只传递强类型字段和稳定 idempotency key。
+注册时把该 OpenAPI spec 挂到现有 NyxID service 上，Aevatar 仍通过 NyxID live discovery 读取 spec，并通过带 exact `_nyxid_via={user_service_id}` 的 `proxy/s/{slug}/...` 调用 `GET /balances`、`POST /balances/reserve`、`POST /balances/deduct` 和 `POST /balances/release`。余额、reservation、deduction transaction 都归外部 ledger 或渠道原生账本拥有；Aevatar 只传递强类型字段和稳定 idempotency key。
 
 如果目标渠道已经原生维护额度，优先记录渠道 API、scope 和真实 subject probe，再直接使用渠道原生账本。渠道自动扣减时不得再调用 `QuotaLedger` deduct。
 
@@ -153,7 +162,8 @@ bearer 决定。
 
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceToolSource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/`（marker / 解析 / schema 内联 / 命名 / proxy tool）
-- `src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiClient.cs`（`GetProxyServiceOpenApiAsync`）
+- `src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiClient.cs`（`ListServicesAsync` / `GetProxyServiceOpenApiAsync` / exact proxy routing）
+- `src/Aevatar.AI.ToolProviders.NyxId/NyxIdExternalWorkflowCapabilitySource.cs`（typed listing/readiness）
 - `src/Aevatar.AI.ToolProviders.ToolSetRegistry/ToolSetNames.cs`
 - `src/platform/Aevatar.GAgentService.Application/Responses/ResponsesDirectToolPlanService.cs`（context-scope seam）
 - `src/Aevatar.Mainnet.Host.Api/Hosting/MainnetHostBuilderExtensions.cs`（tool set 注册）

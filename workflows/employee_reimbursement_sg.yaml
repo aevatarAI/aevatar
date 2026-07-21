@@ -13,7 +13,8 @@ when_to_use: Use when a chat message carries SG employee reimbursement invoices 
 # (approval_code / widget ids / category & currency option ids / 字段默认规则 / 提交路径 ?user_id_type=user_id 逐字拷贝)
 # TODO-verify: 审批附件上传(workflow_file_submit -> 票据 file_code)依赖聊天附件 file-ref 访问表达式, 本批省略;
 #   Related Approval(connect widget17165489347490001)需要已解析的 instance code, 用户未提供时省略该 widget。
-# TODO-verify: 提交 slug 默认 api-lark-bot; 若该审批定义挂在第二租户(同 hr-approval/invoice-ocr 的 api-lark-bot-2), 改 slug 即可。
+# CAPABILITY_FIXTURE: submit_approval 的 external capability tuple 仅用于迁移示例。新准入前必须从
+# list_external_workflow_capabilities + durable READY result 整体替换 service_id/slug/operation_id/method/path/contract_digest；禁止只改 slug。
 
 roles:
   - id: invoice_extractor
@@ -139,7 +140,7 @@ steps:
     type: tool_call
     parameters:
       tool: nyxid_proxy
-      arguments: '{"slug":"api-lark-bot","path":"/open-apis/approval/v4/instances?user_id_type=user_id","method":"POST","body":"${json(input)}"}'
+      arguments: '{"service_id":"us-lark-approval-sg-fixture","slug":"api-lark-bot","operation_id":"create-approval-instance","method":"POST","path":"/open-apis/approval/v4/instances?user_id_type=user_id","contract_digest":"fixture-replace-with-ready-contract-digest","body":"${json(input)}"}'
     next: route_submit
 
   - id: route_submit
