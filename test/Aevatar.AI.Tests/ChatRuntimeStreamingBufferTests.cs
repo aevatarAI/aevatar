@@ -775,6 +775,72 @@ public sealed class ChatRuntimeStreamingBufferTests
             .Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    public async Task ChatStreamAsync_WhenOutcomeToolsShareName_ShouldClassifyRequestLocalTool(
+        bool globalIsReadOnly,
+        bool requestIsReadOnly,
+        bool expectNoMutationConstraint)
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-shared",
+                        Name = "shared_tool",
+                        ArgumentsJson = "{}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "final" },
+            ],
+        ]);
+        var globalExecutionCount = 0;
+        var requestExecutionCount = 0;
+        var globalTools = new ToolManager();
+        globalTools.Register(new DelegateTool(
+            "shared_tool",
+            _ =>
+            {
+                globalExecutionCount++;
+                return "global";
+            },
+            isReadOnly: globalIsReadOnly));
+        var requestTool = new DelegateTool(
+            "shared_tool",
+            _ =>
+            {
+                requestExecutionCount++;
+                return "request-local";
+            },
+            isReadOnly: requestIsReadOnly);
+        var runtime = CreateRuntime(
+            provider,
+            globalTools,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = [],
+                Tools = [requestTool],
+            });
+
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1, turnCatalog: null))
+        {
+        }
+
+        globalExecutionCount.Should().Be(0);
+        requestExecutionCount.Should().Be(1);
+        provider.StreamRequests.Should().HaveCount(2);
+        var constraints = provider.StreamRequests[1].Messages.Where(message =>
+            message.Role == "system" &&
+            message.Content?.Contains("no successful mutating tool execution") == true);
+        constraints.Should().HaveCount(expectNoMutationConstraint ? 1 : 0);
+    }
+
     [Fact]
     public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldUseOnlyFinalRequestCapabilities()
     {
