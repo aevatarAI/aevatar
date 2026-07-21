@@ -7,7 +7,7 @@ namespace Aevatar.Workflow.Host.Api.Tests;
 public sealed class ChatRunRequestNormalizerEmptyInputTests
 {
     [Fact]
-    public void Normalize_ShouldAllowEmptyInputForTypedDefinitionActorSource()
+    public void Normalize_ShouldRejectEmptyInputForTypedDefinitionActorSourceWithoutResolvedMemberWorkflow()
     {
         var result = ChatRunRequestNormalizer.Normalize(new ChatInput
         {
@@ -22,6 +22,29 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
                 },
             },
         });
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.PromptRequired);
+    }
+
+    [Fact]
+    public void Normalize_ShouldAllowEmptyInputForResolvedMemberWorkflow()
+    {
+        var result = ChatRunRequestNormalizer.Normalize(
+            new ChatInput
+            {
+                Prompt = "   ",
+                Source = new WorkflowChatSourceInput
+                {
+                    Kind = "definition_actor",
+                    DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                    {
+                        ActorId = " actor-bound-member ",
+                        WorkflowName = " status-report ",
+                    },
+                },
+            },
+            allowEmptyInputForResolvedMemberWorkflow: true);
 
         result.Succeeded.Should().BeTrue();
         result.Request!.Prompt.Should().BeEmpty();

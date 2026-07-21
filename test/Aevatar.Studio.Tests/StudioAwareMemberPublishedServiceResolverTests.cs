@@ -40,6 +40,7 @@ public sealed class StudioAwareMemberPublishedServiceResolverTests
         // the URL contract handed back to the frontend would 404 against
         // its own binding.
         result.PublishedServiceId.Should().Be("member-m-abc");
+        result.IsMemberAuthorityBacked.Should().BeTrue();
     }
 
     [Fact]
@@ -56,6 +57,7 @@ public sealed class StudioAwareMemberPublishedServiceResolverTests
         // legacy deterministic mapping; otherwise existing platform-only
         // member-first calls would silently break under this resolver.
         result.PublishedServiceId.Should().Be("legacy-member");
+        result.IsMemberAuthorityBacked.Should().BeFalse();
     }
 
     [Fact]
@@ -74,6 +76,7 @@ public sealed class StudioAwareMemberPublishedServiceResolverTests
         result.ScopeId.Should().Be("scope-1");
         result.MemberId.Should().Be("m-abc");
         result.PublishedServiceId.Should().Be("member-m-abc");
+        result.IsMemberAuthorityBacked.Should().BeTrue();
     }
 
     [Theory]
@@ -132,6 +135,7 @@ public sealed class StudioAwareMemberPublishedServiceResolverTests
             CancellationToken.None);
 
         result.PublishedServiceId.Should().Be("m-abc");
+        result.IsMemberAuthorityBacked.Should().BeFalse();
     }
 
     private sealed class InMemoryQueryPort : IStudioMemberQueryPort

@@ -725,13 +725,27 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const isChatEndpoint = Boolean(
     selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
-  const canStartWithoutInput = runtimeTarget === 'member' && isChatEndpoint;
+  const normalizedMemberId = trimOptional(memberId);
+  const normalizedTeamId = trimOptional(teamId);
+  const selectedPublishedServiceId = trimOptional(selectedService?.serviceId);
+  const canStartWithoutInput = Boolean(
+    isChatEndpoint &&
+      runtimeTarget === 'member' &&
+      normalizedMemberId &&
+      selectedPublishedServiceId &&
+      normalizeStudioMemberBindingImplementationKind(
+        memberRevision?.implementationKind,
+      ) === 'workflow' &&
+      trimOptional(memberRevision?.workflowDefinitionActorId) &&
+      trimOptional(endpointContract?.memberId) === normalizedMemberId &&
+      trimOptional(endpointContract?.publishedServiceId) ===
+        selectedPublishedServiceId &&
+      trimOptional(endpointContract?.endpointId) === selectedEndpointId,
+  );
   const preferredServiceId = useMemo(
     () => getPreferredScopeConsoleServiceId(services),
     [services],
   );
-  const normalizedMemberId = trimOptional(memberId);
-  const normalizedTeamId = trimOptional(teamId);
   const currentMemberLabel =
     trimOptional(selectedMemberLabel) ||
     trimOptional(selectedService?.displayName) ||

@@ -1280,6 +1280,31 @@ describe('StudioMemberInvokePanel', () => {
 
   it('allows bound member-run chat endpoints to start without prompt or files', async () => {
     (runtimeRunsApi.streamEndpoint as jest.Mock).mockResolvedValue({});
+    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValueOnce({
+      defaultSmokeInputMode: 'prompt',
+      defaultSmokePrompt: null,
+      deploymentStatus: 'Active',
+      endpointId: 'chat',
+      fetchExample: null,
+      curlExample: null,
+      invokePath: '/api/scopes/scope-1/members/m-alpha/invoke/chat:stream',
+      memberId: 'm-alpha',
+      method: 'POST',
+      publishedServiceId: 'svc-alpha',
+      requestContentType: 'application/json',
+      requestTypeUrl: '',
+      responseContentType: 'text/event-stream',
+      responseTypeUrl: '',
+      revisionId: 'rev-workflow',
+      sampleRequestJson: null,
+      scopeId: 'scope-1',
+      serviceId: 'svc-alpha',
+      smokeTestSupported: true,
+      streamFrameFormat: 'workflow-run-event',
+      supportsAguiFrames: false,
+      supportsSse: true,
+      supportsWebSocket: false,
+    });
 
     render(
       React.createElement(StudioMemberInvokePanel, {
@@ -1338,6 +1363,14 @@ describe('StudioMemberInvokePanel', () => {
         teamId: 'team-alpha',
       }),
     );
+
+    await waitFor(() => {
+      expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
+        'scope-1',
+        'm-alpha',
+        'chat',
+      );
+    });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
 
