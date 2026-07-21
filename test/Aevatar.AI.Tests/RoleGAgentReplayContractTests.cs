@@ -131,16 +131,16 @@ public class RoleGAgentReplayContractTests
         var recoveryAgent = CreateProfiledAgent(services, recoveryActorId);
         await recoveryAgent.ActivateAsync();
         recoveryAgent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
-
         await recoveryAgent.HandleChatRequest(new ChatRequestEvent
         {
             SessionId = "session-recovery",
             Prompt = "recover",
         });
-
         recoveryAgent.PrepareCallCount.Should().Be(0);
         recoveryAgent.MaterializedAuthorities.Should().ContainSingle(authority =>
-            authority.ReconciliationKey.Attempt == 1 && authority.SelectedExactSkillRef == null);
+            authority.ReconciliationKey.SessionId == "session-recovery" &&
+            authority.ReconciliationKey.Attempt == 1 &&
+            authority.SelectedExactSkillRef == null);
         (await store.GetEventsAsync(recoveryActorId))
             .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
             .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind)

@@ -22,55 +22,42 @@ public sealed class RoleGAgentStateCoverageTests
     private static readonly MethodInfo ApplyClearPendingApprovalMethod = typeof(RoleGAgent)
         .GetMethod("ApplyClearPendingApproval", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyClearPendingApproval not found.");
-
     private static readonly MethodInfo ApplyChatSessionStartedMethod = typeof(RoleGAgent)
         .GetMethod("ApplyChatSessionStarted", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyChatSessionStarted not found.");
-
     private static readonly MethodInfo ApplyChatSessionCompletedMethod = typeof(RoleGAgent)
         .GetMethod("ApplyChatSessionCompleted", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyChatSessionCompleted not found.");
-
     private static readonly MethodInfo ResolveRequestInputPartsMethod = typeof(RoleGAgent)
         .GetMethod("ResolveRequestInputParts", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ResolveRequestInputParts not found.");
-
     private static readonly MethodInfo BuildRequestLogSummaryMethod = typeof(RoleGAgent)
         .GetMethod("BuildRequestLogSummary", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("BuildRequestLogSummary not found.");
-
     private static readonly MethodInfo BuildContinuationPromptMethod = typeof(RoleGAgent)
         .GetMethod("BuildContinuationPrompt", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("BuildContinuationPrompt not found.");
-
     private static readonly MethodInfo ApplyPendingApprovalMethod = typeof(RoleGAgent)
         .GetMethod("ApplyPendingApproval", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyPendingApproval not found.");
-
     private static readonly MethodInfo ApplyRemoteApprovalSubmittedMethod = typeof(RoleGAgent)
         .GetMethod("ApplyRemoteApprovalSubmitted", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyRemoteApprovalSubmitted not found.");
-
     private static readonly MethodInfo ApplyVoicePresenceRuntimeStateChangedMethod = typeof(RoleGAgent)
         .GetMethod("ApplyVoicePresenceRuntimeStateChanged", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyVoicePresenceRuntimeStateChanged not found.");
-
     private static readonly MethodInfo SanitizeFailureMessageMethod = typeof(RoleGAgent)
         .GetMethod("SanitizeFailureMessage", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("SanitizeFailureMessage not found.");
-
     private static readonly MethodInfo ResolveTrackedSessionMethod = typeof(RoleGAgent)
         .GetMethod("ResolveTrackedSession", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("ResolveTrackedSession not found.");
-
     private static readonly MethodInfo ExtractStateConfigOverridesMethod = typeof(RoleGAgent)
         .GetMethod("ExtractStateConfigOverrides", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("ExtractStateConfigOverrides not found.");
-
-    private static readonly MethodInfo ApplyAgentProfileTurnAuthorityCommittedMethod = typeof(RoleGAgent)
-        .GetMethod("ApplyAgentProfileTurnAuthorityCommitted", BindingFlags.NonPublic | BindingFlags.Static)
+    private static readonly MethodInfo ApplyAgentProfileTurnAuthorityCommittedMethod = typeof(RoleGAgent).GetMethod(
+        "ApplyAgentProfileTurnAuthorityCommitted", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("ApplyAgentProfileTurnAuthorityCommitted not found.");
-
     [Fact]
     public void ApplyTurnAuthorityInitial_ShouldReplaceOnlyForNewActiveSession()
     {
@@ -78,23 +65,16 @@ public sealed class RoleGAgentStateCoverageTests
         {
             MessageCount = 2,
             AgentProfileTurnAuthority = TurnAuthority("session-old", 1, "intent-a", "skill-a"),
-            Sessions =
-            {
-                ["session-old"] = new RoleChatSessionState { Sequence = 1 },
-                ["session-new"] = new RoleChatSessionState { Sequence = 2 },
-            },
+            Sessions = { ["session-old"] = new RoleChatSessionState { Sequence = 1 },
+                ["session-new"] = new RoleChatSessionState { Sequence = 2 } },
         };
         var initial = TurnAuthority("session-new", 1, "intent-a", "skill-a");
         initial.AuthorityCeilingToolNames.Clear();
         initial.AuthorityCeilingToolNames.Add([" task ", "Search", "TASK"]);
-        initial.DegradationReasons.Add([
-            AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
+        initial.DegradationReasons.Add([AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
             AgentProfileTurnDegradationReason.ClassifierFailed,
-            AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
-        ]);
-
+            AgentProfileTurnDegradationReason.ExactSkillFetchFailed]);
         var next = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Initial, initial);
-
         next.Should().NotBeSameAs(current);
         next.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-new");
         next.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should().Equal("Search", "task");
@@ -105,21 +85,18 @@ public sealed class RoleGAgentStateCoverageTests
         invalidAttempt.ReconciliationKey.Attempt = 2;
         ApplyAuthority(next, AgentProfileTurnAuthorityCommitKind.Initial, invalidAttempt).Should().BeSameAs(next);
     }
-
     [Fact]
     public void ApplyTurnAuthorityRetryStarted_ShouldAdvanceExactlyOneAttemptAndFreezeCandidate()
     {
         var current = StateWithIncompleteAuthority(TurnAuthority("session-a", 1, "intent-a", "skill-a"));
         var retry = current.AgentProfileTurnAuthority.Clone();
         retry.ReconciliationKey.Attempt = 2;
-
         var next = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.RetryStarted, retry);
-
         next.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(2);
-        next.AgentProfileTurnAuthority.CandidateRoute.Should().BeEquivalentTo(
-            current.AgentProfileTurnAuthority.CandidateRoute);
-        next.AgentProfileTurnAuthority.SelectedExactSkillRef.Should().BeEquivalentTo(
-            current.AgentProfileTurnAuthority.SelectedExactSkillRef);
+        next.AgentProfileTurnAuthority.CandidateRoute.Should()
+            .BeEquivalentTo(current.AgentProfileTurnAuthority.CandidateRoute);
+        next.AgentProfileTurnAuthority.SelectedExactSkillRef.Should()
+            .BeEquivalentTo(current.AgentProfileTurnAuthority.SelectedExactSkillRef);
         next.AgentProfileTurnAuthority.AuthorityKind.Should().Be(current.AgentProfileTurnAuthority.AuthorityKind);
         Action<AgentProfileTurnAuthorityState>[] mutations =
         [
@@ -136,37 +113,27 @@ public sealed class RoleGAgentStateCoverageTests
             ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.RetryStarted, mutatedRetry)
                 .Should().BeSameAs(current);
         }
-
         var gap = retry.Clone();
         gap.ReconciliationKey.Attempt = 4;
         ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.RetryStarted, gap).Should().BeSameAs(current);
     }
-
     [Fact]
     public void ApplyTurnAuthority_ShouldRejectWrongSessionAttemptLateAndMutatingEvents()
     {
         var current = StateWithIncompleteAuthority(TurnAuthority("session-a", 2, "intent-a", "skill-a"));
-        var invalidAuthorities = new[]
-        {
+        var invalidAuthorities = new[] {
             MutateAuthority(current, authority => authority.ReconciliationKey.SessionId = "session-b"),
             MutateAuthority(current, authority => authority.ReconciliationKey.Attempt = 1),
             MutateAuthority(current, authority => authority.CandidateRoute.IntentId = "intent-b"),
-            MutateAuthority(current, authority => authority.SelectedExactSkillRef.LiteralVersion = "9.9.9"),
-        };
-
+            MutateAuthority(current, authority => authority.SelectedExactSkillRef.LiteralVersion = "9.9.9") };
         foreach (var invalidAuthority in invalidAuthorities)
-        {
             ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Reconcile, invalidAuthority)
                 .Should().BeSameAs(current);
-        }
-
         var completed = current.Clone();
         completed.Sessions["session-a"].Completed = true;
-        ApplyAuthority(completed, AgentProfileTurnAuthorityCommitKind.Reconcile,
-                completed.AgentProfileTurnAuthority.Clone())
+        ApplyAuthority(completed, AgentProfileTurnAuthorityCommitKind.Reconcile, completed.AgentProfileTurnAuthority.Clone())
             .Should().BeSameAs(completed);
     }
-
     [Fact]
     public void ApplyTurnAuthorityReconcile_ShouldBeIdempotentForDuplicateAndReplay()
     {
@@ -174,16 +141,13 @@ public sealed class RoleGAgentStateCoverageTests
         var reconcile = current.AgentProfileTurnAuthority.Clone();
         reconcile.AuthorityCeilingToolNames.Add("TASK");
         reconcile.DegradationReasons.Add(AgentProfileTurnDegradationReason.ClassifierFailed);
-
         var first = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Reconcile, reconcile);
         var second = ApplyAuthority(first, AgentProfileTurnAuthorityCommitKind.Reconcile, reconcile);
-
         second.Should().BeEquivalentTo(first);
         second.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should().Equal("recovery", "task");
         second.AgentProfileTurnAuthority.DegradationReasons.Should().Equal(
             AgentProfileTurnDegradationReason.ClassifierFailed);
     }
-
     [Fact]
     public void ApplyTurnAuthorityReconcile_ShouldOnlyAttenuateAndUnionReasons()
     {
@@ -198,9 +162,7 @@ public sealed class RoleGAgentStateCoverageTests
         attenuated.AuthorityCeilingToolNames.Add(["task", "A"]);
         attenuated.DegradationReasons.Clear();
         attenuated.DegradationReasons.Add(AgentProfileTurnDegradationReason.ExactSkillFetchFailed);
-
         var next = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Reconcile, attenuated);
-
         next.AgentProfileTurnAuthority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Recovery);
         next.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should().Equal("A", "task");
         next.AgentProfileTurnAuthority.DegradationReasons.Should().Equal(
@@ -216,7 +178,6 @@ public sealed class RoleGAgentStateCoverageTests
                 AgentProfileTurnDegradationReason.ClassifierFailed,
                 AgentProfileTurnDegradationReason.ExactSkillFetchFailed);
     }
-
     [Fact]
     public void ApplyClearPendingApproval_ShouldHandleMissingMismatchAndMatchBranches()
     {
@@ -227,7 +188,6 @@ public sealed class RoleGAgentStateCoverageTests
             new ClearPendingApprovalEvent { RequestId = "req-1" })
             .Should()
             .BeSameAs(empty);
-
         var state = new RoleGAgentState
         {
             PendingApproval = new PendingToolApprovalState
@@ -235,20 +195,17 @@ public sealed class RoleGAgentStateCoverageTests
                 RequestId = "req-1",
             },
         };
-
         var mismatched = InvokePrivateStatic<RoleGAgentState>(
             ApplyClearPendingApprovalMethod,
             state,
             new ClearPendingApprovalEvent { RequestId = "req-2" });
         mismatched.PendingApproval.Should().NotBeNull();
-
         var cleared = InvokePrivateStatic<RoleGAgentState>(
             ApplyClearPendingApprovalMethod,
             state,
             new ClearPendingApprovalEvent());
         cleared.PendingApproval.Should().BeNull();
     }
-
     [Fact]
     public void ApplyPendingApproval_ShouldStorePendingState()
     {
@@ -258,7 +215,6 @@ public sealed class RoleGAgentStateCoverageTests
             SessionId = "session-a",
             ToolName = "dangerous_tool",
         };
-
         var next = InvokePrivateStatic<RoleGAgentState>(
             ApplyPendingApprovalMethod,
             new RoleGAgentState(),
@@ -266,12 +222,10 @@ public sealed class RoleGAgentStateCoverageTests
             {
                 Pending = pending,
             });
-
         next.PendingApproval.Should().NotBeNull();
         next.PendingApproval!.RequestId.Should().Be("req-1");
         next.PendingApproval.ToolName.Should().Be("dangerous_tool");
     }
-
     [Fact]
     public void ApplyVoicePresenceRuntimeStateChanged_ShouldStoreClonedModuleState()
     {
@@ -287,7 +241,6 @@ public sealed class RoleGAgentStateCoverageTests
             ActiveSessionId = "lease-1",
             RemoteAudioSupport = VoiceRemoteAudioSupport.LocalOnly,
         };
-
         var next = InvokePrivateStatic<RoleGAgentState>(
             ApplyVoicePresenceRuntimeStateChangedMethod,
             new RoleGAgentState(),
@@ -297,7 +250,6 @@ public sealed class RoleGAgentStateCoverageTests
                 State = runtimeState,
             });
         runtimeState.CurrentResponseId = 99;
-
         next.VoicePresence.Should().ContainKey("voice_presence");
         next.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(3);
         next.VoicePresence["voice_presence"].ActiveProviderResponseId.Should().Be("provider-response-1");
@@ -307,12 +259,10 @@ public sealed class RoleGAgentStateCoverageTests
         next.VoicePresence["voice_presence"].PcmSampleRateHz.Should().Be(24000);
         next.VoicePresence["voice_presence"].RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.LocalOnly);
     }
-
     [Fact]
     public void ApplyVoicePresenceRuntimeStateChanged_ShouldIgnoreBlankModuleName()
     {
         var current = new RoleGAgentState();
-
         var next = InvokePrivateStatic<RoleGAgentState>(
             ApplyVoicePresenceRuntimeStateChangedMethod,
             current,
@@ -324,18 +274,15 @@ public sealed class RoleGAgentStateCoverageTests
                     Status = VoicePresenceRuntimeStatus.UserSpeaking,
                 },
             });
-
         next.Should().BeSameAs(current);
         next.VoicePresence.Should().BeEmpty();
     }
-
     [Fact]
     public async Task VoicePresenceRuntimeStateOwner_ShouldPersistAndReturnClonedState()
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-voice-presence");
         await agent.ActivateAsync();
-
         var runtimeState = new VoicePresenceRuntimeState
         {
             Status = VoicePresenceRuntimeStatus.AudioDraining,
@@ -344,31 +291,24 @@ public sealed class RoleGAgentStateCoverageTests
             LastDrainAckPlayoutSequence = 1200,
             NextResponseId = 6,
         };
-
         await agent.PersistVoicePresenceRuntimeStateAsync("voice_presence", runtimeState);
         runtimeState.CurrentResponseId = 99;
-
         agent.State.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(5);
         agent.TryGetVoicePresenceRuntimeState("voice_presence", out var stored).Should().BeTrue();
         stored.CurrentResponseId.Should().Be(5);
-
         stored.CurrentResponseId = 77;
-
         agent.State.VoicePresence["voice_presence"].CurrentResponseId.Should().Be(5);
     }
-
     [Fact]
     public async Task VoicePresenceRuntimeStateOwner_ShouldReturnFalseForMissingModule()
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-voice-presence-missing");
         await agent.ActivateAsync();
-
         agent.TryGetVoicePresenceRuntimeState("voice_presence", out var stored).Should().BeFalse();
         stored.Should().NotBeNull();
         stored.Status.Should().Be(VoicePresenceRuntimeStatus.Unspecified);
     }
-
     [Fact]
     public async Task VoicePresenceRuntimeStateOwner_ShouldReturnClonedSessionDefaults()
     {
@@ -389,25 +329,20 @@ public sealed class RoleGAgentStateCoverageTests
                 },
             },
         });
-
         agent.TryGetVoiceSessionDefaults("voice_presence", out var defaults).Should().BeTrue();
         defaults.Voice.Should().Be("verse");
         defaults.SampleRateHz.Should().Be(16000);
-
         defaults.Voice = "mutated";
-
         agent.State.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("verse");
         agent.TryGetVoiceSessionDefaults("missing", out var missing).Should().BeFalse();
         missing.Should().NotBeNull();
     }
-
     [Fact]
     public async Task HandleVoicePresenceEnableRequested_ShouldPersistDefaultsRuntimeStateAndCommittedEvents()
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-voice-enable");
         await agent.ActivateAsync();
-
         await agent.HandleVoicePresenceEnableRequested(new VoicePresenceEnableRequested
         {
             ModuleName = "  voice_presence  ",
@@ -419,27 +354,23 @@ public sealed class RoleGAgentStateCoverageTests
                 TurnDetectionMode = VoiceTurnDetectionMode.ServerVad,
             },
         });
-
         agent.State.VoiceSessionDefaults.Should().ContainKey("voice_presence");
         var defaults = agent.State.VoiceSessionDefaults["voice_presence"];
         defaults.Voice.Should().Be("alloy");
         defaults.Instructions.Should().Be("keep replies short");
         defaults.SampleRateHz.Should().Be(16000);
         defaults.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.ServerVad);
-
         agent.State.VoicePresence.Should().ContainKey("voice_presence");
         var runtimeState = agent.State.VoicePresence["voice_presence"];
         runtimeState.Initialized.Should().BeTrue();
         runtimeState.Status.Should().Be(VoicePresenceRuntimeStatus.Idle);
         runtimeState.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
         runtimeState.PcmSampleRateHz.Should().Be(16000);
-
         var persisted = await provider.GetRequiredService<IEventStore>().GetEventsAsync("role-voice-enable");
         persisted.Should().HaveCount(2);
         persisted.Select(x => x.EventType).Should().Equal(
             VoicePresenceEnabledEvent.Descriptor.FullName,
             VoicePresenceRuntimeStateChangedEvent.Descriptor.FullName);
-
         var enabled = persisted[0].EventData.Unpack<VoicePresenceEnabledEvent>();
         enabled.ModuleName.Should().Be("voice_presence");
         enabled.VoiceSessionDefaults.Voice.Should().Be("alloy");
@@ -447,28 +378,24 @@ public sealed class RoleGAgentStateCoverageTests
         enabled.RuntimeState.Initialized.Should().BeTrue();
         enabled.RuntimeState.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
         enabled.RuntimeState.PcmSampleRateHz.Should().Be(16000);
-
         var changed = persisted[1].EventData.Unpack<VoicePresenceRuntimeStateChangedEvent>();
         changed.ModuleName.Should().Be("voice_presence");
         changed.State.Initialized.Should().BeTrue();
         changed.State.RemoteAudioSupport.Should().Be(VoiceRemoteAudioSupport.Supported);
         changed.State.PcmSampleRateHz.Should().Be(16000);
     }
-
     [Fact]
     public async Task HandleToolApprovalDecision_ShouldIgnoreMissingOrMismatchedPendingApproval()
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-approval-ignore");
         await agent.ActivateAsync();
-
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
             RequestId = "req-1",
             Approved = false,
         });
         agent.State.PendingApproval.Should().BeNull();
-
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
@@ -477,17 +404,14 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
             RequestId = "req-2",
             Approved = false,
         });
-
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RequestId.Should().Be("req-1");
     }
-
     [Fact]
     public async Task HandleToolApprovalDecision_ShouldClearPending_WhenDenied()
     {
@@ -507,18 +431,15 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-
         await agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
         {
             RequestId = "req-1",
             Approved = false,
             Reason = "user denied",
         });
-
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_denied: user denied");
-
         var persistedCompletion = provider.GetRequiredService<IEventStore>() as InMemoryEventStoreForTests;
         persistedCompletion.Should().NotBeNull();
         var completed = (await persistedCompletion!.GetEventsAsync("role-approval-denied"))
@@ -528,7 +449,6 @@ public sealed class RoleGAgentStateCoverageTests
         completed.RoleId.Should().Be("approval-role");
         completed.Content.Should().Contain("approval_denied: user denied");
     }
-
     [Fact]
     public async Task HandleToolApprovalDecision_ShouldExecuteToolAndDispatchContinuation_WhenApproved()
     {
@@ -578,7 +498,6 @@ public sealed class RoleGAgentStateCoverageTests
             Approved = true,
             Reason = "approved",
         });
-
         agent.State.PendingApproval.Should().BeNull();
         AgentToolRequestContext.Current.Should().BeNull();
         observedToolContext.Should().NotBeNull();
@@ -607,7 +526,6 @@ public sealed class RoleGAgentStateCoverageTests
         context.Routing.ModelOverride.Should().Be("model-a");
         context.ExternalMetadata.Should().ContainKey("trace-id").WhoseValue.Should().Be("trace-1");
     }
-
     [Fact]
     public async Task HandleToolApprovalDecision_ShouldUseTypedToolContextOnly()
     {
@@ -657,7 +575,6 @@ public sealed class RoleGAgentStateCoverageTests
             RequestId = "req-1",
             Approved = true,
         });
-
         observedToolContext.Should().NotBeNull();
         observedToolContext!.Request.RequestId.Should().Be("typed-request");
         observedToolContext.Request.CallId.Should().Be("typed-call");
@@ -675,7 +592,6 @@ public sealed class RoleGAgentStateCoverageTests
         continuationContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         continuation.Metadata.Should().BeEmpty();
     }
-
     [Fact]
     public async Task HandleToolApprovalDecision_ShouldUseEmptyContext_WhenToolContextMissing()
     {
@@ -711,7 +627,6 @@ public sealed class RoleGAgentStateCoverageTests
             RequestId = "req-1",
             Approved = true,
         });
-
         observedToolContext.Should().NotBeNull();
         observedToolContext!.Request.RequestId.Should().BeNull();
         observedToolContext.Request.CallId.Should().BeNull();
@@ -728,7 +643,6 @@ public sealed class RoleGAgentStateCoverageTests
         continuationContext.Credentials.Should().Be(AgentToolCredentials.Empty);
         continuation.Metadata.Should().BeEmpty();
     }
-
     [Fact]
     public async Task HandleToolApprovalDecision_ShouldClearPendingAndRethrow_WhenContinuationDispatchFails()
     {
@@ -753,7 +667,6 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-
         await FluentActions.Invoking(() => agent.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
             {
                 RequestId = "req-1",
@@ -762,27 +675,23 @@ public sealed class RoleGAgentStateCoverageTests
             .Should()
             .ThrowAsync<InvalidOperationException>()
             .WithMessage("dispatch failed");
-
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_continuation_failed: dispatch failed");
         AgentToolRequestContext.Current.Should().BeNull();
     }
-
     [Fact]
     public async Task HandleToolApprovalTimeout_ShouldIgnoreMissingOrMismatchedPendingApproval()
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-timeout-ignore");
         await agent.ActivateAsync();
-
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
             RequestId = "req-1",
             SessionId = "session-a",
         });
         agent.State.PendingApproval.Should().BeNull();
-
         agent.State.PendingApproval = new PendingToolApprovalState
         {
             RequestId = "req-1",
@@ -791,17 +700,14 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
             RequestId = "req-2",
             SessionId = "session-a",
         });
-
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RequestId.Should().Be("req-1");
     }
-
     [Fact]
     public async Task HandleToolApprovalTimeout_ShouldPersistTerminalFailure_WhenRemotePortMissing()
     {
@@ -816,18 +722,15 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
             RequestId = "req-1",
             SessionId = "session-a",
         });
-
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should().Contain("approval_timeout: Tool approval timed out and no remote approval port is configured.");
     }
-
     [Fact]
     public async Task HandleToolApprovalTimeout_ShouldSubmitRemoteApprovalAndPersistRemoteBinding()
     {
@@ -855,7 +758,6 @@ public sealed class RoleGAgentStateCoverageTests
             RequestId = "req-1",
             SessionId = "session-a",
         });
-
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
         agent.State.PendingApproval.RemoteStatusCheckAttempt.Should().Be(1);
@@ -869,7 +771,6 @@ public sealed class RoleGAgentStateCoverageTests
                 x.CallbackId == "tool-approval-remote-status-req-1-remote-1-1" &&
                 x.ActorId == "role-timeout-submit");
     }
-
     [Fact]
     public async Task HandleToolApprovalTimeout_ShouldKeepPendingAndScheduleStatus_WhenNotificationFails()
     {
@@ -905,13 +806,11 @@ public sealed class RoleGAgentStateCoverageTests
                     "agent-delivery-1"),
             }).ToPayload(),
         };
-
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
             RequestId = "req-1",
             SessionId = "session-a",
         });
-
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RequestId.Should().Be("req-1");
         agent.State.PendingApproval.RemoteApprovalId.Should().Be("remote-1");
@@ -924,7 +823,6 @@ public sealed class RoleGAgentStateCoverageTests
                 x.CallbackId == "tool-approval-remote-status-req-1-remote-1-1" &&
                 x.ActorId == "role-timeout-notify-fails");
     }
-
     [Fact]
     public async Task HandleToolApprovalTimeout_ShouldPersistTerminalFailure_WhenRemoteSubmitThrows()
     {
@@ -942,20 +840,17 @@ public sealed class RoleGAgentStateCoverageTests
             ToolCallId = "call-1",
             ArgumentsJson = "{}",
         };
-
         await agent.HandleToolApprovalTimeout(new ToolApprovalTimeoutFiredEvent
         {
             RequestId = "req-1",
             SessionId = "session-a",
         });
-
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should()
             .Contain("approval_timeout: Remote approval submit failed: submit failed");
         remotePort.StatusQueries.Should().BeEmpty();
     }
-
     [Fact]
     public async Task HandleRemoteApprovalStatusCheck_WhenPending_ShouldScheduleNextCheckOnly()
     {
@@ -980,7 +875,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             RemoteStatusCheckAttempt = 1,
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -988,7 +882,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
-
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RemoteStatusCheckAttempt.Should().Be(2);
         agent.State.PendingApproval.RemoteApprovalExpiresAtUnixMs.Should()
@@ -998,7 +891,6 @@ public sealed class RoleGAgentStateCoverageTests
                 x.CallbackId == "tool-approval-remote-status-req-1-remote-1-2" &&
                 x.ActorId == "role-status-pending");
     }
-
     [Fact]
     public async Task HandleRemoteApprovalStatusCheck_WhenPortMissing_ShouldPersistTerminalFailure()
     {
@@ -1015,7 +907,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             RemoteStatusCheckAttempt = 1,
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -1023,13 +914,11 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
-
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should()
             .Contain("approval_timeout: Tool approval timed out and no remote approval port is configured.");
     }
-
     [Fact]
     public async Task HandleRemoteApprovalStatusCheck_WhenStatusThrows_ShouldAdvanceAttemptAndKeepPending()
     {
@@ -1050,7 +939,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteStatusCheckAttempt = 1,
             RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -1058,7 +946,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
-
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RemoteStatusCheckAttempt.Should().Be(2);
         agent.State.PendingApproval.RemoteApprovalId.Should().Be("remote-1");
@@ -1069,7 +956,6 @@ public sealed class RoleGAgentStateCoverageTests
                 x.CallbackId == "tool-approval-remote-status-req-1-remote-1-2" &&
                 x.ActorId == "role-status-throws");
     }
-
     [Fact]
     public async Task HandleRemoteApprovalStatusCheck_ShouldIssueStatusQueryWithoutPortLevelCarrier()
     {
@@ -1092,7 +978,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteStatusCheckAttempt = 1,
             RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -1100,12 +985,10 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
-
         var query = remotePort.StatusQueries.Should().ContainSingle().Which;
         query.RequestId.Should().Be("req-1");
         query.RemoteApprovalId.Should().Be("remote-1");
     }
-
     [Fact]
     public async Task HandleRemoteApprovalStatusCheck_WhenUnknownReachesMaxAttempts_ShouldPersistTerminalFailure()
     {
@@ -1128,7 +1011,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteStatusCheckAttempt = 23,
             RemoteApprovalExpiresAtUnixMs = DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(),
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -1136,7 +1018,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 23,
         });
-
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should()
@@ -1145,7 +1026,6 @@ public sealed class RoleGAgentStateCoverageTests
         ((RecordingRuntimeCallbackScheduler)provider.GetRequiredService<IActorRuntimeCallbackScheduler>())
             .TimeoutRequests.Should().BeEmpty();
     }
-
     [Fact]
     public async Task HandleRemoteApprovalStatusCheck_WhenApproved_ShouldResumeThroughToolApprovalDecision()
     {
@@ -1179,7 +1059,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             RemoteStatusCheckAttempt = 1,
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -1187,12 +1066,10 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
-
         agent.State.PendingApproval.Should().BeNull();
         publisher.Published.OfType<ChatRequestEvent>().Should()
             .ContainSingle(x => x.Prompt.Contains("remote-result"));
     }
-
     [Theory]
     [InlineData(RemoteToolApprovalStatus.Rejected, "approval_denied")]
     [InlineData(RemoteToolApprovalStatus.Expired, "approval_timeout")]
@@ -1216,7 +1093,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             RemoteStatusCheckAttempt = 1,
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -1224,12 +1100,10 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
-
         agent.State.PendingApproval.Should().BeNull();
         agent.State.Sessions["session-a"].Completed.Should().BeTrue();
         agent.State.Sessions["session-a"].FinalContent.Should().Contain($"{reasonCode}: terminal");
     }
-
     [Fact]
     public async Task HandleRemoteApprovalStatusCheck_ShouldIgnoreStaleRequestOrRemoteId()
     {
@@ -1249,7 +1123,6 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             RemoteStatusCheckAttempt = 2,
         };
-
         await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -1264,12 +1137,10 @@ public sealed class RoleGAgentStateCoverageTests
             RemoteApprovalId = "remote-1",
             Attempt = 1,
         });
-
         agent.State.PendingApproval.Should().NotBeNull();
         agent.State.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
         remotePort.StatusQueries.Should().BeEmpty();
     }
-
     [Fact]
     public void ApplyChatSessionStateTransitions_ShouldAssignSequence_AndPreserveCompletedOutputs()
     {
@@ -1289,12 +1160,10 @@ public sealed class RoleGAgentStateCoverageTests
                     },
                 },
             });
-
         started.MessageCount.Should().Be(1);
         started.Sessions["session-a"].Sequence.Should().Be(1);
         started.Sessions["session-a"].Prompt.Should().Be("hello");
         started.Sessions["session-a"].InputParts.Should().ContainSingle();
-
         started.Sessions["session-a"].Sequence = 0;
         var completed = InvokePrivateStatic<RoleGAgentState>(
             ApplyChatSessionCompletedMethod,
@@ -1340,7 +1209,6 @@ public sealed class RoleGAgentStateCoverageTests
                     },
                 },
             });
-
         completed.MessageCount.Should().Be(2);
         completed.Sessions["session-a"].Completed.Should().BeTrue();
         completed.Sessions["session-a"].FinalContent.Should().Be("done");
@@ -1353,7 +1221,6 @@ public sealed class RoleGAgentStateCoverageTests
             x.SubjectHash == "hash-1");
         completed.Sessions["session-a"].OutputParts.Should().ContainSingle(x => x.Text == "done");
     }
-
     [Fact]
     public void ApplyRemoteApprovalSubmitted_ShouldStoreRemoteBinding()
     {
@@ -1364,7 +1231,6 @@ public sealed class RoleGAgentStateCoverageTests
                 RequestId = "req-1",
             },
         };
-
         var next = InvokePrivateStatic<RoleGAgentState>(
             ApplyRemoteApprovalSubmittedMethod,
             state,
@@ -1375,7 +1241,6 @@ public sealed class RoleGAgentStateCoverageTests
                 StatusCheckAttempt = 3,
                 ExpiresAtUnixMs = 1234,
             });
-
         next.PendingApproval.Should().NotBeNull();
         next.PendingApproval!.RemoteApprovalId.Should().Be("remote-1");
         next.PendingApproval.RemoteStatusCheckAttempt.Should().Be(3);
@@ -1392,10 +1257,8 @@ public sealed class RoleGAgentStateCoverageTests
                 ToolName = "dangerous_tool",
             },
             (string?)null);
-
         prompt.Should().Contain("dangerous_tool");
         prompt.Should().Contain("(no output)");
-
         InvokePrivateStatic<string>(SanitizeFailureMessageMethod, "  boom  ").Should().Be("boom");
         InvokePrivateStatic<string>(SanitizeFailureMessageMethod, " ").Should().Be("LLM request failed.");
         InvokePrivateStatic<string>(SanitizeFailureMessageMethod, (object?)null).Should().Be("LLM request failed.");
@@ -1414,31 +1277,26 @@ public sealed class RoleGAgentStateCoverageTests
             Kind = ChatContentPartKind.Image,
             Name = "photo.png",
         });
-
         var parts = InvokePrivateStatic<IReadOnlyList<ContentPart>>(
             ResolveRequestInputPartsMethod,
             multimodalRequest);
         parts.Should().HaveCount(2);
         parts[0].Kind.Should().Be(ContentPartKind.Text);
         parts[1].Kind.Should().Be(ContentPartKind.Image);
-
         var multimodalSummary = InvokePrivateStatic<object>(BuildRequestLogSummaryMethod, multimodalRequest);
         GetProperty<int>(multimodalSummary, "PromptLength").Should().Be(sensitivePrompt.Length);
         GetProperty<int>(multimodalSummary, "InputPartCount").Should().Be(2);
         multimodalSummary.ToString().Should().NotContain(sensitivePrompt);
-
         var promptlessRequest = new ChatRequestEvent();
         promptlessRequest.InputParts.Add(new ChatContentPart
         {
             Kind = ChatContentPartKind.Video,
             Name = "clip.mp4",
         });
-
         var promptlessSummary = InvokePrivateStatic<object>(BuildRequestLogSummaryMethod, promptlessRequest);
         GetProperty<int>(promptlessSummary, "PromptLength").Should().Be(0);
         GetProperty<int>(promptlessSummary, "InputPartCount").Should().Be(1);
         promptlessSummary.ToString().Should().NotContain("video");
-
         InvokePrivateStatic<IReadOnlyList<ContentPart>>(
                 ResolveRequestInputPartsMethod,
                 new ChatRequestEvent())
@@ -1461,13 +1319,11 @@ public sealed class RoleGAgentStateCoverageTests
         agent.Logger = logger;
         agent.EventPublisher = new TestRecordingEventPublisher();
         await agent.ActivateAsync();
-
         await agent.HandleChatRequest(new ChatRequestEvent
         {
             Prompt = sensitivePrompt,
             SessionId = "session-log-redaction",
         });
-
         var messages = logger.Messages.Should().NotBeEmpty().And.Subject;
         messages.Should().Contain(message =>
             message.Contains("input_redacted=true", StringComparison.Ordinal) &&
@@ -1489,7 +1345,6 @@ public sealed class RoleGAgentStateCoverageTests
         {
             RoleName = "helper",
         });
-
         (await agent.GetDescriptionAsync()).Should().Be("RoleGAgent[helper]:role-description");
     }
 
@@ -1508,7 +1363,6 @@ public sealed class RoleGAgentStateCoverageTests
             Kind = ChatContentPartKind.Image,
             Name = "photo.png",
         });
-
         InvokePrivateInstance<RoleChatSessionState?>(
             ResolveTrackedSessionMethod,
             agent,
@@ -1527,7 +1381,6 @@ public sealed class RoleGAgentStateCoverageTests
             })
             .Should()
             .NotBeNull();
-
         FluentActions.Invoking(() => InvokePrivateInstance<RoleChatSessionState?>(
                 ResolveTrackedSessionMethod,
                 agent,
@@ -1539,7 +1392,6 @@ public sealed class RoleGAgentStateCoverageTests
             .Should()
             .Throw<InvalidOperationException>()
             .WithMessage("*different prompt*");
-
         FluentActions.Invoking(() => InvokePrivateInstance<RoleChatSessionState?>(
                 ResolveTrackedSessionMethod,
                 agent,
@@ -1559,7 +1411,6 @@ public sealed class RoleGAgentStateCoverageTests
             .Should()
             .Throw<InvalidOperationException>()
             .WithMessage("*different multimodal input*");
-
         InvokePrivateInstance<RoleChatSessionState?>(
                 ResolveTrackedSessionMethod,
                 agent,
@@ -1573,12 +1424,10 @@ public sealed class RoleGAgentStateCoverageTests
     {
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-config-empty");
-
         var overrides = InvokePrivateInstance<object>(
             ExtractStateConfigOverridesMethod,
             agent,
             new RoleGAgentState());
-
         GetProperty<string?>(overrides, "ProviderName").Should().BeNull();
         GetProperty<string?>(overrides, "Model").Should().BeNull();
         GetProperty<string?>(overrides, "SystemPrompt").Should().BeNull();
@@ -1593,7 +1442,6 @@ public sealed class RoleGAgentStateCoverageTests
         using var provider = BuildServiceProvider();
         var agent = CreateRoleAgent(provider, "role-config-full");
         await agent.ActivateAsync();
-
         await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
         {
             RoleName = "worker",
@@ -1606,13 +1454,11 @@ public sealed class RoleGAgentStateCoverageTests
             CompressionThreshold = 512,
             EnableSummarization = true,
         });
-
         agent.State.EventModules.Should().Be("module-a");
         agent.State.EventRoutes.Should().Be("route-a");
         agent.EffectiveConfig.MaxPromptTokenBudget.Should().Be(2048);
         agent.EffectiveConfig.CompressionThreshold.Should().Be(0.99);
         agent.EffectiveConfig.EnableSummarization.Should().BeTrue();
-
         var overrides = InvokePrivateInstance<object>(
             ExtractStateConfigOverridesMethod,
             agent,
@@ -1624,7 +1470,6 @@ public sealed class RoleGAgentStateCoverageTests
         GetProperty<double?>(overrides, "CompressionThreshold").Should().Be(512);
         GetProperty<bool?>(overrides, "EnableSummarization").Should().BeTrue();
     }
-
     private static AgentProfileTurnAuthorityState TurnAuthority(
         string sessionId,
         int attempt,
@@ -1632,37 +1477,19 @@ public sealed class RoleGAgentStateCoverageTests
         string exactSkillGuid) =>
         new()
         {
-            ReconciliationKey = new AgentProfileTurnReconciliationKey
-            {
-                SessionId = sessionId,
-                Attempt = attempt,
-            },
+            ReconciliationKey = new AgentProfileTurnReconciliationKey { SessionId = sessionId, Attempt = attempt },
             CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
-            {
-                ProfileId = "profile-a",
-                ProfileVersion = "v1",
-                PolicyRevision = "policy-a",
-                IntentId = intentId,
-            },
-            SelectedExactSkillRef = new ExactRemoteSkillRef
-            {
-                Guid = exactSkillGuid,
-                LiteralVersion = "1.0.0",
-            },
+                { ProfileId = "profile-a", ProfileVersion = "v1", PolicyRevision = "policy-a", IntentId = intentId },
+            SelectedExactSkillRef = new ExactRemoteSkillRef { Guid = exactSkillGuid, LiteralVersion = "1.0.0" },
             AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
             AuthorityCeilingToolNames = { "recovery", "task" },
         };
-
     private static RoleGAgentState StateWithIncompleteAuthority(AgentProfileTurnAuthorityState authority) =>
         new()
         {
             AgentProfileTurnAuthority = authority,
-            Sessions =
-            {
-                [authority.ReconciliationKey.SessionId] = new RoleChatSessionState { Sequence = 1 },
-            },
+            Sessions = { [authority.ReconciliationKey.SessionId] = new RoleChatSessionState { Sequence = 1 } },
         };
-
     private static RoleGAgentState ApplyAuthority(
         RoleGAgentState current,
         AgentProfileTurnAuthorityCommitKind commitKind,
@@ -1671,11 +1498,7 @@ public sealed class RoleGAgentStateCoverageTests
             ApplyAgentProfileTurnAuthorityCommittedMethod,
             current,
             new AgentProfileTurnAuthorityCommittedEvent
-            {
-                CommitKind = commitKind,
-                Authority = authority,
-            });
-
+                { CommitKind = commitKind, Authority = authority });
     private static AgentProfileTurnAuthorityState MutateAuthority(
         RoleGAgentState current,
         Action<AgentProfileTurnAuthorityState> mutate)
@@ -1684,7 +1507,6 @@ public sealed class RoleGAgentStateCoverageTests
         mutate(authority);
         return authority;
     }
-
     private static ServiceProvider BuildServiceProvider()
     {
         return new ServiceCollection()
@@ -1694,7 +1516,6 @@ public sealed class RoleGAgentStateCoverageTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
     }
-
     private static RoleGAgent CreateRoleAgent(
         IServiceProvider provider,
         string actorId,
@@ -1712,20 +1533,17 @@ public sealed class RoleGAgentStateCoverageTests
             Services = provider,
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
-
         var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
         return agent;
     }
-
     private static ChatHistory GetHistory(RoleGAgent agent)
     {
         return (ChatHistory)typeof(AIGAgentBase<RoleGAgentState>)
             .GetProperty("History", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(agent)!;
     }
-
     private static T InvokePrivateStatic<T>(MethodInfo method, params object?[] args)
     {
         try
@@ -1737,7 +1555,6 @@ public sealed class RoleGAgentStateCoverageTests
             throw ex.InnerException;
         }
     }
-
     private static T InvokePrivateInstance<T>(MethodInfo method, object instance, params object?[] args)
     {
         try
@@ -1749,13 +1566,11 @@ public sealed class RoleGAgentStateCoverageTests
             throw ex.InnerException;
         }
     }
-
     private static T? GetProperty<T>(object instance, string propertyName)
     {
         return (T?)instance.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
             .GetValue(instance);
     }
-
     private sealed class TestRoleGAgent(
         ILLMProviderFactory? llmProviderFactory,
         IRemoteToolApprovalPort? remoteToolApprovalPort,
@@ -1768,17 +1583,13 @@ public sealed class RoleGAgentStateCoverageTests
             remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
     }
-
     private sealed class RecordingLogger : ILogger
     {
         public List<string> Messages { get; } = [];
-
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull =>
             null;
-
         public bool IsEnabled(LogLevel logLevel) => true;
-
         public void Log<TState>(
             LogLevel logLevel,
             EventId eventId,
@@ -1790,7 +1601,6 @@ public sealed class RoleGAgentStateCoverageTests
                 Messages.Add(formatter(state, exception));
         }
     }
-
     private sealed class StubRemoteApprovalPort(
         Func<RemoteToolApprovalRequest, Task<RemoteToolApprovalSubmission>> submit,
         Func<RemoteToolApprovalStatusQuery, Task<RemoteToolApprovalStatusSnapshot>> status)
@@ -1799,43 +1609,36 @@ public sealed class RoleGAgentStateCoverageTests
         public List<RemoteToolApprovalRequest> Submitted { get; } = [];
         public List<RemoteToolApprovalStatusQuery> StatusQueries { get; } = [];
         public List<RemoteToolApprovalDecision> Decisions { get; } = [];
-
         public Task<RemoteToolApprovalSubmission> SubmitAsync(RemoteToolApprovalRequest request, CancellationToken ct)
         {
             Submitted.Add(request);
             return submit(request);
         }
-
         public Task<RemoteToolApprovalStatusSnapshot> GetStatusAsync(RemoteToolApprovalStatusQuery query, CancellationToken ct)
         {
             StatusQueries.Add(query);
             return status(query);
         }
-
         public Task<RemoteToolApprovalDecisionResult> DecideAsync(RemoteToolApprovalDecision decision, CancellationToken ct)
         {
             Decisions.Add(decision);
             return Task.FromResult(new RemoteToolApprovalDecisionResult(true));
         }
     }
-
     private sealed class StubRemoteApprovalNotificationPort(
         Func<RemoteToolApprovalNotification, Task> notify)
         : IRemoteToolApprovalNotificationPort
     {
         public List<RemoteToolApprovalNotification> Notifications { get; } = [];
-
         public Task NotifyAsync(RemoteToolApprovalNotification notification, CancellationToken ct)
         {
             Notifications.Add(notification);
             return notify(notification);
         }
     }
-
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
         public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
-
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
             CancellationToken ct = default)
@@ -1847,7 +1650,6 @@ public sealed class RoleGAgentStateCoverageTests
                 TimeoutRequests.Count,
                 RuntimeCallbackBackend.InMemory));
         }
-
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
             RuntimeCallbackTimerRequest request,
             CancellationToken ct = default) =>
@@ -1856,37 +1658,30 @@ public sealed class RoleGAgentStateCoverageTests
                 request.CallbackId,
                 1,
                 RuntimeCallbackBackend.InMemory));
-
         public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
             Task.CompletedTask;
-
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
             Task.CompletedTask;
     }
-
     private sealed class StaticToolSource(IReadOnlyList<IAgentTool> tools) : IAgentToolSource
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult(tools);
     }
-
     private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool
     {
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
-
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(execute(argumentsJson));
         }
     }
-
     private sealed class RecordingEventPublisher : IEventPublisher
     {
         public List<IMessage> Published { get; } = [];
-
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience direction = TopologyAudience.Children,
@@ -1902,7 +1697,6 @@ public sealed class RoleGAgentStateCoverageTests
             Published.Add(evt);
             return Task.CompletedTask;
         }
-
         public Task SendToAsync<TEvent>(
             string targetActorId,
             TEvent evt,
@@ -1914,7 +1708,6 @@ public sealed class RoleGAgentStateCoverageTests
             _ = targetActorId;
             return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
-
         public Task PublishCommittedStateEventAsync(
             CommittedStateEventPublished evt,
             ObserverAudience audience = ObserverAudience.CommittedFacts,
@@ -1926,7 +1719,6 @@ public sealed class RoleGAgentStateCoverageTests
             return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
     }
-
     private sealed class ThrowingEventPublisher : IEventPublisher
     {
         public Task PublishAsync<TEvent>(
@@ -1944,7 +1736,6 @@ public sealed class RoleGAgentStateCoverageTests
             _ = options;
             return Task.CompletedTask;
         }
-
         public Task SendToAsync<TEvent>(
             string targetActorId,
             TEvent evt,
@@ -1960,7 +1751,6 @@ public sealed class RoleGAgentStateCoverageTests
             _ = options;
             throw new InvalidOperationException("dispatch failed");
         }
-
         public Task PublishCommittedStateEventAsync(
             CommittedStateEventPublished evt,
             ObserverAudience audience = ObserverAudience.CommittedFacts,
