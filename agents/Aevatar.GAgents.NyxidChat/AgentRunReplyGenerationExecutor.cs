@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -321,7 +323,10 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (TryTakeOutboundIntent(generator) is { } outboundIntent)
             result.OutboundIntent = outboundIntent.Clone();
         if (effectiveToolCalls is { Count: > 0 })
+        {
             result.ToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
+            result.AuthorizedTools.AddRange(CaptureAuthorizedTools(llmResult.AuthorizedTools));
+        }
 
         return new AgentRunNextLlmStepRequestedEvent
         {
@@ -407,13 +412,25 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        var candidateRequest = plan.StepExecutor.BuildBaseRequest(
+            requestId: null,
+            plan.Metadata,
+            plan.ToolContext,
+            llmControl: null);
+        var authorizedTools = ResolveAuthorizedTools(
+            candidateRequest.Tools,
+            workItem.StepState.AuthorizedTools);
         // Interactive reply tools (reply_with_interaction) execute here, during the tool
         // step — not during the LLM step that emitted the tool calls. The AsyncLocal
         // collector scope does not survive the actor continuation hop between steps, so
         // the tool step must open its own scope for relay turns and return the captured
         // intent as a typed fact on the step result.
         using var interactiveScope = TryBeginInteractiveScope(request);
-        var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
+        var results = await plan.StepExecutor.ExecuteToolStepAsync(
+                toolCalls,
+                authorizedTools,
+                candidateRequest.ToolContext,
+                ct)
             .ConfigureAwait(false);
 
         var toolStepResult = new AgentRunToolStepResult
@@ -449,6 +466,105 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Request = request.Clone(),
             ToolStepResult = toolStepResult,
         };
+    }
+
+    private static IEnumerable<AgentRunAuthorizedTool> CaptureAuthorizedTools(
+        IEnumerable<IAgentTool> tools)
+    {
+        foreach (var group in tools
+                     .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+                     .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var tool = group.First();
+            if (group.Any(candidate => !ReferenceEquals(candidate, tool)))
+                continue;
+
+            yield return new AgentRunAuthorizedTool
+            {
+                Name = group.Key,
+                ContractFingerprint = ByteString.CopyFrom(ComputeContractFingerprint(tool)),
+            };
+        }
+    }
+
+    private static IReadOnlyList<IAgentTool> ResolveAuthorizedTools(
+        IEnumerable<IAgentTool>? candidates,
+        IEnumerable<AgentRunAuthorizedTool> authorizedTools)
+    {
+        var candidatesByName = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in (candidates ?? [])
+                     .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+                     .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var candidate = group.First();
+            if (group.All(tool => ReferenceEquals(tool, candidate)))
+                candidatesByName.Add(group.Key, candidate);
+        }
+
+        var fingerprintsByName = new Dictionary<string, ByteString>(StringComparer.OrdinalIgnoreCase);
+        var conflicts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var authorizedTool in authorizedTools)
+        {
+            if (string.IsNullOrWhiteSpace(authorizedTool.Name) ||
+                authorizedTool.ContractFingerprint.Length != SHA256.HashSizeInBytes)
+            {
+                continue;
+            }
+
+            var name = authorizedTool.Name.Trim();
+            if (conflicts.Contains(name))
+                continue;
+            if (!fingerprintsByName.TryGetValue(name, out var existing))
+            {
+                fingerprintsByName.Add(name, authorizedTool.ContractFingerprint);
+                continue;
+            }
+            if (existing.Span.SequenceEqual(authorizedTool.ContractFingerprint.Span))
+                continue;
+
+            fingerprintsByName.Remove(name);
+            conflicts.Add(name);
+        }
+
+        var resolved = new List<IAgentTool>();
+        foreach (var (name, fingerprint) in fingerprintsByName)
+        {
+            if (candidatesByName.TryGetValue(name, out var candidate) &&
+                fingerprint.Span.SequenceEqual(ComputeContractFingerprint(candidate)))
+            {
+                resolved.Add(candidate);
+            }
+        }
+        return resolved;
+    }
+
+    private static byte[] ComputeContractFingerprint(IAgentTool tool)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendContractString(hash, tool.Name.Trim().ToUpperInvariant());
+        AppendContractString(hash, tool.GetType().Assembly.GetName().Name);
+        AppendContractString(hash, tool.GetType().FullName);
+        AppendContractString(hash, tool.Description);
+        AppendContractString(hash, tool.ParametersSchema);
+        AppendContractInt32(hash, (int)tool.ApprovalMode);
+        AppendContractInt32(hash, tool.IsReadOnly ? 1 : 0);
+        AppendContractInt32(hash, tool.IsDestructive ? 1 : 0);
+        AppendContractString(hash, tool.SideEffectKind);
+        return hash.GetHashAndReset();
+    }
+
+    private static void AppendContractString(IncrementalHash hash, string? value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+        AppendContractInt32(hash, bytes.Length);
+        hash.AppendData(bytes);
+    }
+
+    private static void AppendContractInt32(IncrementalHash hash, int value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(bytes, value);
+        hash.AppendData(bytes);
     }
 
     private IAgentRunStepConversationReplyGenerator RequireStepGenerator() =>

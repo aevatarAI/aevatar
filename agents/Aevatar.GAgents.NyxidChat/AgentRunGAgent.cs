@@ -804,6 +804,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var next = stepState.Clone();
         next.FinalNoToolsStep = true;
         next.NextStepIndex++;
+        next.AuthorizedTools.Clear();
         // The nudge is LLM-visible plumbing for the retry step only: it is deliberately
         // NOT mirrored into AppendedHistory, so it never lands in the durable
         // conversation history.
@@ -825,6 +826,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var next = stepState.Clone();
         next.EmptyReplyRetry = true;
         next.NextStepIndex++;
+        next.AuthorizedTools.Clear();
         var dropped = TrimMessagesToRecentFloor(next.Messages, RecentHistoryFloor);
         if (dropped > 0)
             _logger.LogWarning(
@@ -1043,8 +1045,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             next.HasStreamedTextContent = true;
 
         next.PendingToolCalls.Clear();
+        next.AuthorizedTools.Clear();
         if (result.ToolCalls.Count > 0)
+        {
             next.PendingToolCalls.AddRange(result.ToolCalls.Select(call => call.Clone()));
+            next.AuthorizedTools.AddRange(result.AuthorizedTools.Select(tool => tool.Clone()));
+        }
 
         if (!string.IsNullOrEmpty(result.Content) ||
             !string.IsNullOrEmpty(result.ReasoningContent) ||
@@ -1081,6 +1087,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var next = current.Clone();
         next.NextStepIndex = completedStepIndex;
         next.PendingToolCalls.Clear();
+        next.AuthorizedTools.Clear();
         next.Messages.AddRange(result.ResultMessages.Select(message => message.Clone()));
         next.AppendedHistory.AddRange(
             result.ResultMessages.Select(AgentRunReplyStepMappers.ToConversationHistoryEntry));
@@ -1100,6 +1107,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         next.NextStepIndex = nextStepIndex;
         next.FinalNoToolsStep = true;
         next.PendingToolCalls.Clear();
+        next.AuthorizedTools.Clear();
         next.AccumulatedText = string.Empty;
         next.LastFinishReason = string.Empty;
         next.HasStreamedTextContent = false;
