@@ -267,7 +267,268 @@ public sealed class RoleGAgentCompletionNotificationTests
         scheduler.TimeoutRequests.Should().BeEmpty();
     }
 
-    private static async Task<RoleGAgent> CreateInitializedActorAsync(
+    [Fact]
+    public async Task DispatchedCommitFailure_ShouldScheduleRetryAndRemainObservable()
+    {
+        var store = new FailOnceDispatchedEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var actor = await CreateInitializedActorAsync(store, scheduler, publisher, "role-dispatch-commit");
+
+        var act = () => CompleteSessionAsync(
+            actor,
+            "session-1",
+            Now.AddMinutes(1).ToUnixTimeMilliseconds());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated dispatched event commit failure");
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        actor.State.Sessions["session-1"].CompletionNotificationAttempt.Should().Be(1);
+        var callback = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+
+        await actor.HandleEventAsync(callback);
+
+        publisher.SuccessfulSends.Should().HaveCount(2);
+        publisher.SuccessfulSends.Select(static send => send.Options!.Delivery!.DeduplicationOperationId)
+            .Should().OnlyContain(static operationId => operationId == "role-chat-terminal:delivery-session-1");
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
+    public async Task DurableRetrySchedulerFailure_ShouldRemainObservableAndRecoverThroughSelfInbox()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated durable scheduler failure"),
+        };
+        var publisher = new RecordingEventPublisher
+        {
+            FailurePredicate = static targetActorId => targetActorId == "service-run:session-1",
+        };
+        var actor = await CreateInitializedActorAsync(store, scheduler, publisher, "role-scheduler-failure");
+
+        var act = () => CompleteSessionAsync(
+            actor,
+            "session-1",
+            Now.AddMinutes(1).ToUnixTimeMilliseconds());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated durable scheduler failure");
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        var recovery = publisher.SuccessfulPublications.Should()
+            .ContainSingle(publication => publication.Audience == TopologyAudience.Self)
+            .Subject;
+        var retry = recovery.Event.Should().BeOfType<RoleChatCompletionNotificationRetryFiredEvent>().Subject;
+        retry.SessionId.Should().Be("session-1");
+        retry.DeliveryId.Should().Be("delivery-session-1");
+        retry.Attempt.Should().Be(1);
+        recovery.Options!.Delivery!.DeduplicationOperationId.Should()
+            .Be("role-chat-completion-retry:session-1:delivery-session-1");
+
+        scheduler.ScheduleException = null;
+        publisher.FailurePredicate = null;
+        await actor.HandleEventAsync(new EventEnvelope
+        {
+            Id = "self-recovery-1",
+            Payload = Any.Pack(retry),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(actor.Id, TopologyAudience.Self),
+            Runtime = new EnvelopeRuntime
+            {
+                Deduplication = new DeliveryDeduplication
+                {
+                    OperationId = recovery.Options.Delivery.DeduplicationOperationId,
+                },
+            },
+        });
+
+        publisher.SuccessfulSends.Should().ContainSingle();
+        actor.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
+        actor.State.Sessions["session-1"].CompletionNotificationAttempt.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ApprovalContinuationCollision_ShouldPreservePendingDelivery(bool retryScheduled)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var actor = await CreateInitializedActorAsync(
+            store,
+            scheduler,
+            new RecordingEventPublisher(),
+            $"role-approval-collision-{retryScheduled}");
+        await PersistPreparedCompletionAsync(actor, "session-1");
+        if (retryScheduled)
+        {
+            await actor.PersistForTestAsync(new RoleChatCompletionNotificationRetryScheduledEvent
+            {
+                SessionId = "session-1",
+                DeliveryId = "delivery-session-1",
+                Attempt = 1,
+                CallbackId = "callback-1",
+                RetryAt = Timestamp.FromDateTimeOffset(Now.AddMilliseconds(250)),
+            });
+        }
+        var before = actor.State.Sessions["session-1"].Clone();
+
+        await actor.HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+        {
+            RequestId = "request-not-pending",
+            ContinuationTurnId = "session-1",
+            Approved = true,
+        });
+
+        var after = actor.State.Sessions["session-1"];
+        after.RunContext.Should().BeEquivalentTo(before.RunContext);
+        after.CompletionNotificationDeliveryStatus.Should()
+            .Be(before.CompletionNotificationDeliveryStatus);
+        after.CompletionNotificationAttempt.Should().Be(before.CompletionNotificationAttempt);
+        after.CompletionNotificationRetryCallbackId.Should()
+            .Be(before.CompletionNotificationRetryCallbackId);
+        after.CompletionNotificationRetryAt.Should().Be(before.CompletionNotificationRetryAt);
+        after.FinalContent.Should().Be("original terminal content");
+        after.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+    }
+
+    [Fact]
+    public async Task RetryScheduledReducer_ShouldRequireEligibleStatusAndNextAttemptOnApplyAndReplay()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var actor = await CreateInitializedActorAsync(
+            store,
+            new RecordingRuntimeCallbackScheduler(),
+            new RecordingEventPublisher(),
+            "role-retry-reducer");
+        await PersistPreparedCompletionAsync(actor, "session-1");
+
+        await actor.PersistForTestAsync(RetryScheduledEvent("session-1", attempt: 2, "skipped-prepared"));
+        AssertDeliveryState(actor, RoleChatCompletionNotificationDeliveryStatus.Prepared, 0, string.Empty);
+
+        await actor.PersistForTestAsync(RetryScheduledEvent("session-1", attempt: 1, "callback-1"));
+        AssertDeliveryState(actor, RoleChatCompletionNotificationDeliveryStatus.RetryScheduled, 1, "callback-1");
+
+        await actor.PersistForTestAsync(RetryScheduledEvent("session-1", attempt: 1, "stale-callback"));
+        await actor.PersistForTestAsync(RetryScheduledEvent("session-1", attempt: 3, "skipped-retry"));
+        AssertDeliveryState(actor, RoleChatCompletionNotificationDeliveryStatus.RetryScheduled, 1, "callback-1");
+
+        await actor.PersistForTestAsync(RetryScheduledEvent("session-1", attempt: 2, "callback-2"));
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationDispatchedEvent
+        {
+            SessionId = "session-1",
+            DeliveryId = "delivery-session-1",
+            Attempt = 2,
+        });
+        await actor.PersistForTestAsync(RetryScheduledEvent("session-1", attempt: 3, "terminal-reopen"));
+        AssertDeliveryState(actor, RoleChatCompletionNotificationDeliveryStatus.Dispatched, 2, string.Empty);
+
+        var recovered = CreateActor(
+            store,
+            new RecordingRuntimeCallbackScheduler(),
+            new RecordingEventPublisher(),
+            "role-retry-reducer");
+        await recovered.ActivateAsync();
+
+        AssertDeliveryState(recovered, RoleChatCompletionNotificationDeliveryStatus.Dispatched, 2, string.Empty);
+    }
+
+    [Fact]
+    public async Task TerminalDeliveryReducers_ShouldRequireEligibleStatusAndExactAttemptOnApplyAndReplay()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var actor = await CreateInitializedActorAsync(
+            store,
+            new RecordingRuntimeCallbackScheduler(),
+            new RecordingEventPublisher(),
+            "role-terminal-reducers");
+        await PersistPreparedCompletionAsync(actor, "dispatched-session");
+        await PersistPreparedCompletionAsync(actor, "expired-session");
+
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationDispatchedEvent
+        {
+            SessionId = "dispatched-session",
+            DeliveryId = "delivery-dispatched-session",
+            Attempt = 2,
+        });
+        actor.State.Sessions["dispatched-session"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationDispatchedEvent
+        {
+            SessionId = "dispatched-session",
+            DeliveryId = "delivery-dispatched-session",
+            Attempt = 0,
+        });
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationExpiredEvent
+        {
+            SessionId = "dispatched-session",
+            DeliveryId = "delivery-dispatched-session",
+            Attempt = 0,
+        });
+        actor.State.Sessions["dispatched-session"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
+
+        await actor.PersistForTestAsync(RetryScheduledEvent("expired-session", attempt: 1, "callback-expired"));
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationExpiredEvent
+        {
+            SessionId = "expired-session",
+            DeliveryId = "delivery-expired-session",
+            Attempt = 0,
+        });
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationExpiredEvent
+        {
+            SessionId = "expired-session",
+            DeliveryId = "delivery-expired-session",
+            Attempt = 3,
+        });
+        AssertSessionDeliveryState(
+            actor,
+            "expired-session",
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled,
+            1);
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationExpiredEvent
+        {
+            SessionId = "expired-session",
+            DeliveryId = "delivery-expired-session",
+            Attempt = 2,
+        });
+        await actor.PersistForTestAsync(new RoleChatCompletionNotificationDispatchedEvent
+        {
+            SessionId = "expired-session",
+            DeliveryId = "delivery-expired-session",
+            Attempt = 2,
+        });
+        AssertSessionDeliveryState(
+            actor,
+            "expired-session",
+            RoleChatCompletionNotificationDeliveryStatus.Expired,
+            2);
+
+        var recovered = CreateActor(
+            store,
+            new RecordingRuntimeCallbackScheduler(),
+            new RecordingEventPublisher(),
+            "role-terminal-reducers");
+        await recovered.ActivateAsync();
+
+        AssertSessionDeliveryState(
+            recovered,
+            "dispatched-session",
+            RoleChatCompletionNotificationDeliveryStatus.Dispatched,
+            0);
+        AssertSessionDeliveryState(
+            recovered,
+            "expired-session",
+            RoleChatCompletionNotificationDeliveryStatus.Expired,
+            2);
+    }
+
+    private static async Task<TestRoleGAgent> CreateInitializedActorAsync(
         IEventStore store,
         RecordingRuntimeCallbackScheduler scheduler,
         RecordingEventPublisher publisher,
@@ -284,7 +545,7 @@ public sealed class RoleGAgentCompletionNotificationTests
         return actor;
     }
 
-    private static RoleGAgent CreateActor(
+    private static TestRoleGAgent CreateActor(
         IEventStore store,
         RecordingRuntimeCallbackScheduler scheduler,
         RecordingEventPublisher publisher,
@@ -297,7 +558,7 @@ public sealed class RoleGAgentCompletionNotificationTests
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
         var provider = new CompletionLlmProvider();
-        var actor = new RoleGAgent(provider, timeProvider: new FixedTimeProvider(Now))
+        var actor = new TestRoleGAgent(provider, new FixedTimeProvider(Now))
         {
             Services = services,
             EventPublisher = publisher,
@@ -306,6 +567,69 @@ public sealed class RoleGAgentCompletionNotificationTests
         typeof(GAgentBase).GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(actor, [actorId]);
         return actor;
+    }
+
+    private static async Task PersistPreparedCompletionAsync(TestRoleGAgent actor, string sessionId)
+    {
+        var runContext = new RoleChatRunContext
+        {
+            RunId = $"run-{sessionId}",
+            CommandId = $"cmd-{sessionId}",
+            CorrelationId = $"corr-{sessionId}",
+            CompletionNotificationActorId = $"service-run:{sessionId}",
+            CompletionNotificationDeliveryId = $"delivery-{sessionId}",
+            CompletionNotificationExpiresAtUnixMs = Now.AddMinutes(1).ToUnixTimeMilliseconds(),
+        };
+        await actor.PersistForTestAsync(new RoleChatSessionStartedEvent
+        {
+            SessionId = sessionId,
+            Prompt = $"prompt-{sessionId}",
+            RunContext = runContext.Clone(),
+        });
+        await actor.PersistForTestAsync(new RoleChatSessionCompletedEvent
+        {
+            SessionId = sessionId,
+            Prompt = $"prompt-{sessionId}",
+            Content = "original terminal content",
+            Outcome = RoleChatSessionOutcome.Completed,
+            TerminalTime = Timestamp.FromDateTimeOffset(Now),
+            RunContext = runContext,
+            ActorId = actor.Id,
+        });
+    }
+
+    private static RoleChatCompletionNotificationRetryScheduledEvent RetryScheduledEvent(
+        string sessionId,
+        int attempt,
+        string callbackId) =>
+        new()
+        {
+            SessionId = sessionId,
+            DeliveryId = $"delivery-{sessionId}",
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAt = Timestamp.FromDateTimeOffset(Now.AddMilliseconds(250 * attempt)),
+        };
+
+    private static void AssertDeliveryState(
+        RoleGAgent actor,
+        RoleChatCompletionNotificationDeliveryStatus status,
+        int attempt,
+        string callbackId) =>
+        AssertSessionDeliveryState(actor, "session-1", status, attempt, callbackId);
+
+    private static void AssertSessionDeliveryState(
+        RoleGAgent actor,
+        string sessionId,
+        RoleChatCompletionNotificationDeliveryStatus status,
+        int attempt,
+        string? callbackId = null)
+    {
+        var session = actor.State.Sessions[sessionId];
+        session.CompletionNotificationDeliveryStatus.Should().Be(status);
+        session.CompletionNotificationAttempt.Should().Be(attempt);
+        if (callbackId != null)
+            session.CompletionNotificationRetryCallbackId.Should().Be(callbackId);
     }
 
     private static Task CompleteSessionAsync(
@@ -352,7 +676,10 @@ public sealed class RoleGAgentCompletionNotificationTests
     {
         public Exception? SendException { get; set; }
 
-        public Func<string, bool>? FailurePredicate { get; init; }
+        public Func<string, bool>? FailurePredicate { get; set; }
+
+        public List<(IMessage Event, TopologyAudience Audience, EventEnvelopePublishOptions? Options)>
+            SuccessfulPublications { get; } = [];
 
         public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> SuccessfulSends { get; } = [];
 
@@ -362,8 +689,12 @@ public sealed class RoleGAgentCompletionNotificationTests
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
-            Task.CompletedTask;
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            SuccessfulPublications.Add((evt, audience, options));
+            return Task.CompletedTask;
+        }
 
         public Task SendToAsync<TEvent>(
             string targetActorId,
@@ -386,6 +717,8 @@ public sealed class RoleGAgentCompletionNotificationTests
 
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        public Exception? ScheduleException { get; set; }
+
         public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
@@ -393,6 +726,8 @@ public sealed class RoleGAgentCompletionNotificationTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (ScheduleException != null)
+                throw ScheduleException;
             TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
             {
                 ActorId = request.ActorId,
@@ -418,6 +753,51 @@ public sealed class RoleGAgentCompletionNotificationTests
 
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class FailOnceDispatchedEventStore : IEventStore
+    {
+        private readonly InMemoryEventStoreForTests _inner = new();
+        private bool _failed;
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var buffered = events.ToArray();
+            if (!_failed && buffered.Any(stateEvent =>
+                    stateEvent.EventData.Is(RoleChatCompletionNotificationDispatchedEvent.Descriptor)))
+            {
+                _failed = true;
+                throw new InvalidOperationException("simulated dispatched event commit failure");
+            }
+
+            return _inner.AppendAsync(agentId, buffered, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class TestRoleGAgent(
+        ILLMProviderFactory provider,
+        TimeProvider timeProvider) : RoleGAgent(provider, timeProvider: timeProvider)
+    {
+        public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
     }
 
     private sealed class FailOnceRetryScheduledEventStore(int failedAttempt) : IEventStore

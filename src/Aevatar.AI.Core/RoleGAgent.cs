@@ -877,11 +877,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 RoleName,
                 request.SessionId);
 
-            if (string.IsNullOrWhiteSpace(request.SessionId) ||
-                State.Sessions.TryGetValue(request.SessionId, out var completed) && completed.Completed)
-            {
+            if (State.Sessions.TryGetValue(request.SessionId, out var completed) && completed.Completed)
+                throw;
+
+            if (string.IsNullOrWhiteSpace(request.SessionId))
                 return;
-            }
 
             await PersistRoleChatSessionCompletionAsync(
                 request,
@@ -897,7 +897,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     }
 
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
-    public Task HandleCompletionNotificationRetryFiredAsync(
+    public async Task HandleCompletionNotificationRetryFiredAsync(
         RoleChatCompletionNotificationRetryFiredEvent retry)
     {
         ArgumentNullException.ThrowIfNull(retry);
@@ -908,7 +908,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 retry.DeliveryId,
                 StringComparison.Ordinal))
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var matchesScheduledAttempt =
@@ -924,15 +924,31 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             RoleChatCompletionNotificationDeliveryStatus.Prepared &&
             retry.Attempt == session.CompletionNotificationAttempt + 1;
 
-        return matchesScheduledAttempt ||
-               matchesScheduledNextAttemptRecovery ||
-               matchesScheduleBeforeCommitRecovery
-            ? DeliverCompletionNotificationAsync(
-                retry.SessionId,
-                session.Clone(),
-                CancellationToken.None,
-                retry.Attempt)
-            : Task.CompletedTask;
+        if (!matchesScheduledAttempt &&
+            !matchesScheduledNextAttemptRecovery &&
+            !matchesScheduleBeforeCommitRecovery)
+        {
+            return;
+        }
+
+        if (matchesScheduledNextAttemptRecovery || matchesScheduleBeforeCommitRecovery)
+        {
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationRetryScheduledEvent
+            {
+                SessionId = retry.SessionId,
+                DeliveryId = retry.DeliveryId,
+                Attempt = retry.Attempt,
+                CallbackId = BuildCompletionNotificationRetryCallbackId(retry.SessionId, retry.DeliveryId),
+                RetryAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            });
+            session = State.Sessions[retry.SessionId];
+        }
+
+        await DeliverCompletionNotificationAsync(
+            retry.SessionId,
+            session.Clone(),
+            CancellationToken.None,
+            retry.Attempt);
     }
 
     private async Task HandleChatRequestCoreAsync(ChatRequestEvent request)
@@ -1819,14 +1835,27 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
         }
 
-        await PersistDomainEventAsync(new RoleChatCompletionNotificationDispatchedEvent
+        try
         {
-            SessionId = sessionId,
-            RunContext = runContext,
-            DeliveryId = deliveryId,
-            Attempt = attempt,
-            DispatchedAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-        }, ct);
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationDispatchedEvent
+            {
+                SessionId = sessionId,
+                RunContext = runContext,
+                DeliveryId = deliveryId,
+                Attempt = attempt,
+                DispatchedAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            }, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ScheduleCompletionNotificationRetryAsync(
+                sessionId,
+                runContext,
+                deliveryId,
+                attempt,
+                ct);
+            throw;
+        }
     }
 
     private async Task ScheduleCompletionNotificationRetryAsync(
@@ -1861,21 +1890,46 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                     runContext.CompletionNotificationExpiresAtUnixMs - now.ToUnixTimeMilliseconds())
                 : retryDelayMs);
         var retryAt = now.Add(dueTime);
-        var callbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
-            CompletionNotificationRetryCallbackPrefix,
-            sessionId,
-            deliveryId);
-
-        await ScheduleSelfDurableTimeoutAsync(
-            callbackId,
-            dueTime,
-            new RoleChatCompletionNotificationRetryFiredEvent
-            {
-                SessionId = sessionId,
-                DeliveryId = deliveryId,
-                Attempt = attempt,
-            },
-            ct: ct);
+        var callbackId = BuildCompletionNotificationRetryCallbackId(sessionId, deliveryId);
+        var retryFired = new RoleChatCompletionNotificationRetryFiredEvent
+        {
+            SessionId = sessionId,
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+        };
+        var retryOptions = BuildCompletionNotificationRetryOptions(callbackId);
+        try
+        {
+            await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                dueTime,
+                retryFired,
+                retryOptions,
+                ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var canPublishImmediateRecovery =
+                current is
+                {
+                    CompletionNotificationDeliveryStatus:
+                        RoleChatCompletionNotificationDeliveryStatus.Prepared,
+                    CompletionNotificationAttempt: 0,
+                } &&
+                attempt == 1;
+            Logger.LogWarning(
+                ex,
+                canPublishImmediateRecovery
+                    ? "Role chat completion durable retry scheduling failed; publishing one immediate recovery continuation. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}"
+                    : "Role chat completion durable retry scheduling failed; preserving the outbox for activation recovery. actor={ActorId} session={SessionId} delivery={DeliveryId} attempt={Attempt}",
+                Id,
+                sessionId,
+                deliveryId,
+                attempt);
+            if (canPublishImmediateRecovery)
+                await PublishAsync(retryFired, TopologyAudience.Self, ct, options: retryOptions);
+            throw;
+        }
         await PersistDomainEventAsync(new RoleChatCompletionNotificationRetryScheduledEvent
         {
             SessionId = sessionId,
@@ -1885,6 +1939,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             RetryAt = Timestamp.FromDateTimeOffset(retryAt),
         }, ct);
     }
+
+    private static string BuildCompletionNotificationRetryCallbackId(string sessionId, string deliveryId) =>
+        RuntimeCallbackKeyComposer.BuildCallbackId(
+            CompletionNotificationRetryCallbackPrefix,
+            sessionId,
+            deliveryId);
+
+    private static EventEnvelopePublishOptions BuildCompletionNotificationRetryOptions(string callbackId) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                DeduplicationOperationId = callbackId,
+            },
+        };
 
     private static long CalculateCompletionNotificationRetryDelayMs(int attempt)
     {
@@ -2068,6 +2137,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (string.IsNullOrWhiteSpace(evt.SessionId))
             return current;
 
+        if (HasPendingCompletionNotification(current, evt.SessionId))
+            return current;
+
         var next = current.Clone();
         if (!next.Sessions.TryGetValue(evt.SessionId, out var session))
         {
@@ -2173,6 +2245,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         if (!deliveryMatches)
             return current;
 
+        if (!IsEligibleCompletionNotificationTerminalTransition(session, evt.Attempt))
+            return current;
+
         var next = current.Clone();
         var nextSession = next.Sessions[evt.SessionId];
         nextSession.CompletionNotificationDeliveryStatus =
@@ -2190,16 +2265,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         RoleGAgentState current,
         RoleChatCompletionNotificationRetryScheduledEvent evt)
     {
-        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out _))
+        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out var session) ||
+            session == null ||
+            !IsCompletionNotificationDeliveryPending(session) ||
+            evt.Attempt != session.CompletionNotificationAttempt + 1)
+        {
             return current;
+        }
 
         var next = current.Clone();
-        var session = next.Sessions[evt.SessionId];
-        session.CompletionNotificationDeliveryStatus =
+        var nextSession = next.Sessions[evt.SessionId];
+        nextSession.CompletionNotificationDeliveryStatus =
             RoleChatCompletionNotificationDeliveryStatus.RetryScheduled;
-        session.CompletionNotificationAttempt = evt.Attempt;
-        session.CompletionNotificationRetryCallbackId = evt.CallbackId ?? string.Empty;
-        session.CompletionNotificationRetryAt = evt.RetryAt?.Clone();
+        nextSession.CompletionNotificationAttempt = evt.Attempt;
+        nextSession.CompletionNotificationRetryCallbackId = evt.CallbackId ?? string.Empty;
+        nextSession.CompletionNotificationRetryAt = evt.RetryAt?.Clone();
         return next;
     }
 
@@ -2207,18 +2287,22 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         RoleGAgentState current,
         RoleChatCompletionNotificationExpiredEvent evt)
     {
-        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out _))
+        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out var session) ||
+            session == null ||
+            !IsEligibleCompletionNotificationTerminalTransition(session, evt.Attempt))
+        {
             return current;
+        }
 
         var next = current.Clone();
-        var session = next.Sessions[evt.SessionId];
-        session.CompletionNotificationDeliveryStatus =
+        var nextSession = next.Sessions[evt.SessionId];
+        nextSession.CompletionNotificationDeliveryStatus =
             RoleChatCompletionNotificationDeliveryStatus.Expired;
-        session.CompletionNotificationAttempt = Math.Max(
-            session.CompletionNotificationAttempt,
+        nextSession.CompletionNotificationAttempt = Math.Max(
+            nextSession.CompletionNotificationAttempt,
             evt.Attempt);
-        session.CompletionNotificationRetryCallbackId = string.Empty;
-        session.CompletionNotificationRetryAt = null;
+        nextSession.CompletionNotificationRetryCallbackId = string.Empty;
+        nextSession.CompletionNotificationRetryAt = null;
         TrimTrackedSessions(next);
         return next;
     }
@@ -2242,6 +2326,23 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session = null;
         return false;
     }
+
+    private static bool IsCompletionNotificationDeliveryPending(RoleChatSessionState session) =>
+        session.CompletionNotificationDeliveryStatus is
+            RoleChatCompletionNotificationDeliveryStatus.Prepared or
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled;
+
+    private static bool HasPendingCompletionNotification(RoleGAgentState state, string sessionId) =>
+        state.Sessions.TryGetValue(sessionId, out var session) &&
+        session.Completed &&
+        IsCompletionNotificationDeliveryPending(session);
+
+    private static bool IsEligibleCompletionNotificationTerminalTransition(
+        RoleChatSessionState session,
+        int attempt) =>
+        IsCompletionNotificationDeliveryPending(session) &&
+        (attempt == session.CompletionNotificationAttempt ||
+         attempt == session.CompletionNotificationAttempt + 1);
 
     private IEnumerable<ToolCallEvent> ToToolCallEvents(
         IEnumerable<ToolCall> toolCalls,
