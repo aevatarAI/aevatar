@@ -101,6 +101,55 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeCommittedAsync_WhenFrozenExactRefDoesNotMatchProfile_ShouldRestrictEmptyWithoutFetch()
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var profile = SealProfile(BuildProfile(withAlias: true));
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .PrepareAsync(
+                profile,
+                "session-a",
+                "/alpha run",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+        var committedAuthority = preparation.Authority;
+        committedAuthority.SelectedExactSkillRef = new ExactRemoteSkillRef
+        {
+            Guid = "22222222-2222-2222-2222-222222222222",
+            LiteralVersion = SkillVersion,
+        };
+        var classifier = new RecordingClassifier(new InvalidOperationException("must not classify"));
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var materialization = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeCommittedAsync(
+                profile,
+                committedAuthority,
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        materialization.Catalog.FinalAllowedToolNames.Should().BeEmpty();
+        materialization.Catalog.SelectedSkillPromptLayer.Should().BeNull();
+        materialization.ReconcileProposal.ReconciliationKey.Should().BeEquivalentTo(
+            committedAuthority.ReconciliationKey);
+        materialization.ReconcileProposal.AuthorityKind.Should().Be(
+            AgentProfileTurnAuthorityKind.RestrictedEmpty);
+        materialization.ReconcileProposal.AuthorityCeilingToolNames.Should().BeEmpty();
+        materialization.ReconcileProposal.DegradationReasons.Should().Contain(
+            AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch);
+        materialization.Catalog.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch);
+        classifier.CallCount.Should().Be(0);
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MaterializeCommittedAsync_ShouldReturnSameKeyMonotonicReconcileForSuccessAndFailure()
     {
         var tools = NewTools("recovery", "task", "extra");

@@ -240,8 +240,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
             return BuildMaterialization(
                 profile,
                 committedAuthority,
-                NarrowAuthority(committedAuthority.AuthorityKind, AgentProfileTurnAuthorityKind.Recovery),
-                recoveryNames,
+                AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                [],
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
                 diagnostics);

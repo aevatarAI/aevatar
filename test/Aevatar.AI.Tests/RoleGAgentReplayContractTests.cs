@@ -133,6 +133,42 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task InvalidReconcileProposal_ShouldNotAppendCallLlmOrReplaceReplayedAuthority()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var provider = new CountingLlmProviderFactory("must not run");
+        const string actorId = "role-profiled-invalid-reconcile";
+        var agent = CreateProfiledAgent(
+            services,
+            actorId,
+            providerFactory: provider,
+            widenReconcileProposal: true);
+        agent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        provider.StreamCallCount.Should().Be(0);
+        agent.MaterializeCallCount.Should().Be(1);
+        var authorityEvents = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .ToArray();
+        authorityEvents.Should().ContainSingle();
+        authorityEvents[0].CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.Initial);
+        authorityEvents[0].Authority.AuthorityCeilingToolNames.Should().Equal("recovery", "task");
+
+        var replayed = CreateProfiledAgent(services, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.AgentProfileTurnAuthority.Should().BeEquivalentTo(authorityEvents[0].Authority);
+    }
+
+    [Fact]
     public async Task RetryStartedAppendFailure_ShouldNotDuplicateFenceOnNextCommandOrReplay()
     {
         var inner = new InMemoryEventStoreForTests();
@@ -1230,13 +1266,16 @@ public class RoleGAgentReplayContractTests
         string actorId,
         string intentId = "intent-a",
         string exactSkillGuid = "skill-a",
-        List<string>? operationLog = null)
+        List<string>? operationLog = null,
+        ILLMProviderFactory? providerFactory = null,
+        bool widenReconcileProposal = false)
     {
         var agent = new ProfiledRoleGAgent(
-            new CountingLlmProviderFactory("done"),
+            providerFactory ?? new CountingLlmProviderFactory("done"),
             intentId,
             exactSkillGuid,
-            operationLog)
+            operationLog,
+            widenReconcileProposal)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -1453,7 +1492,8 @@ public class RoleGAgentReplayContractTests
         ILLMProviderFactory providerFactory,
         string intentId,
         string exactSkillGuid,
-        List<string>? operationLog)
+        List<string>? operationLog,
+        bool widenReconcileProposal)
         : RoleGAgent(providerFactory)
     {
         public int PrepareCallCount { get; private set; }
@@ -1488,8 +1528,11 @@ public class RoleGAgentReplayContractTests
                 selectedSkillPromptLayer: null,
                 selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
                 candidateIntentId: committedAuthority.CandidateRoute?.IntentId);
+            var reconcileProposal = committedAuthority.Clone();
+            if (widenReconcileProposal)
+                reconcileProposal.AuthorityCeilingToolNames.Add("outside-frozen-ceiling");
             return Task.FromResult<AgentProfileTurnCatalogMaterialization?>(
-                AgentProfileTurnCatalogMaterialization.Create(catalog, committedAuthority));
+                AgentProfileTurnCatalogMaterialization.Create(catalog, reconcileProposal));
         }
     }
 
