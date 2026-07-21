@@ -1193,9 +1193,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         IReadOnlyList<AgentToolReceipt> toolReceipts)
     {
         var receipt = toolReceipts.LastOrDefault(static candidate =>
-            (candidate.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied) &&
-            (candidate.IsDestructive || !string.IsNullOrWhiteSpace(candidate.SideEffectKind)));
-        if (receipt is null)
+            candidate.IsDestructive || !string.IsNullOrWhiteSpace(candidate.SideEffectKind));
+        if (receipt?.Status is not (AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied))
             return null;
 
         var failureCode = string.IsNullOrWhiteSpace(receipt.ErrorCode)

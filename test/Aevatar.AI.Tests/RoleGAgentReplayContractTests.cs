@@ -467,6 +467,42 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_WhenSideEffectingToolErrorIsRetriedSuccessfully_ShouldCommitCompletedOutcome()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new SideEffectingToolRetryLlmProviderFactory();
+        var tool = new RetriedSideEffectingReceiptTool();
+        var services = BuildServices(store, collection =>
+            collection.AddSingleton<IAgentToolSource>(
+                new StaticToolSource([tool])));
+        var agent = CreateAgent(services, "role-side-effect-retry", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "schedule the workflow",
+            SessionId = "turn-side-effect-retry",
+        });
+
+        var completed = (await store.GetEventsAsync("role-side-effect-retry"))
+            .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(evt => evt.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Which;
+        completed.Outcome.Should().Be(RoleChatSessionOutcome.Completed);
+        completed.FailureCode.Should().BeEmpty();
+        completed.ToolReceipts.Should().Contain(receipt => receipt.Status == AgentToolReceiptStatus.Error);
+        completed.ToolReceipts.Should().Contain(receipt => receipt.Status == AgentToolReceiptStatus.Success);
+    }
+
+    [Fact]
     public async Task CompletionNotification_ShouldReplayCommittedTerminalFactAfterRestart()
     {
         var store = new InMemoryEventStoreForTests();
@@ -1383,6 +1419,76 @@ public class RoleGAgentReplayContractTests
                 SideEffectKind = SideEffectKind,
                 ErrorCode = "SnapshotStale",
                 ErrorMessage = "nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale",
+                ResultJson = resultJson,
+            };
+    }
+
+    private sealed class SideEffectingToolRetryLlmProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public int StreamCallCount { get; private set; }
+        public string Name => "side-effecting-tool-retry";
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StreamCallCount++;
+            if (StreamCallCount <= 2)
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = $"call-schedule-{StreamCallCount}",
+                        Name = "retried_schedule_receipt_test_tool",
+                        ArgumentsJson = "{}",
+                    },
+                };
+            }
+            else
+            {
+                yield return new LLMStreamChunk { DeltaContent = "The schedule was created." };
+            }
+
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class RetriedSideEffectingReceiptTool : IAgentTool
+    {
+        private int _callCount;
+        public string Name => "retried_schedule_receipt_test_tool";
+        public string Description => "Returns an error receipt once, then a success receipt.";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => false;
+        public string SideEffectKind => "studio.member.workflow.schedule";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            _callCount++;
+            return Task.FromResult(_callCount == 1
+                ? """{"error":{"code":"SnapshotStale","message":"retryable"}}"""
+                : """{"schedule_id":"schedule-alpha"}""");
+        }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = _callCount == 1 ? AgentToolReceiptStatus.Error : AgentToolReceiptStatus.Success,
+                SideEffectKind = SideEffectKind,
+                ErrorCode = _callCount == 1 ? "SnapshotStale" : string.Empty,
+                ErrorMessage = _callCount == 1 ? "retryable" : string.Empty,
                 ResultJson = resultJson,
             };
     }

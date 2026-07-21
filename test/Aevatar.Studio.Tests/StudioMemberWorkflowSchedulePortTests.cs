@@ -140,13 +140,22 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
         var refresh = new RecordingCatalogRefreshPort();
         var request = Request("scope-1", "member-1");
-        var port = NewPort(new RecordingScheduleService(), planner: planner, catalogRefresh: refresh);
+        var retryNow = TestNow.AddSeconds(3);
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            timeProvider: new SequenceTimeProvider(TestNow, retryNow));
 
         var result = await port.PreflightAsync(request);
 
         result.Success.Should().BeTrue();
         result.Plan!.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
         planner.Requests.Should().HaveCount(2);
+        planner.Requests[0].EvaluatedAtUtc.Should().Be(TestNow);
+        planner.Requests[1].EvaluatedAtUtc.Should().Be(retryNow);
+        planner.Requests[1].ExpiresAtUtc.Should().Be(
+            new StudioMemberWorkflowSchedulePolicy().ResolveCredentialExpiresAtUtc(retryNow));
         refresh.RefreshCallCount.Should().Be(1);
         refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
         refresh.LastBearerToken.Should().Be("bearer-alpha");
@@ -671,7 +680,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         RecordingMemberService? memberService = null,
         IScheduledInvocationAuthorizationPlanner? planner = null,
         IStudioScheduledCredentialMaterializer? materializer = null,
-        INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null)
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null,
+        TimeProvider? timeProvider = null)
     {
         var resolvedPlanner = planner ?? new RecordingAuthorizationPlanner();
         return new StudioMemberWorkflowSchedulePort(
@@ -680,7 +690,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             resolvedPlanner,
             new RecordingAuthorizationRevalidator(resolvedPlanner),
             materializer ?? new RecordingCredentialMaterializer(),
-            new FixedTimeProvider(TestNow),
+            timeProvider ?? new FixedTimeProvider(TestNow),
             catalogRefresh);
     }
 
@@ -1048,6 +1058,18 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    private sealed class SequenceTimeProvider(params DateTimeOffset[] values) : TimeProvider
+    {
+        private int _index;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var index = Math.Min(_index, values.Length - 1);
+            _index++;
+            return values[index];
+        }
     }
 
     private sealed class RecordingScheduleService : IScheduledDispatchApplicationService

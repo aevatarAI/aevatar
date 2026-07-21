@@ -166,7 +166,13 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 $"nyxid_catalog_refresh_failed:{failureCode}");
         }
 
-        var second = await _authorizationPlanner.PlanAsync(authorizationRequest, ct);
+        var retryEvaluatedAtUtc = _timeProvider.GetUtcNow();
+        var retryRequest = authorizationRequest with
+        {
+            EvaluatedAtUtc = retryEvaluatedAtUtc,
+            ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
+        };
+        var second = await _authorizationPlanner.PlanAsync(retryRequest, ct);
         if (second.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(second))
             return second;
 
