@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -364,6 +365,50 @@ public sealed class ServiceRunGAgentTests
         var retry = callback.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>();
         retry.DeliveryId.Should().Be("delivery-1");
         retry.Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RetryCallbackEnvelopes_ShouldKeepStableCallbackId_AndDeduplicatePerAttempt()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+        var attemptOne = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        var attemptOneOperationId = attemptOne.TriggerEnvelope.Runtime?.Deduplication?.OperationId;
+
+        attemptOne.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
+            .Attempt.Should().Be(1);
+        attemptOneOperationId.Should().Be("service-run-terminal-retry:delivery-1:1");
+        var deduplicator = new MemoryCacheDeduplicator();
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptOne.TriggerEnvelope, out var attemptOneKey)
+            .Should().BeTrue();
+        (await deduplicator.TryRecordAsync(attemptOneKey)).Should().BeTrue();
+        (await deduplicator.TryRecordAsync(attemptOneKey)).Should().BeFalse();
+
+        await actor.HandleEventAsync(attemptOne.TriggerEnvelope);
+
+        scheduler.TimeoutRequests.Should().HaveCount(2);
+        var attemptTwo = scheduler.TimeoutRequests[1];
+        var attemptTwoOperationId = attemptTwo.TriggerEnvelope.Runtime?.Deduplication?.OperationId;
+        attemptTwo.CallbackId.Should().Be(attemptOne.CallbackId);
+        attemptTwo.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
+            .Attempt.Should().Be(2);
+        attemptTwoOperationId.Should().Be("service-run-terminal-retry:delivery-1:2");
+        attemptTwoOperationId.Should().NotBe(attemptOneOperationId);
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, attemptTwo.TriggerEnvelope, out var attemptTwoKey)
+            .Should().BeTrue();
+        attemptTwoKey.Should().NotBe(attemptOneKey);
+        (await deduplicator.TryRecordAsync(attemptTwoKey)).Should().BeTrue();
     }
 
     [Theory]

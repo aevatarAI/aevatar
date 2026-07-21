@@ -1,3 +1,4 @@
+using System.Globalization;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -598,6 +599,15 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             {
                 DeliveryId = notification.DeliveryId,
                 Attempt = attempt,
+            },
+            new EventEnvelopePublishOptions
+            {
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                        callbackId,
+                        attempt.ToString(CultureInfo.InvariantCulture)),
+                },
             },
             ct: ct);
         await PersistDomainEventAsync(new ServiceRunTerminalNotificationRetryScheduledEvent
