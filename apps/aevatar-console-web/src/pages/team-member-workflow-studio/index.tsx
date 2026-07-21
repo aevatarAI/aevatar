@@ -392,7 +392,8 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           hasBlockingFindings={studio.yamlEditHasBlockingFindings}
           hasConflict={studio.yamlEditHasConflict}
           hasUnappliedChanges={studio.yamlEditHasUnappliedChanges}
-          loading={studio.yamlEditPending}
+          editorLoading={studio.yamlEditOpening}
+          loading={studio.yamlEditOpening || studio.yamlEditPending}
           onApply={studio.applyYamlEdit}
           onBufferChange={studio.setYamlEditBuffer}
           onClose={studio.closeYamlPanel}
