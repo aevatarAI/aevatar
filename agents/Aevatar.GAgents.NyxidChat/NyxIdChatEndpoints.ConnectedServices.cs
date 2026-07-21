@@ -42,7 +42,7 @@ public static partial class NyxIdChatEndpoints
             }
 
             var specSource = http.RequestServices.GetService<IConnectedServiceSpecSource>();
-            var context = await BuildConnectedServicesContextAsync(servicesJson, specSource, accessToken, ct);
+            var context = await BuildConnectedServicesContextAsync(servicesJson, specSource, accessToken, ct, logger);
             if (!string.IsNullOrWhiteSpace(context))
                 metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = context;
         }
@@ -56,7 +56,8 @@ public static partial class NyxIdChatEndpoints
         string servicesJson,
         IConnectedServiceSpecSource? specSource,
         string accessToken,
-        CancellationToken ct)
+        CancellationToken ct,
+        ILogger? logger = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<connected-services>");
@@ -111,8 +112,9 @@ public static partial class NyxIdChatEndpoints
                 }
             }
         }
-        catch
+        catch (JsonException ex)
         {
+            logger?.LogWarning(ex, "Failed to parse connected services response; using an empty capability context");
         }
 
         if (hintRequests.Count == 0)
