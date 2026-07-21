@@ -53,7 +53,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
-            RegisterElasticsearch<ChatHistoryCreateRecoveryCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<ChatHistoryCreateRecoveryCurrentStateDocument>(
+                services,
+                configuration,
+                static document => document.Id);
             RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
@@ -71,7 +74,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
             RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
             RegisterInMemory<ChatConversationCurrentStateDocument>(services);
-            RegisterInMemory<ChatHistoryCreateRecoveryCurrentStateDocument>(services);
+            RegisterInMemory<ChatHistoryCreateRecoveryCurrentStateDocument>(
+                services,
+                static document => document.Id,
+                static document => document.UpdatedAt);
             RegisterInMemory<GAgentRegistryCurrentStateDocument>(services);
             RegisterInMemory<UserMemoryCurrentStateDocument>(services);
             RegisterInMemory<UserConfigCurrentStateDocument>(services);
