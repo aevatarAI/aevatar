@@ -587,13 +587,17 @@ public class NyxIdChatGAgentTests
             provider,
             actorId,
             new AgentProfileBoundEvent { Profile = BuildSealedEnforcedProfile() });
+        var llm = new StreamingToolLoopProviderFactory(
+            [[new LLMStreamChunk { DeltaContent = "must not run" }]]);
         var agent = CreateAgent(
             provider,
             actorId,
-            new StreamingToolLoopProviderFactory([[new LLMStreamChunk { DeltaContent = "must not run" }]]),
+            llm,
             [new StaticToolSource(tools)],
             timeProvider: timeProvider,
             turnCatalogMaterializer: materializer);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
         await agent.ActivateAsync();
         var handling = agent.HandleChatRequest(new ChatRequestEvent
         {
@@ -611,7 +615,9 @@ public class NyxIdChatGAgentTests
         await handling;
 
         fetcher.CancellationObserved.Should().BeTrue();
-        var authorityEvents = (await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId))
+        llm.StreamRequests.Should().BeEmpty();
+        var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+        var authorityEvents = events
             .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
             .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
             .ToArray();
@@ -621,6 +627,17 @@ public class NyxIdChatGAgentTests
             new AgentProfileTurnReconciliationKey { SessionId = sessionId, Attempt = 1 });
         authorityEvents[0].Authority.DegradationReasons.Should().NotContain(
             AgentProfileTurnDegradationReason.MaterializationFailed);
+        var completion = events
+            .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Where(completed => completed.SessionId == sessionId)
+            .Should().ContainSingle().Which;
+        completion.Content.Should().Contain($"LLM request timed out after {timeoutMs}ms");
+        completion.ContentEmitted.Should().BeFalse();
+        publisher.Published.OfType<TextMessageStartEvent>()
+            .Should().ContainSingle(start => start.SessionId == sessionId);
+        publisher.Published.OfType<TextMessageEndEvent>()
+            .Should().ContainSingle(end => end.SessionId == sessionId && end.Content == completion.Content);
     }
 
     [Fact]
