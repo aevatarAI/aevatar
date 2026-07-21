@@ -115,11 +115,11 @@ Chat 在写入含 external operation 的 Workflow 前必须先调用只读工具
 
 NyxID proxy 的权限错误只按真实 structured contract 分类：仅 HTTP `401` + `unauthorized` + `1001` 这一精确组合表示 credential 无效或过期。`ConnectedServiceProxyTool` 与 `NyxIdProxyTool` 都通过同一个 result-receipt 边界生成 `AgentToolReceipt(status=AUTHORIZATION_REQUIRED)`，其中携带 typed `NyxIdAuthorizationRequiredEvent`。不使用 exception message、LLM 文案或 JSON substring 猜测权限状态。
 
-HTTP `403` / `forbidden` / `1002` 本身不表示需要重新连接。approval policy denial、approval timeout、scoped permission denial 与普通 upstream `403` 都保持为 safe typed `AgentToolReceipt(status=ERROR)`，不会生成 authorization blocker。只有 connected-service discovery 确认 service 缺失，或模型调用 `nyxid_require_service` 提供 Aevatar-owned positive evidence 时，才生成 typed connection blocker。
+HTTP `403` / `forbidden` / `1002` 本身不表示需要重新连接。approval policy denial、approval timeout、scoped permission denial 与普通 upstream `403` 都保持为 safe typed `AgentToolReceipt(status=ERROR)`，不会生成 authorization blocker。`nyxid_require_service` 不是模型自报证据：它用当前 caller authority 调用同一个 `IExternalWorkflowCapabilityReadinessPort`，只有 live source 明确返回 `SERVICE_REGISTRATION_REQUIRED` 时才生成 typed connection blocker；`SOURCE_STALE`、访问失败、已有 exact match 或选择歧义都不得伪报为未注册。
 
 失败、拒绝或阻塞 receipt 只保留安全的 typed 诊断字段：proxy 调用已经固定 exact instance 时保留 `user_service_id`，并保留 `service_slug`、可选 `service_label`、去除 query/fragment 的可选 `resource_uri`、`reason_code` 与 `safe_message`。这类调用的上游 raw error body、credential、token 与 secret-bearing arguments 不进入 receipt、actor state、history、Role completion、AGUI payload 或日志；非成功 tool result 统一替换成 receipt 的 safe `result_json`。
 
-NyxIdChat 收到该 receipt 后提交 `RoleChatSessionOutcome.BLOCKED`，Projection Pipeline 依次映射为 `CUSTOM nyxid.authorization.required` 与 `RUN_FINISHED(status=blocked)`。该事实只终止当前 turn，不创建 `PendingToolApprovalState`，也不触发 `:approve` continuation。缺少整个 connected service 时，`nyxid_require_service` 提供相同的 deterministic typed blocker 路径。
+NyxIdChat 收到该 receipt 后提交 `RoleChatSessionOutcome.BLOCKED`，Projection Pipeline 依次映射为 `CUSTOM nyxid.authorization.required` 与 `RUN_FINISHED(status=blocked)`。该事实只终止当前 turn，不创建 `PendingToolApprovalState`，也不触发 `:approve` continuation。缺少整个 connected service 时，`nyxid_require_service` 只把统一 readiness 已验证的 registration blocker 映射到同一条 receipt 路径。
 
 平台审计只在 canonical tool chain 的 `ToolExecutionAuditMiddleware` 中完成。它消费
 typed `AgentToolExecutionContext`、`ToolCallContext.CredentialSource` 和最终

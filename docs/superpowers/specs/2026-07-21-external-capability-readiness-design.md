@@ -169,11 +169,13 @@ admission contract. It:
 6. allows the bind actor to compare the submitted plan against independently
    parsed structure before committing the definition and admission fact.
 
-Scope upsert, Studio provisioning, member binding, revision preparation, and
-publish paths use this same contract. They do not each implement a separate
-readiness policy. Their synchronous receipt remains honest: it acknowledges
-dispatch acceptance, while observed definition state remains a read-model
-query.
+Scope upsert, Studio provisioning, member binding, revision preparation,
+publish, skill mount, and startup file materialization paths use this same
+contract. They do not each implement a separate readiness policy. Repository
+startup definitions have no tenant caller authority and therefore cannot embed
+a tenant-owned NyxID UserService identity. Their synchronous receipt remains
+honest: it acknowledges dispatch acceptance, while observed definition state
+remains a read-model query.
 
 ## Exact NyxID Execution
 

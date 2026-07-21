@@ -590,7 +590,7 @@ public class NyxIdChatGAgentTests
             provider,
             "nyxid-chat-blocked-history",
             llmProviderFactory,
-            [new StaticToolSource([new NyxIdRequireServiceTool()])]);
+            [new StaticToolSource([new VerifiedMissingServiceTool()])]);
 
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
@@ -643,7 +643,8 @@ public class NyxIdChatGAgentTests
             .ContainSingle(static message => message.Role == "assistant").Which;
         blockedAssistant.Id.Should().Be("turn-blocked-assistant");
         blockedAssistant.Status.Should().Be("blocked");
-        blockedAssistant.Error.Should().Be("Connect api-github to continue.");
+        blockedAssistant.Error.Should().Be(
+            "No caller-visible NyxID UserService matches the requested service.");
         blockedAssistant.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
         history.Saved[1].Messages.Should().ContainSingle(message =>
             message.Role == "assistant" &&
@@ -1426,6 +1427,39 @@ public class NyxIdChatGAgentTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
+    }
+
+    private sealed class VerifiedMissingServiceTool : IAgentTool
+    {
+        public string Name => "nyxid_require_service";
+        public string Description => "Verified missing service test fixture";
+        public string ParametersSchema => """{"type":"object"}""";
+        public bool IsReadOnly => true;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult(
+                """{"blocked":true,"service_slug":"api-github","reason_code":"USER_SERVICE_NOT_VISIBLE","safe_message":"No caller-visible NyxID UserService matches the requested service."}""");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.AuthorizationRequired,
+                ErrorCode = "USER_SERVICE_NOT_VISIBLE",
+                ErrorMessage = "No caller-visible NyxID UserService matches the requested service.",
+                AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                {
+                    ServiceSlug = "api-github",
+                    ResourceUri = "/repos/private",
+                    ReasonCode = "USER_SERVICE_NOT_VISIBLE",
+                    SafeMessage = "No caller-visible NyxID UserService matches the requested service.",
+                },
+            };
     }
 
     private sealed class RecordingEventPublisher : IEventPublisher

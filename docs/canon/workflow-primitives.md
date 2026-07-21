@@ -132,7 +132,7 @@ flowchart LR
     O --> P
 ```
 
-所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish）统一调用 `IWorkflowExternalCapabilityAdmissionService`，在 mutation 前重新 parse YAML、读取 live sources 并生成 `WorkflowCapabilityAdmissionPlan`。Plan 固化 definition digest、exact capability refs、operation contract digests 和 source stamps。Definition actor 再次独立 parse，并在一个 actor transition 中提交 definition 与 admission fact；caller-supplied evidence 不能覆盖 actor 解析结果。
+所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，在 mutation 前重新 parse YAML、读取 live sources 并生成 `WorkflowCapabilityAdmissionPlan`。Plan 固化 definition digest、exact capability refs、operation contract digests 和 source stamps。Definition actor 再次独立 parse，并在一个 actor transition 中提交 definition 与 admission fact；caller-supplied evidence 不能覆盖 actor 解析结果。仓库 `workflows/` 是无租户 caller authority 的 startup definition source，因此不得内嵌租户专属 NyxID `user_service_id`；这类 workflow 必须由 scope/user authoring 路径基于 live candidate 创建。
 
 YAML 的 exact capability 规则：
 

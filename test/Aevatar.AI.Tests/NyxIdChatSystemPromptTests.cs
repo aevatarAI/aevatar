@@ -92,7 +92,9 @@ public class NyxIdChatSystemPromptTests
 
         prompt.Should().Contain("`nyxid_require_service`");
         prompt.Should().Contain("not listed in `<connected-services>`");
-        prompt.Should().Contain("Do not substitute a natural-language authorization explanation");
+        prompt.Should().Contain("verify live typed readiness");
+        prompt.Should().Contain("`SERVICE_REGISTRATION_REQUIRED`");
+        prompt.Should().Contain("must not fabricate a missing-service blocker");
         prompt.Should().Contain("does not create a pending approval");
     }
 }

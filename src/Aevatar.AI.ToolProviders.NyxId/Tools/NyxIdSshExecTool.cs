@@ -35,8 +35,8 @@ public sealed class NyxIdSshExecTool : INyxIdBuiltInTool
     public string Description =>
         "Execute a shell command on a remote SSH host via a NyxID-bound SSH service. " +
         "The target service must be SSH-typed (its endpoint starts with 'ssh://'); " +
-        "HTTP services use 'nyxid_proxy' instead. Use 'nyxid_proxy' (no slug) or " +
-        "'nyxid_services' to discover services and read their endpoint scheme. " +
+        "HTTP services use 'nyxid_proxy' instead. Use 'nyxid_services' to discover " +
+        "services and read their endpoint scheme; nyxid_proxy is invocation-only. " +
         "NyxID enforces an 8 KiB command length, a 1 MiB stdout/stderr cap, a 300s " +
         "timeout, and blocks dangerous commands (rm -rf /, mkfs, dd if=, fork bombs).";
 
