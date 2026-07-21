@@ -27,6 +27,7 @@ public sealed class ScriptBehaviorCompletionNotificationTests
 {
     private const string ActorId = "script-runtime-1";
     private const string CompletionActorId = "service-run:tenant:svc:run-1";
+    private static readonly DateTimeOffset FixedNow = DateTimeOffset.Parse("2026-07-22T08:00:00Z");
 
     [Fact]
     public async Task SecondRun_ShouldNotOverwriteFirstPendingOutcome()
@@ -272,6 +273,235 @@ public sealed class ScriptBehaviorCompletionNotificationTests
     }
 
     [Fact]
+    public async Task DispatchedCommitFailure_ShouldScheduleRetryAndRemainObservable()
+    {
+        var eventStore = new FailOnceDispatchedEventStore();
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var actor = await CreateBoundAgentAsync(eventStore, publisher, scheduler);
+
+        var complete = () => CompleteRunAsync(
+            actor,
+            "run-1",
+            "cmd-1",
+            "delivery-1",
+            CompletionActorId);
+
+        await complete.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated dispatched event commit failure");
+        publisher.SuccessfulSends.Should().ContainSingle();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        actor.State.RunOutcomes["run-1"].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.RetryScheduled);
+        actor.State.RunOutcomes["run-1"].Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenFirstPendingFails_ShouldAttemptLaterOutcomesBeforeRethrowing()
+    {
+        var eventStore = new InMemoryEventStore();
+        var first = await CreateBoundAgentAsync(
+            eventStore,
+            new RecordingEventPublisher
+            {
+                SendException = new InvalidOperationException("seed pending outcomes"),
+            },
+            new RecordingCallbackScheduler());
+        await CompleteRunAsync(first, "run-z-first", "cmd-first", "delivery-first", "completion-first");
+        await CompleteRunAsync(first, "run-a-second", "cmd-second", "delivery-second", "completion-second");
+        var scheduler = new RecordingCallbackScheduler
+        {
+            FailureFactory = static request =>
+                request.TriggerEnvelope.Payload.Unpack<ScriptRunOutcomeNotificationRetryFiredEvent>().ScriptRunId ==
+                "run-z-first"
+                    ? new InvalidOperationException("simulated first pending scheduler failure")
+                    : null,
+        };
+        var publisher = new RecordingEventPublisher
+        {
+            FailurePredicate = static targetActorId => targetActorId == "completion-first",
+        };
+        var recovered = CreateAgent(eventStore, publisher, scheduler);
+
+        var activate = () => recovered.ActivateAsync();
+
+        await activate.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated first pending scheduler failure");
+        publisher.SendAttempts.Select(static attempt => attempt.TargetActorId).Should()
+            .Equal("completion-first", "completion-second");
+        publisher.SuccessfulSends.Should().ContainSingle()
+            .Which.TargetActorId.Should().Be("completion-second");
+        recovered.State.RunOutcomes["run-z-first"].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.RetryScheduled);
+        recovered.State.RunOutcomes["run-a-second"].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
+    public async Task ForeignRetryFiredEnvelope_ShouldNotSendOrMutateState()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("seed retry"),
+        };
+        var actor = await CreateBoundAgentAsync(new InMemoryEventStore(), publisher, scheduler);
+        await CompleteRunAsync(actor, "run-1", "cmd-1", "delivery-1", CompletionActorId);
+        var selfRetry = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+        var foreignRetry = selfRetry.Clone();
+        foreignRetry.Route = EnvelopeRouteSemantics.CreateDirect("foreign-actor", actor.Id);
+        var before = actor.State.ToByteArray();
+        publisher.SendException = null;
+        publisher.SendAttempts.Clear();
+
+        await actor.HandleEventAsync(foreignRetry);
+
+        publisher.SendAttempts.Should().BeEmpty();
+        actor.State.ToByteArray().Should().Equal(before);
+
+        await actor.HandleEventAsync(selfRetry);
+
+        publisher.SuccessfulSends.Should().ContainSingle();
+        actor.State.RunOutcomes["run-1"].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
+    public async Task SendCancellation_ShouldPropagateWithoutRetry()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new OperationCanceledException("simulated send cancellation"),
+        };
+        var actor = await CreateBoundAgentAsync(new InMemoryEventStore(), publisher, scheduler);
+
+        var complete = () => CompleteRunAsync(
+            actor,
+            "run-1",
+            "cmd-1",
+            "delivery-1",
+            CompletionActorId);
+
+        await complete.Should().ThrowAsync<OperationCanceledException>()
+            .WithMessage("simulated send cancellation");
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        publisher.SuccessfulPublications.Should().BeEmpty();
+        actor.State.RunOutcomes["run-1"].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.Prepared);
+    }
+
+    [Fact]
+    public async Task SchedulerCancellation_ShouldPropagateWithoutRetryOrFallback()
+    {
+        var scheduler = new RecordingCallbackScheduler
+        {
+            ScheduleException = new OperationCanceledException("simulated scheduler cancellation"),
+        };
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated send failure"),
+        };
+        var actor = await CreateBoundAgentAsync(new InMemoryEventStore(), publisher, scheduler);
+
+        var complete = () => CompleteRunAsync(
+            actor,
+            "run-1",
+            "cmd-1",
+            "delivery-1",
+            CompletionActorId);
+
+        await complete.Should().ThrowAsync<OperationCanceledException>()
+            .WithMessage("simulated scheduler cancellation");
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        publisher.SuccessfulPublications.Should().BeEmpty();
+        actor.State.RunOutcomes["run-1"].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.Prepared);
+    }
+
+    [Fact]
+    public async Task RetryBackoff_ShouldCapAtThirtySecondsAndDeadline()
+    {
+        var timeProvider = new FixedTimeProvider(FixedNow);
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated send failure"),
+        };
+        var actor = await CreateBoundAgentAsync(
+            new InMemoryEventStore(),
+            publisher,
+            scheduler,
+            timeProvider);
+        await CompleteRunAsync(
+            actor,
+            "run-cap",
+            "cmd-cap",
+            "delivery-cap",
+            CompletionActorId,
+            FixedNow.AddMinutes(5).ToUnixTimeMilliseconds());
+        for (var index = 0; index < 7; index++)
+            await actor.HandleEventAsync(scheduler.TimeoutRequests[index].TriggerEnvelope);
+
+        scheduler.TimeoutRequests.Select(static request => request.DueTime).Should().Equal(
+            TimeSpan.FromMilliseconds(250),
+            TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(2),
+            TimeSpan.FromSeconds(4),
+            TimeSpan.FromSeconds(8),
+            TimeSpan.FromSeconds(16),
+            TimeSpan.FromSeconds(30));
+
+        var deadlineScheduler = new RecordingCallbackScheduler();
+        var deadlineActor = await CreateBoundAgentAsync(
+            new InMemoryEventStore(),
+            new RecordingEventPublisher
+            {
+                SendException = new InvalidOperationException("simulated send failure"),
+            },
+            deadlineScheduler,
+            timeProvider);
+        await CompleteRunAsync(
+            deadlineActor,
+            "run-deadline",
+            "cmd-deadline",
+            "delivery-deadline",
+            CompletionActorId,
+            FixedNow.AddMilliseconds(100).ToUnixTimeMilliseconds());
+
+        deadlineScheduler.TimeoutRequests.Should().ContainSingle()
+            .Which.DueTime.Should().Be(TimeSpan.FromMilliseconds(100));
+    }
+
+    [Fact]
+    public async Task LaterAttemptSchedulerFailure_ShouldNotPublishSelfFallback()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated send failure"),
+        };
+        var actor = await CreateBoundAgentAsync(new InMemoryEventStore(), publisher, scheduler);
+        await CompleteRunAsync(actor, "run-1", "cmd-1", "delivery-1", CompletionActorId);
+        var attemptOne = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+        scheduler.ScheduleException = new InvalidOperationException("simulated later scheduler failure");
+
+        for (var repeat = 0; repeat < 2; repeat++)
+        {
+            var retry = () => actor.HandleEventAsync(attemptOne);
+            await retry.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("simulated later scheduler failure");
+        }
+
+        publisher.SuccessfulPublications.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        actor.State.RunOutcomes["run-1"].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.RetryScheduled);
+        actor.State.RunOutcomes["run-1"].Attempt.Should().Be(1);
+    }
+
+    [Fact]
     public async Task DurableRetrySchedulerFailure_ShouldPublishOnlyOneSelfRecovery()
     {
         var scheduler = new RecordingCallbackScheduler
@@ -327,6 +557,8 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             new RecordingCallbackScheduler());
         var state = new ScriptBehaviorState
         {
+            LastAppliedEventVersion = 41,
+            LastEventId = "before-rejected-delivery-event",
             RunOutcomes =
             {
                 ["run-1"] = new ScriptRunOutcomeDeliveryState
@@ -343,19 +575,32 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             },
         };
 
-        state = Reduce(actor, state, RetryScheduled("run-other", "delivery-1", 1, "wrong-run"));
-        state = Reduce(actor, state, RetryScheduled("run-1", "delivery-other", 1, "wrong-delivery"));
-        state = Reduce(actor, state, RetryScheduled("run-1", "delivery-1", 2, "skipped"));
+        AssertRejected(actor, state, RetryScheduled("run-other", "delivery-1", 1, "wrong-run"));
+        AssertRejected(actor, state, RetryScheduled("run-1", "delivery-other", 1, "wrong-delivery"));
+        AssertRejected(actor, state, RetryScheduled("run-1", "delivery-1", 2, "skipped"));
         state.RunOutcomes["run-1"].Status.Should().Be(ScriptRunOutcomeDeliveryStatus.Prepared);
 
         state = Reduce(actor, state, RetryScheduled("run-1", "delivery-1", 1, "callback-1"));
-        state = Reduce(actor, state, RetryScheduled("run-1", "delivery-1", 1, "stale"));
+        AssertRejected(actor, state, RetryScheduled("run-1", "delivery-1", 1, "stale"));
+        AssertRejected(actor, state, RetryScheduled("run-1", "delivery-1", 3, "skipped"));
         state.RunOutcomes["run-1"].RetryCallbackId.Should().Be("callback-1");
-        state = Reduce(actor, state, new ScriptRunOutcomeNotificationDispatchedEvent
+        AssertRejected(actor, state, new ScriptRunOutcomeNotificationDispatchedEvent
+        {
+            ScriptRunId = "run-1",
+            DeliveryId = "delivery-other",
+            Attempt = 1,
+        });
+        AssertRejected(actor, state, new ScriptRunOutcomeNotificationDispatchedEvent
         {
             ScriptRunId = "run-1",
             DeliveryId = "delivery-1",
             Attempt = 0,
+        });
+        AssertRejected(actor, state, new ScriptRunOutcomeNotificationExpiredEvent
+        {
+            ScriptRunId = "run-1",
+            DeliveryId = "delivery-1",
+            Attempt = 2,
         });
         state.RunOutcomes["run-1"].Status.Should()
             .Be(ScriptRunOutcomeDeliveryStatus.RetryScheduled);
@@ -366,8 +611,14 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             DeliveryId = "delivery-1",
             Attempt = 1,
         });
-        state = Reduce(actor, state, RetryScheduled("run-1", "delivery-1", 2, "terminal-reopen"));
-        state = Reduce(actor, state, new ScriptRunOutcomeNotificationExpiredEvent
+        AssertRejected(actor, state, RetryScheduled("run-1", "delivery-1", 2, "terminal-reopen"));
+        AssertRejected(actor, state, new ScriptRunOutcomeNotificationExpiredEvent
+        {
+            ScriptRunId = "run-1",
+            DeliveryId = "delivery-1",
+            Attempt = 1,
+        });
+        AssertRejected(actor, state, new ScriptRunOutcomeNotificationDispatchedEvent
         {
             ScriptRunId = "run-1",
             DeliveryId = "delivery-1",
@@ -375,6 +626,21 @@ public sealed class ScriptBehaviorCompletionNotificationTests
         });
         state.RunOutcomes["run-1"].Status.Should().Be(ScriptRunOutcomeDeliveryStatus.Dispatched);
         state.RunOutcomes["run-1"].Attempt.Should().Be(1);
+    }
+
+    private static void AssertRejected(
+        ScriptBehaviorGAgent actor,
+        ScriptBehaviorState state,
+        IMessage evt)
+    {
+        var before = state.ToByteArray();
+
+        var reduced = Reduce(actor, state, evt);
+
+        reduced.Should().BeSameAs(state);
+        reduced.ToByteArray().Should().Equal(before);
+        reduced.LastAppliedEventVersion.Should().Be(state.LastAppliedEventVersion);
+        reduced.LastEventId.Should().Be(state.LastEventId);
     }
 
     private static ScriptBehaviorState Reduce(
@@ -406,9 +672,10 @@ public sealed class ScriptBehaviorCompletionNotificationTests
     private static async Task<ScriptBehaviorGAgent> CreateBoundAgentAsync(
         IEventStore eventStore,
         RecordingEventPublisher publisher,
-        RecordingCallbackScheduler scheduler)
+        RecordingCallbackScheduler scheduler,
+        TimeProvider? timeProvider = null)
     {
-        var actor = CreateAgent(eventStore, publisher, scheduler);
+        var actor = CreateAgent(eventStore, publisher, scheduler, timeProvider);
         await actor.ActivateAsync();
         await BindAsync(actor);
         return actor;
@@ -417,30 +684,32 @@ public sealed class ScriptBehaviorCompletionNotificationTests
     private static ScriptBehaviorGAgent CreateAgent(
         IEventStore eventStore,
         IEventPublisher publisher,
-        IActorRuntimeCallbackScheduler scheduler)
+        IActorRuntimeCallbackScheduler scheduler,
+        TimeProvider? timeProvider = null)
     {
         var artifactResolver = new CachedScriptBehaviorArtifactResolver(
             new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()));
         var codec = new ProtobufMessageCodec();
-        var agent = new ScriptBehaviorGAgent(
-            new ScriptBehaviorDispatcher(artifactResolver, codec),
-            new ScriptBehaviorRuntimeCapabilityFactory(
+        var dispatcher = new ScriptBehaviorDispatcher(artifactResolver, codec);
+        var capabilityFactory = new ScriptBehaviorRuntimeCapabilityFactory(
                 new RecordingAICapability(),
                 new RecordingProposalPort(),
                 new RecordingDefinitionCommandPort(),
                 new RecordingRuntimeProvisioningPort(),
                 new RecordingRuntimeCommandPort(),
-                new RecordingCatalogCommandPort()),
+                new RecordingCatalogCommandPort());
+        var agent = new ScriptBehaviorGAgent(
+            dispatcher,
+            capabilityFactory,
             artifactResolver,
-            codec)
-        {
-            EventPublisher = publisher,
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(eventStore),
-            Services = new ServiceCollection()
-                .AddSingleton(scheduler)
-                .AddSingleton<IEnumerable<IGAgentExecutionHook>>([])
-                .BuildServiceProvider(),
-        };
+            codec,
+            timeProvider);
+        agent.EventPublisher = publisher;
+        agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(eventStore);
+        agent.Services = new ServiceCollection()
+            .AddSingleton(scheduler)
+            .AddSingleton<IEnumerable<IGAgentExecutionHook>>([])
+            .BuildServiceProvider();
         var setId = typeof(GAgentBase).GetMethod(
             "SetId",
             BindingFlags.Instance | BindingFlags.NonPublic);
@@ -539,6 +808,8 @@ public sealed class ScriptBehaviorCompletionNotificationTests
 
         public List<SentMessage> SuccessfulSends { get; } = [];
 
+        public List<SentMessage> SendAttempts { get; } = [];
+
         public List<PublishedMessage> SuccessfulPublications { get; } = [];
 
         public Task PublishAsync<TEvent>(
@@ -563,6 +834,7 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             where TEvent : IMessage
         {
             ct.ThrowIfCancellationRequested();
+            SendAttempts.Add(new SentMessage(targetActorId, evt, options));
             if (SendException != null || FailurePredicate?.Invoke(targetActorId) == true)
                 throw SendException ?? new InvalidOperationException("simulated completion notification failure");
 
@@ -575,6 +847,8 @@ public sealed class ScriptBehaviorCompletionNotificationTests
     {
         public Exception? ScheduleException { get; set; }
 
+        public Func<RuntimeCallbackTimeoutRequest, Exception?>? FailureFactory { get; set; }
+
         public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
@@ -584,6 +858,8 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             ct.ThrowIfCancellationRequested();
             if (ScheduleException != null)
                 throw ScheduleException;
+            if (FailureFactory?.Invoke(request) is { } failure)
+                throw failure;
 
             TimeoutRequests.Add(request);
             return Task.FromResult(new RuntimeCallbackLease(
@@ -647,6 +923,49 @@ public sealed class ScriptBehaviorCompletionNotificationTests
             long toVersion,
             CancellationToken ct = default) =>
             _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FailOnceDispatchedEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private bool _failed;
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var buffered = events.ToArray();
+            if (!_failed && buffered.Any(stateEvent =>
+                    stateEvent.EventData.Is(ScriptRunOutcomeNotificationDispatchedEvent.Descriptor)))
+            {
+                _failed = true;
+                throw new InvalidOperationException("simulated dispatched event commit failure");
+            }
+
+            return _inner.AppendAsync(agentId, buffered, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     private sealed record SentMessage(

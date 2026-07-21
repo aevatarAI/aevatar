@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Deduplication;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -34,6 +35,7 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         var requestedRunId = WorkOrderConventions.BuildRequestedRunId(workOrderId);
         var terminalDeliveryId = WorkOrderConventions.BuildTerminalDeliveryId(workOrderId);
         var serviceRunActorId = $"service-run:{scopeId}:{serviceId}:{requestedRunId}";
+        var scriptDeliveryId = $"service-run-source:{requestedRunId}:{dispatchCommandId}";
         var requestedAt = DateTimeOffset.UtcNow;
 
         var router = new RoutingEventPublisher();
@@ -208,6 +210,8 @@ public sealed class ServiceRunWorkOrderIntegrationTests
                 CommandId = dispatchCommandId,
                 CorrelationId = dispatchCommandId,
                 CompletionNotificationActorId = serviceRunActorId,
+                CompletionNotificationDeliveryId = scriptDeliveryId,
+                CompletionNotificationExpiresAtUnixMs = long.MaxValue,
             },
             dispatchCommandId));
 
@@ -217,6 +221,9 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             .EventData
             .Unpack<ScriptRunOutcomeRecordedEvent>();
         committedTerminal.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
+        committedTerminal.DeliveryId.Should().Be(scriptDeliveryId);
+        committedTerminal.ExpiresAtUnixTimeMs.Should().Be(long.MaxValue);
+        script.State.RunOutcomes[requestedRunId].DeliveryId.Should().Be(scriptDeliveryId);
         script.State.RunOutcomes[requestedRunId].Status.Should()
             .Be(ScriptRunOutcomeDeliveryStatus.Dispatched);
 
@@ -235,12 +242,28 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             Timestamp.FromDateTimeOffset(
                 DateTimeOffset.FromUnixTimeMilliseconds(committedTerminal.OccurredAtUnixTimeMs)));
 
-        router.Sends.Should().ContainSingle(sent =>
-            sent.Message is ScriptRunOutcomeRecordedEvent &&
-            sent.Options != null &&
-            sent.Options.Delivery != null &&
-            sent.Options.Delivery.DeduplicationOperationId ==
-            $"script-run-terminal:{requestedRunId}:{dispatchCommandId}");
+        var scriptTerminalSend = router.Sends.Should().ContainSingle(sent =>
+            sent.Message is ScriptRunOutcomeRecordedEvent).Subject;
+        var scriptTerminalOperationId = scriptTerminalSend.Options?.Delivery?.DeduplicationOperationId;
+        scriptTerminalOperationId.Should().Be($"script-run-terminal:{scriptDeliveryId}");
+        var scriptTerminalEnvelope = new EventEnvelope
+        {
+            Id = "script-terminal-envelope",
+            Payload = Any.Pack(scriptTerminalSend.Message),
+            Timestamp = Timestamp.FromDateTimeOffset(requestedAt),
+            Route = EnvelopeRouteSemantics.CreateDirect(scriptActorId, serviceRunActorId),
+            Propagation = new EnvelopePropagation { CorrelationId = dispatchCommandId },
+        };
+        scriptTerminalEnvelope.EnsureRuntime().EnsureDeduplication().OperationId =
+            scriptTerminalOperationId;
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(
+                serviceRunActorId,
+                scriptTerminalEnvelope,
+                out var scriptTerminalDedupKey)
+            .Should().BeTrue();
+        var deduplicator = new MemoryCacheDeduplicator();
+        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeTrue();
+        (await deduplicator.TryRecordAsync(scriptTerminalDedupKey)).Should().BeFalse();
         router.Sends.Should().ContainSingle(sent =>
             sent.Message is ServiceRunTerminalNotification &&
             sent.Options != null &&

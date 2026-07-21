@@ -36,17 +36,20 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
     private readonly IScriptBehaviorRuntimeCapabilityFactory _capabilityFactory;
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
     private readonly IProtobufMessageCodec _codec;
+    private readonly TimeProvider _timeProvider;
 
     public ScriptBehaviorGAgent(
         IScriptBehaviorDispatcher dispatcher,
         IScriptBehaviorRuntimeCapabilityFactory capabilityFactory,
         IScriptBehaviorArtifactResolver artifactResolver,
-        IProtobufMessageCodec codec)
+        IProtobufMessageCodec codec,
+        TimeProvider? timeProvider = null)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _capabilityFactory = capabilityFactory ?? throw new ArgumentNullException(nameof(capabilityFactory));
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
+        _timeProvider = timeProvider ?? TimeProvider.System;
         InitializeId();
     }
 
@@ -123,7 +126,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 DeliveryId = retry.DeliveryId,
                 Attempt = retry.Attempt,
                 RetryCallbackId = BuildRunOutcomeRetryCallbackId(retry.ScriptRunId, retry.DeliveryId),
-                RetryAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                RetryAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             });
             delivery = State.RunOutcomes[retry.ScriptRunId].Clone();
         }
@@ -441,7 +444,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             ScopeId = scopeId ?? string.Empty,
             CommittedFactCount = committedFactCount,
             StateVersion = stateVersion,
-            OccurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            OccurredAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
             CompletionNotificationActorId = run.CompletionNotificationActorId ?? string.Empty,
             DeliveryId = ResolveRunOutcomeDeliveryId(
                 run,
@@ -482,17 +485,18 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         ScriptBehaviorState state,
         ScriptRunOutcomeNotificationRetryScheduledEvent evt)
     {
-        var next = AdvanceDeliveryState(
-            state,
-            $"{evt.ScriptRunId}:outcome-notification:retry-scheduled:{evt.Attempt}");
-        if (!TryResolveRunOutcomeDelivery(next, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
+        if (!TryResolveRunOutcomeDelivery(state, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
             delivery == null ||
             !IsPendingRunOutcomeDelivery(delivery) ||
             evt.Attempt != delivery.Attempt + 1)
         {
-            return next;
+            return state;
         }
 
+        var next = AdvanceDeliveryState(
+            state,
+            $"{evt.ScriptRunId}:outcome-notification:retry-scheduled:{evt.Attempt}");
+        delivery = next.RunOutcomes[evt.ScriptRunId];
         delivery.Status = ScriptRunOutcomeDeliveryStatus.RetryScheduled;
         delivery.Attempt = evt.Attempt;
         delivery.RetryCallbackId = evt.RetryCallbackId ?? string.Empty;
@@ -504,15 +508,16 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         ScriptBehaviorState state,
         ScriptRunOutcomeNotificationDispatchedEvent evt)
     {
-        var next = AdvanceDeliveryState(state, $"{evt.ScriptRunId}:outcome-notification:dispatched");
-        if (!TryResolveRunOutcomeDelivery(next, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
+        if (!TryResolveRunOutcomeDelivery(state, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
             delivery == null ||
             !IsPendingRunOutcomeDelivery(delivery) ||
             evt.Attempt != delivery.Attempt)
         {
-            return next;
+            return state;
         }
 
+        var next = AdvanceDeliveryState(state, $"{evt.ScriptRunId}:outcome-notification:dispatched");
+        delivery = next.RunOutcomes[evt.ScriptRunId];
         delivery.Status = ScriptRunOutcomeDeliveryStatus.Dispatched;
         delivery.RetryCallbackId = string.Empty;
         delivery.RetryAtUnixTimeMs = 0;
@@ -524,15 +529,16 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
         ScriptBehaviorState state,
         ScriptRunOutcomeNotificationExpiredEvent evt)
     {
-        var next = AdvanceDeliveryState(state, $"{evt.ScriptRunId}:outcome-notification:expired");
-        if (!TryResolveRunOutcomeDelivery(next, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
+        if (!TryResolveRunOutcomeDelivery(state, evt.ScriptRunId, evt.DeliveryId, out var delivery) ||
             delivery == null ||
             !IsPendingRunOutcomeDelivery(delivery) ||
             evt.Attempt != delivery.Attempt)
         {
-            return next;
+            return state;
         }
 
+        var next = AdvanceDeliveryState(state, $"{evt.ScriptRunId}:outcome-notification:expired");
+        delivery = next.RunOutcomes[evt.ScriptRunId];
         delivery.Status = ScriptRunOutcomeDeliveryStatus.Expired;
         delivery.RetryCallbackId = string.Empty;
         delivery.RetryAtUnixTimeMs = 0;
@@ -632,7 +638,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             return;
 
         var attempt = Math.Max(delivery.Attempt, deliveryAttempt ?? 0);
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         if (HasElapsedRunOutcomeDeadline(delivery, now))
         {
             await PersistDomainEventAsync(new ScriptRunOutcomeNotificationExpiredEvent
@@ -672,7 +678,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
                 ScriptRunId = runId,
                 CommandId = outcome.CommandId,
                 CompletionNotificationActorId = outcome.CompletionNotificationActorId,
-                DispatchedAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                DispatchedAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                 DeliveryId = delivery.DeliveryId,
                 Attempt = attempt,
             }, ct);
@@ -701,7 +707,7 @@ public sealed class ScriptBehaviorGAgent : GAgentBase<ScriptBehaviorState>
             return;
         }
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         if (HasElapsedRunOutcomeDeadline(currentDelivery, now))
         {
             await PersistDomainEventAsync(new ScriptRunOutcomeNotificationExpiredEvent
