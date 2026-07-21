@@ -1,3 +1,7 @@
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -6,27 +10,36 @@ namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
 internal static class StudioProvisioningToolReceiptJson
 {
-    public static AgentToolReceipt? CreateErrorReceiptFromNestedError(
+    public static AgentToolReceipt? CreateReceiptFromResult(
         IAgentTool tool,
         string callId,
         string toolName,
+        string argumentsJson,
         string resultJson)
     {
-        if (!TryReadNestedError(resultJson, out var code, out var message))
+        var sideEffectKind = Normalize(tool.SideEffectKind);
+        if (sideEffectKind.Length == 0 && !tool.IsDestructive)
             return null;
 
-        return new AgentToolReceipt
+        var receipt = new AgentToolReceipt
         {
             CallId = callId ?? string.Empty,
             ToolName = string.IsNullOrWhiteSpace(toolName) ? tool.Name : toolName.Trim(),
-            Status = AgentToolReceiptStatus.Error,
+            Status = AgentToolReceiptStatus.Success,
             ApprovalMode = MapApprovalMode(tool.ApprovalMode),
             IsDestructive = tool.IsDestructive,
-            SideEffectKind = Normalize(tool.SideEffectKind),
-            ErrorCode = code,
-            ErrorMessage = message,
+            SideEffectKind = sideEffectKind,
             ResultJson = resultJson ?? string.Empty,
         };
+        ApplySubject(receipt, argumentsJson);
+
+        if (!TryReadNestedError(resultJson, out var code, out var message))
+            return receipt;
+
+        receipt.Status = AgentToolReceiptStatus.Error;
+        receipt.ErrorCode = code;
+        receipt.ErrorMessage = message;
+        return receipt;
     }
 
     private static bool TryReadNestedError(
@@ -61,6 +74,60 @@ internal static class StudioProvisioningToolReceiptJson
         catch (JsonException)
         {
             return false;
+        }
+    }
+
+    private static void ApplySubject(AgentToolReceipt receipt, string? argumentsJson)
+    {
+        var subjectHash = ComputeSubjectHash(argumentsJson);
+        receipt.SubjectKind = receipt.SideEffectKind;
+        receipt.SubjectId = subjectHash;
+        receipt.SubjectHash = subjectHash;
+    }
+
+    private static string ComputeSubjectHash(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return Convert.ToHexStringLower(SHA256.HashData(Array.Empty<byte>()));
+
+        try
+        {
+            using var document = JsonDocument.Parse(argumentsJson);
+            using var stream = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(stream))
+            {
+                WriteCanonicalJsonValue(writer, document.RootElement);
+            }
+            return Convert.ToHexStringLower(SHA256.HashData(stream.ToArray()));
+        }
+        catch (JsonException)
+        {
+            return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(argumentsJson.Trim())));
+        }
+    }
+
+    private static void WriteCanonicalJsonValue(Utf8JsonWriter writer, JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject().OrderBy(static property => property.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonicalJsonValue(writer, property.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                    WriteCanonicalJsonValue(writer, item);
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
         }
     }
 

@@ -181,6 +181,72 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             $"nyxid_catalog_refresh_observed_but_snapshot_unavailable:{second.Detail}");
     }
 
+    private async Task<ScheduledInvocationAuthorizationValidationResult> RevalidateWithCatalogRefreshRetryAsync(
+        ScheduledInvocationAuthorizationRequest authorizationRequest,
+        ScheduledInvocationAuthorizationConfirmation confirmation,
+        string? provisioningBearerToken,
+        CancellationToken ct)
+    {
+        var first = await _authorizationRevalidator.RevalidateAsync(authorizationRequest, confirmation, ct);
+        if (first.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(first.Detail))
+            return first;
+
+        var bearerToken = NormalizeOptional(provisioningBearerToken);
+        if (bearerToken is null)
+        {
+            return ScheduledInvocationAuthorizationValidationResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_requires_bearer_token:{first.Detail}");
+        }
+
+        if (_catalogRefreshPort is null)
+        {
+            return ScheduledInvocationAuthorizationValidationResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_unavailable:{first.Detail}");
+        }
+
+        NyxIdAuthorizationCatalogRefreshResult refresh;
+        try
+        {
+            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
+                authorizationRequest.Owner.OwnerKind);
+            return ScheduledInvocationAuthorizationValidationResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_failed:{ex.GetType().Name}");
+        }
+
+        if (!refresh.Success)
+        {
+            var failureCode = string.IsNullOrWhiteSpace(refresh.FailureCode)
+                ? refresh.Status.ToString()
+                : refresh.FailureCode.Trim();
+            return ScheduledInvocationAuthorizationValidationResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_failed:{failureCode}");
+        }
+
+        var retryEvaluatedAtUtc = _timeProvider.GetUtcNow();
+        var retryRequest = authorizationRequest with
+        {
+            EvaluatedAtUtc = retryEvaluatedAtUtc,
+            ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
+        };
+        var second = await _authorizationRevalidator.RevalidateAsync(retryRequest, confirmation, ct);
+        if (second.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(second.Detail))
+            return second;
+
+        return ScheduledInvocationAuthorizationValidationResult.Failed(
+            second.FailureCode,
+            $"nyxid_catalog_refresh_observed_but_snapshot_unavailable:{second.Detail}");
+    }
+
     public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,
@@ -421,9 +487,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             throw new InvalidOperationException("credential_provisioning_kind_invalid");
         }
-        var validation = await _authorizationRevalidator.RevalidateAsync(
+        var validation = await RevalidateWithCatalogRefreshRetryAsync(
             resolved.AuthorizationRequest,
             confirmation,
+            request.ProvisioningBearerToken,
             ct);
         if (!validation.Success)
         {
@@ -1376,8 +1443,13 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             return false;
         }
 
-        var detail = NormalizeOptional(result.Detail);
-        return detail is "nyxid_catalog_snapshot_not_found" or
+        return IsRecoverableNyxIdCatalogSnapshotFailure(result.Detail);
+    }
+
+    private static bool IsRecoverableNyxIdCatalogSnapshotFailure(string? detail)
+    {
+        var normalizedDetail = NormalizeOptional(detail);
+        return normalizedDetail is "nyxid_catalog_snapshot_not_found" or
             "nyxid_catalog_snapshot_invalidated" or
             "nyxid_catalog_snapshot_stale";
     }

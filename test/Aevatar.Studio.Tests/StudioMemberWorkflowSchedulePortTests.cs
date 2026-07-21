@@ -276,6 +276,37 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenCatalogSnapshotInvalidatedAndBearerAvailable_ShouldRefreshAndRetryRevalidation()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort { Calls = calls };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls);
+        var retryNow = TestNow.AddSeconds(7);
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh,
+            timeProvider: new SequenceTimeProvider(TestNow, retryNow));
+        var request = Request("scope-1", "member-1");
+
+        var result = await port.CreateAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        result.Success.Should().BeTrue();
+        result.Status.Should().Be("pending");
+        refresh.RefreshCallCount.Should().Be(1);
+        refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
+        refresh.LastBearerToken.Should().Be("bearer-alpha");
+        revalidator.Requests.Should().HaveCount(2);
+        revalidator.Requests[1].EvaluatedAtUtc.Should().Be(retryNow);
+        revalidator.Requests[1].ExpiresAtUtc.Should().Be(
+            new StudioMemberWorkflowSchedulePolicy().ResolveCredentialExpiresAtUtc(retryNow));
+        scheduleService.BeginCallCount.Should().Be(1);
+        scheduleService.EnsureCallCount.Should().Be(1);
+        calls.Should().Equal("revalidate", "refresh", "revalidate", "begin", "complete");
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenBeginReplayDoesNotOwnEffect_ShouldNotMaterializeCredential()
     {
         var scheduleService = new RecordingScheduleService { BeginOwnsEffectAttempt = false };
@@ -679,6 +710,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         RecordingScheduleService schedule,
         RecordingMemberService? memberService = null,
         IScheduledInvocationAuthorizationPlanner? planner = null,
+        IScheduledInvocationAuthorizationRevalidator? revalidator = null,
         IStudioScheduledCredentialMaterializer? materializer = null,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null,
         TimeProvider? timeProvider = null)
@@ -688,7 +720,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             memberService ?? new RecordingMemberService { Detail = CreateWorkflowMemberDetail() },
             schedule,
             resolvedPlanner,
-            new RecordingAuthorizationRevalidator(resolvedPlanner),
+            revalidator ?? new RecordingAuthorizationRevalidator(resolvedPlanner),
             materializer ?? new RecordingCredentialMaterializer(),
             timeProvider ?? new FixedTimeProvider(TestNow),
             catalogRefresh);
@@ -949,6 +981,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int RefreshCallCount { get; private set; }
         public AuthorizationOwnerIdentity? LastOwner { get; private set; }
         public string? LastBearerToken { get; private set; }
+        public List<string>? Calls { get; init; }
         public NyxIdAuthorizationCatalogRefreshResult Result { get; init; } =
             NyxIdAuthorizationCatalogRefreshResult.Observed;
 
@@ -958,6 +991,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             RefreshCallCount++;
+            Calls?.Add("refresh");
             LastOwner = owner.Clone();
             LastBearerToken = bearerToken;
             return Task.FromResult(Result);
@@ -992,6 +1026,31 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 : ScheduledInvocationAuthorizationValidationResult.Failed(
                     ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
                     "authorization_plan_changed");
+        }
+    }
+
+    private sealed class RefreshAwareAuthorizationRevalidator(
+        RecordingCatalogRefreshPort refresh,
+        List<string> calls) : IScheduledInvocationAuthorizationRevalidator
+    {
+        public List<ScheduledInvocationAuthorizationRequest> Requests { get; } = [];
+
+        public Task<ScheduledInvocationAuthorizationValidationResult> RevalidateAsync(
+            ScheduledInvocationAuthorizationRequest request,
+            ScheduledInvocationAuthorizationConfirmation confirmation,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            calls.Add("revalidate");
+            if (refresh.RefreshCallCount == 0)
+            {
+                return Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Failed(
+                    ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                    "nyxid_catalog_snapshot_invalidated"));
+            }
+
+            return Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Succeeded(
+                RecordingAuthorizationPlanner.SuccessResult().Plan!));
         }
     }
 
@@ -1091,6 +1150,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int RetryRevocationCallCount { get; private set; }
         public int CompleteRevocationCallCount { get; private set; }
         public TeamAutomationCredentialOperation? BeginOperation { get; private set; }
+        public List<string>? Calls { get; init; }
         private ScheduledInvocationAgentKeyCredentialReference? _candidateCredential;
         private ScheduledInvocationAuthorizationOwner? _candidateOwner;
         private bool _candidateExceptionThrown;
@@ -1100,6 +1160,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             BeginCallCount++;
+            Calls?.Add("begin");
             BeginOperation = operation;
             return Task.FromResult(Committed(
                 operation.ScheduleId,
@@ -1159,6 +1220,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             EnsureCallCount++;
+            Calls?.Add("complete");
             Configuration = configuration;
             Configurations.Add(configuration);
             if (EnsureCallCount <= TombstonedAttempts)

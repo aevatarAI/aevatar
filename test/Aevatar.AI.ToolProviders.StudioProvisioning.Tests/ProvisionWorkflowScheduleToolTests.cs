@@ -1204,6 +1204,49 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_CreateResultReceipt_WhenSuccess_ShouldReturnSubjectReceipt()
+    {
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(new RecordingMemberWorkflowSchedulePort());
+        const string argumentsJson = """
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """;
+        const string resultJson = """
+            {
+              "success": true,
+              "status": "pending",
+              "scope_id": "scope-current",
+              "member_id": "member-alpha",
+              "schedule_id": "schedule-alpha",
+              "published_service_id": "svc-alpha",
+              "observatory_url": "/workflow/observatory"
+            }
+            """;
+
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, argumentsJson, resultJson);
+        var reorderedReceipt = tool.CreateResultReceipt("call-2", tool.Name, """
+            {
+              "schedule_timezone": "Asia/Shanghai",
+              "schedule_cron": "0 9 * * *",
+              "member_id": "member-alpha"
+            }
+            """, resultJson);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SideEffectKind.Should().Be("studio.member.workflow.schedule");
+        receipt.SubjectKind.Should().Be("studio.member.workflow.schedule");
+        receipt.SubjectId.Should().NotBeEmpty();
+        receipt.SubjectHash.Should().Be(receipt.SubjectId);
+        receipt.ResultJson.Should().Be(resultJson);
+        reorderedReceipt.Should().NotBeNull();
+        reorderedReceipt!.SubjectHash.Should().Be(receipt.SubjectHash);
+    }
+
+    [Fact]
     public async Task ScheduleTool_ShouldDeclareDirectChannelChatExclusion()
     {
         var tool = await DiscoverToolAsync(new RecordingProvisioningPort());

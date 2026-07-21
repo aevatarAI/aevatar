@@ -503,6 +503,48 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_WhenSameSideEffectingToolSucceedsForDifferentSubjectAfterError_ShouldKeepFailedOutcome()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new MixedSideEffectingToolLlmProviderFactory();
+        var services = BuildServices(store, collection =>
+            collection.AddSingleton<IAgentToolSource>(
+                new StaticToolSource([new MixedScheduleSideEffectReceiptTool()])));
+        var agent = CreateAgent(services, "role-side-effect-mixed", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "schedule two workflows",
+            SessionId = "turn-side-effect-mixed",
+        });
+
+        var completed = (await store.GetEventsAsync("role-side-effect-mixed"))
+            .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(evt => evt.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Which;
+        completed.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        completed.FailureCode.Should().Be("SnapshotNotFound");
+        completed.SafeMessage.Should().Be("nyxid_catalog_snapshot_invalidated");
+        completed.ToolReceipts.Should().Contain(receipt =>
+            receipt.ToolName == "mixed_schedule_side_effect_test_tool" &&
+            receipt.SubjectId == "schedule-alpha" &&
+            receipt.Status == AgentToolReceiptStatus.Error);
+        completed.ToolReceipts.Should().Contain(receipt =>
+            receipt.ToolName == "mixed_schedule_side_effect_test_tool" &&
+            receipt.SubjectId == "schedule-beta" &&
+            receipt.Status == AgentToolReceiptStatus.Success);
+    }
+
+    [Fact]
     public async Task CompletionNotification_ShouldReplayCommittedTerminalFactAfterRestart()
     {
         var store = new InMemoryEventStoreForTests();
@@ -1487,8 +1529,82 @@ public class RoleGAgentReplayContractTests
                 ToolName = toolName,
                 Status = _callCount == 1 ? AgentToolReceiptStatus.Error : AgentToolReceiptStatus.Success,
                 SideEffectKind = SideEffectKind,
+                SubjectKind = "studio.member.workflow.schedule",
+                SubjectId = "schedule-alpha",
                 ErrorCode = _callCount == 1 ? "SnapshotStale" : string.Empty,
                 ErrorMessage = _callCount == 1 ? "retryable" : string.Empty,
+                ResultJson = resultJson,
+            };
+    }
+
+    private sealed class MixedSideEffectingToolLlmProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public int StreamCallCount { get; private set; }
+        public string Name => "mixed-side-effecting-tools";
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StreamCallCount++;
+            if (StreamCallCount <= 2)
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = $"call-side-effect-{StreamCallCount}",
+                        Name = "mixed_schedule_side_effect_test_tool",
+                        ArgumentsJson = "{}",
+                    },
+                };
+            }
+            else
+            {
+                yield return new LLMStreamChunk { DeltaContent = "The second schedule was created." };
+            }
+
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class MixedScheduleSideEffectReceiptTool : IAgentTool
+    {
+        private int _callCount;
+        public string Name => "mixed_schedule_side_effect_test_tool";
+        public string Description => "Fails one schedule subject, then succeeds for another schedule subject.";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => false;
+        public string SideEffectKind => "studio.member.workflow.schedule";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            _callCount++;
+            return Task.FromResult(_callCount == 1
+                ? """{"error":{"code":"SnapshotNotFound","message":"nyxid_catalog_snapshot_invalidated"}}"""
+                : """{"schedule_id":"schedule-beta"}""");
+        }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = _callCount == 1 ? AgentToolReceiptStatus.Error : AgentToolReceiptStatus.Success,
+                SideEffectKind = SideEffectKind,
+                SubjectKind = "studio.member.workflow.schedule",
+                SubjectId = _callCount == 1 ? "schedule-alpha" : "schedule-beta",
+                ErrorCode = _callCount == 1 ? "SnapshotNotFound" : string.Empty,
+                ErrorMessage = _callCount == 1 ? "nyxid_catalog_snapshot_invalidated" : string.Empty,
                 ResultJson = resultJson,
             };
     }

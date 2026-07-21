@@ -100,6 +100,35 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
+    public async Task Preflight_ShouldPassFreshBearerToApplicationBoundary()
+    {
+        var schedules = new StubSchedules();
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        schedules.LastPreflight.Should().NotBeNull();
+        schedules.LastPreflight!.ScopeId.Should().Be(ScopeId);
+        schedules.LastPreflight.TeamId.Should().Be(TeamId);
+        schedules.LastPreflight.MemberId.Should().Be(MemberId);
+        schedules.LastPreflight.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
+        schedules.LastPreflight.AuthenticatedOwner.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+    }
+
+    [Fact]
     public async Task Create_ShouldKeepCanonicalOwnerIdentityAndReturnPendingReceipt()
     {
         var schedules = new StubSchedules();
@@ -508,6 +537,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public int ListCalls { get; private set; }
         public int ScheduleMutationCalls { get; private set; }
         public StudioMemberAutomationView? View { get; init; }
+        public StudioMemberWorkflowScheduleRequest? LastPreflight { get; private set; }
         public StudioMemberWorkflowScheduleRequest? LastCreate { get; private set; }
         public string? LastConfirmedPermissionDigest { get; private set; }
         public StudioMemberAutomationUpdateCommand? LastUpdate { get; private set; }
@@ -520,12 +550,15 @@ public sealed class StudioMemberAutomationEndpointsTests
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
             StudioMemberWorkflowScheduleRequest request,
-            CancellationToken ct = default) =>
-            Result(new StudioMemberWorkflowAuthorizationResult(
+            CancellationToken ct = default)
+        {
+            LastPreflight = request;
+            return Result(new StudioMemberWorkflowAuthorizationResult(
                 false,
                 null,
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "not_configured"));
+        }
 
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,

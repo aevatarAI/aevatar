@@ -111,10 +111,11 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         string toolName,
         string argumentsJson,
         string resultJson) =>
-        StudioProvisioningToolReceiptJson.CreateErrorReceiptFromNestedError(
+        StudioProvisioningToolReceiptJson.CreateReceiptFromResult(
             this,
             callId,
             toolName,
+            argumentsJson,
             resultJson);
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
