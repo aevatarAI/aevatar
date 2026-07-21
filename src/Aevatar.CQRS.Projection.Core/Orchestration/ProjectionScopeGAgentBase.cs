@@ -103,7 +103,10 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         if (!State.Active || State.Released || State.Failures.Count == 0)
             return;
 
-        await _failureTracker!.ReplayAsync(State, command.MaxItems, DispatchObservationAsync);
+        await _failureTracker!.ReplayAsync(
+            State,
+            command.MaxItems,
+            (envelope, ct) => DispatchObservationAsync(envelope, ct, bypassSuccessfulVersionFence: true));
     }
 
     [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
@@ -177,11 +180,12 @@ public abstract class ProjectionScopeGAgentBase<TContext>
 
     private async Task<ProjectionScopeDispatchResult> DispatchObservationAsync(
         EventEnvelope envelope,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool bypassSuccessfulVersionFence = false)
     {
         var context = ResolveScopeContext();
         var sourceActorId = ResolveSourceActorId(envelope);
-        if (IsAlreadyProjected(sourceActorId, envelope))
+        if (!bypassSuccessfulVersionFence && IsAlreadyProjected(sourceActorId, envelope))
             return ProjectionScopeDispatchResult.Skip(envelope.Payload?.TypeUrl ?? string.Empty);
 
         var result = await ProcessObservationCoreAsync(context, envelope, ct);

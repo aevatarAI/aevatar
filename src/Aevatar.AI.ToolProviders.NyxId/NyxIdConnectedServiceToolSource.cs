@@ -256,7 +256,7 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
 
     private static bool IsExecutableConnectedService(NyxIdConnectedServiceDto service)
     {
-        if (!service.Connected || !service.IsActive ||
+        if (service.Connected == false || !service.IsActive ||
             service.Allowed == false || service.CredentialSource?.Allowed == false)
         {
             return false;

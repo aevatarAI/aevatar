@@ -1035,6 +1035,42 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_ShouldEmitLegacySessionConflictWireTypeDuringRollingUpgrade()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "turn-legacy-conflict",
+            ProjectionKind = "nyxid-chat-session",
+        };
+        var envelope = CommittedEnvelope(
+            context.RootActorId,
+            new RoleChatCommandAttemptRejectedEvent
+            {
+                RequestedSessionId = context.SessionId,
+                Reason = RoleChatCommandAttemptRejectionReason.InputPartsMismatch,
+                SafeMessage = "legacy input conflict",
+            },
+            stateVersion: 41);
+        var committed = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        committed.StateEvent.EventData.TypeUrl =
+            "type.googleapis.com/aevatar.ai.RoleChatSessionConflictEvent";
+        committed.StateEvent.EventType = "aevatar.ai.RoleChatSessionConflictEvent";
+        envelope.Payload = Any.Pack(committed);
+
+        await projector.ProjectAsync(context, envelope, CancellationToken.None);
+
+        var terminal = hub.Published.Should().ContainSingle().Which.Event;
+        terminal.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunError);
+        terminal.RunError.RunId.Should().Be(context.SessionId);
+        terminal.RunError.Code.Should().Be("IDEMPOTENCY_CONFLICT");
+        terminal.RunError.Message.Should().Be("legacy input conflict");
+        terminal.Sequence.Should().Be(41);
+    }
+
+    [Fact]
     public async Task Projector_ShouldEmitCommittedAuthorizationThenBlockedTerminal()
     {
         var hub = new RecordingSessionEventHub();

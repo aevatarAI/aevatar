@@ -85,7 +85,7 @@ through the projection-backed realtime stream.
 
 ### 3.1 NyxIdChat live progress is a committed actor contract
 
-`RoleGAgent` owns `RoleChatSessionProgressedEvent.session_id + sequence + oneof payload`. The sequence increases monotonically inside actor state. The NyxIdChat projector consumes only committed envelopes and maps each payload to AGUI with the same sequence. The projection scope persists a watermark per origin actor, rather than using one ambiguous cross-publisher counter, and drops duplicate or stale committed deliveries before fan-out. Each explicit sink attachment also owns a narrow delivery fence for post-fan-out broker retries: lower sequences and identical protobuf frames at the latest sequence are dropped, while distinct replay frames sharing one sequence are preserved. The fence is released with the attachment and is not a session registry or business fact source.
+`RoleGAgent` owns `RoleChatSessionProgressedEvent.session_id + sequence + oneof payload`. The sequence increases monotonically inside actor state. The NyxIdChat projector consumes only committed envelopes and maps each payload to AGUI with the same sequence. The projection scope persists a watermark per origin actor, rather than using one ambiguous cross-publisher counter, and drops duplicate or stale committed deliveries before fan-out during normal observation. Explicit replay of a recorded projection failure bypasses that fence, so an older failed version remains recoverable after a newer version succeeds. Each explicit sink attachment also owns a narrow delivery fence for post-fan-out broker retries: lower sequences and identical protobuf frames at the latest sequence are dropped, while distinct replay frames sharing one sequence are preserved. The fence is released with the attachment and is not a session registry or business fact source.
 
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
@@ -104,7 +104,7 @@ Required behavior:
 - `TOOL_CALL_START` is committed before advancing the stream into tool execution;
 - initial skill recovery and text-parsed tools use the same start-before-execution and result lifecycle as provider-native tool calls;
 - normal `RoleChatSessionCompletedEvent` embeds its typed terminal tail in one committed fact; projection expands only that tail and never the live completion snapshot;
-- a different-input retry emits a typed command-attempt rejection and does not advance or replace the completed session's final authority;
+- a different-input retry emits a typed command-attempt rejection and does not advance or replace the completed session's final authority; projection still accepts the legacy session-conflict protobuf full name during rolling upgrades;
 - tool approval is a typed sequenced progress payload; raw pending-state commits do not bypass the progress sequence;
 - the descriptor resolved and cloned at tool start is copied into completion/replay and never rediscovered; argument-dependent tools such as `use_skill` resolve the actual invocation identity before the snapshot;
 - explicit replay is a typed progress payload, restores tool, reasoning, media, text, usage, and terminal frames from the committed snapshot, and does not commit a second completion;

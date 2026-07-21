@@ -49,6 +49,29 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
     }
 
     [Fact]
+    public void GetPlans_ShouldMapLegacySessionConflictWireTypeToSessionObservation()
+    {
+        var provider = new NyxIdChatCommittedStateProjectionActivationPlanProvider();
+        var context = BuildContext(
+            "conv-a",
+            typeof(NyxIdChatGAgent),
+            new RoleChatCommandAttemptRejectedEvent
+            {
+                RequestedSessionId = "session-legacy",
+                Reason = RoleChatCommandAttemptRejectionReason.PromptMismatch,
+                SafeMessage = "legacy conflict",
+            });
+        context.Published.StateEvent.EventData.TypeUrl =
+            "type.googleapis.com/aevatar.ai.RoleChatSessionConflictEvent";
+        context.Published.StateEvent.EventType = "aevatar.ai.RoleChatSessionConflictEvent";
+
+        var plans = provider.GetPlans(context).ToArray();
+
+        plans.Should().ContainSingle();
+        plans[0].StartRequest.SessionId.Should().Be("session-legacy");
+    }
+
+    [Fact]
     public void GetPlans_ShouldSkipNonNyxIdChatActors()
     {
         var provider = new NyxIdChatCommittedStateProjectionActivationPlanProvider();

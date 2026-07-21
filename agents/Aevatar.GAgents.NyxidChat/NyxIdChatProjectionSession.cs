@@ -269,30 +269,53 @@ public sealed class NyxIdChatSessionEventProjector
             return BuildProgressEntries(context, completion.TerminalProgress);
         }
 
+        if (payload.Is(RoleChatSessionConflictEvent.Descriptor))
+        {
+            var conflict = payload.Unpack<RoleChatSessionConflictEvent>();
+            return BuildCommandAttemptRejectionEntries(
+                context,
+                stateVersion,
+                conflict.SessionId,
+                conflict.SafeMessage);
+        }
+
         if (payload.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
         {
             var rejected = payload.Unpack<RoleChatCommandAttemptRejectedEvent>();
-            if (!string.Equals(rejected.RequestedSessionId, context.SessionId, StringComparison.Ordinal))
-                return EmptyEntries;
-
-            return
-            [
-                Entry(context, new AGUIEvent
-                {
-                    Sequence = stateVersion,
-                    RunError = new RunErrorEvent
-                    {
-                        RunId = context.SessionId,
-                        Code = "IDEMPOTENCY_CONFLICT",
-                        Message = string.IsNullOrWhiteSpace(rejected.SafeMessage)
-                            ? "This client request id was already used for different input."
-                            : rejected.SafeMessage,
-                    },
-                }),
-            ];
+            return BuildCommandAttemptRejectionEntries(
+                context,
+                stateVersion,
+                rejected.RequestedSessionId,
+                rejected.SafeMessage);
         }
 
         return EmptyEntries;
+    }
+
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> BuildCommandAttemptRejectionEntries(
+        NyxIdChatSessionProjectionContext context,
+        long stateVersion,
+        string sessionId,
+        string safeMessage)
+    {
+        if (!string.Equals(sessionId, context.SessionId, StringComparison.Ordinal))
+            return EmptyEntries;
+
+        return
+        [
+            Entry(context, new AGUIEvent
+            {
+                Sequence = stateVersion,
+                RunError = new RunErrorEvent
+                {
+                    RunId = context.SessionId,
+                    Code = "IDEMPOTENCY_CONFLICT",
+                    Message = string.IsNullOrWhiteSpace(safeMessage)
+                        ? "This client request id was already used for different input."
+                        : safeMessage,
+                },
+            }),
+        ];
     }
 
     private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> BuildProgressEntries(

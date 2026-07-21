@@ -35,7 +35,7 @@ internal sealed class NyxIdConnectedServiceDto
     public string? CatalogServiceName { get; init; }
 
     [JsonPropertyName("connected")]
-    public bool Connected { get; init; }
+    public bool? Connected { get; init; }
 
     [JsonPropertyName("is_active")]
     public bool IsActive { get; init; }

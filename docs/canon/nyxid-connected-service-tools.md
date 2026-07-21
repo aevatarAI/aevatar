@@ -56,7 +56,7 @@ paths:
 
 执行前的 effective tool discovery 复用同一条 caller-scoped 路径，不建立第二份目录：
 
-1. `GET /api/v1/keys` 是 connected-instance authority。只有 `connected=true && is_active=true`、`status=active|ready`、caller `allowed != false`、`credential_source.allowed != false` 且具有稳定 `id + slug` 的实例进入 executable tools。
+1. `GET /api/v1/keys` 是 connected-instance authority，active key 本身就是连接证据。`connected=false` 是显式否决；字段缺失或为 `true` 时，仍须满足 `is_active=true`、`status=active|ready`、caller `allowed != false`、`credential_source.allowed != false` 且具有稳定 `id + slug`，实例才进入 executable tools。
 2. `GET /api/v1/catalog` 是 connector definition、canonical name、description 与 icon authority。
 3. `GET /api/v1/proxy/services/{connectedServiceId}/openapi.json` 按 connected instance ID 获取 proxy-aware operation contract；不得从 `toolName` 或 slug 前缀猜 connected ID。
 4. 未连接、停用、待授权或 caller 无权执行的 catalog service 不进入 effective executable tools。若其他产品表面需要展示，必须作为独立 `unavailable` presentation item 返回，而不能伪装成可执行工具。

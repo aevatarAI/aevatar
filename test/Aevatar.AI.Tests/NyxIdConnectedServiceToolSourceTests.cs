@@ -186,6 +186,39 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DiscoverToolsAsync_ActiveKeyWithoutConnectedField_RemainsExecutable()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = """
+            {
+              "keys": [
+                {
+                  "id": "connected-service-existing",
+                  "name": "existing-key",
+                  "label": "Existing Connection",
+                  "slug": "api-existing",
+                  "catalog_service_slug": "existing",
+                  "is_active": true,
+                  "status": "active"
+                }
+              ]
+            }
+            """;
+        handler.CatalogByToken["user-token"] = """
+            { "entries": [{ "slug": "existing", "name": "Existing Connector" }] }
+            """;
+        handler.SpecsByServiceId["connected-service-existing"] = SpecWithPing("read_existing");
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Which;
+
+        tool.Name.Should().Be("nyxid_api-existing__read_existing");
+        tool.Presentation.NyxIdOperation.ConnectedServiceId.Should().Be("connected-service-existing");
+        handler.SpecRequests.Should().ContainSingle().Which.Should().Be("connected-service-existing");
+    }
+
+    [Fact]
     public async Task DiscoveredTools_ApprovalAndReadOnlyMetadata()
     {
         var handler = new FakeNyxIdHandler();

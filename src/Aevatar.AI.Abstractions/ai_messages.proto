@@ -357,6 +357,20 @@ message RoleChatSessionStartedEvent {
   RoleChatRunContext run_context = 4;
 }
 
+// Legacy committed wire contract retained for rolling upgrades and queued
+// events. New producers publish RoleChatCommandAttemptRejectedEvent.
+enum RoleChatSessionConflictReason {
+  ROLE_CHAT_SESSION_CONFLICT_REASON_UNSPECIFIED = 0;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_PROMPT_MISMATCH = 1;
+  ROLE_CHAT_SESSION_CONFLICT_REASON_INPUT_PARTS_MISMATCH = 2;
+}
+
+message RoleChatSessionConflictEvent {
+  string session_id = 1;
+  RoleChatSessionConflictReason reason = 2;
+  string safe_message = 3;
+}
+
 enum RoleChatCommandAttemptRejectionReason {
   ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_UNSPECIFIED = 0;
   ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_PROMPT_MISMATCH = 1;

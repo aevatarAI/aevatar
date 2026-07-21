@@ -54,9 +54,11 @@ rewrite historical cards.
 
 ### NyxID Discovery Authority
 
-Caller-scoped `GET /api/v1/keys` is the connected-instance authority. Only
-entries with `connected=true`, `is_active=true`, `status=active|ready`, and no
-explicit caller or credential-source denial enter effective executable tools.
+Caller-scoped `GET /api/v1/keys` is the connected-instance authority, and an
+active key is itself connection evidence. Explicit `connected=false` rejects
+the entry; absent or true `connected` still requires `is_active=true`,
+`status=active|ready`, and no explicit caller or credential-source denial
+before the instance enters effective executable tools.
 `GET /api/v1/catalog` supplies definition identity, connector name,
 description, and icon. A typed adapter DTO retains both sources and joins them
 by the key's explicit catalog slug; no `toolName` prefix parsing or metadata bag
@@ -146,7 +148,12 @@ increasing live sequences. A live completion never expands its snapshot, so it
 cannot duplicate already delivered text or tools; only its typed tail produces
 presentation frames. A different-input retry commits a typed command-attempt
 rejection with its own command id and leaves the completed session sequence and
-final authority unchanged. The attachment-scoped delivery fence closes the
+final authority unchanged. New producers use the command-attempt contract;
+projection activation and mapping retain the legacy session-conflict protobuf
+full name for queued events and rolling upgrades. The normal observation
+watermark drops duplicate/stale delivery, while explicit replay of a recorded
+projection failure bypasses that fence so an older failed frame remains
+recoverable after a newer version succeeds. The attachment-scoped delivery fence closes the
 remaining post-fan-out retry window without collapsing distinct frames emitted
 by one explicit replay progress fact.
 

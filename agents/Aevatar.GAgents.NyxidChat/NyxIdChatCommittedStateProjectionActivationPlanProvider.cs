@@ -49,6 +49,9 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
         if (eventData.Is(RoleChatSessionCompletedEvent.Descriptor))
             return eventData.Unpack<RoleChatSessionCompletedEvent>().SessionId;
 
+        if (eventData.Is(RoleChatSessionConflictEvent.Descriptor))
+            return eventData.Unpack<RoleChatSessionConflictEvent>().SessionId;
+
         if (eventData.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
             return eventData.Unpack<RoleChatCommandAttemptRejectedEvent>().RequestedSessionId;
 
