@@ -119,6 +119,30 @@ public sealed class NyxIdServiceToolsTests
     }
 
     [Fact]
+    public async Task ProxyExactServiceRequestAsync_ServiceSlugRoute_ShouldEncodeSlugViaAndToken()
+    {
+        var handler = new ServiceHandler();
+        var client = CreateClient(handler);
+
+        await client.ProxyExactServiceRequestAsync(
+            "user-token",
+            new NyxIdProxyRouteConstraint { ServiceSlug = "custom/api" },
+            "custom/id 7",
+            "orders/o 1",
+            NyxIdServiceHttpMethod.Get,
+            [new KeyValuePair<string, string>("expand", "line items")],
+            null,
+            null,
+            CancellationToken.None);
+
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Path.Should().Be("/api/v1/proxy/s/custom%2Fapi/orders/o%201");
+        request.Query.Should().Be("?expand=line%20items&_nyxid_via=custom%2Fid%207");
+        request.Authorization.Should().Be("user-token");
+        handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task RequestTool_ForgedIdentity_ShouldFailBeforeExactReadOrProxy()
     {
         var handler = new ServiceHandler();
@@ -425,6 +449,51 @@ public sealed class NyxIdServiceToolsTests
         proxy.IfMatch.Should().Be("etag-1");
     }
 
+    [Fact]
+    public async Task RouteTool_Direct_ShouldRevalidateAndClearNodeId()
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-personal-7"] = instance;
+        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var route = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_route");
+        var result = await route.ExecuteAsync(
+            """{ "user_service_id": "us-personal-7", "route": "direct" }""");
+
+        result.Should().Contain("\"accepted\": true");
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-personal-7");
+        var mutation = handler.Requests.Should().ContainSingle().Subject;
+        mutation.Method.Should().Be("PUT");
+        mutation.Path.Should().Be("/api/v1/user-services/us-personal-7");
+        using var body = JsonDocument.Parse(mutation.Body);
+        body.RootElement.GetProperty("node_id").GetString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RouteTool_InvalidRoute_ShouldFailBeforeRevalidationOrMutation()
+    {
+        var handler = new ServiceHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop", true));
+        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var route = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_route");
+        var result = await route.ExecuteAsync(
+            """{ "user_service_id": "us-personal-7", "route": "unsupported" }""");
+
+        ErrorCode(result).Should().Be("invalid_route");
+        handler.ExactReads.Should().BeEmpty();
+        handler.Requests.Should().BeEmpty();
+    }
+
     private static NyxIdConnectedServiceToolSource CreateSource(ServiceHandler handler)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -473,6 +542,7 @@ public sealed class NyxIdServiceToolsTests
           "catalog_service_id": "{{serviceId}}",
           "endpoint_id": "endpoint-1",
           "endpoint_url": "https://shop.test",
+          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{serviceId}}/openapi.json",
           "is_active": {{active.ToString().ToLowerInvariant()}},
           "credential_source": {{credentialSource}}
         }

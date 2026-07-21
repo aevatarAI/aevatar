@@ -194,6 +194,32 @@ public class NyxIdConnectedServiceToolSourceTests
         body.RootElement.GetProperty("q").GetString().Should().Be("shoes");
     }
 
+    [Fact]
+    public async Task DiscoverToolsAsync_CustomKeyContract_ShouldExposeAndRouteExactOperationBySlug()
+    {
+        var handler = new FakeNyxIdHandler();
+        var instance = CustomInstance("custom-service-7", "custom/api");
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["custom-service-7"] = instance;
+        handler.SpecsByServiceId["custom-service-7"] = ShopSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().Contain(FixedToolNames);
+        var operation = tools.Single(tool => tool.Name == "nyxid_service_operation__get_order");
+        var result = await operation.ExecuteAsync(
+            """{ "user_service_id": "custom-service-7", "orderId": "o/1" }""");
+
+        result.Should().Contain("ok");
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("custom-service-7");
+        var proxy = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxy.Path.Should().Be("/api/v1/proxy/s/custom%2Fapi/orders/o%2F1");
+        proxy.Query.Should().Be("?_nyxid_via=custom-service-7");
+        proxy.Token.Should().Be("user-token");
+    }
+
     [Theory]
     [InlineData("nyxid_service_operation__get_order", "{ \"user_service_id\": \"us-personal-7\" }", "path")]
     [InlineData("nyxid_service_operation__search_orders", "{ \"user_service_id\": \"us-personal-7\" }", "body")]
@@ -342,8 +368,23 @@ public class NyxIdConnectedServiceToolSourceTests
           "catalog_service_id": "{{catalogServiceId}}",
           "endpoint_id": "endpoint-1",
           "endpoint_url": "https://shop.test",
+          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{catalogServiceId}}/openapi.json",
           "is_active": true,
           "credential_source": {{credentialSource}}
+        }
+        """;
+
+    private static string CustomInstance(string id, string slug) => $$"""
+        {
+          "id": "{{id}}",
+          "slug": "{{slug}}",
+          "label": "Custom API",
+          "endpoint_id": "endpoint-custom",
+          "endpoint_url": "https://custom.test",
+          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{id}}/openapi.json",
+          "source": "custom",
+          "is_active": true,
+          "credential_source": {{PersonalCredentialSource}}
         }
         """;
 

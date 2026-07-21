@@ -119,6 +119,131 @@ public class ToolCallLoopTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareRemovesTool_ShouldNotExecuteRemovedTool()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-removed", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var executions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            executions++;
+            return "executed";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            context.Request = CopyRequestWithTools(context.Request, null);
+            await next();
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        provider.Requests[0].Tools.Should().BeNull();
+        executions.Should().Be(0);
+        messages.Should().Contain(message =>
+            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareAddsTool_ShouldHideAndRejectAddedTool()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-added", Name = "added", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var exactTool = new DelegateTool("echo", _ => "exact");
+        var addedExecutions = 0;
+        var addedTool = new DelegateTool("added", _ =>
+        {
+            addedExecutions++;
+            return "added";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            context.Request = CopyRequestWithTools(context.Request, [exactTool, addedTool]);
+            await next();
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        provider.Requests[0].Tools.Should().ContainSingle().Which.Should().BeSameAs(exactTool);
+        addedExecutions.Should().Be(0);
+        messages.Should().Contain(message =>
+            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareReplacesToolWithSameName_ShouldRejectBothObjects()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-replaced", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var exactExecutions = 0;
+        var replacementExecutions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            exactExecutions++;
+            return "exact";
+        });
+        var replacementTool = new DelegateTool("echo", _ =>
+        {
+            replacementExecutions++;
+            return "replacement";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            context.Request = CopyRequestWithTools(context.Request, [replacementTool]);
+            await next();
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        provider.Requests[0].Tools.Should().BeNull();
+        exactExecutions.Should().Be(0);
+        replacementExecutions.Should().Be(0);
+        messages.Should().Contain(message =>
+            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallTypedContext()
     {
         var provider = new QueueLLMProvider(
@@ -1097,6 +1222,24 @@ public class ToolCallLoopTests
             await Task.CompletedTask;
         }
     }
+
+    private static LLMRequest CopyRequestWithTools(
+        LLMRequest request,
+        IReadOnlyList<IAgentTool>? tools) => new()
+    {
+        Messages = request.Messages,
+        RequestId = request.RequestId,
+        Metadata = request.Metadata,
+        CallerContext = request.CallerContext,
+        ToolContext = request.ToolContext,
+        RoutingContext = request.RoutingContext,
+        LlmControl = request.LlmControl,
+        Tools = tools,
+        Model = request.Model,
+        Temperature = request.Temperature,
+        MaxTokens = request.MaxTokens,
+        ResponseFormat = request.ResponseFormat,
+    };
 
     private sealed class DelegateTool : IAgentTool
     {

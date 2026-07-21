@@ -63,7 +63,6 @@ public sealed class ToolCallLoop
             provider,
             messages,
             baseRequest,
-            CreateRequestToolManager(baseRequest.Tools),
             maxRounds,
             ct);
     }
@@ -78,7 +77,7 @@ public sealed class ToolCallLoop
 
     private async Task<string?> ExecuteCoreAsync(
         ILLMProvider provider, List<ChatMessage> messages,
-        LLMRequest baseRequest, ToolManager requestTools, int maxRounds, CancellationToken ct)
+        LLMRequest baseRequest, int maxRounds, CancellationToken ct)
     {
         var lengthRecoveryCount = 0;
         StringBuilder? accumulatedContent = null;
@@ -102,7 +101,8 @@ public sealed class ToolCallLoop
                 ResponseFormat = baseRequest.ResponseFormat,
             };
 
-            var (response, terminated) = await InvokeLlmAsync(provider, request, ct);
+            var (response, terminated, authorizedRequest) = await InvokeLlmAsync(provider, request, ct);
+            var authorizedTools = CreateRequestToolManager(authorizedRequest.Tools);
 
             // ─── Hook: Post-Sampling（LLM 输出后、Tool 执行前） ───
             if (_hooks != null && response.HasToolCalls && !terminated)
@@ -162,7 +162,7 @@ public sealed class ToolCallLoop
                             parsed.CleanedContent,
                             response.ReasoningContent,
                             parsed.ToolCalls));
-                        await ExecuteToolCallsCoreAsync(requestTools, parsed.ToolCalls, messages, ct);
+                        await ExecuteToolCallsCoreAsync(authorizedTools, parsed.ToolCalls, messages, ct);
                         accumulatedContent = null;
                         continue;
                     }
@@ -211,7 +211,7 @@ public sealed class ToolCallLoop
                 ReasoningContent = response.ReasoningContent,
                 ToolCalls = response.ToolCalls,
             });
-            await ExecuteToolCallsCoreAsync(requestTools, response.ToolCalls!, messages, ct);
+            await ExecuteToolCallsCoreAsync(authorizedTools, response.ToolCalls!, messages, ct);
         }
 
         // maxRounds exhausted — tool results from the last round are already in messages.
@@ -232,7 +232,7 @@ public sealed class ToolCallLoop
             MaxTokens = baseRequest.MaxTokens,
             ResponseFormat = baseRequest.ResponseFormat,
         };
-        var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
+        var (finalResponse, _, authorizedFinalRequest) = await InvokeLlmAsync(provider, finalRequest, ct);
         var finalContent = finalResponse?.Content;
 
         // ─── Fallback: the final no-tools call may still contain DSML text calls ───
@@ -246,7 +246,7 @@ public sealed class ToolCallLoop
                     finalResponse?.ReasoningContent,
                     finalParsed.ToolCalls));
                 await ExecuteToolCallsCoreAsync(
-                    CreateRequestToolManager(finalRequest.Tools),
+                    CreateRequestToolManager(authorizedFinalRequest.Tools),
                     finalParsed.ToolCalls,
                     messages,
                     ct);
@@ -267,7 +267,7 @@ public sealed class ToolCallLoop
                     MaxTokens = finalRequest.MaxTokens,
                     ResponseFormat = finalRequest.ResponseFormat,
                 };
-                var (summaryResponse, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
+                var (summaryResponse, _, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
                 var summaryContent = summaryResponse?.Content;
                 if (summaryContent != null)
                     messages.Add(ChatMessage.Assistant(summaryContent, summaryResponse?.ReasoningContent));
@@ -295,7 +295,7 @@ public sealed class ToolCallLoop
         await ExecuteToolCallsCoreAsync(_tools, toolCalls, messages, ct);
     }
 
-    private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
+    private async Task<(LLMResponse Response, bool Terminated, LLMRequest AuthorizedRequest)> InvokeLlmAsync(
         ILLMProvider provider,
         LLMRequest request,
         CancellationToken ct)
@@ -304,24 +304,34 @@ public sealed class ToolCallLoop
         //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
         //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
         // ─── Hook: LLM Request Start ───
-        var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
+        var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
+        var hasRequestExtensionPoint = _hooks is not null || _llmMiddlewares.Count > 0;
+        var catalogBoundRequest = authorizationFence.Apply(request, forceCopy: hasRequestExtensionPoint);
+        var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = catalogBoundRequest };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
         var llmStartedAt = Stopwatch.GetTimestamp();
 
         var llmCallContext = new LLMCallContext
         {
-            Request = request,
+            Request = authorizationFence.Apply(catalogBoundRequest),
             Provider = provider,
             CancellationToken = ct,
             IsStreaming = true,
         };
         AnnotateRequestIdentity(llmCallContext);
 
+        LLMRequest? authorizedRequest = null;
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
             if (llmCallContext.Terminate) return;
-            llmCallContext.Response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, llmCallContext.Request, ct);
+            authorizedRequest = authorizationFence.Apply(llmCallContext.Request);
+            llmCallContext.Request = authorizedRequest;
+            llmCallContext.Response = await ChatStreamContentAggregator.AggregateResponseAsync(
+                provider,
+                authorizedRequest,
+                ct);
         });
+        authorizedRequest ??= authorizationFence.Apply(llmCallContext.Request);
 
         var response = llmCallContext.Response
             ?? new LLMResponse { Content = null, ToolCalls = null };
@@ -332,7 +342,7 @@ public sealed class ToolCallLoop
         // ─── Hook: LLM Request End ───
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
-        return (response, llmCallContext.Terminate);
+        return (response, llmCallContext.Terminate, authorizedRequest);
     }
 
     internal static string? ComposeRoundCallId(string? baseRequestId, int round)

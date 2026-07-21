@@ -295,6 +295,7 @@ public sealed class NyxIdServiceInstanceClient
             routeConstraint.CatalogServiceId = catalogId;
         else
             routeConstraint.ServiceSlug = slug;
+        var proxySpecServiceId = ResolveProxySpecServiceId(item, id, catalogId);
         var instance = new NyxIdServiceInstance
         {
             UserServiceId = id,
@@ -305,7 +306,7 @@ public sealed class NyxIdServiceInstanceClient
             IsActive = active.Value,
             CredentialSource = credentialSource,
             AccessTokenSource = tokenSource,
-            ProxySpecServiceId = ReadString(item, "proxy_spec_service_id") ?? catalogId ?? string.Empty,
+            ProxySpecServiceId = proxySpecServiceId ?? string.Empty,
             RouteConstraint = routeConstraint,
             CredentialAllowed = credentialAllowed,
         };
@@ -315,6 +316,32 @@ public sealed class NyxIdServiceInstanceClient
         if (!string.IsNullOrWhiteSpace(nodeId))
             instance.NodeId = nodeId;
         return new NyxIdServiceInstanceBinding(instance, token);
+    }
+
+    private static string? ResolveProxySpecServiceId(JsonElement item, string userServiceId, string? catalogServiceId)
+    {
+        var openApiUrl = ReadString(item, "openapi_url");
+        if (!Uri.TryCreate(openApiUrl, UriKind.Absolute, out var uri) ||
+            (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 4 ||
+            !string.Equals(segments[^1], "openapi.json", StringComparison.Ordinal) ||
+            !string.Equals(segments[^3], "services", StringComparison.Ordinal) ||
+            !string.Equals(segments[^4], "proxy", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var specServiceId = Uri.UnescapeDataString(segments[^2]);
+        var expectedServiceId = catalogServiceId ?? userServiceId;
+        return string.Equals(specServiceId, expectedServiceId, StringComparison.Ordinal)
+            ? specServiceId
+            : null;
     }
 
     private static bool TryReadCredentialSource(
