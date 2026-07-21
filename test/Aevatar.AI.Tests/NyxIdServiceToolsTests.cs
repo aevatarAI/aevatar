@@ -47,7 +47,8 @@ public sealed class NyxIdServiceToolsTests
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop", true),
             Instance("us-personal-8", "api-shop", "svc-shop", true));
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-8"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -79,7 +80,8 @@ public sealed class NyxIdServiceToolsTests
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop", true),
             Instance("us-personal-8", "api-shop", "svc-shop", true));
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-8"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -101,7 +103,7 @@ public sealed class NyxIdServiceToolsTests
         var instance = Instance("us/personal 7", "api-shop", "svc-shop", true);
         handler.KeysByToken["user-token"] = Keys(instance);
         handler.ExactKeys["us/personal 7"] = instance;
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us/personal 7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -147,7 +149,7 @@ public sealed class NyxIdServiceToolsTests
     {
         var handler = new ServiceHandler();
         handler.KeysByToken["user-token"] = Keys(Instance("us-personal-7", "api-shop", "svc-shop", true));
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -168,7 +170,7 @@ public sealed class NyxIdServiceToolsTests
         var handler = new ServiceHandler();
         handler.KeysByToken["user-token"] = Keys(Instance("us-personal-7", "api-shop", "svc-shop", true));
         handler.ExactKeys["us-personal-7"] = Instance("us-personal-7", "api-shop", "svc-shop", false);
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -223,7 +225,7 @@ public sealed class NyxIdServiceToolsTests
         };
         handler.KeysByToken["user-token"] = Keys(discovered);
         handler.ExactKeys["us-7"] = exact;
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -233,6 +235,32 @@ public sealed class NyxIdServiceToolsTests
                 .ExecuteAsync("""{ "user_service_id": "us-7", "method": "GET", "relative_path": "orders" }""")
             : await tools.Single(tool => tool.Name == "nyxid_service_update")
                 .ExecuteAsync("""{ "user_service_id": "us-7", "label": "Changed" }""");
+
+        ResponseErrorCode(result).Should().Be("identity_revalidation_failed");
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-7");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("nyxid_service_update", "{ \"user_service_id\": \"us-7\", \"label\": \"Changed\" }")]
+    [InlineData("nyxid_service_route", "{ \"user_service_id\": \"us-7\", \"route\": \"node\", \"node_id\": \"node-c\" }")]
+    [InlineData("nyxid_service_delete", "{ \"user_service_id\": \"us-7\" }")]
+    [InlineData("nyxid_service_request", "{ \"user_service_id\": \"us-7\", \"method\": \"GET\", \"relative_path\": \"orders\" }")]
+    [InlineData("nyxid_service_operation__get_order", "{ \"user_service_id\": \"us-7\", \"order_id\": \"order-1\" }")]
+    public async Task SideEffectTools_ChangedNodeBinding_ShouldFailBeforeMutationOrProxy(
+        string toolName,
+        string arguments)
+    {
+        var handler = new ServiceHandler();
+        var discovered = Instance("us-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(discovered);
+        handler.ExactKeys["us-7"] = WithNodeId(discovered, "node-b");
+        handler.SpecsByServiceId["us-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Single(candidate => candidate.Name == toolName);
+        var result = await tool.ExecuteAsync(arguments);
 
         ResponseErrorCode(result).Should().Be("identity_revalidation_failed");
         handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-7");
@@ -250,7 +278,7 @@ public sealed class NyxIdServiceToolsTests
         var instance = Instance("us-7", "api-shop", "svc-shop", true);
         handler.KeysByToken["user-token"] = Keys(instance);
         handler.ExactKeys["us-7"] = instance;
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -274,7 +302,7 @@ public sealed class NyxIdServiceToolsTests
         var instance = Instance("us-7", "api-shop", "svc-shop", true);
         handler.KeysByToken["user-token"] = Keys(instance);
         handler.ExactKeys["us-7"] = instance;
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -368,7 +396,7 @@ public sealed class NyxIdServiceToolsTests
     {
         var handler = new ServiceHandler();
         handler.KeysByToken["user-token"] = Keys(Instance("us-personal-7", "api-shop", "svc-shop", true));
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -397,7 +425,7 @@ public sealed class NyxIdServiceToolsTests
         var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
         handler.KeysByToken["user-token"] = Keys(instance);
         handler.ExactKeys["us-personal-7"] = instance;
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -456,7 +484,7 @@ public sealed class NyxIdServiceToolsTests
         var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
         handler.KeysByToken["user-token"] = Keys(instance);
         handler.ExactKeys["us-personal-7"] = instance;
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -480,7 +508,7 @@ public sealed class NyxIdServiceToolsTests
         var handler = new ServiceHandler();
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop", true));
-        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -516,7 +544,7 @@ public sealed class NyxIdServiceToolsTests
             CatalogServiceId = "svc-shop",
             CredentialSource = NyxIdServiceCredentialSource.Personal,
             AccessTokenSource = NyxIdServiceAccessTokenSource.User,
-            ProxySpecServiceId = "svc-shop",
+            ProxySpecServiceId = "us-7",
             RouteConstraint = new NyxIdProxyRouteConstraint { CatalogServiceId = "svc-shop" },
             CredentialAllowed = true,
         },
@@ -542,7 +570,7 @@ public sealed class NyxIdServiceToolsTests
           "catalog_service_id": "{{serviceId}}",
           "endpoint_id": "endpoint-1",
           "endpoint_url": "https://shop.test",
-          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{serviceId}}/openapi.json",
+          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{id}}/openapi.json",
           "is_active": {{active.ToString().ToLowerInvariant()}},
           "credential_source": {{credentialSource}}
         }
@@ -568,6 +596,13 @@ public sealed class NyxIdServiceToolsTests
     {
         var root = JsonNode.Parse(json)!.AsObject();
         root.Remove(propertyName);
+        return root.ToJsonString();
+    }
+
+    private static string WithNodeId(string json, string nodeId)
+    {
+        var root = JsonNode.Parse(json)!.AsObject();
+        root["node_id"] = nodeId;
         return root.ToJsonString();
     }
 

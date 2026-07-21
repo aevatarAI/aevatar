@@ -92,7 +92,7 @@ public class NyxIdConnectedServiceToolSourceTests
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop"));
-        handler.SpecsByServiceId["svc-shop"] = ShopSpec;
+        handler.SpecsByServiceId["us-personal-7"] = ShopSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -114,9 +114,9 @@ public class NyxIdConnectedServiceToolSourceTests
             Instance("us-personal", "api-shop", "svc-personal"),
             Instance("us-org-allowed", "api-shop", "svc-org-allowed", OrganizationCredentialSource(true)),
             Instance("us-org-denied", "api-shop", "svc-org-denied", OrganizationCredentialSource(false)));
-        handler.SpecsByServiceId["svc-personal"] = SpecWithPing("ping_personal");
-        handler.SpecsByServiceId["svc-org-allowed"] = SpecWithPing("ping_org_allowed");
-        handler.SpecsByServiceId["svc-org-denied"] = SpecWithPing("ping_org_denied");
+        handler.SpecsByServiceId["us-personal"] = SpecWithPing("ping_personal");
+        handler.SpecsByServiceId["us-org-allowed"] = SpecWithPing("ping_org_allowed");
+        handler.SpecsByServiceId["us-org-denied"] = SpecWithPing("ping_org_denied");
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -145,7 +145,7 @@ public class NyxIdConnectedServiceToolSourceTests
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop"));
-        handler.SpecsByServiceId["svc-shop"] = ShopSpec;
+        handler.SpecsByServiceId["us-personal-7"] = ShopSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -169,7 +169,7 @@ public class NyxIdConnectedServiceToolSourceTests
         var instance = Instance("us-personal-7", "api-shop", "svc-shop");
         handler.KeysByToken["user-token"] = Keys(instance);
         handler.ExactKeys["us-personal-7"] = instance;
-        handler.SpecsByServiceId["svc-shop"] = ShopSpec;
+        handler.SpecsByServiceId["us-personal-7"] = ShopSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -231,7 +231,7 @@ public class NyxIdConnectedServiceToolSourceTests
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop"));
-        handler.SpecsByServiceId["svc-shop"] = ShopSpec;
+        handler.SpecsByServiceId["us-personal-7"] = ShopSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -257,7 +257,7 @@ public class NyxIdConnectedServiceToolSourceTests
         var handler = new FakeNyxIdHandler();
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop"));
-        handler.SpecsByServiceId["svc-shop"] = conflictSpec;
+        handler.SpecsByServiceId["us-personal-7"] = conflictSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -273,8 +273,8 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.KeysByToken["user-token"] = Keys(
             Instance("us-personal-7", "api-shop", "svc-shop-a"),
             Instance("us-personal-8", "api-shop", "svc-shop-b"));
-        handler.SpecsByServiceId["svc-shop-a"] = ShopSpec;
-        handler.SpecsByServiceId["svc-shop-b"] = ShopSpec;
+        handler.SpecsByServiceId["us-personal-7"] = ShopSpec;
+        handler.SpecsByServiceId["us-personal-8"] = ShopSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -297,8 +297,8 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.KeysByToken["org-token"] = Keys(organization);
         handler.ExactKeys["us-personal-7"] = personal;
         handler.ExactKeys["us-org-9"] = organization;
-        handler.SpecsByServiceId["svc-personal"] = SpecWithPing("ping_personal");
-        handler.SpecsByServiceId["svc-organization"] = SpecWithPing("ping_organization");
+        handler.SpecsByServiceId["us-personal-7"] = SpecWithPing("ping_personal");
+        handler.SpecsByServiceId["us-org-9"] = SpecWithPing("ping_organization");
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token", "org-token");
@@ -325,14 +325,51 @@ public class NyxIdConnectedServiceToolSourceTests
             Instance("us-shared", "api-shop", "svc-personal"));
         handler.KeysByToken["org-token"] = Keys(
             Instance("us-shared", "api-shop", "svc-organization", OrganizationCredentialSource(true)));
-        handler.SpecsByServiceId["svc-personal"] = SpecWithPing("ping_personal");
-        handler.SpecsByServiceId["svc-organization"] = SpecWithPing("ping_organization");
+        handler.SpecsByServiceId["us-shared"] = SpecWithPing("ping_shared");
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token", "org-token");
         var tools = await source.DiscoverToolsAsync();
 
         tools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_OneSpecFails_ShouldKeepFixedToolsAndOtherOperations()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-bad", "api-shop", "svc-shop"),
+            Instance("us-good", "api-shop", "svc-shop"));
+        handler.FailingSpecIds.Add("us-bad");
+        handler.SpecsByServiceId["us-good"] = SpecWithPing("ping_good");
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Select(static tool => tool.Name).Should().BeEquivalentTo(
+            FixedToolNames.Append("nyxid_service_operation__ping_good"));
+        var inventory = await tools.Single(tool => tool.Name == "nyxid_service_inventory")
+            .ExecuteAsync("{}");
+        inventory.Should().Contain("us-bad").And.Contain("us-good");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_CallerCancellationDuringSpecFetch_ShouldPropagate()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop"));
+        handler.CancelledSpecIds.Add("us-personal-7");
+        var source = CreateSource(handler);
+        using var cts = new CancellationTokenSource();
+        handler.SpecCancellationSource = cts;
+
+        using var scope = PushContext("user-token");
+        var action = () => source.DiscoverToolsAsync(cts.Token);
+
+        await action.Should().ThrowAsync<OperationCanceledException>();
     }
 
     private static string SpecWithPing(string operationId) => $$"""
@@ -368,7 +405,7 @@ public class NyxIdConnectedServiceToolSourceTests
           "catalog_service_id": "{{catalogServiceId}}",
           "endpoint_id": "endpoint-1",
           "endpoint_url": "https://shop.test",
-          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{catalogServiceId}}/openapi.json",
+          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{id}}/openapi.json",
           "is_active": true,
           "credential_source": {{credentialSource}}
         }
@@ -409,6 +446,9 @@ public class NyxIdConnectedServiceToolSourceTests
         public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> ExactKeys { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> SpecsByServiceId { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> FailingSpecIds { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> CancelledSpecIds { get; } = new(StringComparer.Ordinal);
+        public CancellationTokenSource? SpecCancellationSource { get; set; }
         public List<string> ExactReads { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
         public int DiscoveryRequests { get; private set; }
@@ -438,6 +478,13 @@ public class NyxIdConnectedServiceToolSourceTests
                 path.EndsWith("/openapi.json", StringComparison.Ordinal))
             {
                 var id = path["/api/v1/proxy/services/".Length..^"/openapi.json".Length];
+                if (CancelledSpecIds.Contains(id))
+                {
+                    SpecCancellationSource?.Cancel();
+                    ct.ThrowIfCancellationRequested();
+                }
+                if (FailingSpecIds.Contains(id))
+                    throw new HttpRequestException("spec_fetch_failed");
                 return SpecsByServiceId.TryGetValue(id, out var spec)
                     ? Json(spec)
                     : new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}") };

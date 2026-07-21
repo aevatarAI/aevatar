@@ -63,6 +63,43 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
+    public async Task MainTurn_RouteOnlyTool_ShouldExecuteExactRequestObject()
+    {
+        var globalTool = new CountingTool("global");
+        var routeOnlyExactTool = new CountingTool("route-only");
+        var provider = new ForgedToolProvider("route-only");
+        var runtime = NewRuntime(provider, NewToolManager(globalTool));
+
+        await DrainAsync(runtime.ChatStreamAsync(
+            "run",
+            NewCatalog(["route-only"], routeOwnedTools: [routeOnlyExactTool])));
+
+        provider.Requests[0].Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnlyExactTool);
+        routeOnlyExactTool.ExecuteCount.Should().Be(1);
+        globalTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task StepTurn_RouteOnlyTool_ShouldExecuteExactRequestObject()
+    {
+        var globalTool = new CountingTool("global");
+        var routeOnlyExactTool = new CountingTool("route-only");
+        var executor = NewRuntime(new RecordingProvider(), NewToolManager(globalTool))
+            .CreateStepExecutor(NewCatalog(["route-only"], routeOwnedTools: [routeOnlyExactTool]));
+        var request = executor.BuildBaseRequest(null, null, null, null);
+
+        await executor.ExecuteToolStepAsync(
+            [new ToolCall { Id = "route-call", Name = "route-only", ArgumentsJson = "{}" }],
+            requestMetadata: null,
+            toolContext: null,
+            CancellationToken.None);
+
+        request.Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnlyExactTool);
+        routeOnlyExactTool.ExecuteCount.Should().Be(1);
+        globalTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task MainTurn_ShouldHideAndRejectToolsOutsideCatalog()
     {
         var visible = new CountingTool("visible");
@@ -171,6 +208,59 @@ public sealed class AgentProfileTurnRuntimeTests
         provider.Requests[0].Tools.Should().BeNull();
         exact.ExecuteCount.Should().Be(0);
         replacement.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SkillRecovery_RequestExcludesTool_ShouldNotExecuteGlobalTool()
+    {
+        var globalTool = new CountingTool("use_skill");
+        var tools = NewToolManager(globalTool);
+        var history = new ChatHistory();
+        var runtime = new ChatRuntime(
+            () => new RecordingProvider(),
+            history,
+            new ToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = history.BuildMessages("system"),
+                Tools = tools.GetAll(),
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    SkillRecovery = InitialSkillRecovery(),
+                },
+            });
+
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog([])));
+
+        globalTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SkillRecovery_SameNameGlobalTool_ShouldExecuteExactRequestObject()
+    {
+        var globalTool = new CountingTool("use_skill");
+        var requestExactTool = new CountingTool("use_skill");
+        var history = new ChatHistory();
+        var runtime = new ChatRuntime(
+            () => new RecordingProvider(),
+            history,
+            new ToolCallLoop(NewToolManager(globalTool)),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = history.BuildMessages("system"),
+                Tools = [requestExactTool],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    SkillRecovery = InitialSkillRecovery(),
+                },
+            });
+
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["use_skill"])));
+
+        requestExactTool.ExecuteCount.Should().Be(1);
+        globalTool.ExecuteCount.Should().Be(0);
     }
 
     [Fact]
@@ -341,6 +431,14 @@ public sealed class AgentProfileTurnRuntimeTests
         manager.Register(tools);
         return manager;
     }
+
+    private static AgentSkillRecoveryContext InitialSkillRecovery() => new(
+        RequireInitialOrnnSearch: true,
+        RequireOrnnSearchOnBlocker: false,
+        CommandName: "summary",
+        OriginalCommand: "/summary",
+        PrimarySkillName: "project-summary",
+        MaxOrnnSearchAttempts: 1);
 
     private static ChatRuntime NewRuntime(
         ILLMProvider provider,
