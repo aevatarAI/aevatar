@@ -13,6 +13,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
     : GAgentBase<NyxIdAuthorizationCatalogState>, IProjectedActor
 {
     public const string DurableProjectionKind = "nyxid-authorization-catalog";
+    private const string RefreshSupersededFailureCode = "nyxid_catalog_refresh_superseded";
 
     public static string ProjectionKind => DurableProjectionKind;
 
@@ -47,19 +48,53 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             throw new InvalidOperationException("Catalog refresh identity and start time are required.");
 
         var refreshId = command.RefreshId.Trim();
-        if (string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal))
+        var newestRefreshId = string.IsNullOrEmpty(State.NewestRefreshId)
+            ? State.ActiveRefreshId
+            : State.NewestRefreshId;
+        var newestRefreshStartedAt = State.NewestRefreshStartedAt ?? State.ActiveRefreshStartedAt;
+        if (string.Equals(newestRefreshId, refreshId, StringComparison.Ordinal))
         {
-            if (State.ActiveRefreshStartedAt?.Equals(command.StartedAt) == true)
-                return;
-            throw new InvalidOperationException("An active catalog refresh identity cannot change its start time.");
+            if (newestRefreshStartedAt?.Equals(command.StartedAt) != true)
+                throw new InvalidOperationException("A catalog refresh identity cannot change its start time.");
+
+            await PersistRefreshOutcomeAsync(
+                refreshId,
+                string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal)
+                    ? NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started
+                    : NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                command.StartedAt,
+                string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal)
+                    ? string.Empty
+                    : RefreshSupersededFailureCode);
+            return;
         }
 
-        await PersistDomainEventAsync(new NyxIdAuthorizationCatalogRefreshBeganEvent
+        if (!string.IsNullOrEmpty(newestRefreshId) &&
+            newestRefreshStartedAt != null &&
+            CompareRefreshOrder(
+                command.StartedAt,
+                refreshId,
+                newestRefreshStartedAt,
+                newestRefreshId) < 0)
         {
-            Owner = command.Owner.Clone(),
-            RefreshId = refreshId,
-            StartedAt = command.StartedAt.Clone(),
-        });
+            await PersistRefreshOutcomeAsync(
+                refreshId,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                command.StartedAt,
+                RefreshSupersededFailureCode);
+            return;
+        }
+
+        await PersistRefreshTransitionAsync(
+            new NyxIdAuthorizationCatalogRefreshBeganEvent
+            {
+                Owner = command.Owner.Clone(),
+                RefreshId = refreshId,
+                StartedAt = command.StartedAt.Clone(),
+            },
+            refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started,
+            command.StartedAt);
     }
 
     [EventHandler(EndpointName = "observeCatalog")]
@@ -67,15 +102,34 @@ public sealed class NyxIdAuthorizationCatalogGAgent
     {
         ArgumentNullException.ThrowIfNull(command);
         ValidateOwner(command.Owner);
-        ValidateObservation(command);
         EnsureCurrentOwner(command.Owner);
-        EnsureActiveRefresh(command.RefreshId);
+        var refreshId = NormalizeRefreshIdentity(command.RefreshId);
+        if (command.ObservedAt == null)
+            throw new InvalidOperationException("Catalog observation time is required.");
+        if (!IsActiveRefresh(refreshId))
+        {
+            await PersistRefreshOutcomeAsync(
+                refreshId,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                command.ObservedAt,
+                RefreshSupersededFailureCode);
+            return;
+        }
+
+        ValidateObservation(command);
 
         if (State.ObservedAt != null)
         {
             var ordering = command.ObservedAt.CompareTo(State.ObservedAt);
             if (ordering < 0)
+            {
+                await PersistRefreshOutcomeAsync(
+                    refreshId,
+                    NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                    command.ObservedAt,
+                    RefreshSupersededFailureCode);
                 return;
+            }
             if (ordering == 0)
             {
                 if (string.Equals(State.ContentDigest, command.ContentDigest, StringComparison.Ordinal) &&
@@ -97,7 +151,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         var observed = new NyxIdAuthorizationCatalogObservedEvent
         {
             Owner = command.Owner.Clone(),
-            RefreshId = command.RefreshId.Trim(),
+            RefreshId = refreshId,
             ObservedAt = command.ObservedAt.Clone(),
             FreshUntil = command.FreshUntil.Clone(),
             ContractVersion = command.ContractVersion.Trim(),
@@ -107,7 +161,11 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             LifecycleFence = State.LifecycleFence,
         };
         observed.Services.Add(command.Services.Select(static service => service.Clone()));
-        await PersistDomainEventAsync(observed);
+        await PersistRefreshTransitionAsync(
+            observed,
+            refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Observed,
+            command.ObservedAt);
     }
 
     [EventHandler(EndpointName = "recordRefreshFailure")]
@@ -116,17 +174,31 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         ArgumentNullException.ThrowIfNull(command);
         ValidateOwner(command.Owner);
         EnsureCurrentOwner(command.Owner);
-        EnsureActiveRefresh(command.RefreshId);
         if (command.FailedAt == null || string.IsNullOrWhiteSpace(command.FailureCode))
             throw new InvalidOperationException("Refresh failure time and code are required.");
-
-        await PersistDomainEventAsync(new NyxIdAuthorizationCatalogRefreshFailedEvent
+        var refreshId = NormalizeRefreshIdentity(command.RefreshId);
+        if (!IsActiveRefresh(refreshId))
         {
-            Owner = command.Owner.Clone(),
-            RefreshId = command.RefreshId.Trim(),
-            FailedAt = command.FailedAt.Clone(),
-            FailureCode = command.FailureCode.Trim(),
-        });
+            await PersistRefreshOutcomeAsync(
+                refreshId,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                command.FailedAt,
+                RefreshSupersededFailureCode);
+            return;
+        }
+
+        await PersistRefreshTransitionAsync(
+            new NyxIdAuthorizationCatalogRefreshFailedEvent
+            {
+                Owner = command.Owner.Clone(),
+                RefreshId = refreshId,
+                FailedAt = command.FailedAt.Clone(),
+                FailureCode = command.FailureCode.Trim(),
+            },
+            refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed,
+            command.FailedAt,
+            command.FailureCode.Trim());
     }
 
     [EventHandler(EndpointName = "invalidateCatalog")]
@@ -135,10 +207,30 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         ArgumentNullException.ThrowIfNull(command);
         ValidateOwner(command.Owner);
         EnsureCurrentOwner(command.Owner);
-        if (!string.IsNullOrWhiteSpace(command.RefreshId))
-            EnsureActiveRefresh(command.RefreshId);
         if (command.InvalidatedAt == null || string.IsNullOrWhiteSpace(command.Reason))
             throw new InvalidOperationException("Invalidation time and reason are required.");
+        var refreshId = string.IsNullOrWhiteSpace(command.RefreshId)
+            ? string.Empty
+            : command.RefreshId.Trim();
+        var displacedRefreshId = string.IsNullOrEmpty(refreshId)
+            ? State.ActiveRefreshId
+            : string.Empty;
+        if (!string.IsNullOrEmpty(refreshId) && !IsActiveRefresh(refreshId))
+        {
+            await PersistRefreshOutcomeAsync(
+                refreshId,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                command.InvalidatedAt,
+                RefreshSupersededFailureCode);
+            return;
+        }
+        if (!string.IsNullOrEmpty(refreshId) &&
+            command.OutcomeStatus is not (
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.AccessDenied or
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable))
+        {
+            throw new InvalidOperationException("Refresh invalidation outcome status is invalid.");
+        }
         if (State.Invalidated &&
             string.Equals(State.InvalidationReason, command.Reason.Trim(), StringComparison.Ordinal) &&
             string.IsNullOrEmpty(State.ActiveRefreshId))
@@ -151,13 +243,35 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             ? State.LifecycleFence
             : checked(State.LifecycleFence + 1);
 
-        await PersistDomainEventAsync(new NyxIdAuthorizationCatalogInvalidatedEvent
+        var invalidated = new NyxIdAuthorizationCatalogInvalidatedEvent
         {
             Owner = command.Owner.Clone(),
             InvalidatedAt = command.InvalidatedAt.Clone(),
             Reason = command.Reason.Trim(),
             LifecycleFence = lifecycleFence,
-        });
+        };
+        if (!string.IsNullOrEmpty(refreshId))
+        {
+            await PersistRefreshTransitionAsync(
+                invalidated,
+                refreshId,
+                command.OutcomeStatus,
+                command.InvalidatedAt,
+                command.Reason.Trim());
+        }
+        else if (!string.IsNullOrEmpty(displacedRefreshId))
+        {
+            await PersistRefreshTransitionAsync(
+                invalidated,
+                displacedRefreshId,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                command.InvalidatedAt,
+                RefreshSupersededFailureCode);
+        }
+        else
+        {
+            await PersistDomainEventAsync(invalidated);
+        }
     }
 
     [EventHandler(EndpointName = "cleanupCatalog")]
@@ -174,19 +288,33 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         {
             return;
         }
+        var displacedRefreshId = State.ActiveRefreshId;
 
         var lifecycleFence = State.Cleaned &&
                              string.Equals(State.CleanupReason, command.Reason.Trim(), StringComparison.Ordinal)
             ? State.LifecycleFence
             : checked(State.LifecycleFence + 1);
 
-        await PersistDomainEventAsync(new NyxIdAuthorizationCatalogCleanedEvent
+        var cleaned = new NyxIdAuthorizationCatalogCleanedEvent
         {
             Owner = command.Owner.Clone(),
             CleanedAt = command.CleanedAt.Clone(),
             Reason = command.Reason.Trim(),
             LifecycleFence = lifecycleFence,
-        });
+        };
+        if (!string.IsNullOrEmpty(displacedRefreshId))
+        {
+            await PersistRefreshTransitionAsync(
+                cleaned,
+                displacedRefreshId,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                command.CleanedAt,
+                RefreshSupersededFailureCode);
+        }
+        else
+        {
+            await PersistDomainEventAsync(cleaned);
+        }
     }
 
     protected override NyxIdAuthorizationCatalogState TransitionState(
@@ -199,6 +327,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         .On<NyxIdAuthorizationCatalogRefreshFailedEvent>(ApplyRefreshFailed)
         .On<NyxIdAuthorizationCatalogInvalidatedEvent>(ApplyInvalidated)
         .On<NyxIdAuthorizationCatalogCleanedEvent>(ApplyCleaned)
+        .On<NyxIdAuthorizationCatalogRefreshOutcomeEvent>(ApplyRefreshOutcome)
         .OrCurrent();
 
     private static NyxIdAuthorizationCatalogState ApplyActivated(
@@ -221,6 +350,8 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Owner ??= evt.Owner.Clone();
         next.ActiveRefreshId = evt.RefreshId;
         next.ActiveRefreshStartedAt = evt.StartedAt.Clone();
+        next.NewestRefreshId = evt.RefreshId;
+        next.NewestRefreshStartedAt = evt.StartedAt.Clone();
         return next;
     }
 
@@ -246,6 +377,8 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             ActivatedAt = state.ActivatedAt?.Clone() ?? evt.ObservedAt.Clone(),
             Cleaned = false,
             CleanupReason = string.Empty,
+            NewestRefreshId = state.NewestRefreshId,
+            NewestRefreshStartedAt = state.NewestRefreshStartedAt?.Clone(),
         };
         next.Services.Add(evt.Services.Select(static service => service.Clone()));
         return next;
@@ -295,7 +428,25 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         Cleaned = true,
         CleanedAt = evt.CleanedAt.Clone(),
         CleanupReason = evt.Reason,
+        NewestRefreshId = state.NewestRefreshId,
+        NewestRefreshStartedAt = state.NewestRefreshStartedAt?.Clone(),
     };
+
+    private static NyxIdAuthorizationCatalogState ApplyRefreshOutcome(
+        NyxIdAuthorizationCatalogState state,
+        NyxIdAuthorizationCatalogRefreshOutcomeEvent evt)
+    {
+        if (evt.Status != NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded ||
+            !string.Equals(state.ActiveRefreshId, evt.RefreshId, StringComparison.Ordinal))
+        {
+            return state;
+        }
+
+        var next = state.Clone();
+        next.ActiveRefreshId = string.Empty;
+        next.ActiveRefreshStartedAt = null;
+        return next;
+    }
 
     private void EnsureCurrentOwner(AuthorizationOwnerIdentity owner)
     {
@@ -303,15 +454,79 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             throw new InvalidOperationException("NyxID authorization catalog owner cannot change.");
     }
 
-    private void EnsureActiveRefresh(string refreshId)
+    private bool IsActiveRefresh(string refreshId) =>
+        !string.IsNullOrEmpty(State.ActiveRefreshId) &&
+        string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal);
+
+    private static string NormalizeRefreshIdentity(string refreshId)
     {
-        if (string.IsNullOrWhiteSpace(refreshId) ||
-            string.IsNullOrEmpty(State.ActiveRefreshId) ||
-            !string.Equals(State.ActiveRefreshId, refreshId.Trim(), StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Catalog result does not match the active refresh.");
-        }
+        if (string.IsNullOrWhiteSpace(refreshId))
+            throw new InvalidOperationException("Catalog refresh identity is required.");
+        return refreshId.Trim();
     }
+
+    private static int CompareRefreshOrder(
+        Google.Protobuf.WellKnownTypes.Timestamp leftStartedAt,
+        string leftRefreshId,
+        Google.Protobuf.WellKnownTypes.Timestamp rightStartedAt,
+        string rightRefreshId)
+    {
+        var timeOrdering = leftStartedAt.CompareTo(rightStartedAt);
+        return timeOrdering != 0
+            ? timeOrdering
+            : string.CompareOrdinal(leftRefreshId, rightRefreshId);
+    }
+
+    private Task PersistRefreshOutcomeAsync(
+        string refreshId,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState status,
+        Google.Protobuf.WellKnownTypes.Timestamp observedAt,
+        string failureCode = "") => PersistDomainEventAsync(BuildRefreshOutcome(
+        refreshId,
+        status,
+        CurrentStateVersion(),
+        observedAt,
+        failureCode));
+
+    private Task PersistRefreshTransitionAsync(
+        IMessage stateEvent,
+        string refreshId,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState status,
+        Google.Protobuf.WellKnownTypes.Timestamp observedAt,
+        string failureCode = "")
+    {
+        ArgumentNullException.ThrowIfNull(stateEvent);
+        var mutationStateVersion = checked(CurrentStateVersion() + 1);
+        return PersistDomainEventsAsync(
+        [
+            stateEvent,
+            BuildRefreshOutcome(
+                refreshId,
+                status,
+                mutationStateVersion,
+                observedAt,
+                failureCode),
+        ]);
+    }
+
+    private long CurrentStateVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException(
+            "Event sourcing must be configured before observing a catalog refresh."))
+        .CurrentVersion;
+
+    private static NyxIdAuthorizationCatalogRefreshOutcomeEvent BuildRefreshOutcome(
+        string refreshId,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState status,
+        long stateVersion,
+        Google.Protobuf.WellKnownTypes.Timestamp observedAt,
+        string failureCode) => new()
+    {
+        RefreshId = refreshId,
+        Status = status,
+        StateVersion = stateVersion,
+        FailureCode = failureCode,
+        ObservedAtUtc = observedAt.Clone(),
+    };
 
     private static void ValidateObservation(ObserveNyxIdAuthorizationCatalogCommand command)
     {

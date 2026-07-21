@@ -1,5 +1,7 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
@@ -92,63 +94,242 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
-    public async Task RefreshSession_ShouldRejectSupersededObservation()
+    public async Task RefreshSession_ShouldFenceDelayedOlderBeginWhileNewerRefreshIsActive()
     {
         var owner = Owner();
-        var agent = CreateAgent(owner);
-        await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
-        {
-            Owner = owner.Clone(),
-            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
-        });
-        await BeginRefreshAsync(agent, owner, "refresh-old", ObservedAt.AddSeconds(1));
-        await BeginRefreshAsync(agent, owner, "refresh-current", ObservedAt.AddSeconds(2));
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await ActivateAsync(agent, owner);
+        await BeginRefreshAsync(agent, owner, "refresh-newer", ObservedAt.AddSeconds(2));
 
-        var superseded = () => agent.HandleObserveAsync(
-            ObservationCommand(owner, "refresh-old", ObservedAt.AddMinutes(1)));
+        await BeginRefreshAsync(agent, owner, "refresh-older", ObservedAt.AddSeconds(1));
 
-        await superseded.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*active refresh*");
-        agent.State.ActiveRefreshId.Should().Be("refresh-current");
-
-        await agent.HandleObserveAsync(
-            ObservationCommand(owner, "refresh-current", ObservedAt.AddMinutes(1)));
-        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.ActiveRefreshId.Should().Be("refresh-newer");
+        agent.State.ActiveRefreshStartedAt.Should()
+            .Be(Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)));
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-older",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
     }
 
     [Fact]
-    public async Task RefreshSession_ShouldRejectSupersededRefreshInvalidation()
+    public async Task RefreshSession_ShouldKeepNewestWatermarkAfterTerminalCompletion()
     {
         var owner = Owner();
-        var agent = CreateAgent(owner);
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await ActivateAsync(agent, owner);
+        await BeginRefreshAsync(agent, owner, "refresh-newer", ObservedAt.AddSeconds(2));
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-newer", ObservedAt.AddMinutes(1)));
+
+        await BeginRefreshAsync(agent, owner, "refresh-older", ObservedAt.AddSeconds(1));
+
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.ContentDigest.Should().NotBeEmpty();
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-older",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+    }
+
+    [Fact]
+    public async Task RefreshSession_ShouldKeepNewestWatermarkAcrossCleanupAndReactivation()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await ActivateAsync(agent, owner);
+        await BeginRefreshAsync(agent, owner, "refresh-newer", ObservedAt.AddSeconds(2));
+        await agent.HandleCleanupAsync(new CleanupNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(3)),
+            Reason = "owner_unbound",
+        });
         await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
-            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(4)),
         });
+
+        await BeginRefreshAsync(agent, owner, "refresh-older", ObservedAt.AddSeconds(1));
+
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.NewestRefreshId.Should().Be("refresh-newer");
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-older",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+    }
+
+    [Fact]
+    public async Task RefreshSession_ShouldResolveEqualStartTimesByOrdinalRefreshIdentity()
+    {
+        var owner = Owner();
+        var firstAgent = CreateAgent(owner);
+        var secondAgent = CreateAgent(owner);
+        await ActivateAsync(firstAgent, owner);
+        await ActivateAsync(secondAgent, owner);
+        var startedAt = ObservedAt.AddSeconds(1);
+
+        await BeginRefreshAsync(firstAgent, owner, "refresh-z", startedAt);
+        await BeginRefreshAsync(firstAgent, owner, "refresh-a", startedAt);
+        await BeginRefreshAsync(secondAgent, owner, "refresh-a", startedAt);
+        await BeginRefreshAsync(secondAgent, owner, "refresh-z", startedAt);
+
+        firstAgent.State.ActiveRefreshId.Should().Be("refresh-z");
+        secondAgent.State.ActiveRefreshId.Should().Be("refresh-z");
+    }
+
+    [Fact]
+    public async Task RefreshBegin_WhenOutcomeBatchCommitFails_ShouldNotPersistPartialLease()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var rejectingStore = new RefreshOutcomeRejectingEventStore(eventStore)
+        {
+            RejectRefreshOutcomes = true,
+        };
+        var agent = CreateAgent(owner, eventStore);
+        agent.EventSourcingBehaviorFactory =
+            new DefaultEventSourcingBehaviorFactory<NyxIdAuthorizationCatalogState>(
+                rejectingStore);
+        await ActivateAsync(agent, owner);
+        var versionBefore = await eventStore.GetVersionAsync(agent.Id);
+        var stateBefore = agent.State.ToByteArray();
+
+        var act = () => BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-atomic",
+            ObservedAt.AddSeconds(1));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("event-store-batch-failure");
+        (await eventStore.GetVersionAsync(agent.Id)).Should().Be(versionBefore);
+        agent.State.ToByteArray().Should().Equal(stateBefore);
+    }
+
+    [Theory]
+    [InlineData("observed")]
+    [InlineData("failed")]
+    [InlineData("invalidated")]
+    [InlineData("cleaned")]
+    public async Task RefreshTerminal_WhenOutcomeBatchCommitFails_ShouldNotPersistPartialMutation(
+        string terminal)
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var rejectingStore = new RefreshOutcomeRejectingEventStore(eventStore);
+        var agent = CreateAgent(owner, eventStore);
+        agent.EventSourcingBehaviorFactory =
+            new DefaultEventSourcingBehaviorFactory<NyxIdAuthorizationCatalogState>(
+                rejectingStore);
+        await ActivateAsync(agent, owner);
+        await BeginRefreshAsync(agent, owner, "refresh-atomic", ObservedAt.AddSeconds(1));
+        var versionBefore = await eventStore.GetVersionAsync(agent.Id);
+        var stateBefore = agent.State.ToByteArray();
+        rejectingStore.RejectRefreshOutcomes = true;
+
+        Func<Task> act = terminal switch
+        {
+            "observed" => () => agent.HandleObserveAsync(
+                ObservationCommand(owner, "refresh-atomic", ObservedAt.AddMinutes(1))),
+            "failed" => () => agent.HandleRefreshFailureAsync(
+                new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+                {
+                    Owner = owner.Clone(),
+                    RefreshId = "refresh-atomic",
+                    FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                    FailureCode = "provider_unavailable",
+                }),
+            "invalidated" => () => agent.HandleInvalidateAsync(
+                new InvalidateNyxIdAuthorizationCatalogCommand
+                {
+                    Owner = owner.Clone(),
+                    RefreshId = "refresh-atomic",
+                    InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                    Reason = "api_key_scope_plan_denied",
+                    OutcomeStatus =
+                        NyxIdAuthorizationCatalogRefreshOutcomeStatusState.AccessDenied,
+                }),
+            "cleaned" => () => agent.HandleCleanupAsync(
+                new CleanupNyxIdAuthorizationCatalogCommand
+                {
+                    Owner = owner.Clone(),
+                    CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                    Reason = "owner_unbound",
+                }),
+            _ => throw new ArgumentOutOfRangeException(nameof(terminal), terminal, null),
+        };
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("event-store-batch-failure");
+        (await eventStore.GetVersionAsync(agent.Id)).Should().Be(versionBefore);
+        agent.State.ToByteArray().Should().Equal(stateBefore);
+    }
+
+    [Theory]
+    [InlineData("observed")]
+    [InlineData("failed")]
+    [InlineData("invalidated")]
+    public async Task RefreshSession_ShouldCommitSupersededOutcomeForStaleTerminalCommand(
+        string terminal)
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await ActivateAsync(agent, owner);
         await BeginRefreshAsync(agent, owner, "refresh-old", ObservedAt.AddSeconds(1));
         await BeginRefreshAsync(agent, owner, "refresh-current", ObservedAt.AddSeconds(2));
 
-        var superseded = () => agent.HandleInvalidateAsync(
-            new InvalidateNyxIdAuthorizationCatalogCommand
-            {
-                Owner = owner.Clone(),
-                RefreshId = "refresh-old",
-                InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
-                Reason = "api_key_scope_plan_denied",
-            });
+        Func<Task> act = terminal switch
+        {
+            "observed" => () => agent.HandleObserveAsync(
+                ObservationCommand(owner, "refresh-old", ObservedAt.AddMinutes(1))),
+            "failed" => () => agent.HandleRefreshFailureAsync(
+                new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+                {
+                    Owner = owner.Clone(),
+                    RefreshId = "refresh-old",
+                    FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                    FailureCode = "provider_unavailable",
+                }),
+            "invalidated" => () => agent.HandleInvalidateAsync(
+                new InvalidateNyxIdAuthorizationCatalogCommand
+                {
+                    Owner = owner.Clone(),
+                    RefreshId = "refresh-old",
+                    InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+                    Reason = "api_key_scope_plan_denied",
+                }),
+            _ => throw new ArgumentOutOfRangeException(nameof(terminal), terminal, null),
+        };
 
-        await superseded.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*active refresh*");
+        await act.Should().NotThrowAsync();
+
         agent.State.ActiveRefreshId.Should().Be("refresh-current");
+        agent.State.ContentDigest.Should().BeEmpty();
+        agent.State.LastRefreshFailureCode.Should().BeEmpty();
         agent.State.Invalidated.Should().BeFalse();
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-old",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
     }
 
     [Fact]
     public async Task Invalidation_ShouldEndActiveRefreshWithoutAdvancingAnUnchangedFence()
     {
         var owner = Owner();
-        var agent = CreateAgent(owner);
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
         await agent.HandleActivateAsync(new ActivateNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
@@ -168,6 +349,65 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
 
         agent.State.ActiveRefreshId.Should().BeEmpty();
         agent.State.LifecycleFence.Should().Be(1);
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-after-invalidation",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+    }
+
+    [Fact]
+    public async Task Cleanup_ShouldCommitSupersededOutcomeForActiveRefresh()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await ActivateAsync(agent, owner);
+        await BeginRefreshAsync(agent, owner, "refresh-active", ObservedAt.AddSeconds(1));
+
+        await agent.HandleCleanupAsync(new CleanupNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+            Reason = "owner_unbound",
+        });
+
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-active",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+    }
+
+    [Theory]
+    [InlineData(NyxIdAuthorizationCatalogRefreshOutcomeStatusState.AccessDenied)]
+    [InlineData(NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable)]
+    public async Task RefreshInvalidation_ShouldCommitTypedTerminalOutcome(
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcomeStatus)
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await ActivateAsync(agent, owner);
+        await BeginRefreshAsync(agent, owner, "refresh-invalidated", ObservedAt.AddSeconds(1));
+
+        await agent.HandleInvalidateAsync(new InvalidateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = "refresh-invalidated",
+            InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+            Reason = "provider_rejected",
+            OutcomeStatus = outcomeStatus,
+        });
+
+        agent.State.Invalidated.Should().BeTrue();
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-invalidated",
+            outcomeStatus);
     }
 
     [Theory]
@@ -347,10 +587,18 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         var persistedDescriptors = new[]
         {
             NyxIdAuthorizationCatalogState.Descriptor,
+            ActivateNyxIdAuthorizationCatalogCommand.Descriptor,
+            BeginNyxIdAuthorizationCatalogRefreshCommand.Descriptor,
+            ObserveNyxIdAuthorizationCatalogCommand.Descriptor,
+            RecordNyxIdAuthorizationCatalogRefreshFailureCommand.Descriptor,
+            InvalidateNyxIdAuthorizationCatalogCommand.Descriptor,
+            CleanupNyxIdAuthorizationCatalogCommand.Descriptor,
+            NyxIdAuthorizationCatalogRefreshBeganEvent.Descriptor,
             NyxIdAuthorizationCatalogObservedEvent.Descriptor,
             NyxIdAuthorizationCatalogRefreshFailedEvent.Descriptor,
             NyxIdAuthorizationCatalogInvalidatedEvent.Descriptor,
             NyxIdAuthorizationCatalogCleanedEvent.Descriptor,
+            NyxIdAuthorizationCatalogRefreshOutcomeEvent.Descriptor,
             NyxIdAuthorizationCatalogDocument.Descriptor,
         };
 
@@ -359,7 +607,8 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             .Select(static field => field.Name)
             .Should().NotContain(static name =>
                 name.Contains("bearer", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("token", StringComparison.OrdinalIgnoreCase));
+                name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("normalized_grant_digest", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -399,8 +648,11 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         var state = NyxIdAuthorizationCatalogState.Descriptor;
         state.FindFieldByName("active_refresh_id").Should().NotBeNull();
         state.FindFieldByName("active_refresh_started_at").Should().NotBeNull();
+        state.FindFieldByName("newest_refresh_id").Should().NotBeNull();
+        state.FindFieldByName("newest_refresh_started_at").Should().NotBeNull();
         state.DescriptorForType("BeginNyxIdAuthorizationCatalogRefreshCommand").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshBeganEvent").Should().NotBeNull();
+        state.DescriptorForType("NyxIdAuthorizationCatalogRefreshOutcomeEvent").Should().NotBeNull();
 
         NyxIdAuthorizationCatalogDocument.Descriptor.FindFieldByName("active_refresh_id").Should().BeNull();
         NyxIdAuthorizationCatalogDocument.Descriptor.FindFieldByName("active_refresh_started_at").Should().BeNull();
@@ -457,12 +709,26 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     };
 
     private static NyxIdAuthorizationCatalogGAgent CreateAgent(AuthorizationOwnerIdentity owner) =>
+        CreateAgent(owner, new InMemoryEventStore());
+
+    private static NyxIdAuthorizationCatalogGAgent CreateAgent(
+        AuthorizationOwnerIdentity owner,
+        InMemoryEventStore eventStore) =>
         GAgentServiceTestKit.CreateStatefulAgent<
             NyxIdAuthorizationCatalogGAgent,
             NyxIdAuthorizationCatalogState>(
-            new InMemoryEventStore(),
+            eventStore,
             NyxIdAuthorizationCatalogActorIds.Build(owner),
             static () => new NyxIdAuthorizationCatalogGAgent());
+
+    private static Task ActivateAsync(
+        NyxIdAuthorizationCatalogGAgent agent,
+        AuthorizationOwnerIdentity owner) => agent.HandleActivateAsync(
+        new ActivateNyxIdAuthorizationCatalogCommand
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        });
 
     private static ObserveNyxIdAuthorizationCatalogCommand ObservationCommand(
         AuthorizationOwnerIdentity owner,
@@ -564,6 +830,59 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             StateRoot = Any.Pack(state),
         }),
     };
+
+    private static async Task AssertLastRefreshOutcomeAsync(
+        InMemoryEventStore eventStore,
+        string actorId,
+        string refreshId,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState expectedStatus)
+    {
+        var payload = (await eventStore.GetEventsAsync(actorId))[^1].EventData;
+        payload.Is(NyxIdAuthorizationCatalogRefreshOutcomeEvent.Descriptor).Should().BeTrue();
+        var outcome = payload.Unpack<NyxIdAuthorizationCatalogRefreshOutcomeEvent>();
+        outcome.RefreshId.Should().Be(refreshId);
+        outcome.Status.Should().Be(expectedStatus);
+        outcome.StateVersion.Should().Be((await eventStore.GetEventsAsync(actorId))[^1].Version - 1);
+    }
+
+    private sealed class RefreshOutcomeRejectingEventStore(InMemoryEventStore inner) : IEventStore
+    {
+        public bool RejectRefreshOutcomes { get; set; }
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.ToArray();
+            if (RejectRefreshOutcomes && batch.Any(static stateEvent =>
+                    stateEvent.EventData?.Is(
+                        NyxIdAuthorizationCatalogRefreshOutcomeEvent.Descriptor) == true))
+            {
+                throw new InvalidOperationException("event-store-batch-failure");
+            }
+
+            return inner.AppendAsync(agentId, batch, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(
+            string agentId,
+            CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
 }
 
 file static class ProtobufDescriptorTestExtensions

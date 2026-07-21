@@ -155,6 +155,7 @@ public enum NyxIdAuthorizationCatalogRefreshStatus
     ObservationTimedOut = 4,
     OwnerNotSupported = 5,
     CatalogUnstable = 6,
+    Superseded = 7,
 }
 
 public sealed record NyxIdAuthorizationCatalogRefreshResult(
@@ -236,6 +237,7 @@ public interface INyxIdAuthorizationCatalogCommandPort
         string refreshId,
         DateTimeOffset invalidatedAtUtc,
         string reason,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus outcomeStatus,
         CancellationToken ct = default);
 
     Task CleanupAsync(

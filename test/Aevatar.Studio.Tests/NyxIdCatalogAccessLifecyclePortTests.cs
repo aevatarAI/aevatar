@@ -109,6 +109,7 @@ public sealed class NyxIdCatalogAccessLifecyclePortTests
             string refreshId,
             DateTimeOffset invalidatedAtUtc,
             string reason,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus outcomeStatus,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task CleanupAsync(

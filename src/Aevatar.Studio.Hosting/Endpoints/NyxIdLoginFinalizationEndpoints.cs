@@ -594,6 +594,7 @@ public static class NyxIdLoginFinalizationEndpoints
         NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut => "observation_timed_out",
         NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => "owner_not_supported",
         NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable => "catalog_unstable",
+        NyxIdAuthorizationCatalogRefreshStatus.Superseded => "superseded",
         _ => "not_configured",
     };
 

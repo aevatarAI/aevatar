@@ -76,21 +76,35 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         DateTimeOffset invalidatedAtUtc,
         string reason,
         CancellationToken ct = default) =>
-        InvalidateCoreAsync(owner, string.Empty, invalidatedAtUtc, reason, ct);
+        InvalidateCoreAsync(
+            owner,
+            string.Empty,
+            invalidatedAtUtc,
+            reason,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Unspecified,
+            ct);
 
     public Task InvalidateRefreshAsync(
         AuthorizationOwnerIdentity owner,
         string refreshId,
         DateTimeOffset invalidatedAtUtc,
         string reason,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus outcomeStatus,
         CancellationToken ct = default) =>
-        InvalidateCoreAsync(owner, refreshId, invalidatedAtUtc, reason, ct);
+        InvalidateCoreAsync(
+            owner,
+            refreshId,
+            invalidatedAtUtc,
+            reason,
+            ToOutcomeStatusState(outcomeStatus),
+            ct);
 
     private Task InvalidateCoreAsync(
         AuthorizationOwnerIdentity owner,
         string refreshId,
         DateTimeOffset invalidatedAtUtc,
         string reason,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcomeStatus,
         CancellationToken ct) =>
         DispatchAsync(owner, new InvalidateNyxIdAuthorizationCatalogCommand
         {
@@ -98,6 +112,7 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             RefreshId = refreshId ?? string.Empty,
             InvalidatedAt = Timestamp.FromDateTimeOffset(invalidatedAtUtc),
             Reason = reason ?? string.Empty,
+            OutcomeStatus = outcomeStatus,
         }, ct);
 
     public Task CleanupAsync(
@@ -132,4 +147,17 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         };
         await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
+
+    private static NyxIdAuthorizationCatalogRefreshOutcomeStatusState ToOutcomeStatusState(
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus status) => status switch
+    {
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus.AccessDenied =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.AccessDenied,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(status),
+            status,
+            "Catalog refresh invalidation requires an access-denied or unstable outcome."),
+    };
 }

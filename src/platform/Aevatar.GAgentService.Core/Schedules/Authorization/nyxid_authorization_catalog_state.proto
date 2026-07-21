@@ -31,6 +31,8 @@ message NyxIdAuthorizationCatalogState {
   google.protobuf.Timestamp evaluated_at = 20;
   string active_refresh_id = 21;
   google.protobuf.Timestamp active_refresh_started_at = 22;
+  string newest_refresh_id = 23;
+  google.protobuf.Timestamp newest_refresh_started_at = 24;
 }
 
 message ActivateNyxIdAuthorizationCatalogCommand {
@@ -71,6 +73,7 @@ message InvalidateNyxIdAuthorizationCatalogCommand {
   google.protobuf.Timestamp invalidated_at = 2;
   string reason = 3;
   string refresh_id = 4;
+  NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcome_status = 5;
 }
 
 message CleanupNyxIdAuthorizationCatalogCommand {
@@ -126,4 +129,22 @@ message NyxIdAuthorizationCatalogCleanedEvent {
   google.protobuf.Timestamp cleaned_at = 2;
   string reason = 3;
   int64 lifecycle_fence = 4;
+}
+
+enum NyxIdAuthorizationCatalogRefreshOutcomeStatusState {
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_STARTED = 1;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_OBSERVED = 2;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_FAILED = 3;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_ACCESS_DENIED = 4;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_CATALOG_UNSTABLE = 5;
+  NYX_ID_AUTHORIZATION_CATALOG_REFRESH_OUTCOME_STATUS_STATE_SUPERSEDED = 6;
+}
+
+message NyxIdAuthorizationCatalogRefreshOutcomeEvent {
+  string refresh_id = 1;
+  NyxIdAuthorizationCatalogRefreshOutcomeStatusState status = 2;
+  int64 state_version = 3;
+  string failure_code = 4;
+  google.protobuf.Timestamp observed_at_utc = 5;
 }

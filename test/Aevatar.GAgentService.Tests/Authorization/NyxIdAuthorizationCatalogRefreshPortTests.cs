@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using FluentAssertions;
@@ -14,6 +15,149 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-21T09:00:00Z");
     private static readonly DateTimeOffset EvaluatedAt = DateTimeOffset.Parse("2026-07-21T08:59:59Z");
+
+    [Fact]
+    public async Task RefreshPersonalAsync_ShouldNotTreatDispatchAdmissionAsCommittedBegin()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJson()));
+        var observation = new RecordingObservationRuntime();
+        using var cancellation = new CancellationTokenSource();
+
+        var refresh = Create(
+                commands,
+                handler,
+                publishCommittedOutcomes: false,
+                observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret", cancellation.Token);
+
+        commands.Beginnings.Should().ContainSingle();
+        refresh.IsCompleted.Should().BeFalse();
+        handler.Requests.Should().BeEmpty();
+
+        cancellation.Cancel();
+        var act = () => refresh;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_ShouldNotTreatTerminalDispatchAdmissionAsCompletion()
+    {
+        var commands = new RecordingCommandPort { PublishTerminalOutcomes = false };
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJson()));
+        using var cancellation = new CancellationTokenSource();
+
+        var refresh = Create(commands, handler)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret", cancellation.Token);
+
+        commands.Observations.Should().ContainSingle();
+        refresh.IsCompleted.Should().BeFalse();
+        handler.Requests.Should().HaveCount(2);
+
+        cancellation.Cancel();
+        var act = () => refresh;
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenCommittedBeginIsNotObserved_ShouldReturnObservationTimedOut()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJson()));
+        var observation = new RecordingObservationRuntime();
+        var clock = new FakeTimeProvider(Now);
+
+        var refresh = Create(
+                commands,
+                handler,
+                publishCommittedOutcomes: false,
+                observation,
+                clock)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        clock.Advance(NyxIdAuthorizationCatalogRefreshPort.CatalogObservationTimeout);
+        var result = await refresh;
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut);
+        result.FailureCode.Should().Be("nyxid_catalog_refresh_observation_timed_out");
+        handler.Requests.Should().BeEmpty();
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenCommittedBeginIsSuperseded_ShouldSkipProviderCalls()
+    {
+        var commands = new RecordingCommandPort
+        {
+            BeginOutcomeStatus = NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
+        };
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJson()));
+
+        var result = await Create(commands, handler)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
+        result.FailureCode.Should().Be("nyxid_catalog_refresh_superseded");
+        handler.Requests.Should().BeEmpty();
+        commands.Observations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenDetachFails_ShouldStillReleaseBothScopes()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime
+        {
+            DetachFailure = new InvalidOperationException("detach-failure"),
+        };
+
+        var act = () => Create(
+                commands,
+                new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+                observation: observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("detach-failure");
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenProjectionReleaseFails_ShouldStillReleasePreparation()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime
+        {
+            ProjectionReleaseFailure = new InvalidOperationException("projection-release-failure"),
+        };
+
+        var act = () => Create(
+                commands,
+                new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+                observation: observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("projection-release-failure");
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
 
     [Fact]
     public async Task RefreshPersonalAsync_ShouldObservePublishedScopePlanForActiveAllowedServices()
@@ -99,6 +243,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         commands.Invalidations.Should().ContainSingle();
         commands.Invalidations[0].RefreshId.Should().Be(commands.Beginnings[0].RefreshId);
         commands.Invalidations[0].Reason.Should().Be("api_key_scope_plan_denied");
+        commands.Invalidations[0].OutcomeStatus.Should()
+            .Be(NyxIdAuthorizationCatalogRefreshOutcomeStatus.AccessDenied);
         commands.Observations.Should().BeEmpty();
         commands.Failures.Should().BeEmpty();
     }
@@ -139,6 +285,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         commands.Invalidations.Should().ContainSingle();
         commands.Invalidations[0].RefreshId.Should().Be(commands.Beginnings[0].RefreshId);
         commands.Invalidations[0].Reason.Should().Be("nyxid_scope_plan_response_malformed");
+        commands.Invalidations[0].OutcomeStatus.Should()
+            .Be(NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable);
         commands.Observations.Should().BeEmpty();
     }
 
@@ -175,15 +323,22 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
     private static NyxIdAuthorizationCatalogRefreshPort Create(
         RecordingCommandPort commands,
-        RoutingJsonHandler handler)
+        RoutingJsonHandler handler,
+        bool publishCommittedOutcomes = true,
+        RecordingObservationRuntime? observation = null,
+        TimeProvider? timeProvider = null)
     {
+        observation ??= new RecordingObservationRuntime();
+        commands.Observation = publishCommittedOutcomes ? observation : null;
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example") });
         return new NyxIdAuthorizationCatalogRefreshPort(
             commands,
             new TestNyxIdApiClientFactory(client),
-            new FakeTimeProvider(Now),
+            observation,
+            observation,
+            timeProvider ?? new FakeTimeProvider(Now),
             NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
     }
 
@@ -277,8 +432,20 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At)> Beginnings { get; } = [];
         public List<NyxIdAuthorizationCatalogObservation> Observations { get; } = [];
         public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code)> Failures { get; } = [];
-        public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Reason)> Invalidations { get; } = [];
+        public List<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset At,
+            string Reason,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus OutcomeStatus)> Invalidations { get; } = [];
         public List<(AuthorizationOwnerIdentity Owner, DateTimeOffset At, string Reason)> Cleanups { get; } = [];
+
+        public RecordingObservationRuntime? Observation { get; set; }
+
+        public bool PublishTerminalOutcomes { get; init; } = true;
+
+        public NyxIdAuthorizationCatalogRefreshOutcomeStatus BeginOutcomeStatus { get; init; } =
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus.Started;
 
         public int AllCalls => Activations.Count + Beginnings.Count + Observations.Count + Failures.Count +
                                Invalidations.Count + Cleanups.Count;
@@ -299,6 +466,13 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             Beginnings.Add((owner.Clone(), refreshId, startedAtUtc));
+            Observation?.Publish(
+                refreshId,
+                BeginOutcomeStatus,
+                BeginOutcomeStatus == NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded
+                    ? "nyxid_catalog_refresh_superseded"
+                    : string.Empty,
+                startedAtUtc: startedAtUtc);
             return Task.CompletedTask;
         }
 
@@ -307,6 +481,13 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             Observations.Add(observation);
+            if (PublishTerminalOutcomes)
+            {
+                Observation?.Publish(
+                    observation.RefreshId,
+                    NyxIdAuthorizationCatalogRefreshOutcomeStatus.Observed,
+                    startedAtUtc: observation.ObservedAtUtc);
+            }
             return Task.CompletedTask;
         }
 
@@ -318,6 +499,14 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode));
+            if (PublishTerminalOutcomes)
+            {
+                Observation?.Publish(
+                    refreshId,
+                    NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed,
+                    failureCode,
+                    failedAtUtc);
+            }
             return Task.CompletedTask;
         }
 
@@ -327,7 +516,12 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             string reason,
             CancellationToken ct = default)
         {
-            Invalidations.Add((owner.Clone(), string.Empty, invalidatedAtUtc, reason));
+            Invalidations.Add((
+                owner.Clone(),
+                string.Empty,
+                invalidatedAtUtc,
+                reason,
+                default));
             return Task.CompletedTask;
         }
 
@@ -336,9 +530,12 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             string refreshId,
             DateTimeOffset invalidatedAtUtc,
             string reason,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus outcomeStatus,
             CancellationToken ct = default)
         {
-            Invalidations.Add((owner.Clone(), refreshId, invalidatedAtUtc, reason));
+            Invalidations.Add((owner.Clone(), refreshId, invalidatedAtUtc, reason, outcomeStatus));
+            if (PublishTerminalOutcomes)
+                Observation?.Publish(refreshId, outcomeStatus, reason, invalidatedAtUtc);
             return Task.CompletedTask;
         }
 
@@ -350,6 +547,111 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         {
             Cleanups.Add((owner.Clone(), cleanedAtUtc, reason));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingObservationRuntime
+        : INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort,
+          INyxIdAuthorizationCatalogRefreshObservationProjectionPort
+    {
+        private IEventSink<NyxIdAuthorizationCatalogRefreshCommittedOutcome>? _sink;
+
+        public bool ProjectionEnabled => true;
+
+        public int Detached { get; private set; }
+
+        public int ProjectionReleases { get; private set; }
+
+        public int PreparationReleases { get; private set; }
+
+        public Exception? DetachFailure { get; init; }
+
+        public Exception? ProjectionReleaseFailure { get; init; }
+
+        public Task<NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation?> PrepareAsync(
+            string actorId,
+            string refreshId,
+            CancellationToken ct = default) =>
+            Task.FromResult<NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation?>(
+                new NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation(
+                    actorId,
+                    refreshId));
+
+        public Task ReleaseAsync(
+            NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation preparation,
+            CancellationToken ct = default)
+        {
+            PreparationReleases++;
+            return Task.CompletedTask;
+        }
+
+        public Task<
+            EventSinkProjectionAttachment<INyxIdAuthorizationCatalogRefreshObservationProjectionLease>?>
+            AttachExistingRefreshProjectionAsync(
+                string actorId,
+                string refreshId,
+                IEventSink<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
+                CancellationToken ct = default)
+        {
+            _sink = sink;
+            var lease = new ObservationLease(actorId, refreshId);
+            return Task.FromResult<
+                EventSinkProjectionAttachment<
+                    INyxIdAuthorizationCatalogRefreshObservationProjectionLease>?>(
+                new EventSinkProjectionAttachment<
+                    INyxIdAuthorizationCatalogRefreshObservationProjectionLease>(
+                    lease,
+                    new NoopAsyncDisposable()));
+        }
+
+        public Task<IAsyncDisposable?> AttachLiveSinkAsync(
+            INyxIdAuthorizationCatalogRefreshObservationProjectionLease lease,
+            IEventSink<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
+            CancellationToken ct = default)
+        {
+            _sink = sink;
+            return Task.FromResult<IAsyncDisposable?>(new NoopAsyncDisposable());
+        }
+
+        public Task DetachLiveSinkAsync(
+            IAsyncDisposable? liveSinkLease,
+            CancellationToken ct = default)
+        {
+            Detached++;
+            _sink = null;
+            return DetachFailure == null
+                ? Task.CompletedTask
+                : Task.FromException(DetachFailure);
+        }
+
+        public Task ReleaseActorProjectionAsync(
+            INyxIdAuthorizationCatalogRefreshObservationProjectionLease lease,
+            CancellationToken ct = default)
+        {
+            ProjectionReleases++;
+            return ProjectionReleaseFailure == null
+                ? Task.CompletedTask
+                : Task.FromException(ProjectionReleaseFailure);
+        }
+
+        public void Publish(
+            string refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus status,
+            string failureCode = "",
+            DateTimeOffset? startedAtUtc = null) =>
+            _sink?.Push(new NyxIdAuthorizationCatalogRefreshCommittedOutcome(
+                refreshId,
+                status,
+                1,
+                failureCode,
+                startedAtUtc ?? Now));
+
+        private sealed record ObservationLease(string ActorId, string RefreshId)
+            : INyxIdAuthorizationCatalogRefreshObservationProjectionLease;
+
+        private sealed class NoopAsyncDisposable : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 }

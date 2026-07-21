@@ -90,6 +90,30 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
     }
 
     [Fact]
+    public async Task AuthorizationCatalogRefresh_WhenRefreshIsSuperseded_ShouldExposeSupersededStatus()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(new NyxIdAuthorizationCatalogRefreshResult(
+            NyxIdAuthorizationCatalogRefreshStatus.Superseded,
+            "nyxid_catalog_refresh_superseded"));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("sub", "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle);
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
+            false,
+            "superseded",
+            "nyxid_catalog_refresh_superseded"));
+    }
+
+    [Fact]
     public async Task Finalize_ShouldRefreshCatalogForVerifiedNyxIdOwner()
     {
         var lifecycle = new RecordingCatalogRefreshLifecycle();
