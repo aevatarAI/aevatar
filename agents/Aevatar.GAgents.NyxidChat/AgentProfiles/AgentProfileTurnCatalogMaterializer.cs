@@ -56,9 +56,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ProfileInvalid,
                 "snapshot_digest_invalid"));
-<<<<<<< HEAD
-            return BuildCatalog(profile, [], null, null, null, diagnostics, []);
-=======
             return CreatePreparation(
                 sessionId,
                 candidate: null,
@@ -66,7 +63,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 AgentProfileTurnAuthorityKind.RestrictedEmpty,
                 [],
                 diagnostics);
->>>>>>> refs/remotes/origin/feat/2026-07-10_scheduled-agent-key-credential
         }
 
         var routeTools = await DiscoverToolSetAsync(
@@ -76,7 +72,15 @@ public sealed class AgentProfileTurnCatalogMaterializer
             diagnostics,
             ct);
         if (routeTools.HadFailure)
-            return BuildCatalog(profile, [], null, null, null, diagnostics, []);
+        {
+            return CreatePreparation(
+                sessionId,
+                candidate: null,
+                selectedExactSkillRef: null,
+                AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                [],
+                diagnostics);
+        }
 
         var registered = ToEligibleTools(registeredTools, toolContext, diagnostics);
         var availableTools = MergeExactTools(routeTools.Tools, registered.Tools, diagnostics, out var hadMergeFailure);
@@ -88,15 +92,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         var recovery = await ResolvePolicyAsync(profile.RecoveryToolPolicy, toolContext, diagnostics, ct);
         var recoveryNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
-<<<<<<< HEAD
-        if (routeTools.HadFailure || registered.HadFailure || hadMergeFailure || maximum.HadFailure || recovery.HadFailure)
-            return BuildCatalog(profile, recoveryNames, null, null, null, diagnostics, SelectTools(routeTools.Tools, recoveryNames));
-
-        var candidate = await SelectCandidateAsync(profile, userMessage, diagnostics, ct);
-        if (candidate is null)
-            return BuildCatalog(profile, recoveryNames, null, null, null, diagnostics, SelectTools(routeTools.Tools, recoveryNames));
-=======
-        if (routeTools.HadFailure || registered.HadFailure || maximum.HadFailure || recovery.HadFailure)
+        if (routeTools.HadFailure || registered.HadFailure || hadMergeFailure ||
+            maximum.HadFailure || recovery.HadFailure)
         {
             return CreatePreparation(
                 sessionId,
@@ -120,7 +117,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 recoveryNames,
                 diagnostics);
         }
->>>>>>> refs/remotes/origin/feat/2026-07-10_scheduled-agent-key-credential
 
         var candidateIdentity = new AgentProfileTurnCandidateRouteIdentity
         {
@@ -134,9 +130,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ShadowCandidate,
                 candidate.IntentId));
-<<<<<<< HEAD
-            return BuildCatalog(profile, recoveryNames, null, candidate.IntentId, null, diagnostics, SelectTools(routeTools.Tools, recoveryNames));
-=======
             return CreatePreparation(
                 sessionId,
                 candidateIdentity,
@@ -202,7 +195,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 [],
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                routeOwnedTools: []);
         }
 
         var routeTools = await DiscoverToolSetAsync(
@@ -211,9 +205,22 @@ public sealed class AgentProfileTurnCatalogMaterializer
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
             diagnostics,
             ct);
-        var registered = ToEligibleToolNames(registeredTools, toolContext, diagnostics);
-        var eligible = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
-        eligible.IntersectWith(registered.Names);
+        if (routeTools.HadFailure)
+        {
+            return BuildMaterialization(
+                profile,
+                committedAuthority,
+                AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                [],
+                selectedIntentId: null,
+                selectedSkillPromptLayer: null,
+                diagnostics,
+                routeOwnedTools: []);
+        }
+
+        var registered = ToEligibleTools(registeredTools, toolContext, diagnostics);
+        var availableTools = MergeExactTools(routeTools.Tools, registered.Tools, diagnostics, out var hadMergeFailure);
+        var eligible = new HashSet<string>(availableTools.Keys, StringComparer.OrdinalIgnoreCase);
         eligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
         var maximum = await ResolvePolicyAsync(profile.MaximumToolPolicy, toolContext, diagnostics, ct);
         eligible.IntersectWith(maximum.Names);
@@ -222,7 +229,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         var recoveryNames = new HashSet<string>(eligible, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
 
-        if (routeTools.HadFailure || registered.HadFailure || maximum.HadFailure || recovery.HadFailure)
+        if (routeTools.HadFailure || registered.HadFailure || hadMergeFailure ||
+            maximum.HadFailure || recovery.HadFailure)
         {
             return BuildMaterialization(
                 profile,
@@ -235,7 +243,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 recoveryNames,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                SelectTools(routeTools.Tools, recoveryNames));
         }
 
         if (committedAuthority.SelectedExactSkillRef is null)
@@ -247,7 +256,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 eligible,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                SelectTools(routeTools.Tools, eligible));
         }
 
         var candidate = ResolveCommittedCandidate(profile, committedAuthority);
@@ -263,24 +273,12 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 [],
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
->>>>>>> refs/remotes/origin/feat/2026-07-10_scheduled-agent-key-credential
+                diagnostics,
+                routeOwnedTools: []);
         }
 
         var fetched = await FetchSelectedSkillAsync(profile, candidate, accessToken, diagnostics, ct);
         if (fetched is null)
-<<<<<<< HEAD
-            return BuildCatalog(profile, recoveryNames, null, candidate.IntentId, null, diagnostics, SelectTools(routeTools.Tools, recoveryNames));
-
-        var taskPolicy = await ResolvePolicyAsync(candidate.TaskToolPolicy, toolContext, diagnostics, ct);
-        if (taskPolicy.HadFailure)
-            return BuildCatalog(profile, recoveryNames, null, candidate.IntentId, null, diagnostics, SelectTools(routeTools.Tools, recoveryNames));
-
-        var selectedPolicy = new HashSet<string>(recovery.Names, StringComparer.OrdinalIgnoreCase);
-        selectedPolicy.UnionWith(taskPolicy.Names);
-        var finalNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
-        finalNames.IntersectWith(selectedPolicy);
-=======
         {
             return BuildMaterialization(
                 profile,
@@ -289,9 +287,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 recoveryNames,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                SelectTools(routeTools.Tools, recoveryNames));
         }
->>>>>>> refs/remotes/origin/feat/2026-07-10_scheduled-agent-key-credential
 
         var selectedLayer = new SelectedSkillPromptLayer(
             fetched,
@@ -306,7 +304,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
             candidate.IntentId,
             selectedLayer,
             diagnostics,
-            SelectTools(routeTools.Tools, finalNames));
+            SelectTools(routeTools.Tools, eligible));
     }
 
     private async Task<AgentProfileSkillMember?> SelectCandidateAsync(
@@ -684,7 +682,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         IEnumerable<string> ceilingToolNames,
         string? selectedIntentId,
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
-        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
+        IEnumerable<IAgentTool> routeOwnedTools)
     {
         var canonicalCeilingToolNames = CanonicalToolNames(ceilingToolNames);
         var proposal = committedAuthority.Clone();
@@ -704,7 +703,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedIntentId,
             committedAuthority.CandidateRoute?.IntentId,
             selectedSkillPromptLayer,
-            diagnostics);
+            diagnostics,
+            routeOwnedTools);
         return AgentProfileTurnCatalogMaterialization.Create(catalog, proposal);
     }
 
