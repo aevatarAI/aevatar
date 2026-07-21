@@ -355,14 +355,19 @@ public sealed class ToolCallLoop
         }
     }
 
-    public static ChatMessage BuildToolResultMessage(string callId, string toolName, string toolResult)
+    public static ChatMessage BuildToolResultMessage(
+        string callId,
+        string toolName,
+        string toolResult,
+        AgentToolReceipt? receipt = null)
     {
         if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
         {
             return SkillRecoveryToolResultViews.Attach(
                 ChatMessage.Tool(callId, toolResult),
                 toolName,
-                toolResult);
+                toolResult,
+                receipt);
         }
 
         return SkillRecoveryToolResultViews.Attach(
@@ -374,7 +379,8 @@ public sealed class ToolCallLoop
                 ContentParts = parts,
             },
             toolName,
-            toolResult);
+            toolResult,
+            receipt);
     }
 
     private static bool TryExtractToolContentParts(
@@ -581,7 +587,8 @@ public sealed class ToolCallLoop
             messages.Add(BuildToolResultMessage(
                 result.CallId,
                 result.ToolName,
-                ToolExecutionResultHistory.ResolveSafeContent(result)));
+                ToolExecutionResultHistory.ResolveSafeContent(result),
+                result.Receipt));
         }
     }
 

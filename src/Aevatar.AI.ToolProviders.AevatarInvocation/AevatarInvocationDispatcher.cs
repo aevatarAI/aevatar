@@ -27,10 +27,9 @@ public sealed class AevatarInvocationDispatcher
 {
     private const string DirectGAgentPublisherId = "aevatar.tools.invoke_gagent";
     private const string DeletedGAgentActorNameAlias = "actor_name";
-    private const string ChannelWorkflowDeliveryUnavailableCode = "channel_workflow_delivery_unavailable";
     private const string WorkflowBackgroundDeliveryBindingDegradedCode = "binding_degraded";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
-        "This channel bot is not provisioned for workflow result delivery, so the workflow was not started: its terminal result could not be delivered back to this chat. Start the workflow from a surface that can observe the run result, or re-register the channel bot to enable workflow result delivery.";
+        "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. No Lark developer-console changes are required. You can also start the workflow from a surface that can observe its result.";
     private const string WorkflowBackgroundDeliveryReservationFailedMessage =
         "Workflow result delivery could not be prepared, so the workflow was not started. Retry from this chat, or start the workflow from a surface that can observe its result.";
     private static readonly TimeSpan WorkflowBackgroundDeliveryReservationLifetime = TimeSpan.FromDays(30);
@@ -999,7 +998,7 @@ public sealed class AevatarInvocationDispatcher
         if (reservation is null || _workflowRunDeliveryRegistrationPort is null)
         {
             return WorkflowBackgroundDeliveryReservationResult.Failed(Error(
-                ChannelWorkflowDeliveryUnavailableCode,
+                AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
                 ChannelWorkflowDeliveryUnavailableMessage));
         }
 
@@ -1260,7 +1259,9 @@ public sealed class AevatarInvocationDispatcher
             };
 
     private static InvocationToolError ChannelWorkflowDeliveryUnavailableError() =>
-        Error(ChannelWorkflowDeliveryUnavailableCode, ChannelWorkflowDeliveryUnavailableMessage);
+        Error(
+            AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
+            ChannelWorkflowDeliveryUnavailableMessage);
 
     private WorkflowBackgroundDeliveryResolution ResolveWorkflowBackgroundDelivery(
         AgentToolExecutionContext? context)
