@@ -258,6 +258,7 @@ public enum WorkflowChatRunStartError
     InvalidConversationId = 15,
     ConversationNotFound = 16,
     ChatHistoryReservationUnavailable = 17,
+    IdempotencyConflict = 18,
 }
 
 public enum WorkflowProjectionCompletionStatus

@@ -48,6 +48,26 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     }
 
     [Fact]
+    public async Task ReserveAsync_ShouldReturnSameConversationAndTurnForSameCreateCommandIdentity()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreatePort(runtime, dispatch);
+        var request = ReservationRequest(WorkflowChatConversationIntent.Create());
+
+        var first = await port.ReserveAsync(request);
+        var second = await port.ReserveAsync(request);
+
+        first.Succeeded.Should().BeTrue();
+        second.Succeeded.Should().BeTrue();
+        second.ChatContext.Should().BeEquivalentTo(first.ChatContext);
+        first.Reservation!.ExistingReservation.Should().BeFalse();
+        second.Reservation!.ExistingReservation.Should().BeTrue();
+        runtime.CreatedActors.Should().ContainSingle();
+        dispatch.Calls.Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task ReserveAsync_ShouldContinueExistingConversationAndGenerateTurn()
     {
         var runtime = new RecordingActorRuntime();

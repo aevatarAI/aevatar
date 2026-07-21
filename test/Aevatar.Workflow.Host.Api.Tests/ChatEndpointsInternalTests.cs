@@ -1155,6 +1155,56 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChatPost_ShouldWriteRecoveredChatContext_WhenReplayReturnsAcceptedReceiptWithoutCallback()
+    {
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, onAcceptedAsync, _) =>
+            {
+                onAcceptedAsync.Should().NotBeNull();
+                command.CommandIdSeed.Should().Be("create-cmd-1");
+                var recovered = new WorkflowChatInteractionAcceptedReceipt(
+                    new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "create-cmd-1", "corr-1"),
+                    new WorkflowChatContext("trusted-scope", "recovered-conversation", "recovered-turn"));
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Success(recovered, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, false)));
+            },
+        };
+        var parser = new WorkflowMultipartChatRequestParser(
+            new RecordingWorkflowFileIngressPort(),
+            Options.Create(new WorkflowMultipartFileIngressOptions()));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.User = AuthenticatedScopePrincipal("trusted-scope");
+        http.Request.ContentType = "application/json";
+        http.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """
+            {
+              "prompt": "describe the release plan",
+              "commandId": "create-cmd-1",
+              "conversation": {
+                "conversationId": null
+              }
+            }
+            """));
+
+        await WorkflowCapabilityEndpoints.HandleChatPost(
+            http,
+            interactionService,
+            parser,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        var chatContextIndex = body.IndexOf("aevatar.chat.context", StringComparison.Ordinal);
+        var runContextIndex = body.IndexOf("aevatar.run.context", StringComparison.Ordinal);
+        chatContextIndex.Should().BeGreaterThanOrEqualTo(0);
+        runContextIndex.Should().BeGreaterThan(chatContextIndex);
+        body.Should().Contain("recovered-conversation");
+        body.Should().Contain("recovered-turn");
+    }
+
+    [Fact]
     public async Task HandleChatPost_ShouldReturnInvalidChatInputAndSkipDispatch_WhenJsonBodyIsMalformed()
     {
         var called = false;

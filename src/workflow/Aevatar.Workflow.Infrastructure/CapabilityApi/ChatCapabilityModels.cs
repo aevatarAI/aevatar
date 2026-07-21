@@ -81,6 +81,9 @@ public sealed record HttpChatInput
 
     public ChatConversationInput? Conversation { get; init; }
 
+    /// <summary>Client-controlled idempotency identity for retryable HTTP chat create requests.</summary>
+    public string? CommandId { get; init; }
+
     /// <summary>Ignored legacy HTTP body field; trusted caller scope owns request scope.</summary>
     public JsonElement? ScopeId { get; init; }
 

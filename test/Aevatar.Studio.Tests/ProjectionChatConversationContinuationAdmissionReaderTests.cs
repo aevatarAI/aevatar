@@ -43,8 +43,9 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
             "conversation-missing");
 
         canContinue.Should().BeFalse();
-        documentReader.GetKeys.Should().ContainSingle()
-            .Which.Should().Be(ChatHistoryActorIds.Conversation("scope-alpha", "conversation-missing"));
+        documentReader.GetKeys.Should().Equal(
+            ChatHistoryActorIds.Conversation("scope-alpha", "conversation-missing"),
+            ChatHistoryActorIds.LegacyConversation("scope-alpha", "conversation-missing"));
     }
 
     [Fact]
