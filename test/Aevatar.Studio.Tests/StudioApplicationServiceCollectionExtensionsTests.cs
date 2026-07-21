@@ -2,13 +2,18 @@ using System.Reflection;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
+using Aevatar.Studio.Hosting;
+using Aevatar.Studio.Hosting.WorkOrders;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.Studio.Tests;
 
@@ -79,6 +84,37 @@ public sealed class StudioApplicationServiceCollectionExtensionsTests
         services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowBoardClock));
         services.Should().ContainSingle(x => x.ServiceType == typeof(IUserConfigService))
             .Which.ImplementationType.Should().Be(typeof(UserConfigService));
+    }
+
+    [Fact]
+    public void AddStudioApplication_ShouldAliasWorkOrderSchedulerAndRegisterQueueSingleton()
+    {
+        var services = new ServiceCollection();
+
+        services.AddStudioApplication();
+
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IWorkOrderExecutionQueue) &&
+            x.ImplementationType == typeof(WorkOrderExecutionQueue) &&
+            x.Lifetime == ServiceLifetime.Singleton);
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IWorkOrderExecutionScheduler>().Should().BeSameAs(
+            provider.GetRequiredService<WorkOrderExecutionScheduler>());
+        var queue = provider.GetRequiredService<IWorkOrderExecutionQueue>();
+        provider.GetRequiredService<IWorkOrderExecutionQueue>().Should().BeSameAs(queue);
+    }
+
+    [Fact]
+    public void AddStudioHostingCore_ShouldRegisterWorkOrderExecutionWorker()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddStudioHostingCore(configuration);
+
+        services.Should().ContainSingle(x =>
+            x.ServiceType == typeof(IHostedService) &&
+            x.ImplementationType == typeof(WorkOrderExecutionWorker));
     }
 
     private static void AddSchedulePortDependencies(IServiceCollection services)

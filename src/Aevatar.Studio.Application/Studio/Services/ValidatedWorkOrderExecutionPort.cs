@@ -93,6 +93,11 @@ public sealed class ValidatedWorkOrderExecutionPort : IWorkOrderExecutionPort
     {
         if (request.Input?.Chat == null)
             throw new InvalidOperationException("WorkOrder chat input is required for dispatch.");
+        if (request.DeadlineAtUtc == null ||
+            request.DeadlineAtUtc.ToDateTimeOffset().ToUnixTimeMilliseconds() <= 0)
+            throw new InvalidOperationException("WorkOrder execution requires a positive deadline_at_utc.");
+
+        var expiresAtUnixMs = request.DeadlineAtUtc.ToDateTimeOffset().ToUnixTimeMilliseconds();
 
         var invocationRequest = new ServiceInvocationRequest
         {
@@ -116,11 +121,13 @@ public sealed class ValidatedWorkOrderExecutionPort : IWorkOrderExecutionPort
         switch (request.ImplementationKind)
         {
             case MemberImplementationKindNames.Workflow:
-                invocationRequest.WorkflowCompletionNotificationTarget = CreateWorkflowCompletionTarget(request);
+                invocationRequest.WorkflowCompletionNotificationTarget =
+                    CreateWorkflowCompletionTarget(request, expiresAtUnixMs);
                 break;
             case MemberImplementationKindNames.Script:
             case MemberImplementationKindNames.GAgent:
-                invocationRequest.ServiceRunCompletionNotificationTarget = CreateServiceRunCompletionTarget(request);
+                invocationRequest.ServiceRunCompletionNotificationTarget =
+                    CreateServiceRunCompletionTarget(request, expiresAtUnixMs);
                 break;
             default:
                 throw new InvalidOperationException(
@@ -131,21 +138,23 @@ public sealed class ValidatedWorkOrderExecutionPort : IWorkOrderExecutionPort
     }
 
     private static WorkflowServiceCompletionNotificationTarget CreateWorkflowCompletionTarget(
-        WorkOrderExecutionRequest request) =>
+        WorkOrderExecutionRequest request,
+        long expiresAtUnixMs) =>
         new()
         {
             ActorId = request.WorkOrderActorId,
             DeliveryId = request.TerminalDeliveryId,
-            ExpiresAtUnixMs = long.MaxValue,
+            ExpiresAtUnixMs = expiresAtUnixMs,
         };
 
     private static ServiceRunCompletionNotificationTarget CreateServiceRunCompletionTarget(
-        WorkOrderExecutionRequest request) =>
+        WorkOrderExecutionRequest request,
+        long expiresAtUnixMs) =>
         new()
         {
             ActorId = request.WorkOrderActorId,
             DeliveryId = request.TerminalDeliveryId,
-            ExpiresAtUnixMs = long.MaxValue,
+            ExpiresAtUnixMs = expiresAtUnixMs,
         };
 
     private static void EnsureAssignmentStillMatches(

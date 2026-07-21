@@ -46,6 +46,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IStudioTeamService, StudioTeamService>();
         services.TryAddSingleton<WorkOrderAssignmentValidator>();
         services.TryAddSingleton<IWorkOrderExecutionPort, ValidatedWorkOrderExecutionPort>();
+        services.AddOptions<WorkOrderExecutionWorkerOptions>();
+        services.TryAddSingleton<IWorkOrderExecutionQueue, WorkOrderExecutionQueue>();
+        services.TryAddSingleton<WorkOrderExecutionScheduler>();
+        services.TryAddSingleton<IWorkOrderExecutionScheduler>(provider =>
+            provider.GetRequiredService<WorkOrderExecutionScheduler>());
+        services.TryAddSingleton<WorkOrderExecutionService>();
         services.TryAddSingleton<IWorkOrderService, WorkOrderService>();
         services.TryAddSingleton<IStudioTeamProvisioningPort, StudioTeamProvisioningPort>();
         services.TryAddSingleton<IStudioMemberProvisioningPort, StudioMemberProvisioningPort>();

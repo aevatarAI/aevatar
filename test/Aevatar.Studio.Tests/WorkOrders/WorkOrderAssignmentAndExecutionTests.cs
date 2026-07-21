@@ -1,10 +1,23 @@
+using System.Reflection;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Hosting.WorkOrders;
 using FluentAssertions;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests.WorkOrders;
 
@@ -274,6 +287,39 @@ public sealed class ValidatedWorkOrderExecutionPortTests
         result.Failed.Failure.Code.Should().Be("WORK_ORDER_RUN_IDENTITY_MISMATCH");
     }
 
+    [Fact]
+    public async Task ValidatedExecution_ShouldUseWorkOrderDeadlineForBothCompletionTargets()
+    {
+        var deadline = DateTimeOffset.Parse("2026-07-17T01:00:00Z");
+        var workflowInvocationPort = new RecordingInvocationPort();
+        var workflowPort = new ValidatedWorkOrderExecutionPort(
+            WorkOrderAssignmentValidatorTests.CreateValidator(),
+            workflowInvocationPort);
+        var workflowRequest = BuildExecutionRequest();
+        workflowRequest.DeadlineAtUtc = Timestamp.FromDateTimeOffset(deadline);
+
+        await workflowPort.ExecuteAsync(workflowRequest);
+
+        var invocation = workflowInvocationPort.Requests.Should().ContainSingle().Subject;
+        invocation.WorkflowCompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(deadline.ToUnixTimeMilliseconds());
+
+        var serviceInvocationPort = new RecordingInvocationPort();
+        var servicePort = new ValidatedWorkOrderExecutionPort(
+            WorkOrderAssignmentValidatorTests.CreateValidator(
+                workflowId: null,
+                implementationKind: MemberImplementationKindNames.GAgent),
+            serviceInvocationPort);
+        var serviceRequest = BuildExecutionRequest();
+        serviceRequest.WorkflowId = string.Empty;
+        serviceRequest.ImplementationKind = MemberImplementationKindNames.GAgent;
+        serviceRequest.DeadlineAtUtc = Timestamp.FromDateTimeOffset(deadline);
+
+        await servicePort.ExecuteAsync(serviceRequest);
+
+        invocation = serviceInvocationPort.Requests.Should().ContainSingle().Subject;
+        invocation.ServiceRunCompletionNotificationTarget.ExpiresAtUnixMs.Should().Be(deadline.ToUnixTimeMilliseconds());
+    }
+
     private static WorkOrderExecutionRequest BuildExecutionRequest() =>
         new()
         {
@@ -294,6 +340,7 @@ public sealed class ValidatedWorkOrderExecutionPortTests
             DispatchCommandId = "command-1",
             RequestedRunId = "run-1",
             TerminalDeliveryId = "delivery-1",
+            DeadlineAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(1)),
         };
 
     private sealed class RecordingInvocationPort : IServiceInvocationPort
@@ -317,4 +364,329 @@ public sealed class ValidatedWorkOrderExecutionPortTests
             });
         }
     }
+}
+
+public sealed class WorkOrderExecutionInfrastructureTests
+{
+    private const string ScopeId = "scope-1";
+    private const string DedupKey = "worker-timeout";
+    private static readonly string WorkOrderId = WorkOrderConventions.BuildWorkOrderId(ScopeId, DedupKey);
+    private static readonly string ActorId = WorkOrderConventions.BuildActorId(ScopeId, WorkOrderId);
+    private static readonly MethodInfo SetIdMethod = typeof(GAgentBase)
+        .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("GAgentBase.SetId was not found.");
+
+    [Fact]
+    public void WorkOrderExecutionQueue_WhenFull_ShouldThrowWithoutBlocking()
+    {
+        var queue = new WorkOrderExecutionQueue(
+            Options.Create(new WorkOrderExecutionWorkerOptions { QueueCapacity = 1 }));
+        queue.Enqueue(BuildExecutionRequest("work-order-1", "command-1"));
+
+        var overflow = () => queue.Enqueue(BuildExecutionRequest("work-order-2", "command-2"));
+
+        overflow.Should().Throw<WorkOrderExecutionQueueFullException>()
+            .WithMessage("*work-order-2*command-2*");
+    }
+
+    [Fact]
+    public async Task WorkOrderExecutionService_WhenAccepted_ShouldDispatchAcceptedContinuation()
+    {
+        var accepted = BuildAcceptedResult();
+        var dispatch = new RecordingActorDispatchPort();
+        var service = new WorkOrderExecutionService(
+            new StubExecutionPort((_, _) => Task.FromResult(accepted)),
+            dispatch);
+        var request = BuildExecutionRequest("work-order-1", "command-1");
+
+        await service.ExecuteAsync(request);
+
+        var call = dispatch.Calls.Should().ContainSingle().Subject;
+        call.ActorId.Should().Be(request.WorkOrderActorId);
+        call.Envelope.Id.Should().Be("work-order-execution-result:work-order-1:command-1");
+        call.Envelope.Propagation.CorrelationId.Should().Be(call.Envelope.Id);
+        var continuation = call.Envelope.Payload.Unpack<WorkOrderExecutionAcceptedContinuation>();
+        continuation.WorkOrderId.Should().Be(request.WorkOrderId);
+        continuation.DispatchCommandId.Should().Be(request.DispatchCommandId);
+        continuation.RequestedRunId.Should().Be(request.RequestedRunId);
+        continuation.Accepted.Should().BeEquivalentTo(accepted.Accepted);
+    }
+
+    [Fact]
+    public async Task WorkOrderExecutionService_WhenUnexpectedFailure_ShouldDispatchSafeFailedContinuation()
+    {
+        const string sensitiveMessage = "credential secret must not escape";
+        var dispatch = new RecordingActorDispatchPort();
+        var service = new WorkOrderExecutionService(
+            new StubExecutionPort((_, _) => throw new InvalidOperationException(sensitiveMessage)),
+            dispatch);
+
+        await service.ExecuteAsync(BuildExecutionRequest("work-order-1", "command-1"));
+
+        var continuation = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload
+            .Unpack<WorkOrderExecutionFailedContinuation>();
+        continuation.Failed.Failure.Code.Should().Be("WORK_ORDER_EXECUTION_UNEXPECTED_FAILURE");
+        continuation.Failed.Failure.Message.Should().Contain(nameof(InvalidOperationException));
+        continuation.Failed.Failure.Message.Should().NotContain(sensitiveMessage);
+    }
+
+    [Fact]
+    public async Task WorkOrderExecutionService_WhenContinuationDispatchFails_ShouldSurfaceForWatchdogRecovery()
+    {
+        var dispatch = new RecordingActorDispatchPort
+        {
+            DispatchException = new InvalidOperationException("continuation dispatch failed"),
+        };
+        var service = new WorkOrderExecutionService(
+            new StubExecutionPort((_, _) => Task.FromResult(BuildAcceptedResult())),
+            dispatch);
+
+        var execute = () => service.ExecuteAsync(BuildExecutionRequest("work-order-1", "command-1"));
+
+        await execute.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("continuation dispatch failed");
+    }
+
+    [Fact]
+    public async Task BlockedWorker_ShouldNotBlockWorkOrderTimeout()
+    {
+        var queue = new WorkOrderExecutionQueue(
+            Options.Create(new WorkOrderExecutionWorkerOptions { QueueCapacity = 4 }));
+        var scheduler = new WorkOrderExecutionScheduler(queue);
+        var blockedPort = new BlockingExecutionPort();
+        using var worker = new WorkOrderExecutionWorker(
+            queue,
+            new WorkOrderExecutionService(blockedPort, new RecordingActorDispatchPort()),
+            Options.Create(new WorkOrderExecutionWorkerOptions
+            {
+                MaxConcurrency = 1,
+                ShutdownDrainGraceSeconds = 0,
+            }),
+            NullLogger<WorkOrderExecutionWorker>.Instance);
+        await worker.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var agent = await CreateExpiredDispatchPendingAgentAsync(scheduler);
+            await agent.HandleExecuteAsync(new ExecuteWorkOrder
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                DispatchCommandId = agent.State.DispatchCommandId,
+            });
+            await blockedPort.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await agent.HandleTimeoutAsync(new WorkOrderTimeoutFired
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                TimeoutAtUtc = agent.State.TimeoutAtUtc.Clone(),
+            });
+
+            agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.TimedOut);
+        }
+        finally
+        {
+            blockedPort.Release.TrySetResult();
+            await worker.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static async Task<WorkOrderGAgent> CreateExpiredDispatchPendingAgentAsync(
+        IWorkOrderExecutionScheduler scheduler)
+    {
+        var agent = new WorkOrderGAgent(scheduler)
+        {
+            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkOrderState>(
+                new InMemoryEventStore()),
+            EventPublisher = new NoOpEventPublisher(),
+            Services = new ServiceCollection()
+                .AddSingleton<IEnumerable<IGAgentExecutionHook>>([])
+                .AddSingleton<IActorRuntimeCallbackScheduler>(new NoOpCallbackScheduler())
+                .BuildServiceProvider(),
+        };
+        SetIdMethod.Invoke(agent, [ActorId]);
+        await agent.ActivateAsync();
+        var requestedAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        await agent.HandleCreateAsync(new CreateWorkOrder
+        {
+            WorkOrderId = WorkOrderId,
+            DedupKey = DedupKey,
+            ScopeId = ScopeId,
+            TeamId = "team-1",
+            Requester = new WorkOrderPrincipal
+            {
+                PrincipalId = "requester-1",
+                PrincipalKind = "user",
+            },
+            MemberId = "member-1",
+            PublishedServiceId = "service-1",
+            WorkflowId = "workflow-1",
+            ServiceRevisionId = "revision-1",
+            ImplementationKind = MemberImplementationKindNames.Workflow,
+            EndpointId = "run",
+            Intent = "exercise timeout while worker is blocked",
+            Input = new WorkOrderServiceInput
+            {
+                Chat = new WorkOrderChatInput { Prompt = "do the work" },
+            },
+            PermissionPlan = new WorkOrderPermissionPlan(),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
+            TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddMinutes(1)),
+        });
+        await agent.HandleDispatchAsync(new DispatchWorkOrder
+        {
+            WorkOrderId = WorkOrderId,
+            ExpectedLifecycleVersion = 2,
+            RequestedBy = new WorkOrderPrincipal
+            {
+                PrincipalId = "requester-1",
+                PrincipalKind = "user",
+            },
+            DispatchCommandId = WorkOrderConventions.BuildDispatchCommandId(WorkOrderId),
+            RequestedRunId = WorkOrderConventions.BuildRequestedRunId(WorkOrderId),
+            TerminalDeliveryId = WorkOrderConventions.BuildTerminalDeliveryId(WorkOrderId),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+        return agent;
+    }
+
+    private static WorkOrderExecutionRequest BuildExecutionRequest(string workOrderId, string dispatchCommandId) =>
+        new()
+        {
+            WorkOrderActorId = $"work-order:scope-1:{workOrderId}",
+            WorkOrderId = workOrderId,
+            ScopeId = ScopeId,
+            TeamId = "team-1",
+            MemberId = "member-1",
+            PublishedServiceId = "service-1",
+            WorkflowId = "workflow-1",
+            ServiceRevisionId = "revision-1",
+            ImplementationKind = MemberImplementationKindNames.Workflow,
+            EndpointId = "run",
+            Input = new WorkOrderServiceInput
+            {
+                Chat = new WorkOrderChatInput { Prompt = "do the work" },
+            },
+            DispatchCommandId = dispatchCommandId,
+            RequestedRunId = $"run-{workOrderId}",
+            TerminalDeliveryId = $"delivery-{workOrderId}",
+            DeadlineAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(1)),
+        };
+
+    private static WorkOrderExecutionResult BuildAcceptedResult() =>
+        new()
+        {
+            Accepted = new WorkOrderExecutionAccepted
+            {
+                RunId = "run-work-order-1",
+                RunActorId = "workflow-run-actor-1",
+                CommandId = "command-1",
+                CorrelationId = "command-1",
+                RevisionId = "revision-1",
+                DeploymentId = "deployment-1",
+                AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+    private sealed class StubExecutionPort(
+        Func<WorkOrderExecutionRequest, CancellationToken, Task<WorkOrderExecutionResult>> execute)
+        : IWorkOrderExecutionPort
+    {
+        public Task<WorkOrderExecutionResult> ExecuteAsync(
+            WorkOrderExecutionRequest request,
+            CancellationToken ct = default) => execute(request, ct);
+    }
+
+    private sealed class BlockingExecutionPort : IWorkOrderExecutionPort
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<WorkOrderExecutionResult> ExecuteAsync(
+            WorkOrderExecutionRequest request,
+            CancellationToken ct = default)
+        {
+            Entered.TrySetResult();
+            await Release.Task;
+            return new WorkOrderExecutionResult
+            {
+                Failed = new WorkOrderExecutionFailed
+                {
+                    Failure = new WorkOrderFailureReference
+                    {
+                        Code = "TEST_RELEASED",
+                        Message = "test execution released",
+                        Source = "test",
+                        ReferenceId = request.DispatchCommandId,
+                    },
+                    FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                },
+            };
+        }
+    }
+
+    private sealed class RecordingActorDispatchPort : IActorDispatchPort
+    {
+        public List<DispatchCall> Calls { get; } = [];
+        public Exception? DispatchException { get; init; }
+
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            if (DispatchException != null)
+                throw DispatchException;
+
+            Calls.Add(new DispatchCall(actorId, envelope.Clone()));
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
+    }
+
+    private sealed class NoOpCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                1,
+                RuntimeCallbackBackend.InMemory));
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class NoOpEventPublisher : IEventPublisher
+    {
+        public Task PublishAsync<T>(
+            T evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage => Task.CompletedTask;
+
+        public Task SendToAsync<T>(
+            string targetActorId,
+            T evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage => Task.CompletedTask;
+    }
+
+    private sealed record DispatchCall(string ActorId, EventEnvelope Envelope);
 }

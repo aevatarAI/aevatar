@@ -5,10 +5,12 @@ using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Application.Studio.WorkflowBoards;
 using Aevatar.Studio.Hosting.Controllers;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Hosting.WorkflowBoards;
+using Aevatar.Studio.Hosting.WorkOrders;
 using Aevatar.Studio.Hosting.NyxId;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution; // DefaultAppScopeResolver
@@ -44,6 +46,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
+        AddWorkOrderExecutionWorker(services, configuration);
         services.Configure<NyxIdLlmCatalogCacheOptions>(
             configuration.GetSection(NyxIdLlmCatalogCacheOptions.SectionName));
         services.TryAddSingleton<NyxIdLlmCatalogHttpClient>();
@@ -118,4 +121,13 @@ internal static class StudioHostingServiceCollectionExtensions
     private static bool HasWorkflowBoardExecutionDocumentReader(IServiceCollection services) =>
         services.Any(static descriptor =>
             descriptor.ServiceType == typeof(IProjectionDocumentReader<WorkflowExecutionBoardDocument, string>));
+
+    private static void AddWorkOrderExecutionWorker(
+        IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<WorkOrderExecutionWorkerOptions>(
+            configuration.GetSection(WorkOrderExecutionWorkerOptions.SectionName));
+        services.AddHostedService<WorkOrderExecutionWorker>();
+    }
 }
