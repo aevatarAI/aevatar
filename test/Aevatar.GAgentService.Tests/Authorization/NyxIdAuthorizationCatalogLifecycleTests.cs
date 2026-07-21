@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -14,6 +15,7 @@ using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Authorization;
 
@@ -263,6 +265,324 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             agent.Id,
             "refresh-delayed-prior-epoch",
             NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+    }
+
+    [Fact]
+    public async Task LegacyTerminalReplay_ShouldMigrateEpochAndFenceDelayedPreUpgradeBegin()
+    {
+        var owner = Owner();
+        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var eventStore = new InMemoryEventStore();
+        var history = new List<StateEvent>();
+
+        void Append(IMessage payload)
+        {
+            var version = history.Count + 1;
+            history.Add(new StateEvent
+            {
+                AgentId = actorId,
+                EventId = $"legacy-event-{version}",
+                EventType = payload.Descriptor.FullName,
+                EventData = Any.Pack(payload),
+                Timestamp = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(version)),
+                Version = version,
+            });
+        }
+
+        void AppendOutcome(
+            string refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState status)
+        {
+            Append(new NyxIdAuthorizationCatalogRefreshOutcomeEvent
+            {
+                RefreshId = refreshId,
+                Status = status,
+                StateVersion = history.Count,
+                ObservedAtUtc = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(history.Count)),
+            });
+        }
+
+        NyxIdAuthorizationCatalogObservedEvent LegacyObserved(string refreshId, string digest)
+        {
+            var observed = Observed(owner, digest);
+            observed.RefreshId = refreshId;
+            return observed;
+        }
+
+        Append(new NyxIdAuthorizationCatalogActivatedEvent
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        });
+        Append(new NyxIdAuthorizationCatalogRefreshBeganEvent
+        {
+            Owner = owner.Clone(),
+            RefreshId = "legacy-observed-1",
+            StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(10)),
+        });
+        Append(LegacyObserved("legacy-observed-1", "digest-legacy-1"));
+        AppendOutcome(
+            "legacy-observed-1",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Observed);
+        Append(new NyxIdAuthorizationCatalogRefreshBeganEvent
+        {
+            Owner = owner.Clone(),
+            RefreshId = "legacy-failed-1",
+            StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(20)),
+        });
+        Append(new NyxIdAuthorizationCatalogRefreshFailedEvent
+        {
+            Owner = owner.Clone(),
+            RefreshId = "legacy-failed-1",
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(21)),
+            FailureCode = "legacy_provider_unavailable",
+        });
+        AppendOutcome(
+            "legacy-failed-1",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed);
+        Append(new NyxIdAuthorizationCatalogRefreshBeganEvent
+        {
+            Owner = owner.Clone(),
+            RefreshId = "legacy-observed-2",
+            StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(30)),
+        });
+        Append(LegacyObserved("legacy-observed-2", "digest-legacy-2"));
+        AppendOutcome(
+            "legacy-observed-2",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Observed);
+        Append(new NyxIdAuthorizationCatalogInvalidatedEvent
+        {
+            Owner = owner.Clone(),
+            InvalidatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(40)),
+            Reason = "legacy_credential_revoked",
+        });
+        Append(new NyxIdAuthorizationCatalogCleanedEvent
+        {
+            Owner = owner.Clone(),
+            CleanedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(50)),
+            Reason = "legacy_owner_unbound",
+        });
+        Append(new NyxIdAuthorizationCatalogActivatedEvent
+        {
+            Owner = owner.Clone(),
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(60)),
+        });
+        Append(new NyxIdAuthorizationCatalogRefreshBeganEvent
+        {
+            Owner = owner.Clone(),
+            RefreshId = "legacy-failed-2",
+            StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(70)),
+        });
+        Append(new NyxIdAuthorizationCatalogRefreshFailedEvent
+        {
+            Owner = owner.Clone(),
+            RefreshId = "legacy-failed-2",
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(71)),
+            FailureCode = "legacy_provider_timeout",
+        });
+        AppendOutcome(
+            "legacy-failed-2",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed);
+        await eventStore.AppendAsync(actorId, history, expectedVersion: 0);
+
+        var agent = CreateAgent(owner, eventStore);
+        await agent.ActivateAsync();
+        var migratedEpoch = agent.State.LifecycleFence;
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-post-rollback",
+            ObservedAt.AddMinutes(1),
+            migratedEpoch);
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-delayed-pre-upgrade",
+            ObservedAt.AddMinutes(80),
+            expectedLifecycleFence: 0);
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            actorId,
+            "refresh-delayed-pre-upgrade",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-post-rollback", ObservedAt.AddMinutes(2)));
+
+        migratedEpoch.Should().Be(7);
+        agent.State.LifecycleFence.Should().Be(8);
+        agent.State.LifecycleFenceSemanticsVersion.Should().Be(
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion.TerminalFactsAdvanceFence);
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.ObservedAt.Should()
+            .Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)));
+    }
+
+    [Fact]
+    public async Task LegacySnapshotActivation_ShouldCommitAndProjectFenceMigrationBeforeServingBegins()
+    {
+        const string migrationEventType =
+            "aevatar.gagentservice.schedules.authorization.state." +
+            "NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent";
+        var owner = Owner();
+        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var eventStore = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<NyxIdAuthorizationCatalogState>();
+        var legacyRefreshStartedAt = ObservedAt.AddMinutes(-2);
+        await eventStore.AppendAsync(actorId,
+        [
+            new StateEvent
+            {
+                AgentId = actorId,
+                EventId = "legacy-refresh-began",
+                EventType = NyxIdAuthorizationCatalogRefreshBeganEvent.Descriptor.FullName,
+                EventData = Any.Pack(new NyxIdAuthorizationCatalogRefreshBeganEvent
+                {
+                    Owner = owner.Clone(),
+                    RefreshId = "refresh-pre-upgrade",
+                    StartedAt = Timestamp.FromDateTimeOffset(legacyRefreshStartedAt),
+                }),
+                Timestamp = Timestamp.FromDateTimeOffset(legacyRefreshStartedAt),
+                Version = 1,
+            },
+        ], expectedVersion: 0);
+        var legacyState = new NyxIdAuthorizationCatalogState
+        {
+            Owner = owner.Clone(),
+            Activated = true,
+            ActivatedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(-3)),
+            LifecycleFence = 0,
+            ActiveRefreshId = "refresh-pre-upgrade",
+            ActiveRefreshStartedAt = Timestamp.FromDateTimeOffset(legacyRefreshStartedAt),
+            ContentDigest = "legacy-digest",
+            ContractVersion = "legacy-contract",
+            PolicyVersion = "legacy-policy",
+        };
+        var wireLegacyState = NyxIdAuthorizationCatalogState.Parser.ParseFrom(legacyState.ToByteArray());
+        await snapshotStore.SaveAsync(
+            actorId,
+            new EventSourcingSnapshot<NyxIdAuthorizationCatalogState>(wireLegacyState, Version: 1));
+        var publications = new RecordingPublicationHook();
+        var agent = CreateSnapshotAgent(owner, eventStore, snapshotStore, publications);
+
+        await agent.ActivateAsync();
+
+        var migratedEvents = (await eventStore.GetEventsAsync(actorId)).Skip(1).ToArray();
+        migratedEvents.Should().HaveCount(2);
+        migratedEvents[0].EventType.Should().Be(migrationEventType);
+        migratedEvents[0].EventData
+            .Is(NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent.Descriptor)
+            .Should().BeTrue();
+        var migration = migratedEvents[0].EventData
+            .Unpack<NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent>();
+        migration.SemanticsVersion.Should().Be(
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion.TerminalFactsAdvanceFence);
+        migration.LifecycleFence.Should().Be(1);
+        var displacedOutcome = migratedEvents[1].EventData
+            .Unpack<NyxIdAuthorizationCatalogRefreshOutcomeEvent>();
+        displacedOutcome.RefreshId.Should().Be("refresh-pre-upgrade");
+        displacedOutcome.Status.Should().Be(
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+        displacedOutcome.StateVersion.Should().Be(2);
+        agent.State.LifecycleFence.Should().Be(1);
+        agent.State.LifecycleFenceSemanticsVersion.Should().Be(
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion.TerminalFactsAdvanceFence);
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+        agent.State.ActiveRefreshStartedAt.Should().BeNull();
+        agent.State.ContentDigest.Should().Be("legacy-digest");
+        agent.State.ContractVersion.Should().Be("legacy-contract");
+        agent.State.PolicyVersion.Should().Be("legacy-policy");
+        NyxIdAuthorizationCatalogState.Descriptor
+            .FindFieldByName("lifecycle_fence_semantics_version")
+            .Should().NotBeNull();
+
+        var migrationPublication = publications.Contexts.Single(context =>
+            string.Equals(
+                context.Published.StateEvent.EventType,
+                migrationEventType,
+                StringComparison.Ordinal));
+        var documentStore = new RecordingDocumentStore<NyxIdAuthorizationCatalogDocument>(
+            static document => document.Id);
+        var projector = new NyxIdAuthorizationCatalogCurrentStateProjector(
+            documentStore,
+            new FixedProjectionClock(ObservedAt));
+        await projector.ProjectAsync(
+            new NyxIdAuthorizationCatalogProjectionContext
+            {
+                RootActorId = actorId,
+                ProjectionKind = NyxIdAuthorizationCatalogGAgent.ProjectionKind,
+            },
+            new EventEnvelope
+            {
+                Id = migrationPublication.Published.StateEvent.EventId,
+                Timestamp = Timestamp.FromDateTimeOffset(ObservedAt),
+                Payload = Any.Pack(migrationPublication.Published),
+            });
+        var projected = await documentStore.GetAsync(actorId);
+        projected.Should().NotBeNull();
+        projected!.StateVersion.Should().Be(2);
+        projected.LifecycleFence.Should().Be(1);
+
+        var versionBeforeStaleBegin = await eventStore.GetVersionAsync(actorId);
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-delayed-pre-upgrade",
+            ObservedAt.AddMinutes(1),
+            expectedLifecycleFence: 0);
+        var staleBeginEvents = (await eventStore.GetEventsAsync(actorId))
+            .Where(evt => evt.Version > versionBeforeStaleBegin)
+            .ToArray();
+        staleBeginEvents.Should().ContainSingle();
+        staleBeginEvents.Should().NotContain(static evt =>
+            evt.EventData.Is(NyxIdAuthorizationCatalogRefreshBeganEvent.Descriptor));
+        staleBeginEvents[0].EventData.Unpack<NyxIdAuthorizationCatalogRefreshOutcomeEvent>()
+            .Status.Should().Be(NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
+
+        var versionBeforeReactivation = await eventStore.GetVersionAsync(actorId);
+        var reactivationPublications = new RecordingPublicationHook();
+        var reactivated = CreateSnapshotAgent(
+            owner,
+            eventStore,
+            snapshotStore,
+            reactivationPublications);
+        await reactivated.ActivateAsync();
+
+        (await eventStore.GetVersionAsync(actorId)).Should().Be(versionBeforeReactivation);
+        reactivationPublications.Contexts.Should().BeEmpty();
+        reactivated.State.LifecycleFence.Should().Be(1);
+        reactivated.State.LifecycleFenceSemanticsVersion.Should().Be(
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion.TerminalFactsAdvanceFence);
+    }
+
+    [Fact]
+    public async Task FreshActivation_ShouldNotCreateMigrationOrAdvanceInitialFence()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var snapshotStore = new InMemoryEventSourcingSnapshotStore<NyxIdAuthorizationCatalogState>();
+        var publications = new RecordingPublicationHook();
+        var agent = CreateSnapshotAgent(owner, eventStore, snapshotStore, publications);
+
+        await agent.ActivateAsync();
+
+        (await eventStore.GetEventsAsync(agent.Id)).Should().BeEmpty();
+        publications.Contexts.Should().BeEmpty();
+        agent.State.LifecycleFence.Should().Be(0);
+
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-fresh",
+            ObservedAt,
+            expectedLifecycleFence: 0);
+
+        agent.State.ActiveRefreshId.Should().Be("refresh-fresh");
+        agent.State.LifecycleFence.Should().Be(0);
+        agent.State.LifecycleFenceSemanticsVersion.Should().Be(
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion.TerminalFactsAdvanceFence);
+        (await RefreshOutcomesAsync(eventStore, agent.Id, "refresh-fresh"))
+            .Should().ContainSingle()
+            .Which.Status.Should().Be(NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started);
     }
 
     [Fact]
@@ -763,7 +1083,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
-    public void RefreshFailureTransition_WhenLegacyEventOmitsFence_ShouldPreserveReplayedFence()
+    public void RefreshFailureTransition_WhenLegacyEventOmitsFence_ShouldAdvanceReplayedFence()
     {
         var agent = new NyxIdAuthorizationCatalogGAgent();
         var owner = Owner();
@@ -783,7 +1103,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             FailureCode = "provider_unavailable",
         });
 
-        failed.LifecycleFence.Should().Be(7);
+        failed.LifecycleFence.Should().Be(8);
         failed.ActiveRefreshId.Should().BeEmpty();
         failed.LastRefreshFailureCode.Should().Be("provider_unavailable");
     }
@@ -811,7 +1131,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         cleaned.Invalidated.Should().BeTrue();
         cleaned.Cleaned.Should().BeTrue();
         cleaned.CleanupReason.Should().Be("account_removed");
-        cleaned.LifecycleFence.Should().Be(1);
+        cleaned.LifecycleFence.Should().Be(2);
     }
 
     [Fact]
@@ -888,6 +1208,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             NyxIdAuthorizationCatalogRefreshFailedEvent.Descriptor,
             NyxIdAuthorizationCatalogInvalidatedEvent.Descriptor,
             NyxIdAuthorizationCatalogCleanedEvent.Descriptor,
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent.Descriptor,
             NyxIdAuthorizationCatalogRefreshOutcomeEvent.Descriptor,
             NyxIdAuthorizationCatalogDocument.Descriptor,
         };
@@ -936,6 +1257,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         authority.ToProto().ReservedName.Should().Contain("external_revision");
 
         var state = NyxIdAuthorizationCatalogState.Descriptor;
+        state.FindFieldByName("lifecycle_fence_semantics_version").Should().NotBeNull();
         state.FindFieldByName("active_refresh_id").Should().NotBeNull();
         state.FindFieldByName("active_refresh_started_at").Should().NotBeNull();
         state.FindFieldByName("newest_refresh_id").Should().BeNull();
@@ -953,6 +1275,8 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshBeganEvent").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshFailedEvent")!
             .FindFieldByName("lifecycle_fence").Should().NotBeNull();
+        state.DescriptorForType("NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent")
+            .Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshOutcomeEvent").Should().NotBeNull();
 
         NyxIdAuthorizationCatalogDocument.Descriptor.FindFieldByName("active_refresh_id").Should().BeNull();
@@ -1021,6 +1345,32 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             eventStore,
             NyxIdAuthorizationCatalogActorIds.Build(owner),
             static () => new NyxIdAuthorizationCatalogGAgent());
+
+    private static NyxIdAuthorizationCatalogGAgent CreateSnapshotAgent(
+        AuthorizationOwnerIdentity owner,
+        InMemoryEventStore eventStore,
+        InMemoryEventSourcingSnapshotStore<NyxIdAuthorizationCatalogState> snapshotStore,
+        RecordingPublicationHook publications)
+    {
+        var agent = GAgentServiceTestKit.CreateStatefulAgent<
+            NyxIdAuthorizationCatalogGAgent,
+            NyxIdAuthorizationCatalogState>(
+            eventStore,
+            NyxIdAuthorizationCatalogActorIds.Build(owner),
+            static () => new NyxIdAuthorizationCatalogGAgent(),
+            services => services.AddSingleton<ICommittedStatePublicationHook>(publications));
+        agent.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<
+            NyxIdAuthorizationCatalogState>(
+            eventStore,
+            new EventSourcingRuntimeOptions
+            {
+                EnableSnapshots = true,
+                SnapshotInterval = 1,
+                EnableEventCompaction = false,
+            },
+            snapshotStore);
+        return agent;
+    }
 
     private static ObserveNyxIdAuthorizationCatalogCommand ObservationCommand(
         AuthorizationOwnerIdentity owner,
@@ -1151,6 +1501,20 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         outcome.RefreshId.Should().Be(refreshId);
         outcome.Status.Should().Be(expectedStatus);
         outcome.StateVersion.Should().Be((await eventStore.GetEventsAsync(actorId))[^1].Version - 1);
+    }
+
+    private sealed class RecordingPublicationHook : ICommittedStatePublicationHook
+    {
+        public List<CommittedStatePublicationContext> Contexts { get; } = [];
+
+        public Task BeforePublishAsync(
+            CommittedStatePublicationContext context,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            Contexts.Add(context);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RefreshOutcomeRejectingEventStore(InMemoryEventStore inner) : IEventStore

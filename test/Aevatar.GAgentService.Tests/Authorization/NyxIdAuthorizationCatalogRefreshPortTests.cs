@@ -262,12 +262,192 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             "nyxid_catalog_refresh_superseded");
 
         var result = await refresh;
+        await logger.WarningLogged.WaitAsync(TimeSpan.FromSeconds(1));
 
         result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
         logger.Messages.Should().ContainSingle();
         logger.Exceptions.Should().ContainSingle().Which.Should().BeNull();
         string.Join('\n', logger.Messages).Should().NotContain("private-provider-detail");
         string.Join('\n', logger.Messages).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenSupersededProviderIgnoresCancellation_ShouldReleaseBeforeProviderCompletes()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var handler = new CancellationIgnoringFaultingHandler();
+        var logger = new RecordingLogger<NyxIdAuthorizationCatalogRefreshPort>();
+        var refresh = Create(
+                commands,
+                handler,
+                observation: observation,
+                logger: logger)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+        await handler.Blocked;
+        var refreshId = commands.Beginnings.Should().ContainSingle().Which.RefreshId;
+
+        observation.Publish(
+            refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
+            "nyxid_catalog_refresh_superseded");
+        await handler.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
+
+        try
+        {
+            var result = await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+
+            result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
+            handler.ProviderCompleted.Should().BeFalse();
+            observation.Detached.Should().Be(1);
+            observation.ProjectionReleases.Should().Be(1);
+            observation.PreparationReleases.Should().Be(1);
+        }
+        finally
+        {
+            handler.CompleteWithFault();
+            await logger.WarningLogged.WaitAsync(TimeSpan.FromSeconds(1));
+            await IgnoreFailureAsync(refresh);
+        }
+
+        handler.TokenLifetimeFailure.Should().BeNull();
+        logger.Exceptions.Should().OnlyContain(static exception => exception == null);
+        string.Join('\n', logger.Messages).Should().NotContain("private-provider-detail");
+        string.Join('\n', logger.Messages).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenCallerCancelsProviderThatIgnoresCancellation_ShouldReleaseBeforeProviderCompletes()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var handler = new CancellationIgnoringFaultingHandler();
+        var logger = new RecordingLogger<NyxIdAuthorizationCatalogRefreshPort>();
+        using var cancellation = new CancellationTokenSource();
+        var refresh = Create(
+                commands,
+                handler,
+                observation: observation,
+                logger: logger)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret", cancellation.Token);
+        await handler.Blocked;
+
+        cancellation.Cancel();
+        await handler.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
+
+        try
+        {
+            var act = async () => await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+
+            await act.Should().ThrowAsync<OperationCanceledException>();
+            handler.ProviderCompleted.Should().BeFalse();
+            observation.Detached.Should().Be(1);
+            observation.ProjectionReleases.Should().Be(1);
+            observation.PreparationReleases.Should().Be(1);
+        }
+        finally
+        {
+            handler.CompleteWithFault();
+            await logger.WarningLogged.WaitAsync(TimeSpan.FromSeconds(1));
+            await IgnoreFailureAsync(refresh);
+        }
+
+        handler.TokenLifetimeFailure.Should().BeNull();
+        logger.Exceptions.Should().OnlyContain(static exception => exception == null);
+        string.Join('\n', logger.Messages).Should().NotContain("private-provider-detail");
+        string.Join('\n', logger.Messages).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenSupersessionCancellationCallbackThrows_ShouldPreserveResultAndRelease()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var handler = new CancellationIgnoringThrowingCallbackHandler();
+        var refresh = Create(commands, handler, observation: observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+        await handler.Blocked;
+        var refreshId = commands.Beginnings.Should().ContainSingle().Which.RefreshId;
+
+        observation.Publish(
+            refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
+            "nyxid_catalog_refresh_superseded");
+        await handler.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
+
+        try
+        {
+            var result = await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+
+            result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
+            handler.ProbeTokenLifetime();
+            handler.TokenLifetimeFailure.Should().BeNull();
+            observation.Detached.Should().Be(1);
+            observation.ProjectionReleases.Should().Be(1);
+            observation.PreparationReleases.Should().Be(1);
+        }
+        finally
+        {
+            handler.CompleteCanceled();
+            await IgnoreFailureAsync(refresh);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenCallerCancellationCallbackThrows_ShouldPreserveCancellationAndRelease()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var handler = new CancellationIgnoringThrowingCallbackHandler();
+        using var cancellation = new CancellationTokenSource();
+        var refresh = Create(commands, handler, observation: observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret", cancellation.Token);
+        await handler.Blocked;
+
+        try
+        {
+            var cancel = () => cancellation.Cancel();
+            cancel.Should().NotThrow();
+            await handler.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
+            var act = async () => await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+
+            await act.Should().ThrowAsync<OperationCanceledException>();
+            handler.ProbeTokenLifetime();
+            handler.TokenLifetimeFailure.Should().BeNull();
+            observation.Detached.Should().Be(1);
+            observation.ProjectionReleases.Should().Be(1);
+            observation.PreparationReleases.Should().Be(1);
+        }
+        finally
+        {
+            handler.CompleteCanceled();
+            await IgnoreFailureAsync(refresh);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenProviderCompletesInsideCancellationCallback_ShouldKeepTokenAliveUntilCallbackReturns()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var client = new CancellationCompletingHttpClient();
+        var port = CreateWithClient(commands, client, observation: observation);
+        var refresh = Task.Run(() => port.RefreshPersonalAsync("owner-alpha", "bearer-secret"));
+        await client.Blocked;
+        var refreshId = commands.Beginnings.Should().ContainSingle().Which.RefreshId;
+
+        observation.Publish(
+            refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
+            "nyxid_catalog_refresh_superseded");
+        await client.CancellationCallbackCompleted.WaitAsync(TimeSpan.FromSeconds(1));
+        var result = await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
+        client.TokenLifetimeFailure.Should().BeNull();
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
     }
 
     [Fact]
@@ -354,6 +534,53 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshPersonalAsync_WhenProviderFailureLoggingThrows_ShouldPreserveProviderFailureAndReleaseAll()
+    {
+        var commands = new RecordingCommandPort
+        {
+            ObservationException = new InvalidOperationException("provider-original-failure"),
+        };
+        var observation = new RecordingObservationRuntime();
+        var logger = new ThrowingLogger<NyxIdAuthorizationCatalogRefreshPort>();
+
+        var act = () => Create(
+                commands,
+                new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+                observation: observation,
+                logger: logger)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("provider-original-failure");
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenCommittedOutcomeLoggingThrows_ShouldPreserveAccessDeniedResult()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var logger = new ThrowingLogger<NyxIdAuthorizationCatalogRefreshPort>();
+
+        var result = await Create(
+                commands,
+                new RoutingJsonHandler(
+                    Ok(UserServicesJson()),
+                    Error(HttpStatusCode.Forbidden, "api_key_scope_plan_denied", 9004)),
+                observation: observation,
+                logger: logger)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.AccessDenied);
+        result.FailureCode.Should().Be("api_key_scope_plan_denied");
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_WhenDetachFails_ShouldStillReleaseBothScopes()
     {
         var commands = new RecordingCommandPort();
@@ -366,6 +593,30 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
                 commands,
                 new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
                 observation: observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("detach-failure");
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenCleanupLoggingThrows_ShouldReleaseAllAndPreserveCleanupFailure()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime
+        {
+            DetachFailure = new InvalidOperationException("detach-failure"),
+        };
+        var logger = new ThrowingLogger<NyxIdAuthorizationCatalogRefreshPort>();
+
+        var act = () => Create(
+                commands,
+                new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+                observation: observation,
+                logger: logger)
             .RefreshPersonalAsync("owner-alpha", "bearer-secret");
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -570,11 +821,31 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         RecordingCatalogQueryPort? catalogQuery = null,
         ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
     {
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example") };
+        return CreateWithClient(
+            commands,
+            httpClient,
+            publishCommittedOutcomes,
+            observation,
+            timeProvider,
+            catalogQuery,
+            logger);
+    }
+
+    private static NyxIdAuthorizationCatalogRefreshPort CreateWithClient(
+        RecordingCommandPort commands,
+        HttpClient httpClient,
+        bool publishCommittedOutcomes = true,
+        RecordingObservationRuntime? observation = null,
+        TimeProvider? timeProvider = null,
+        RecordingCatalogQueryPort? catalogQuery = null,
+        ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
+    {
         observation ??= new RecordingObservationRuntime();
         commands.Observation = publishCommittedOutcomes ? observation : null;
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
-            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example") });
+            httpClient);
         return new NyxIdAuthorizationCatalogRefreshPort(
             commands,
             catalogQuery ?? new RecordingCatalogQueryPort(),
@@ -639,6 +910,18 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
     private static QueuedResponse ProviderTimeout() =>
         new(default, string.Empty, new TaskCanceledException("provider request timed out"));
+
+    private static async Task IgnoreFailureAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch
+        {
+            // The public result is asserted before test cleanup observes the task.
+        }
+    }
 
     private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
     {
@@ -790,11 +1073,153 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
     }
 
+    private sealed class CancellationIgnoringFaultingHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<bool> _blocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _cancellationObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<HttpResponseMessage> _pendingResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private CancellationToken _providerToken;
+
+        public Task Blocked => _blocked.Task;
+
+        public Task CancellationObserved => _cancellationObserved.Task;
+
+        public bool ProviderCompleted => _pendingResponse.Task.IsCompleted;
+
+        public Exception? TokenLifetimeFailure { get; private set; }
+
+        public void CompleteWithFault()
+        {
+            try
+            {
+                if (!_providerToken.WaitHandle.WaitOne(0))
+                {
+                    TokenLifetimeFailure = new InvalidOperationException(
+                        "The provider token was not canceled before detachment.");
+                }
+            }
+            catch (Exception ex)
+            {
+                TokenLifetimeFailure = ex;
+            }
+
+            _pendingResponse.TrySetException(
+                new InvalidOperationException("private-provider-detail bearer-secret"));
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _providerToken = cancellationToken;
+            using var registration = cancellationToken.Register(
+                () => _cancellationObserved.TrySetResult(true));
+            _blocked.TrySetResult(true);
+            return await _pendingResponse.Task;
+        }
+    }
+
+    private sealed class CancellationIgnoringThrowingCallbackHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<bool> _blocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _cancellationObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<HttpResponseMessage> _pendingResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private CancellationToken _providerToken;
+
+        public Task Blocked => _blocked.Task;
+
+        public Task CancellationObserved => _cancellationObserved.Task;
+
+        public Exception? TokenLifetimeFailure { get; private set; }
+
+        public void CompleteCanceled() => _pendingResponse.TrySetCanceled();
+
+        public void ProbeTokenLifetime()
+        {
+            try
+            {
+                if (!_providerToken.WaitHandle.WaitOne(0))
+                {
+                    TokenLifetimeFailure = new InvalidOperationException(
+                        "The provider token was not canceled before detachment.");
+                }
+            }
+            catch (Exception ex)
+            {
+                TokenLifetimeFailure = ex;
+            }
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _providerToken = cancellationToken;
+            using var registration = cancellationToken.Register(() =>
+            {
+                _cancellationObserved.TrySetResult(true);
+                throw new InvalidOperationException("private-cancel-detail bearer-secret");
+            });
+            _blocked.TrySetResult(true);
+            return await _pendingResponse.Task;
+        }
+    }
+
+    private sealed class CancellationCompletingHttpClient : HttpClient
+    {
+        private readonly TaskCompletionSource<bool> _blocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _cancellationCallbackCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<HttpResponseMessage> _response = new();
+
+        public Task Blocked => _blocked.Task;
+
+        public Task CancellationCallbackCompleted => _cancellationCallbackCompleted.Task;
+
+        public Exception? TokenLifetimeFailure { get; private set; }
+
+        public override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _ = cancellationToken.Register(() =>
+            {
+                _response.TrySetCanceled(cancellationToken);
+                try
+                {
+                    _ = cancellationToken.WaitHandle.WaitOne(0);
+                }
+                catch (Exception ex)
+                {
+                    TokenLifetimeFailure = ex;
+                }
+                finally
+                {
+                    _cancellationCallbackCompleted.TrySetResult(true);
+                }
+            });
+            _blocked.TrySetResult(true);
+            return _response.Task;
+        }
+    }
+
     private sealed class RecordingLogger<T> : ILogger<T>
     {
+        private readonly TaskCompletionSource<bool> _warningLogged =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public List<string> Messages { get; } = [];
 
         public List<Exception?> Exceptions { get; } = [];
+
+        public Task WarningLogged => _warningLogged.Task;
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
@@ -809,7 +1234,24 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         {
             Messages.Add(formatter(state, exception));
             Exceptions.Add(exception);
+            if (logLevel >= LogLevel.Warning)
+                _warningLogged.TrySetResult(true);
         }
+    }
+
+    private sealed class ThrowingLogger<T> : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            throw new InvalidOperationException("logger-failure");
     }
 
     private sealed class RecordingCommandPort : INyxIdAuthorizationCatalogCommandPort

@@ -168,63 +168,74 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
         CancellationToken ct)
     {
-        using var providerCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        using var terminalCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var terminalTask = AwaitTerminalResultAsync(sink, refreshId, terminalCancellation.Token);
-        var providerTask = RefreshProviderAsync(
-            normalizedOwner,
-            bearerToken,
-            refreshId,
-            providerCancellation.Token);
-        var completed = await Task.WhenAny(terminalTask, providerTask).ConfigureAwait(false);
-        if (ReferenceEquals(completed, terminalTask))
+        var providerCancellation = new CancellationTokenSource();
+        var providerCancellationTransferred = false;
+        try
         {
-            NyxIdAuthorizationCatalogRefreshResult terminal;
-            try
+            using var terminalCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var terminalTask = AwaitTerminalResultAsync(sink, refreshId, terminalCancellation.Token);
+            var providerTask = RefreshProviderAsync(
+                normalizedOwner,
+                bearerToken,
+                refreshId,
+                providerCancellation.Token);
+            var completed = await Task.WhenAny(terminalTask, providerTask).ConfigureAwait(false);
+            if (ReferenceEquals(completed, terminalTask))
             {
-                terminal = await terminalTask.ConfigureAwait(false);
-            }
-            catch
-            {
-                providerCancellation.Cancel();
-                await ObserveAfterCancellationAsync(providerTask).ConfigureAwait(false);
-                throw;
-            }
+                NyxIdAuthorizationCatalogRefreshResult terminal;
+                try
+                {
+                    terminal = await terminalTask.ConfigureAwait(false);
+                }
+                catch
+                {
+                    var observation = ObserveLosingProviderTask(providerTask, providerCancellation);
+                    providerCancellationTransferred = true;
+                    CancelProviderWithoutThrowing(observation);
+                    throw;
+                }
 
-            if (terminal.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
-            {
-                providerCancellation.Cancel();
-                await ObserveAfterCancellationAsync(providerTask).ConfigureAwait(false);
+                if (terminal.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
+                {
+                    var observation = ObserveLosingProviderTask(providerTask, providerCancellation);
+                    providerCancellationTransferred = true;
+                    CancelProviderWithoutThrowing(observation);
+                    return terminal;
+                }
+
+                await providerTask.ConfigureAwait(false);
                 return terminal;
             }
 
-            await providerTask.ConfigureAwait(false);
-            return terminal;
-        }
+            try
+            {
+                await providerTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                terminalCancellation.Cancel();
+                await ObserveAfterCancellationAsync(terminalTask).ConfigureAwait(false);
+                throw;
+            }
 
-        try
-        {
-            await providerTask.ConfigureAwait(false);
-        }
-        catch
-        {
+            using var timeout = new CancellationTokenSource(CatalogObservationTimeout, _timeProvider);
+            using var observationDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+            var deadlineTask = Task.Delay(Timeout.InfiniteTimeSpan, _timeProvider, observationDeadline.Token);
+            completed = await Task.WhenAny(terminalTask, deadlineTask).ConfigureAwait(false);
+            if (ReferenceEquals(completed, terminalTask))
+                return await terminalTask.ConfigureAwait(false);
+
             terminalCancellation.Cancel();
             await ObserveAfterCancellationAsync(terminalTask).ConfigureAwait(false);
-            throw;
+            if (ct.IsCancellationRequested)
+                ct.ThrowIfCancellationRequested();
+            return ObservationTimedOut();
         }
-
-        using var timeout = new CancellationTokenSource(CatalogObservationTimeout, _timeProvider);
-        using var observationDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
-        var deadlineTask = Task.Delay(Timeout.InfiniteTimeSpan, _timeProvider, observationDeadline.Token);
-        completed = await Task.WhenAny(terminalTask, deadlineTask).ConfigureAwait(false);
-        if (ReferenceEquals(completed, terminalTask))
-            return await terminalTask.ConfigureAwait(false);
-
-        terminalCancellation.Cancel();
-        await ObserveAfterCancellationAsync(terminalTask).ConfigureAwait(false);
-        if (ct.IsCancellationRequested)
-            ct.ThrowIfCancellationRequested();
-        return ObservationTimedOut();
+        finally
+        {
+            if (!providerCancellationTransferred)
+                providerCancellation.Dispose();
+        }
     }
 
     private async Task<Exception?> ReleaseObservationAsync(
@@ -242,7 +253,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             catch (Exception ex)
             {
                 firstFailure ??= ex;
-                _logger.LogWarning(
+                LogWithoutThrowing(
+                    LogLevel.Warning,
                     "Failed to release NyxID catalog refresh observation resource at stage {CleanupStage}.",
                     stage);
             }
@@ -373,7 +385,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             _timeProvider.GetUtcNow(),
             ProviderTimedOutFailureCode,
             ct);
-        _logger.LogWarning(
+        LogWithoutThrowing(
+            LogLevel.Warning,
             "NyxID authorization catalog provider request timed out. ownerKind={OwnerKind} failureCode={FailureCode}",
             owner.OwnerKind,
             ProviderTimedOutFailureCode);
@@ -398,7 +411,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                 code,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatus.AccessDenied,
                 ct);
-            _logger.LogWarning(
+            LogWithoutThrowing(
+                LogLevel.Warning,
                 "NyxID authorization catalog access was denied. ownerKind={OwnerKind} failureCode={FailureCode}",
                 owner.OwnerKind,
                 code);
@@ -410,7 +424,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             NyxIdApiAccessFailureKind.Transient)
         {
             await _commandPort.RecordRefreshFailureAsync(owner, refreshId, now, code, ct);
-            _logger.LogWarning(
+            LogWithoutThrowing(
+                LogLevel.Warning,
                 "NyxID authorization catalog refresh failed transiently. ownerKind={OwnerKind} failureCode={FailureCode}",
                 owner.OwnerKind,
                 code);
@@ -433,7 +448,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             code,
             NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable,
             ct);
-        _logger.LogWarning(
+        LogWithoutThrowing(
+            LogLevel.Warning,
             "NyxID authorization catalog response was unstable. ownerKind={OwnerKind} failureCode={FailureCode}",
             owner.OwnerKind,
             code);
@@ -447,12 +463,124 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         }
         catch (OperationCanceledException)
         {
-            _logger.LogDebug("Canceled the losing NyxID catalog refresh task after terminal observation.");
+            LogWithoutThrowing(
+                LogLevel.Debug,
+                "Canceled the losing NyxID catalog refresh task after terminal observation.");
         }
         catch (Exception)
         {
-            _logger.LogWarning(
+            LogWithoutThrowing(
+                LogLevel.Warning,
                 "The losing NyxID catalog refresh task failed after terminal observation.");
+        }
+    }
+
+    private LosingProviderTaskObservation ObserveLosingProviderTask(
+        Task providerTask,
+        CancellationTokenSource providerCancellation)
+    {
+        var observation = new LosingProviderTaskObservation(providerCancellation, _logger);
+        _ = providerTask.ContinueWith(
+            static (completed, state) =>
+            {
+                var observation = (LosingProviderTaskObservation)state!;
+                try
+                {
+                    if (completed.IsCanceled)
+                    {
+                        LogWithoutThrowing(
+                            observation.Logger,
+                            LogLevel.Debug,
+                            "Canceled the losing NyxID catalog refresh provider task after terminal observation.");
+                    }
+                    else if (completed.IsFaulted)
+                    {
+                        _ = completed.Exception;
+                        LogWithoutThrowing(
+                            observation.Logger,
+                            LogLevel.Warning,
+                            "The losing NyxID catalog refresh provider task failed after terminal observation.");
+                    }
+                }
+                catch
+                {
+                    _ = completed.Exception;
+                }
+                finally
+                {
+                    observation.MarkProviderCompletion();
+                }
+            },
+            observation,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return observation;
+    }
+
+    private void CancelProviderWithoutThrowing(LosingProviderTaskObservation observation)
+    {
+        try
+        {
+            observation.Cancellation.Cancel();
+        }
+        catch
+        {
+            LogWithoutThrowing(
+                LogLevel.Warning,
+                "A NyxID catalog refresh provider cancellation callback failed after terminal observation.");
+        }
+        finally
+        {
+            observation.MarkCancellationAttemptCompletion();
+        }
+    }
+
+    private void LogWithoutThrowing(LogLevel logLevel, string message, params object?[] args) =>
+        LogWithoutThrowing(_logger, logLevel, message, args);
+
+    private static void LogWithoutThrowing(
+        ILogger logger,
+        LogLevel logLevel,
+        string message,
+        params object?[] args)
+    {
+        try
+        {
+            logger.Log(logLevel, message, args);
+        }
+        catch
+        {
+            // Logging must not replace the operation result or interrupt resource cleanup.
+            return;
+        }
+    }
+
+    private sealed class LosingProviderTaskObservation(
+        CancellationTokenSource cancellation,
+        ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
+    {
+        private int _providerCompletionMarked;
+        private int _cancellationAttemptCompletionMarked;
+        private int _remainingLifetimeOwners = 2;
+
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+
+        public ILogger<NyxIdAuthorizationCatalogRefreshPort> Logger { get; } = logger;
+
+        public void MarkProviderCompletion() =>
+            ReleaseLifetimeOwner(ref _providerCompletionMarked);
+
+        public void MarkCancellationAttemptCompletion() =>
+            ReleaseLifetimeOwner(ref _cancellationAttemptCompletionMarked);
+
+        private void ReleaseLifetimeOwner(ref int completionMarker)
+        {
+            if (Interlocked.Exchange(ref completionMarker, 1) != 0)
+                return;
+
+            if (Interlocked.Decrement(ref _remainingLifetimeOwners) == 0)
+                Cancellation.Dispose();
         }
     }
 

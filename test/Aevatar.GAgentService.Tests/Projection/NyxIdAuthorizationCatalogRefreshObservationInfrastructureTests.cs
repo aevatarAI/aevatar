@@ -1,9 +1,17 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.DependencyInjection;
+using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Foundation.Core.TypeSystem;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
+using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using Aevatar.GAgentService.Projection.Configuration;
 using Aevatar.GAgentService.Projection.DependencyInjection;
 using Aevatar.GAgentService.Projection.Orchestration;
@@ -12,11 +20,18 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aevatar.GAgentService.Tests.Projection;
 
 public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTests
 {
+    private const string RefreshObservationProjectionKind =
+        "nyxid-authorization-catalog-refresh-observation";
+    private static readonly DateTimeOffset RefreshStartedAt =
+        DateTimeOffset.Parse("2026-07-21T09:00:00Z");
+
     [Theory]
     [InlineData(NyxIdAuthorizationCatalogRefreshOutcomeStatus.Started)]
     [InlineData(NyxIdAuthorizationCatalogRefreshOutcomeStatus.Observed)]
@@ -256,6 +271,95 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTes
     }
 
     [Fact]
+    public async Task RefreshPort_WhenSupersededWithProviderIncomplete_ShouldReleaseProductionObservationResources()
+    {
+        await using var services = CreateProductionObservationServices();
+        var actorRuntime = services.GetRequiredService<IActorRuntime>();
+        var commandPort = new NyxIdAuthorizationCatalogCommandPort(
+            actorRuntime,
+            services.GetRequiredService<IActorDispatchPort>());
+        var sessionEventHub = services.GetRequiredService<
+            IProjectionSessionEventHub<NyxIdAuthorizationCatalogRefreshCommittedOutcome>>();
+        var providerHandler = new IncompleteProviderHandler();
+        using var httpClient = new HttpClient(providerHandler)
+        {
+            BaseAddress = new Uri("https://nyx.example"),
+        };
+        var refreshPort = new NyxIdAuthorizationCatalogRefreshPort(
+            commandPort,
+            new EmptyCatalogQueryPort(),
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(
+                new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+                httpClient)),
+            services.GetRequiredService<
+                INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort>(),
+            services.GetRequiredService<
+                INyxIdAuthorizationCatalogRefreshObservationProjectionPort>(),
+            new FakeTimeProvider(RefreshStartedAt),
+            NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
+        var owner = PersonalOwner();
+        var catalogActorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var refresh = refreshPort.RefreshAsync(owner, "bearer-secret");
+
+        await providerHandler.Blocked.WaitAsync(TimeSpan.FromSeconds(1));
+        try
+        {
+            var catalogActor = await actorRuntime.GetAsync(catalogActorId);
+            catalogActor.Should().NotBeNull();
+            var catalogAgent = catalogActor!.Agent
+                .Should().BeOfType<NyxIdAuthorizationCatalogGAgent>().Subject;
+            var losingRefreshId = catalogAgent.State.ActiveRefreshId;
+            var scopeKey = new ProjectionRuntimeScopeKey(
+                catalogActorId,
+                RefreshObservationProjectionKind,
+                ProjectionRuntimeMode.SessionObservation,
+                losingRefreshId);
+            var scopeActorId = ProjectionScopeActorId.Build(scopeKey);
+            var forwardingRegistry = services.GetRequiredService<IStreamForwardingRegistry>();
+
+            losingRefreshId.Should().NotBeNullOrWhiteSpace();
+            (await forwardingRegistry.ListBySourceAsync(catalogActorId)).Should().Contain(binding =>
+                string.Equals(binding.TargetStreamId, scopeActorId, StringComparison.Ordinal));
+
+            await commandPort.BeginRefreshAsync(
+                owner,
+                "refresh-winner",
+                RefreshStartedAt.AddSeconds(1),
+                catalogAgent.State.LifecycleFence);
+
+            var result = await refresh.WaitAsync(TimeSpan.FromSeconds(1));
+            await providerHandler.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
+            result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
+            providerHandler.ProviderCompleted.Should().BeFalse();
+
+            var scopeActor = await actorRuntime.GetAsync(scopeActorId);
+            scopeActor.Should().NotBeNull();
+            await DrainActorMailboxAsync(scopeActor!);
+            var scopeAgent = scopeActor!.Agent.Should().BeOfType<ProjectionSessionScopeGAgent<
+                NyxIdAuthorizationCatalogRefreshObservationProjectionContext>>().Subject;
+            scopeAgent.State.Released.Should().BeTrue();
+            scopeAgent.State.ObservationAttached.Should().BeFalse();
+            (await forwardingRegistry.ListBySourceAsync(catalogActorId)).Should().NotContain(binding =>
+                string.Equals(binding.TargetStreamId, scopeActorId, StringComparison.Ordinal));
+
+            await AssertReleasedLiveSinkIsDetachedAsync(
+                services.GetRequiredService<IStreamProvider>(),
+                services.GetRequiredService<
+                    IProjectionSessionEventCodec<NyxIdAuthorizationCatalogRefreshCommittedOutcome>>(),
+                sessionEventHub,
+                catalogActorId,
+                losingRefreshId);
+            providerHandler.ProviderCompleted.Should().BeFalse();
+        }
+        finally
+        {
+            providerHandler.CompleteCanceled();
+            await providerHandler.Exited.WaitAsync(TimeSpan.FromSeconds(1));
+            await IgnoreFailureAsync(refresh);
+        }
+    }
+
+    [Fact]
     public void AddGAgentServiceProjection_ShouldRegisterCatalogRefreshObservationRuntime()
     {
         var services = new ServiceCollection();
@@ -300,6 +404,105 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTes
             string.Empty,
             DateTimeOffset.Parse("2026-07-21T09:00:00Z"));
 
+    private static ServiceProvider CreateProductionObservationServices()
+    {
+        var services = new ServiceCollection();
+        services.AddAevatarRuntime(options => options.ThrowOnSubscriberError = true);
+        services.AddAevatarAgentKindRegistry(builder =>
+            builder.Register<NyxIdAuthorizationCatalogGAgent>());
+        services.AddTransient<NyxIdAuthorizationCatalogGAgent>();
+        services.AddEventSinkProjectionRuntimeCore<
+            NyxIdAuthorizationCatalogRefreshObservationProjectionContext,
+            NyxIdAuthorizationCatalogRefreshObservationRuntimeLease,
+            NyxIdAuthorizationCatalogRefreshCommittedOutcome,
+            ProjectionSessionScopeGAgent<NyxIdAuthorizationCatalogRefreshObservationProjectionContext>>(
+            static scopeKey => new NyxIdAuthorizationCatalogRefreshObservationProjectionContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+                SessionId = scopeKey.SessionId,
+            },
+            static context => new NyxIdAuthorizationCatalogRefreshObservationRuntimeLease(context));
+        services.AddSingleton(new ServiceProjectionOptions { Enabled = true });
+        services.AddSingleton<
+            IProjectionSessionEventCodec<NyxIdAuthorizationCatalogRefreshCommittedOutcome>,
+            NyxIdAuthorizationCatalogRefreshObservationSessionEventCodec>();
+        services.AddSingleton<
+            IProjectionSessionEventHub<NyxIdAuthorizationCatalogRefreshCommittedOutcome>,
+            ProjectionSessionEventHub<NyxIdAuthorizationCatalogRefreshCommittedOutcome>>();
+        services.AddSingleton<IProjectionProjector<
+            NyxIdAuthorizationCatalogRefreshObservationProjectionContext>,
+            NyxIdAuthorizationCatalogRefreshObservationSessionEventProjector>();
+        services.AddSingleton<
+            INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort,
+            NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort>();
+        services.AddSingleton<
+            INyxIdAuthorizationCatalogRefreshObservationProjectionPort,
+            NyxIdAuthorizationCatalogRefreshObservationProjectionPort>();
+        return services.BuildServiceProvider();
+    }
+
+    private static AuthorizationOwnerIdentity PersonalOwner() => new()
+    {
+        Authority = NyxIdAuthorizationAuthorities.NyxId,
+        OwnerKind = AuthorizationOwnerKind.Personal,
+        OwnerSubject = "owner-alpha",
+    };
+
+    private static Task DrainActorMailboxAsync(IActor actor) =>
+        actor.HandleEventAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new ReplayProjectionFailuresCommand()),
+            Route = EnvelopeRouteSemantics.CreateDirect("test.projection.barrier", actor.Id),
+        });
+
+    private static async Task AssertReleasedLiveSinkIsDetachedAsync(
+        IStreamProvider streamProvider,
+        IProjectionSessionEventCodec<NyxIdAuthorizationCatalogRefreshCommittedOutcome> codec,
+        IProjectionSessionEventHub<NyxIdAuthorizationCatalogRefreshCommittedOutcome> hub,
+        string actorId,
+        string refreshId)
+    {
+        var transportObserved = new TaskCompletionSource<ProjectionSessionEventTransportMessage>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = streamProvider.GetStream($"{codec.Channel}:{actorId}:{refreshId}");
+        await using var probe = await stream.SubscribeAsync<ProjectionSessionEventTransportMessage>(message =>
+        {
+            transportObserved.TrySetResult(message);
+            return Task.CompletedTask;
+        });
+
+        // A leaked earlier sink would write to its completed EventChannel and stop this
+        // ThrowOnSubscriberError stream before the later probe receives the message.
+        await hub.PublishAsync(
+            actorId,
+            refreshId,
+            new NyxIdAuthorizationCatalogRefreshCommittedOutcome(
+                refreshId,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
+                1,
+                "nyxid_catalog_refresh_superseded",
+                RefreshStartedAt));
+
+        var transport = await transportObserved.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        transport.RootActorId.Should().Be(actorId);
+        transport.SessionId.Should().Be(refreshId);
+    }
+
+    private static async Task IgnoreFailureAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch
+        {
+            // Test cleanup only observes a task whose public result was already asserted.
+        }
+    }
+
     private static EventEnvelope CommittedEnvelope(IMessage payload) =>
         new()
         {
@@ -334,6 +537,61 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTes
                     ProjectionKind = request.ProjectionKind,
                     SessionId = request.SessionId,
                 }));
+        }
+    }
+
+    private sealed class EmptyCatalogQueryPort : INyxIdAuthorizationCatalogQueryPort
+    {
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<NyxIdAuthorizationCatalogSnapshot?>(null);
+        }
+    }
+
+    private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
+    {
+        public NyxIdApiClient CreateClient() => client;
+    }
+
+    private sealed class IncompleteProviderHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<bool> _blocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _cancellationObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<HttpResponseMessage> _response =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _exited =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Blocked => _blocked.Task;
+
+        public Task CancellationObserved => _cancellationObserved.Task;
+
+        public Task Exited => _exited.Task;
+
+        public bool ProviderCompleted => _response.Task.IsCompleted;
+
+        public void CompleteCanceled() => _response.TrySetCanceled();
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            using var registration = cancellationToken.Register(
+                () => _cancellationObserved.TrySetResult(true));
+            _blocked.TrySetResult(true);
+            try
+            {
+                return await _response.Task;
+            }
+            finally
+            {
+                _exited.TrySetResult(true);
+            }
         }
     }
 

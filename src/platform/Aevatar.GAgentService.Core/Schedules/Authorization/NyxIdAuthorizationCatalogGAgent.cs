@@ -14,8 +14,48 @@ public sealed class NyxIdAuthorizationCatalogGAgent
 {
     public const string DurableProjectionKind = "nyxid-authorization-catalog";
     private const string RefreshSupersededFailureCode = "nyxid_catalog_refresh_superseded";
+    private const NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion
+        CurrentLifecycleFenceSemanticsVersion =
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion.TerminalFactsAdvanceFence;
 
     public static string ProjectionKind => DurableProjectionKind;
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        if (State.Owner != null &&
+            CurrentStateVersion() > 0 &&
+            (int)State.LifecycleFenceSemanticsVersion <
+            (int)CurrentLifecycleFenceSemanticsVersion)
+        {
+            var displacedRefreshId = State.ActiveRefreshId;
+            var displacedRefreshStartedAt = State.ActiveRefreshStartedAt?.Clone()
+                                            ?? State.ActivatedAt?.Clone()
+                                            ?? new Google.Protobuf.WellKnownTypes.Timestamp();
+            var migrationStateVersion = checked(CurrentStateVersion() + 1);
+            var migrationEvents = new List<IMessage>
+            {
+                new NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent
+                {
+                    Owner = State.Owner.Clone(),
+                    SemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
+                    LifecycleFence = checked(State.LifecycleFence + 1),
+                },
+            };
+            if (!string.IsNullOrEmpty(displacedRefreshId))
+            {
+                migrationEvents.Add(BuildRefreshOutcome(
+                    displacedRefreshId,
+                    NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                    migrationStateVersion,
+                    displacedRefreshStartedAt,
+                    RefreshSupersededFailureCode));
+            }
+
+            await PersistDomainEventsAsync(migrationEvents, ct);
+        }
+
+        await base.OnActivateAsync(ct);
+    }
 
     [EventHandler(EndpointName = "beginCatalogRefresh")]
     public async Task HandleBeginRefreshAsync(BeginNyxIdAuthorizationCatalogRefreshCommand command)
@@ -76,6 +116,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
                 Owner = command.Owner.Clone(),
                 ActivatedAt = command.StartedAt.Clone(),
                 LifecycleFence = State.LifecycleFence,
+                LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
             });
         }
 
@@ -136,6 +177,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             EvaluatedAt = command.EvaluatedAt.Clone(),
             ContentDigest = command.ContentDigest.Trim(),
             LifecycleFence = checked(State.LifecycleFence + 1),
+            LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
         };
         observed.Services.Add(command.Services.Select(static service => service.Clone()));
         await PersistRefreshTransitionAsync(
@@ -172,6 +214,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
                 FailedAt = command.FailedAt.Clone(),
                 FailureCode = command.FailureCode.Trim(),
                 LifecycleFence = checked(State.LifecycleFence + 1),
+                LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
             },
             refreshId,
             NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed,
@@ -217,6 +260,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             InvalidatedAt = command.InvalidatedAt.Clone(),
             Reason = command.Reason.Trim(),
             LifecycleFence = lifecycleFence,
+            LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
         };
         if (!string.IsNullOrEmpty(refreshId))
         {
@@ -259,6 +303,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             CleanedAt = command.CleanedAt.Clone(),
             Reason = command.Reason.Trim(),
             LifecycleFence = lifecycleFence,
+            LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
         };
         if (!string.IsNullOrEmpty(displacedRefreshId))
         {
@@ -285,6 +330,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         .On<NyxIdAuthorizationCatalogRefreshFailedEvent>(ApplyRefreshFailed)
         .On<NyxIdAuthorizationCatalogInvalidatedEvent>(ApplyInvalidated)
         .On<NyxIdAuthorizationCatalogCleanedEvent>(ApplyCleaned)
+        .On<NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent>(ApplyLifecycleFenceSemanticsMigrated)
         .On<NyxIdAuthorizationCatalogRefreshOutcomeEvent>(ApplyRefreshOutcome)
         .OrCurrent();
 
@@ -296,7 +342,10 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Owner ??= evt.Owner.Clone();
         next.Activated = true;
         next.ActivatedAt = evt.ActivatedAt.Clone();
-        next.LifecycleFence = evt.LifecycleFence;
+        next.LifecycleFence = Math.Max(state.LifecycleFence, evt.LifecycleFence);
+        next.LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
+            state.LifecycleFenceSemanticsVersion,
+            evt.LifecycleFenceSemanticsVersion);
         return next;
     }
 
@@ -328,7 +377,10 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             InvalidationReason = string.Empty,
             LastRefreshFailedAt = state.LastRefreshFailedAt?.Clone(),
             LastRefreshFailureCode = state.LastRefreshFailureCode,
-            LifecycleFence = evt.LifecycleFence,
+            LifecycleFence = AdvanceTerminalLifecycleFence(state.LifecycleFence, evt.LifecycleFence),
+            LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
+                state.LifecycleFenceSemanticsVersion,
+                evt.LifecycleFenceSemanticsVersion),
             Activated = true,
             ActivatedAt = state.ActivatedAt?.Clone() ?? evt.ObservedAt.Clone(),
             Cleaned = false,
@@ -346,8 +398,10 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Owner ??= evt.Owner.Clone();
         next.ActiveRefreshId = string.Empty;
         next.ActiveRefreshStartedAt = null;
-        if (evt.HasLifecycleFence)
-            next.LifecycleFence = evt.LifecycleFence;
+        next.LifecycleFence = AdvanceTerminalLifecycleFence(state.LifecycleFence, evt.LifecycleFence);
+        next.LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
+            state.LifecycleFenceSemanticsVersion,
+            evt.LifecycleFenceSemanticsVersion);
         next.LastRefreshFailedAt = evt.FailedAt.Clone();
         next.LastRefreshFailureCode = evt.FailureCode;
         return next;
@@ -362,7 +416,10 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Invalidated = true;
         next.InvalidationReason = evt.Reason;
         next.InvalidatedAt = evt.InvalidatedAt.Clone();
-        next.LifecycleFence = evt.LifecycleFence;
+        next.LifecycleFence = AdvanceTerminalLifecycleFence(state.LifecycleFence, evt.LifecycleFence);
+        next.LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
+            state.LifecycleFenceSemanticsVersion,
+            evt.LifecycleFenceSemanticsVersion);
         next.ActiveRefreshId = string.Empty;
         next.ActiveRefreshStartedAt = null;
         return next;
@@ -376,12 +433,39 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         Invalidated = true,
         InvalidationReason = evt.Reason,
         InvalidatedAt = evt.CleanedAt.Clone(),
-        LifecycleFence = evt.LifecycleFence,
+        LifecycleFence = AdvanceTerminalLifecycleFence(state.LifecycleFence, evt.LifecycleFence),
+        LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
+            state.LifecycleFenceSemanticsVersion,
+            evt.LifecycleFenceSemanticsVersion),
         Activated = false,
         Cleaned = true,
         CleanedAt = evt.CleanedAt.Clone(),
         CleanupReason = evt.Reason,
     };
+
+    private static long AdvanceTerminalLifecycleFence(long currentFence, long eventFence) =>
+        Math.Max(eventFence, checked(currentFence + 1));
+
+    private static NyxIdAuthorizationCatalogState ApplyLifecycleFenceSemanticsMigrated(
+        NyxIdAuthorizationCatalogState state,
+        NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent evt)
+    {
+        var next = state.Clone();
+        next.Owner ??= evt.Owner.Clone();
+        next.LifecycleFence = Math.Max(state.LifecycleFence, evt.LifecycleFence);
+        next.LifecycleFenceSemanticsVersion = LatestLifecycleFenceSemanticsVersion(
+            state.LifecycleFenceSemanticsVersion,
+            evt.SemanticsVersion);
+        next.ActiveRefreshId = string.Empty;
+        next.ActiveRefreshStartedAt = null;
+        return next;
+    }
+
+    private static NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion
+        LatestLifecycleFenceSemanticsVersion(
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion current,
+            NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion candidate) =>
+            (int)candidate > (int)current ? candidate : current;
 
     private static NyxIdAuthorizationCatalogState ApplyRefreshOutcome(
         NyxIdAuthorizationCatalogState state,

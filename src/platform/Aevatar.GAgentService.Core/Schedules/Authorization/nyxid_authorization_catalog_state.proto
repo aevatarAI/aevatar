@@ -31,6 +31,7 @@ message NyxIdAuthorizationCatalogState {
   google.protobuf.Timestamp evaluated_at = 20;
   string active_refresh_id = 21;
   google.protobuf.Timestamp active_refresh_started_at = 22;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 25;
 }
 
 message ObserveNyxIdAuthorizationCatalogCommand {
@@ -80,6 +81,7 @@ message NyxIdAuthorizationCatalogActivatedEvent {
   aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
   google.protobuf.Timestamp activated_at = 2;
   int64 lifecycle_fence = 3;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 4;
 }
 
 message NyxIdAuthorizationCatalogRefreshBeganEvent {
@@ -102,6 +104,7 @@ message NyxIdAuthorizationCatalogObservedEvent {
   string policy_version = 9;
   google.protobuf.Timestamp evaluated_at = 10;
   string refresh_id = 11;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 12;
 }
 
 message NyxIdAuthorizationCatalogRefreshFailedEvent {
@@ -110,6 +113,7 @@ message NyxIdAuthorizationCatalogRefreshFailedEvent {
   string failure_code = 3;
   string refresh_id = 4;
   optional int64 lifecycle_fence = 5;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 6;
 }
 
 message NyxIdAuthorizationCatalogInvalidatedEvent {
@@ -117,6 +121,7 @@ message NyxIdAuthorizationCatalogInvalidatedEvent {
   google.protobuf.Timestamp invalidated_at = 2;
   string reason = 3;
   int64 lifecycle_fence = 4;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 5;
 }
 
 message NyxIdAuthorizationCatalogCleanedEvent {
@@ -124,6 +129,18 @@ message NyxIdAuthorizationCatalogCleanedEvent {
   google.protobuf.Timestamp cleaned_at = 2;
   string reason = 3;
   int64 lifecycle_fence = 4;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion lifecycle_fence_semantics_version = 5;
+}
+
+enum NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion {
+  NYX_ID_AUTHORIZATION_CATALOG_LIFECYCLE_FENCE_SEMANTICS_VERSION_UNSPECIFIED = 0;
+  NYX_ID_AUTHORIZATION_CATALOG_LIFECYCLE_FENCE_SEMANTICS_VERSION_TERMINAL_FACTS_ADVANCE_FENCE = 1;
+}
+
+message NyxIdAuthorizationCatalogLifecycleFenceSemanticsMigratedEvent {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  NyxIdAuthorizationCatalogLifecycleFenceSemanticsVersion semantics_version = 2;
+  int64 lifecycle_fence = 3;
 }
 
 enum NyxIdAuthorizationCatalogRefreshOutcomeStatusState {
