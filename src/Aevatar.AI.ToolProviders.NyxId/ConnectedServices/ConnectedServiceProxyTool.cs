@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.Foundation.Abstractions.Tools;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -18,6 +19,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
     private readonly NyxIdApiClient _client;
     private readonly ConnectedServiceToolOperation _operation;
     private readonly string _serviceSlug;
+    private readonly string _userServiceId;
     private readonly bool _preferOrgToken;
     private readonly ILogger _logger;
 
@@ -25,15 +27,19 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         NyxIdApiClient client,
         string name,
         string serviceSlug,
+        string userServiceId,
         ConnectedServiceToolOperation operation,
         bool preferOrgToken,
+        ToolPresentationDescriptor presentation,
         ILogger? logger = null)
     {
         _client = client;
         Name = name;
         _serviceSlug = serviceSlug;
+        _userServiceId = userServiceId;
         _operation = operation;
         _preferOrgToken = preferOrgToken;
+        Presentation = presentation?.Clone() ?? throw new ArgumentNullException(nameof(presentation));
         _logger = logger ?? NullLogger.Instance;
 
         ParametersSchema = operation.BuildParametersSchema();
@@ -47,7 +53,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             : !string.IsNullOrWhiteSpace(operation.Marker?.Description)
                 ? operation.Marker!.Description
                 : operation.OperationId;
-        Description = $"{summary} [NyxID service: {serviceSlug}; {operation.Method} {operation.PathTemplate}]";
+        Description = $"{summary} [NyxID service: {serviceSlug}; instance: {userServiceId}; {operation.Method} {operation.PathTemplate}]";
     }
 
     public string Name { get; }
@@ -55,6 +61,8 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
     public string Description { get; }
 
     public string ParametersSchema { get; }
+
+    public ToolPresentationDescriptor Presentation { get; }
 
     public ToolApprovalMode ApprovalMode { get; }
 
@@ -73,6 +81,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             callId,
             toolName,
             _serviceSlug,
+            _userServiceId,
             serviceLabel: null,
             resourceUri,
             resultJson);
@@ -111,7 +120,15 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             "[{Tool}] proxy {Method} slug={Slug} tokenSource={Source}",
             Name, _operation.Method, _serviceSlug, _preferOrgToken ? "org" : "user");
 
-        return await _client.ProxyRequestAsync(token, _serviceSlug, fullPath, _operation.Method, body, headers, ct);
+        return await _client.ProxyRequestAsync(
+            token,
+            _serviceSlug,
+            _userServiceId,
+            fullPath,
+            _operation.Method,
+            body,
+            headers,
+            ct);
     }
 
     private bool TryBuildPath(ToolArgs args, out string path, out string? error)

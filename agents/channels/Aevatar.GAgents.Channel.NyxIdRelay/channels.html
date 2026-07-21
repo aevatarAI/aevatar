@@ -156,7 +156,7 @@
   .reg-row .rm { font-size:12px; color:var(--muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:2px; }
   .reg-row .rm .id { font-family:var(--mono); font-size:11.5px; color:var(--muted-2); }
   .reg-row .rm .sep { color:var(--border); }
-  .reg-row .ra { display:flex; align-items:center; gap:10px; }
+  .reg-row .ra { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
   .manage-btn { font-size:12.5px; font-weight:600; color:var(--fg); background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-sm); padding:6px 12px; }
   .manage-btn:hover { border-color:var(--muted-2); }
 
@@ -296,6 +296,7 @@
   .kv .k { color:var(--muted); }
   .kv .v { color:var(--fg); font-family:var(--mono); font-size:12.5px; text-align:right; word-break:break-all; }
   .kv .v.plain { font-family:var(--sans); }
+  .repair-detail { font-family:var(--mono); font-size:11.5px; color:var(--muted-2); margin-top:5px; word-break:break-word; }
 
   /* =========================================================================
      Responsive
@@ -375,6 +376,7 @@
      GET    /api/channels/registrations                connected list
      DELETE /api/channels/registrations/{id}            delete / recreate
      GET    /api/channels/registrations/{id}/status     live NyxID bot status
+     POST   /api/channels/registrations/{id}/workflow-result-delivery/repair
      GET/PUT /api/user-config/llm                        owner reply-model config
    =========================================================================== */
 
@@ -420,6 +422,12 @@ const esc=(s)=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;
 const initials=(s)=>(s||"?").trim().charAt(0).toUpperCase();
 
 const STATUS_LABEL = { active:"已激活", pending:"待激活", pending_webhook:"待激活", error:"异常", registered:"已注册", bound:"已绑定", soon:"即将上线", available:"可接入", loading:"查询中", foreign:"非本账户", unknown:"状态未知" };
+const WORKFLOW_DELIVERY_STATUS = {
+  enabled:{ label:"工作流回传正常", badge:"active" },
+  repair_required:{ label:"工作流回传待修复", badge:"warn" },
+  repairing:{ label:"工作流回传修复中", badge:"running" },
+  repair_failed:{ label:"工作流回传失败", badge:"failed" }
+};
 
 const ICON={
   sun:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.6 4.6l1.7 1.7M17.7 17.7l1.7 1.7M19.4 4.6l-1.7 1.7M6.3 17.7l-1.7 1.7"/></svg>',
@@ -529,6 +537,8 @@ const state = {
   llmSel:{ route:null, model:null },  // step4 selections
   llmSaving:false, llmSaved:false,
   manageReg:null,                     // registration row being managed
+  workflowRepairing:{},               // registrationId -> request in flight
+  workflowRepairNotice:null,          // safe user-facing result message
   lights:["pending","pending"],
   _statusTimer:null
 };
@@ -698,6 +708,69 @@ function normStatus(s){
 }
 const BADGE_BY_STATUS = { active:["b-active","s-active"], pending:["b-pending","s-pending"], error:["b-error","s-error"], loading:["b-soon","s-running"], foreign:["b-soon","s-unknown"], unknown:["b-warn","s-warn"] };
 
+function workflowDeliveryStatus(registration){
+  if(!registration) return "repair_required";
+  const live = state.statuses[registration.id];
+  return (live && live.workflow_result_delivery_status) ||
+    registration.workflow_result_delivery_status || "repair_required";
+}
+function workflowDeliveryView(registration){
+  const status = workflowDeliveryStatus(registration);
+  if(status==="repair_required" && (registration.platform||"").toLowerCase()!=="lark"){
+    return { label:"工作流回传未启用", badge:"soon" };
+  }
+  return WORKFLOW_DELIVERY_STATUS[status] || WORKFLOW_DELIVERY_STATUS.repair_required;
+}
+function applyWorkflowDeliveryResult(registration, data, fallbackStatus){
+  const status = (data && data.workflow_result_delivery_status) || fallbackStatus;
+  registration.workflow_result_delivery_status = status;
+  registration.workflow_result_delivery_failure_phase = data && data.failure_phase || null;
+  registration.workflow_result_delivery_failure_reason = data && data.failure_reason || null;
+  const live = state.statuses[registration.id];
+  if(live){
+    live.workflow_result_delivery_status = status;
+    live.workflow_result_delivery_failure_phase = registration.workflow_result_delivery_failure_phase;
+    live.workflow_result_delivery_failure_reason = registration.workflow_result_delivery_failure_reason;
+  }
+}
+async function repairWorkflowReplies(registration){
+  if(!registration || !registration.id || state.workflowRepairing[registration.id]) return;
+  state.workflowRepairing[registration.id] = true;
+  state.workflowRepairNotice = null;
+  render();
+  let result;
+  try {
+    result = await apiSend(
+      "/api/channels/registrations/" + encodeURIComponent(registration.id) +
+        "/workflow-result-delivery/repair",
+      "POST",
+      null);
+  } catch(e) {
+    state.workflowRepairing[registration.id] = false;
+    if(e.message!=="unauthorized"){
+      applyWorkflowDeliveryResult(registration, null, "repair_failed");
+      state.workflowRepairNotice = { registrationId:registration.id, message:"工作流回传修复请求失败，请重试。" };
+      render();
+    }
+    return;
+  }
+
+  state.workflowRepairing[registration.id] = false;
+  const data = result.data || {};
+  applyWorkflowDeliveryResult(
+    registration,
+    data,
+    result.ok ? "enabled" : "repair_failed");
+  if(result.ok && workflowDeliveryStatus(registration)==="enabled"){
+    state.workflowRepairNotice = { registrationId:registration.id, message:"工作流回传已恢复，无需修改 Lark 后台配置。" };
+  } else if(workflowDeliveryStatus(registration)==="repairing") {
+    state.workflowRepairNotice = { registrationId:registration.id, message:"工作流回传修复正在完成。" };
+  } else {
+    state.workflowRepairNotice = { registrationId:registration.id, message:data.note || "工作流回传修复未完成，请重试。" };
+  }
+  render();
+}
+
 /* ---- register / delete / llm save ---- */
 async function doRegister(){
   state.step=2; state.s="running"; state.err=null; state.errMsg=null; render();
@@ -715,6 +788,7 @@ async function doRegister(){
       routeId: d.nyx_conversation_route_id || "",
       webhookUrl: d.webhook_url || "",
       relayCallbackUrl: d.relay_callback_url || "",
+      workflowDeliveryStatus: d.workflow_result_delivery_status || "repair_required",
       scope: state.scopeId || (r.data && r.data.scope_id) || "",
       verificationToken: (c.verification_token||"").trim(),
       label: (c.label||"").trim()
@@ -870,6 +944,7 @@ function renderCatalog(){
     regs.forEach(r=>{
       const st = normStatus(state.statuses[r.id]);
       const [badgeCls,dotCls] = BADGE_BY_STATUS[st] || ["b-soon","s-unknown"];
+      const delivery = workflowDeliveryView(r);
       const row=el("div",{class:"reg-row",role:"listitem"});
       row.innerHTML=`
         <div class="rl" style="background:linear-gradient(150deg,var(--accent),color-mix(in oklab,var(--accent) 55%,#7c4dff))">${chLogo(r.platform||"lark")}</div>
@@ -878,7 +953,8 @@ function renderCatalog(){
           <div class="rm"><span class="id">${esc(r.nyx_channel_bot_id||r.id)}</span><span class="sep">·</span><span class="id">${esc(r.scope_id||"")}</span></div>
         </div>
         <div class="ra">
-          <span class="badge ${badgeCls}"><span class="dot ${dotCls}"></span>${STATUS_LABEL[st]||st}</span>
+          <span class="badge ${badgeCls}" title="消息入站状态"><span class="dot ${dotCls}"></span>${STATUS_LABEL[st]||st}</span>
+          <span title="工作流结果回传状态">${badge(delivery.badge,delivery.label)}</span>
           <button class="manage-btn">管理</button>
         </div>`;
       row.querySelector(".manage-btn").addEventListener("click",()=>{ state.view="manage"; state.manageReg=r; render(); fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); });
@@ -1064,13 +1140,20 @@ function renderStep2(){
     }
   } else { // done
     const P=curP();
+    const workflowReady = state.reg && state.reg.workflowDeliveryStatus === "enabled";
     wrap.appendChild(regProgress(["done","done","done","done"]));
     const rc=el("div",{class:"result-card"});
-    rc.innerHTML=`<div class="rc-h">${ICON.check} 注册成功 · mirror 已写入</div>`;
+    rc.innerHTML=`<div class="rc-h">${ICON.check} ${workflowReady?"注册完成":"入站接入完成 · 工作流回传待修复"} · mirror 已写入</div>`;
     rc.appendChild(copyRow("bot_id", state.reg.botId));
     if(P.consoleStep) rc.appendChild(copyRow("webhook_url（回调地址）", state.reg.webhookUrl));
     if(state.reg.scope) rc.appendChild(copyRow("scope", state.reg.scope));
     wrap.appendChild(rc);
+    if(!workflowReady){
+      const capabilityCopy = P.id==="lark"
+        ? `完成接入后可在管理页选择 <b>Repair workflow replies</b>；修复会保留当前 bot 和 webhook。`
+        : `当前渠道尚未提供工作流结果回传修复操作。`;
+      wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">部分配置已完成</span>bot 已具备消息入站能力，但工作流结束后的结果回传尚未启用。${capabilityCopy}</div>`));
+    }
     if(P.consoleStep){
       wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body">下一步要把上面的 <b>webhook_url</b> 和 Verification Token 填到 Lark 后台 —— 这一步只能你手动做。</div>`));
     } else {
@@ -1284,6 +1367,15 @@ function renderManage(){
   const p=el("main",{class:"page"});
   const r = state.manageReg || {};
   const st = normStatus(state.statuses[r.id]);
+  const repairInFlight = !!state.workflowRepairing[r.id];
+  const committedDeliveryStatus = workflowDeliveryStatus(r);
+  const deliveryStatus = repairInFlight ? "repairing" : committedDeliveryStatus;
+  const delivery = repairInFlight
+    ? WORKFLOW_DELIVERY_STATUS.repairing
+    : workflowDeliveryView(r);
+  const liveStatus = state.statuses[r.id] || {};
+  const failurePhase = liveStatus.workflow_result_delivery_failure_phase || r.workflow_result_delivery_failure_phase || "";
+  const failureReason = liveStatus.workflow_result_delivery_failure_reason || r.workflow_result_delivery_failure_reason || "";
   const crumb=el("nav",{class:"crumb"});
   const back=el("button",{},`${ICON.back}<span>渠道目录</span>`); back.addEventListener("click",()=>{ state.view="catalog"; render(); });
   crumb.appendChild(back); crumb.insertAdjacentHTML("beforeend",`<span class="sep">/</span><span>${esc(connectName(r.platform))} · 管理</span>`);
@@ -1299,6 +1391,8 @@ function renderManage(){
     </div>`;
   const rows=[
     ["渠道", r.platform||"lark","plain"],
+    ["消息入站", STATUS_LABEL[st]||st,"plain"],
+    ["工作流回传", delivery.label,"plain"],
     ["bot_id", r.nyx_channel_bot_id||""],
     ["scope", r.scope_id||""],
     ["provider", r.nyx_provider_slug||""],
@@ -1316,7 +1410,30 @@ function renderManage(){
     p.appendChild(el("div",{class:"callout warn",style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">bot 还没激活</span>${warnBody}</div>`));
   }
 
+  const ownedLark = r.owned === true && (r.platform||"").toLowerCase()==="lark";
+  if(ownedLark && (deliveryStatus==="repair_required" || deliveryStatus==="repair_failed")){
+    const failedDetail = deliveryStatus==="repair_failed" && (failurePhase || failureReason)
+      ? `<div class="repair-detail">${esc(failurePhase||"unspecified")} · ${esc(failureReason||"unspecified")}</div>`
+      : "";
+    p.appendChild(el("div",{class:`callout ${deliveryStatus==="repair_failed"?"err":"warn"}`,style:"margin-top:16px"},`${ICON.warn}<div class="body"><span class="ct-title">工作流结果回传${deliveryStatus==="repair_failed"?"修复未完成":"尚未启用"}</span>消息入站状态与工作流回传能力相互独立；当前 bot 仍可接收消息。使用下方修复操作会保留现有 bot、webhook 和 Lark 后台配置。${failedDetail}</div>`));
+  } else if(ownedLark && deliveryStatus==="repairing") {
+    p.appendChild(el("div",{class:"callout info",style:"margin-top:16px",role:"status","aria-live":"polite"},`${ICON.refresh}<div class="body"><span class="ct-title">工作流回传修复中</span>正在轮换内部回传凭据并更新现有路由。</div>`));
+  }
+
+  if(state.workflowRepairNotice && state.workflowRepairNotice.registrationId===r.id){
+    const noticeKind = deliveryStatus==="enabled" ? "info" : "warn";
+    p.appendChild(el("div",{class:`callout ${noticeKind}`,style:"margin-top:16px",role:"status","aria-live":"polite"},`${deliveryStatus==="enabled"?ICON.check:ICON.info}<div class="body">${esc(state.workflowRepairNotice.message)}</div>`));
+  }
+
   const foot=el("div",{class:"step-foot",style:"border-top:0;margin-top:18px;padding-top:0"});
+  if(ownedLark && (committedDeliveryStatus==="repair_required" || committedDeliveryStatus==="repair_failed")){
+    foot.appendChild(btn(
+      "Repair workflow replies",
+      "primary",
+      repairInFlight ? '<span class="spin"></span>' : ICON.refresh,
+      ()=>repairWorkflowReplies(r),
+      {disabled:repairInFlight}));
+  }
   foot.appendChild(btn("刷新状态","ghost",ICON.refresh,()=>{ if(r.id) fetchStatus(r.id).then(s=>{ if(s){ state.statuses[r.id]=s; render(); } }); }));
   foot.appendChild(btn("重新接入","ghost",ICON.gear,()=>{ enterWizard((r.platform||"lark").toLowerCase()); }));
   foot.appendChild(btn("删除接入","danger",ICON.trash,()=>{ const recover = hasConsole((r.platform||"lark").toLowerCase()) ? "如需恢复要重新注册并回后台改回调。" : "如需恢复重新注册即可（Telegram 无需后台改动）。"; if(confirm("删除该接入？\n\n这会删除 registration 和 mirror，bot 将不再路由。"+recover)){ doDelete(r.id, ()=>{ state.view="catalog"; render(); }); } }));

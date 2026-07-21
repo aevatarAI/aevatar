@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.Foundation.Abstractions.Tools;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -9,9 +10,10 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 /// <summary>
 /// Discovers the caller's NyxID connected services at request time and registers any
 /// operation that is explicitly marked <c>x-aevatar-tool</c> as an individual
-/// <see cref="IAgentTool"/>. NyxID stays the single source of truth: services and specs are
-/// read live from NyxID's proxy/spec surfaces on every discovery, nothing is cached as a
-/// process-local catalog, and execution always goes back through the NyxID proxy.
+/// <see cref="IAgentTool"/>. NyxID stays the single source of truth: connected instances come
+/// from /keys, definitions come from /catalog, and specs are read live from the proxy-aware
+/// OpenAPI surface. Nothing is cached as a process-local catalog, and execution always goes
+/// back through the NyxID proxy.
 /// </summary>
 /// <remarks>
 /// The per-request NyxID access token is read from <see cref="AgentToolRequestContext"/>,
@@ -77,40 +79,56 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         var tools = new List<IAgentTool>();
         var byName = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        for (var i = 0; i < services.Count; i++)
-        {
-            var service = services[i];
-            var operations = specs[i]
-                .OrderBy(op => op.PathTemplate, StringComparer.Ordinal)
-                .ThenBy(op => op.Method, StringComparer.Ordinal);
-
-            foreach (var operation in operations)
-            {
-                var name = ConnectedServiceToolNaming.Build(
-                    service.Slug,
-                    operation.Marker?.Name ?? operation.OperationId);
-                var identity = $"{service.Slug}:{operation.Method} {operation.PathTemplate}";
-
-                if (byName.TryGetValue(name, out var existing))
-                {
-                    // Observable failure: two operations collapse to the same tool name. Keep the
-                    // first (deterministic order) and drop the rest so the LLM never sees an
-                    // ambiguous duplicate.
-                    _logger.LogWarning(
-                        "NyxID connected-service tool name conflict on '{Name}': keeping {Existing}, dropping {Dropped}",
-                        name, existing, identity);
-                    continue;
-                }
-
-                byName[name] = identity;
-                tools.Add(new ConnectedServiceProxyTool(
-                    _client,
-                    name,
-                    service.Slug,
+        var candidates = services
+            .SelectMany((service, index) => specs[index]
+                .OrderBy(static operation => operation.PathTemplate, StringComparer.Ordinal)
+                .ThenBy(static operation => operation.Method, StringComparer.Ordinal)
+                .Select(operation => new ToolCandidate(
+                    service,
                     operation,
-                    service.PreferOrgToken,
-                    _logger));
+                    operation.Marker?.Name ?? operation.OperationId,
+                    ConnectedServiceToolNaming.Build(
+                        service.Slug,
+                        operation.Marker?.Name ?? operation.OperationId))))
+            .ToArray();
+        var ambiguousNames = candidates
+            .GroupBy(static candidate => candidate.BaseName, StringComparer.Ordinal)
+            .Where(static group => group
+                .Select(static candidate => candidate.Service.ServiceId)
+                .Distinct(StringComparer.Ordinal)
+                .Count() > 1)
+            .Select(static group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var candidate in candidates)
+        {
+            var service = candidate.Service;
+            var operation = candidate.Operation;
+            var name = ambiguousNames.Contains(candidate.BaseName)
+                ? ConnectedServiceToolNaming.Build(
+                    service.Slug,
+                    $"{candidate.OperationName}_{service.ServiceId}")
+                : candidate.BaseName;
+            var identity = $"{service.ServiceId}:{service.Slug}:{operation.Method} {operation.PathTemplate}";
+
+            if (byName.TryGetValue(name, out var existing))
+            {
+                _logger.LogWarning(
+                    "NyxID connected-service tool name conflict on '{Name}': keeping {Existing}, dropping {Dropped}",
+                    name, existing, identity);
+                continue;
             }
+
+            byName[name] = identity;
+            tools.Add(new ConnectedServiceProxyTool(
+                _client,
+                name,
+                service.Slug,
+                service.ServiceId,
+                operation,
+                service.PreferOrgToken,
+                BuildPresentation(service, operation, name),
+                _logger));
         }
 
         _logger.LogInformation(
@@ -120,18 +138,54 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         return tools;
     }
 
+    private static ToolPresentationDescriptor BuildPresentation(
+        ConnectedServiceRef service,
+        ConnectedServiceToolOperation operation,
+        string invocationName)
+    {
+        var operationDisplayName = FirstNonEmpty(
+            operation.Summary,
+            operation.Marker?.Description,
+            operation.Marker?.Name,
+            operation.OperationId);
+        var connectorDisplayName = FirstNonEmpty(
+            service.ConnectorDisplayName,
+            service.ConnectionLabel,
+            service.CatalogServiceSlug,
+            service.Slug);
+        var displayName = string.IsNullOrWhiteSpace(operationDisplayName)
+            ? connectorDisplayName
+            : $"{connectorDisplayName} - {operationDisplayName}";
+        var description = FirstNonEmpty(service.Description, operation.Marker?.Description, operation.Summary);
+
+        return new ToolPresentationDescriptor
+        {
+            InvocationName = invocationName,
+            DisplayName = displayName,
+            Description = description,
+            Kind = ToolPresentationKind.NyxIdOperation,
+            Availability = ToolAvailability.Available,
+            IconUrl = service.IconUrl,
+            NyxIdOperation = new NyxIdOperationRef
+            {
+                ConnectedServiceId = service.ServiceId,
+                ServiceSlug = service.Slug,
+                CatalogServiceSlug = service.CatalogServiceSlug,
+                ConnectionLabel = service.ConnectionLabel,
+                ConnectorDisplayName = connectorDisplayName,
+                OperationId = operation.OperationId,
+                HttpMethod = operation.Method,
+                PathTemplate = operation.PathTemplate,
+            },
+        };
+    }
+
     private async Task<IReadOnlyList<ConnectedServiceToolOperation>> FetchOperationsAsync(
         ConnectedServiceRef service,
         string userToken,
         string? orgToken,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(service.ServiceId))
-        {
-            _logger.LogDebug("NyxID service '{Slug}' has no service id; cannot fetch proxy-aware spec", service.Slug);
-            return [];
-        }
-
         var token = service.PreferOrgToken && !string.IsNullOrWhiteSpace(orgToken) ? orgToken! : userToken;
         var specJson = await _client.GetProxyServiceOpenApiAsync(token, service.ServiceId, ct);
         if (LooksLikeErrorEnvelope(specJson))
@@ -149,19 +203,19 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         CancellationToken ct)
     {
         var merged = new List<ConnectedServiceRef>();
-        var seenSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenServiceIds = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var service in ParseServices(await _client.DiscoverProxyServicesAsync(userToken, ct), preferOrgToken: false))
+        foreach (var service in await DiscoverServicesForTokenAsync(userToken, preferOrgToken: false, ct))
         {
-            if (seenSlugs.Add(service.Slug))
+            if (seenServiceIds.Add(service.ServiceId))
                 merged.Add(service);
         }
 
         if (!string.IsNullOrWhiteSpace(orgToken) && orgToken != userToken)
         {
-            foreach (var service in ParseServices(await _client.DiscoverProxyServicesAsync(orgToken, ct), preferOrgToken: true))
+            foreach (var service in await DiscoverServicesForTokenAsync(orgToken, preferOrgToken: true, ct))
             {
-                if (seenSlugs.Add(service.Slug))
+                if (seenServiceIds.Add(service.ServiceId))
                     merged.Add(service);
             }
         }
@@ -169,62 +223,85 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         return merged;
     }
 
-    internal static IReadOnlyList<ConnectedServiceRef> ParseServices(string? json, bool preferOrgToken)
+    private async Task<IReadOnlyList<ConnectedServiceRef>> DiscoverServicesForTokenAsync(
+        string token,
+        bool preferOrgToken,
+        CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(json))
-            return [];
+        var keysTask = _client.ListServicesAsync(token, ct);
+        var catalogTask = _client.ListCatalogAsync(token, ct);
+        await Task.WhenAll(keysTask, catalogTask).ConfigureAwait(false);
+
+        var keys = ParseJson<NyxIdConnectedServiceListDto>(await keysTask.ConfigureAwait(false))?.Keys ?? [];
+        var catalogEntries = ParseJson<NyxIdCatalogListDto>(await catalogTask.ConfigureAwait(false))?.Entries ?? [];
+        var catalogBySlug = catalogEntries
+            .Where(static entry => !string.IsNullOrWhiteSpace(entry.Slug))
+            .GroupBy(static entry => entry.Slug, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         var results = new List<ConnectedServiceRef>();
-        try
+        foreach (var key in keys)
         {
-            using var doc = JsonDocument.Parse(json);
-            foreach (var item in EnumerateServiceItems(doc.RootElement))
+            if (!IsExecutableConnectedService(key) ||
+                string.IsNullOrWhiteSpace(key.Id) ||
+                string.IsNullOrWhiteSpace(key.Slug))
             {
-                if (item.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                var slug = ReadString(item, "slug");
-                if (string.IsNullOrWhiteSpace(slug))
-                    continue;
-
-                var serviceId = ReadString(item, "id") ?? ReadString(item, "service_id");
-                results.Add(new ConnectedServiceRef(slug!, serviceId, preferOrgToken));
+                continue;
             }
-        }
-        catch (JsonException)
-        {
-            return [];
+
+            NyxIdCatalogEntryDto? catalog = null;
+            if (!string.IsNullOrWhiteSpace(key.CatalogServiceSlug))
+                catalogBySlug.TryGetValue(key.CatalogServiceSlug, out catalog);
+
+            results.Add(new ConnectedServiceRef(
+                key.Slug.Trim(),
+                key.Id.Trim(),
+                key.CatalogServiceSlug?.Trim() ?? string.Empty,
+                FirstNonEmpty(key.Label, key.Name, key.Slug),
+                FirstNonEmpty(catalog?.Name, key.CatalogServiceName, key.Label, key.Name, key.Slug),
+                FirstNonEmpty(catalog?.Description, key.Description),
+                catalog?.IconUrl?.Trim() ?? string.Empty,
+                preferOrgToken));
         }
 
         return results;
     }
 
-    private static IEnumerable<JsonElement> EnumerateServiceItems(JsonElement root)
+    private static bool IsExecutableConnectedService(NyxIdConnectedServiceDto service)
     {
-        if (root.ValueKind == JsonValueKind.Array)
+        if (service.Connected == false || !service.IsActive ||
+            service.Allowed == false || service.CredentialSource?.Allowed == false)
         {
-            foreach (var item in root.EnumerateArray())
-                yield return item;
-            yield break;
+            return false;
         }
 
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
+        return string.Equals(service.Status, "active", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(service.Status, "ready", StringComparison.OrdinalIgnoreCase);
+    }
 
-        foreach (var propertyName in new[] { "services", "custom_services", "data" })
+    private static T? ParseJson<T>(string? json) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
         {
-            if (!root.TryGetProperty(propertyName, out var items) || items.ValueKind != JsonValueKind.Array)
-                continue;
-
-            foreach (var item in items.EnumerateArray())
-                yield return item;
+            return JsonSerializer.Deserialize<T>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
-    private static string? ReadString(JsonElement owner, string name) =>
-        owner.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+    private static string FirstNonEmpty(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+            if (!string.IsNullOrWhiteSpace(candidate))
+                return candidate.Trim();
+
+        return string.Empty;
+    }
 
     private static bool LooksLikeErrorEnvelope(string? response)
     {
@@ -245,5 +322,19 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         }
     }
 
-    internal sealed record ConnectedServiceRef(string Slug, string? ServiceId, bool PreferOrgToken);
+    private sealed record ConnectedServiceRef(
+        string Slug,
+        string ServiceId,
+        string CatalogServiceSlug,
+        string ConnectionLabel,
+        string ConnectorDisplayName,
+        string Description,
+        string IconUrl,
+        bool PreferOrgToken);
+
+    private sealed record ToolCandidate(
+        ConnectedServiceRef Service,
+        ConnectedServiceToolOperation Operation,
+        string OperationName,
+        string BaseName);
 }

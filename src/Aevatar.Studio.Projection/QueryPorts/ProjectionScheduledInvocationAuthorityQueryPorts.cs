@@ -59,10 +59,8 @@ public sealed class ProjectionScheduledInvocationWorkflowQueryPort(
         var evidence = artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence;
         return new ScheduledInvocationWorkflowEvidence(
             catalog.StateVersion,
-            evidence.ConnectorCapabilityRefs.ToArray(),
+            evidence.ExternalCapabilities.Select(static capability => capability.Clone()).ToArray(),
             evidence.OwnerLlmRouteRequired,
-            evidence.NyxIdServiceIds.ToArray(),
-            evidence.NyxIdServiceSlugs.ToArray(),
             evidence.ServiceGrantRequirement);
     }
 }

@@ -223,7 +223,7 @@ Use the code_execute tool for a simpler interface.
         }
 
         if (operations.Length > maxEndpoints)
-            sb.AppendLine($"... and {operations.Length - maxEndpoints} more. Use nyxid_proxy with the service slug for uncovered endpoints.");
+            sb.AppendLine($"... and {operations.Length - maxEndpoints} more. Use nyxid_proxy with the exact user_service_id and slug for uncovered endpoints.");
 
         return sb.ToString();
     }

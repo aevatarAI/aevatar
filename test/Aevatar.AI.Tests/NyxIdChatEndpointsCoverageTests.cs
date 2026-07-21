@@ -1344,6 +1344,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-1");
+        request.CommandAttemptId.Should().Be(result.Receipt.CommandId);
         request.ScopeId.Should().Be("scope-a");
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         request.Metadata.Should().NotContainKey("scope_id");
@@ -2672,66 +2673,6 @@ public partial class NyxIdChatEndpointsCoverageTests
         diag.Should().Contain("timeout");
     }
 
-    [Fact]
-    public async Task NyxIdChatSessionEventProjector_ShouldPublishTypedAguiFrames_FromEventEnvelopeInput()
-    {
-        var sessionHub = new RecordingNyxIdChatSessionEventHub();
-        var projector = new NyxIdChatSessionEventProjector(sessionHub);
-        var context = new NyxIdChatSessionProjectionContext
-        {
-            RootActorId = "actor-1",
-            SessionId = "session-1",
-            ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
-        };
-
-        await projector.ProjectAsync(
-            context,
-            CommittedNyxIdCompletionEnvelope(
-                context.RootActorId,
-                new RoleChatSessionCompletedEvent
-                {
-                    SessionId = "session-1",
-                    Content = "done",
-                    ContentEmitted = false,
-                    Usage = new TokenUsagePayload
-                    {
-                        PromptTokens = 2,
-                        CompletionTokens = 4,
-                        TotalTokens = 6,
-                    },
-                    Model = "nyxid-model",
-                }),
-            CancellationToken.None);
-
-        sessionHub.Published.Should().HaveCount(5);
-        sessionHub.Published[0].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageStart);
-        sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
-        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
-        sessionHub.Published[2].Event.Usage.Available.Should().BeTrue();
-        sessionHub.Published[2].Event.Usage.TotalTokens.Should().Be(6);
-        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
-        sessionHub.Published[4].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
-        sessionHub.Published.Should().OnlyContain(x => x.RootActorId == "actor-1" && x.SessionId == "session-1");
-    }
-
-    private static EventEnvelope CommittedNyxIdCompletionEnvelope(string actorId, RoleChatSessionCompletedEvent evt) => new()
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Payload = Any.Pack(new CommittedStateEventPublished
-        {
-            StateEvent = new StateEvent
-            {
-                EventId = Guid.NewGuid().ToString("N"),
-                Version = 1,
-                EventData = Any.Pack(evt),
-                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            },
-            StateRoot = Any.Pack(new RoleGAgentState()),
-        }),
-        Route = EnvelopeRouteSemantics.CreateObserverPublication(actorId),
-        Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-    };
-
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
         var method = EndpointsType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -3790,35 +3731,6 @@ public partial class NyxIdChatEndpointsCoverageTests
     private sealed record StubNyxIdChatSessionProjectionLease(string ActorId, string SessionId)
         : INyxIdChatSessionProjectionLease;
 
-    private sealed class RecordingNyxIdChatSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
-    {
-        public List<(string RootActorId, string SessionId, AGUIEvent Event)> Published { get; } = [];
-
-        public Task PublishAsync(
-            string rootActorId,
-            string sessionId,
-            AGUIEvent evt,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Published.Add((rootActorId, sessionId, evt));
-            return Task.CompletedTask;
-        }
-
-        public Task<IAsyncDisposable> SubscribeAsync(
-            string rootActorId,
-            string sessionId,
-            Func<AGUIEvent, ValueTask> handler,
-            CancellationToken ct = default)
-        {
-            _ = rootActorId;
-            _ = sessionId;
-            _ = handler;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
-        }
-    }
-
     private sealed class ThrowingNyxIdChatSessionProjectionPort(Exception exception) : INyxIdChatSessionProjectionPort
     {
         public bool ProjectionEnabled => true;
@@ -3986,8 +3898,4 @@ public partial class NyxIdChatEndpointsCoverageTests
             Task.FromResult(promptSection);
     }
 
-    private sealed class NoopDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
 }

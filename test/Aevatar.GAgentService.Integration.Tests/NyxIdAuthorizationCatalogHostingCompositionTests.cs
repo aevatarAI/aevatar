@@ -8,6 +8,7 @@ using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -84,5 +85,37 @@ public sealed class NyxIdAuthorizationCatalogHostingCompositionTests
             .Should().Be(1);
         services.Count(static descriptor => descriptor.ServiceType == typeof(INyxIdApiClientFactory))
             .Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void NyxIdCatalogHostingAndTools_InEitherOrder_ShouldKeepOneOptionsAndCapabilitySource(
+        bool catalogFirst)
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+
+        if (catalogFirst)
+        {
+            services.AddNyxIdAuthorizationCatalogHosting(configuration);
+            services.AddNyxIdTools(options => options.BaseUrl = "https://nyxid.invalid");
+        }
+        else
+        {
+            services.AddNyxIdTools(options => options.BaseUrl = "https://nyxid.invalid");
+            services.AddNyxIdAuthorizationCatalogHosting(configuration);
+        }
+
+        services.Count(static descriptor => descriptor.ServiceType == typeof(NyxIdToolOptions))
+            .Should().Be(1);
+        services.Count(static descriptor =>
+                descriptor.ServiceType == typeof(IExternalWorkflowCapabilitySource) &&
+                descriptor.ImplementationType == typeof(NyxIdExternalWorkflowCapabilitySource))
+            .Should().Be(1);
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://nyxid.invalid");
     }
 }

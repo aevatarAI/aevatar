@@ -466,7 +466,8 @@ public sealed class StudioMemberServicePatchTests
             new ThrowingTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
     private static InMemoryQueryPort NewQueryPort(string implementationKind) =>
         new(NewDetail(implementationKind));

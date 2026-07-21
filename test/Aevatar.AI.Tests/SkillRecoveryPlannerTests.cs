@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -32,14 +33,18 @@ public sealed class SkillRecoveryPlannerTests
         var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
         var pending = new List<ChatMessage> { messages[0] };
 
-        var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: null,
-            messages,
-            pending,
-            callIdPrefix: "req-orchestrator",
-            CancellationToken.None);
+        var progress = new List<SkillRecoveryToolProgress>();
+        await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           callIdPrefix: "req-orchestrator",
+                           CancellationToken.None))
+        {
+            progress.Add(item);
+        }
 
-        applied.Should().BeTrue();
+        progress.Should().HaveCount(4);
         var searchMessage = messages.Single(message =>
             message.Role == "tool" &&
             message.ToolCallId == "req-orchestrator:skill-recovery:ornn-search-skills:recovery:1");
@@ -75,14 +80,18 @@ public sealed class SkillRecoveryPlannerTests
         var pending = new List<ChatMessage> { messages[0] };
         var longPrefix = "req-" + new string('a', 50);
 
-        var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: null,
-            messages,
-            pending,
-            longPrefix,
-            CancellationToken.None);
+        var progress = new List<SkillRecoveryToolProgress>();
+        await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           longPrefix,
+                           CancellationToken.None))
+        {
+            progress.Add(item);
+        }
 
-        applied.Should().BeTrue();
+        progress.Should().HaveCount(4);
         var toolCallIds = messages
             .Where(message => message.Role == "tool")
             .Select(message => message.ToolCallId)
@@ -123,17 +132,62 @@ public sealed class SkillRecoveryPlannerTests
         };
         var pending = new List<ChatMessage>(messages);
 
-        var recovered = await orchestrator.TryRecoverFinalAnswerAsync(
-            toolContext: null,
-            messages,
-            pending,
-            finalContent: "cannot complete",
-            callIdPrefix: "req-nudge",
-            CancellationToken.None);
+        orchestrator.ShouldRecoverFinalAnswer(pending, "cannot complete", "req-nudge").Should().BeTrue();
+        var progress = new List<SkillRecoveryToolProgress>();
+        await foreach (var item in orchestrator.RecoverFinalAnswerAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           finalContent: "cannot complete",
+                           callIdPrefix: "req-nudge",
+                           CancellationToken.None))
+        {
+            progress.Add(item);
+        }
 
-        recovered.Should().BeTrue();
+        progress.Should().HaveCount(2);
         messages.Last().Role.Should().Be("tool");
         messages.Last().ToolResultView!.SkillLoad!.Loaded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenToolFails_ShouldRedactPendingArguments()
+    {
+        var tools = new ToolManager();
+        tools.Register(new FailedReceiptTool("ornn_search_skills"));
+        var orchestrator = new SkillRecoveryOrchestrator(
+            Recovery(
+                primarySkillName: null,
+                maxAttempts: 1,
+                originalCommand: "/goal query-secret",
+                commandArguments: "header-secret"),
+            _ => new StreamingToolExecutor(tools));
+        var messages = new List<ChatMessage> { ChatMessage.User("/goal query-secret") };
+        var pending = new List<ChatMessage> { messages[0] };
+
+        var progress = new List<SkillRecoveryToolProgress>();
+        await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           callIdPrefix: "req-sensitive-recovery",
+                           CancellationToken.None))
+        {
+            progress.Add(item);
+        }
+
+        progress.Should().HaveCount(2);
+        var assistant = messages.Should().ContainSingle(message =>
+            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 1).Which;
+        assistant.ToolCalls![0].Id.Should().NotBeNullOrWhiteSpace();
+        assistant.ToolCalls[0].Name.Should().Be("ornn_search_skills");
+        assistant.ToolCalls[0].ArgumentsJson.Should()
+            .NotContain("query-secret")
+            .And.NotContain("header-secret");
+        assistant.ToolCalls[0].ArgumentsJson.Should().Be("{}");
+        pending.Should().ContainSingle(message => ReferenceEquals(message, assistant));
+        messages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == assistant.ToolCalls[0].Id);
     }
 
     [Fact]
@@ -432,6 +486,65 @@ public sealed class SkillRecoveryPlannerTests
         directive.ToolCall.ArgumentsJson.Should().Contain("backend unavailable");
     }
 
+    [Fact]
+    public void TryPlanNextDirective_WhenChannelWorkflowDeliveryRequiresConfiguration_ShouldNotSearchForAnotherSkill()
+    {
+        const string displayText = "当前 channel workflow delivery 不可用。";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "invoke-1",
+            ToolName = "aevatar_invoke_team",
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
+            ErrorMessage = "Open /channels and choose Repair workflow replies.",
+            ResultJson = """{"error":{"code":"channel_workflow_delivery_unavailable"}}""",
+        };
+        var messages = MessagesWithInvocationFailure(displayText, receipt);
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(requireInitialSearch: false, primarySkillName: null, maxAttempts: 2),
+            messages,
+            finalContent: "当前 channel workflow delivery 不可用。 The workflow is unavailable.",
+            recoveryAttempts: 0,
+            callIdPrefix: "request-alpha",
+            out var directive);
+
+        messages.Last().ToolResultView!.Failure!.ErrorCode.Should().Be(
+            AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable);
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenSameDisplayTextHasAnotherErrorCode_ShouldRetainBlockerSearch()
+    {
+        const string displayText = "当前 channel workflow delivery 不可用。";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "invoke-1",
+            ToolName = "aevatar_invoke_team",
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = "backend_unavailable",
+            ErrorMessage = displayText,
+            ResultJson = """{"error":{"code":"backend_unavailable"}}""",
+        };
+        var messages = MessagesWithInvocationFailure(displayText, receipt);
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(requireInitialSearch: false, primarySkillName: null, maxAttempts: 2),
+            messages,
+            finalContent: "当前 channel workflow delivery 不可用。 The workflow is unavailable.",
+            recoveryAttempts: 0,
+            callIdPrefix: "request-beta",
+            out var directive);
+
+        forced.Should().BeTrue();
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.Name.Should().Be("ornn_search_skills");
+    }
+
     [Theory]
     [InlineData("无法完成请求")]
     [InlineData("The command cannot complete")]
@@ -514,8 +627,28 @@ public sealed class SkillRecoveryPlannerTests
             ],
         };
 
-    private static ChatMessage ToolResult(string callId, string toolName, string rawResult) =>
-        ToolCallLoop.BuildToolResultMessage(callId, toolName, rawResult);
+    private static List<ChatMessage> MessagesWithInvocationFailure(
+        string displayText,
+        AgentToolReceipt receipt) =>
+    [
+        ChatMessage.User("/goal ship"),
+        AssistantToolCall("use-1", "use_skill", """{"skill":"project-summary"}"""),
+        ToolResult("use-1", "use_skill", LoadResult(
+            status: "success",
+            skillName: "project-summary",
+            loaded: true,
+            error: null,
+            text: "# project-summary\n\nInstructions")),
+        AssistantToolCall("invoke-1", "aevatar_invoke_team", """{"team_id":"team-alpha"}"""),
+        ToolResult("invoke-1", "aevatar_invoke_team", displayText, receipt),
+    ];
+
+    private static ChatMessage ToolResult(
+        string callId,
+        string toolName,
+        string rawResult,
+        AgentToolReceipt? receipt = null) =>
+        ToolCallLoop.BuildToolResultMessage(callId, toolName, rawResult, receipt);
 
     private static string SearchResult(
         string status,
@@ -560,5 +693,37 @@ public sealed class SkillRecoveryPlannerTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(execute(argumentsJson));
         }
+    }
+
+    private sealed class FailedReceiptTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "returns a typed failure";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(SearchResult(
+                status: "error",
+                text: "Search failed.",
+                matches: [],
+                error: "safe_failure"));
+        }
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "SAFE_FAILURE",
+                ErrorMessage = "Search failed.",
+                ResultJson = resultJson,
+            };
     }
 }

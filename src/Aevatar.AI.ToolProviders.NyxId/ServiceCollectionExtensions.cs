@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -27,6 +28,9 @@ public static class ServiceCollectionExtensions
         // Old: singleton tool clients constructed or pinned raw HttpClient instances.
         // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
         services.AddNyxIdApiAccess(configure);
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilitySource,
+            NyxIdExternalWorkflowCapabilitySource>());
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
         services.Replace(ServiceDescriptor.Singleton<

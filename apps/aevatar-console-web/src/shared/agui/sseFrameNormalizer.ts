@@ -33,6 +33,21 @@ function asRecord(value: unknown): JsonRecord | undefined {
   return value as JsonRecord;
 }
 
+function cloneJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(cloneJsonValue);
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, cloneJsonValue(entry)])
+  );
+}
+
 function readString(record: JsonRecord | undefined, ...keys: string[]): string {
   if (!record) {
     return "";
@@ -85,10 +100,12 @@ function readNumber(
 function createTypedEvent(
   type: RuntimeEventType,
   timestamp: number,
-  payload: JsonRecord
+  payload: JsonRecord,
+  sequence?: number
 ): AGUIEvent {
   return {
     ...payload,
+    ...(sequence === undefined ? {} : { sequence }),
     timestamp,
     type,
   } as unknown as AGUIEvent;
@@ -113,6 +130,14 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
     typeof rawTimestamp === "number"
       ? rawTimestamp
       : Number(rawTimestamp) || Date.now();
+  const sequence =
+    typeof frame.sequence === "number" && Number.isFinite(frame.sequence)
+      ? frame.sequence
+      : undefined;
+  const createFrameEvent = (
+    type: RuntimeEventType,
+    payload: JsonRecord
+  ): AGUIEvent => createTypedEvent(type, timestamp, payload, sequence);
 
   for (const [oneofKey, eventType] of Object.entries(ONEOF_KEY_MAP)) {
     if (!(oneofKey in frame)) {
@@ -122,7 +147,7 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
     const nested = asRecord(frame[oneofKey]);
     switch (eventType) {
       case AGUIEventType.RUN_STARTED:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           actorId:
             readString(nested, "actorId") ||
             readString(frame, "actorId", "threadId"),
@@ -138,7 +163,7 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
             readString(frame, "threadId", "actorId"),
         });
       case AGUIEventType.RUN_FINISHED:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           commandId:
             readString(nested, "commandId", "command_id") ||
             readString(frame, "commandId", "command_id"),
@@ -152,7 +177,7 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
             readString(frame, "threadId", "actorId"),
         });
       case AGUIEventType.RUN_ERROR:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           code:
             readString(nested, "code", "errorCode", "error_code") ||
             readString(frame, "code", "errorCode", "error_code") ||
@@ -167,46 +192,47 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
           runId: readString(nested, "runId") || undefined,
         });
       case "RUN_STOPPED":
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           reason: readString(nested, "reason"),
           runId: readString(nested, "runId"),
         });
       case AGUIEventType.TEXT_MESSAGE_START:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           messageId: readString(nested, "messageId"),
           role: readString(nested, "role"),
         });
       case AGUIEventType.TEXT_MESSAGE_CONTENT:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           delta: readString(nested, "delta"),
           messageId: readString(nested, "messageId"),
         });
       case AGUIEventType.TEXT_MESSAGE_END:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           delta: readString(nested, "delta"),
           message: readString(nested, "message"),
           messageId: readString(nested, "messageId"),
         });
       case AGUIEventType.STEP_STARTED:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           stepName: readString(nested, "stepName"),
         });
       case AGUIEventType.STEP_FINISHED:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           stepName: readString(nested, "stepName"),
         });
       case AGUIEventType.TOOL_CALL_START:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
+          presentation: cloneJsonValue(nested?.presentation),
           toolCallId: readString(nested, "toolCallId"),
           toolName: readString(nested, "toolName"),
         });
       case AGUIEventType.TOOL_CALL_END:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           result: readString(nested, "result"),
           toolCallId: readString(nested, "toolCallId"),
         });
       case "TOOL_APPROVAL_REQUEST":
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           argumentsJson: readString(nested, "argumentsJson", "arguments_json"),
           isDestructive: readBoolean(
             nested,
@@ -224,7 +250,7 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
           toolName: readString(nested, "toolName", "tool_name"),
         });
       case AGUIEventType.HUMAN_INPUT_REQUEST:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           metadata: nested?.metadata as Record<string, string> | undefined,
           prompt: readString(nested, "prompt"),
           runId: readString(nested, "runId"),
@@ -233,13 +259,13 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
           timeoutSeconds: readNumber(nested, 0, "timeoutSeconds"),
         });
       case AGUIEventType.CUSTOM:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           name: readString(nested, "name"),
           payload: nested?.payload,
           value: nested?.payload ?? nested?.value,
         });
       case AGUIEventType.STATE_SNAPSHOT:
-        return createTypedEvent(eventType, timestamp, {
+        return createFrameEvent(eventType, {
           snapshot: frame[oneofKey],
         });
       default:

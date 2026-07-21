@@ -5,7 +5,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage OAuth provider connections in NyxID.</summary>
-public sealed class NyxIdProvidersTool : IAgentTool, IAgentToolCapabilityDescriptor
+public sealed class NyxIdProvidersTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 

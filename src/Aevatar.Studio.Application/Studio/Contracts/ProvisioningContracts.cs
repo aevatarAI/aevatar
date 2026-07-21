@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions;
+
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
 /// <summary>
@@ -75,6 +78,9 @@ public sealed record ProvisionWorkflowRequest(
     string? Timezone = null,
     ProvisionWorkflowCallerCredential? Caller = null)
 {
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
     /// <summary>
     /// Target Studio Team that owns the provisioned workflow member. Required:
     /// Chat-created workflows must be discoverable through the Team member route

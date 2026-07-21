@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Tools;
@@ -25,13 +26,13 @@ internal sealed class SkillRecoveryOrchestrator
 
     public bool RequiresInitialSearch => _recovery.RequireInitialOrnnSearch;
 
-    public Task<bool> ApplyInitialDirectivesAsync(
+    public IAsyncEnumerable<SkillRecoveryToolProgress> ApplyInitialDirectivesAsync(
         AgentToolExecutionContext? toolContext,
         List<ChatMessage> messages,
         List<ChatMessage> pendingHistoryMessages,
         string? callIdPrefix,
         CancellationToken ct) =>
-        TryApplyDirectivesAsync(
+        StreamDirectivesAsync(
             toolContext,
             messages,
             pendingHistoryMessages,
@@ -39,46 +40,42 @@ internal sealed class SkillRecoveryOrchestrator
             callIdPrefix,
             ct);
 
-    public async Task<bool> TryRecoverFinalAnswerAsync(
+    public bool ShouldRecoverFinalAnswer(
+        IReadOnlyList<ChatMessage> pendingHistoryMessages,
+        string? finalContent,
+        string? callIdPrefix) =>
+        SkillRecoveryPlanner.TryPlanNextDirective(
+            _recovery,
+            pendingHistoryMessages,
+            finalContent,
+            _searchAttempts,
+            callIdPrefix,
+            out _);
+
+    public IAsyncEnumerable<SkillRecoveryToolProgress> RecoverFinalAnswerAsync(
         AgentToolExecutionContext? toolContext,
         List<ChatMessage> messages,
         List<ChatMessage> pendingHistoryMessages,
         string? finalContent,
         string? callIdPrefix,
-        CancellationToken ct)
-    {
-        if (!SkillRecoveryPlanner.TryPlanNextDirective(
-                _recovery,
-                pendingHistoryMessages,
-                finalContent,
-                _searchAttempts,
-                callIdPrefix,
-                out _))
-        {
-            return false;
-        }
+        CancellationToken ct) =>
+        StreamDirectivesAsync(
+            toolContext,
+            messages,
+            pendingHistoryMessages,
+            finalContent,
+            callIdPrefix,
+            ct);
 
-        await TryApplyDirectivesAsync(
-                toolContext,
-                messages,
-                pendingHistoryMessages,
-                finalContent,
-                callIdPrefix,
-                ct)
-            .ConfigureAwait(false);
-        return true;
-    }
-
-    private async Task<bool> TryApplyDirectivesAsync(
+    private async IAsyncEnumerable<SkillRecoveryToolProgress> StreamDirectivesAsync(
         AgentToolExecutionContext? toolContext,
         List<ChatMessage> messages,
         List<ChatMessage> pendingHistoryMessages,
         string? finalContent,
         string? callIdPrefix,
-        CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var executor = _executorFactory(toolContext);
-        var applied = false;
         for (var i = 0; i < MaxChainedDirectives; i++)
         {
             if (!SkillRecoveryPlanner.TryPlanNextDirective(
@@ -92,16 +89,20 @@ internal sealed class SkillRecoveryOrchestrator
                 break;
             }
 
-            await ApplyDirectiveAsync(WithUniqueToolCallId(directive), executor, messages, pendingHistoryMessages, ct)
-                .ConfigureAwait(false);
+            await foreach (var progress in ApplyDirectiveAsync(
+                               WithUniqueToolCallId(directive),
+                               executor,
+                               messages,
+                               pendingHistoryMessages,
+                               ct))
+            {
+                yield return progress;
+            }
             if (directive.ConsumesOrnnSearchAttempt)
                 _searchAttempts++;
 
-            applied = true;
             finalContent = null;
         }
-
-        return applied;
     }
 
     private SkillRecoveryPlanner.RecoveryDirective WithUniqueToolCallId(
@@ -121,12 +122,12 @@ internal sealed class SkillRecoveryOrchestrator
         return directive with { ToolCall = uniqueToolCall };
     }
 
-    private static async Task ApplyDirectiveAsync(
+    private static async IAsyncEnumerable<SkillRecoveryToolProgress> ApplyDirectiveAsync(
         SkillRecoveryPlanner.RecoveryDirective directive,
         StreamingToolExecutor executor,
         List<ChatMessage> messages,
         List<ChatMessage> pendingHistoryMessages,
-        CancellationToken ct)
+        [EnumeratorCancellation] CancellationToken ct)
     {
         if (directive.ToolCall is { } toolCall)
         {
@@ -141,18 +142,27 @@ internal sealed class SkillRecoveryOrchestrator
             pendingHistoryMessages.Add(assistantToolCallMessage);
 
             using var state = executor.CreateExecutionState();
+            yield return SkillRecoveryToolProgress.Starting(toolCall);
             executor.AddTool(state, toolCall);
+            var currentAssistantToolCallMessage = assistantToolCallMessage;
             await foreach (var result in executor.GetRemainingResultsAsync(state, ct))
             {
+                currentAssistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
+                    messages,
+                    pendingHistoryMessages,
+                    currentAssistantToolCallMessage,
+                    result);
                 var toolMsg = ToolCallLoop.BuildToolResultMessage(
                     result.CallId,
                     result.ToolName,
-                    ToolExecutionResultHistory.ResolveSafeContent(result));
+                    ToolExecutionResultHistory.ResolveSafeContent(result),
+                    result.Receipt);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
+                yield return SkillRecoveryToolProgress.Completed(result);
             }
 
-            return;
+            yield break;
         }
 
         if (!string.IsNullOrWhiteSpace(directive.Nudge))
@@ -162,4 +172,22 @@ internal sealed class SkillRecoveryOrchestrator
             pendingHistoryMessages.Add(nudge);
         }
     }
+}
+
+internal sealed record SkillRecoveryToolProgress(
+    ToolCall? StartedToolCall,
+    ToolExecutionResult? CompletedResult)
+{
+    public static SkillRecoveryToolProgress Starting(ToolCall toolCall) =>
+        new(CloneToolCall(toolCall), null);
+
+    public static SkillRecoveryToolProgress Completed(ToolExecutionResult result) =>
+        new(null, result);
+
+    private static ToolCall CloneToolCall(ToolCall toolCall) => new()
+    {
+        Id = toolCall.Id,
+        Name = toolCall.Name,
+        ArgumentsJson = toolCall.ArgumentsJson,
+    };
 }

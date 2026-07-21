@@ -718,6 +718,54 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshPersonalAsync_WhenPersonalGrantClaimsAnotherOwner_ShouldInvalidateAsUnstable()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJson(personalResourceOwnerId: "owner-beta")));
+
+        var result = await Create(commands, handler)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_scope_plan_catalog_mismatch");
+        commands.Invalidations.Should().ContainSingle().Which.Should().Match<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset At,
+            string Reason,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus OutcomeStatus)>(invalidation =>
+            invalidation.Reason == "nyxid_scope_plan_catalog_mismatch" &&
+            invalidation.OutcomeStatus == NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable);
+        commands.Observations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenOrganizationGrantClaimsAnotherOrganization_ShouldInvalidateAsUnstable()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJson(organizationResourceOwnerId: "org-beta")));
+
+        var result = await Create(commands, handler)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable);
+        result.FailureCode.Should().Be("nyxid_scope_plan_catalog_mismatch");
+        commands.Invalidations.Should().ContainSingle().Which.Should().Match<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset At,
+            string Reason,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus OutcomeStatus)>(invalidation =>
+            invalidation.Reason == "nyxid_scope_plan_catalog_mismatch" &&
+            invalidation.OutcomeStatus == NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable);
+        commands.Observations.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_WhenScopePlanIsForbidden_ShouldInvalidateCatalog()
     {
         var commands = new RecordingCommandPort();
@@ -878,7 +926,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
         """;
 
-    private static string ScopePlanJson() => $$$"""
+    private static string ScopePlanJson(
+        string personalResourceOwnerId = "owner-alpha",
+        string organizationResourceOwnerId = "org-alpha") => $$$"""
         {
           "authority":"nyxid",
           "contract_version":"1",
@@ -886,8 +936,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
           "authenticated_actor":{"id":"owner-alpha","type":"personal"},
           "intended_key_owner":{"id":"owner-alpha","type":"personal"},
           "services":[
-            {"user_service_id":"service-a","resource_owner":{"id":"owner-alpha","type":"personal"},"node_grant":{"type":"not_required"}},
-            {"user_service_id":"service-b","resource_owner":{"id":"org-alpha","type":"organization"},"node_grant":{"type":"required","node_ids":["node-a","node-b"]}}
+            {"user_service_id":"service-a","resource_owner":{"id":"{{{personalResourceOwnerId}}}","type":"personal"},"node_grant":{"type":"not_required"}},
+            {"user_service_id":"service-b","resource_owner":{"id":"{{{organizationResourceOwnerId}}}","type":"organization"},"node_grant":{"type":"required","node_ids":["node-a","node-b"]}}
           ],
           "allowed_service_ids":["service-a","service-b"],
           "allowed_node_ids":["node-a","node-b"],

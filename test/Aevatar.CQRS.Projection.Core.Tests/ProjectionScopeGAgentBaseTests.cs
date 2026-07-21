@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -131,6 +132,80 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldIgnoreDuplicateAndStaleVersionsFromSamePublisher()
+    {
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-source-watermark",
+            onProcess: envelope =>
+            {
+                processed++;
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing(),
+            runtimeMode: ProjectionRuntimeMode.SessionObservation);
+        var versionTwo = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-source-watermark",
+            version: 2);
+        var versionOne = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-source-watermark",
+            version: 1);
+
+        await agent.HandleObservedEnvelopeAsync(versionTwo);
+        await agent.HandleObservedEnvelopeAsync(versionTwo.Clone());
+        await agent.HandleObservedEnvelopeAsync(versionOne);
+
+        processed.Should().Be(1);
+        agent.State.LastSuccessfulVersionsByActor["publisher-actor"].Should().Be(2);
+    }
+
+    [Fact]
+    public async Task HandleReplayAsync_ShouldReprocessRecordedFailure_WhenNewerVersionAlreadySucceeded()
+    {
+        var processed = 0;
+        var eventSourcing = new TrackingEventSourcing();
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-failure-gap",
+            onProcess: envelope =>
+            {
+                processed++;
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                version.Should().Be(1);
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: eventSourcing,
+            runtimeMode: ProjectionRuntimeMode.SessionObservation);
+        agent.State.Active = false;
+        await agent.InitializeForTestAsync();
+        agent.State.Active = true;
+
+        var failedEnvelope = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-failure-gap",
+            version: 1);
+        agent.State.LastSuccessfulVersionsByActor["publisher-actor"] = 2;
+        agent.State.Failures.Add(new ProjectionScopeFailure
+        {
+            FailureId = "failure-version-1",
+            SourceVersion = 1,
+            Envelope = failedEnvelope,
+        });
+
+        await agent.HandleReplayAsync(new ReplayProjectionFailuresCommand { MaxItems = 1 });
+
+        processed.Should().Be(1);
+        agent.State.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldSwallow_DeterministicProjectionFailure()
     {
         var agent = BuildActivatedAgent(
@@ -147,9 +222,10 @@ public sealed class ProjectionScopeGAgentBaseTests
     private static TestScopeAgent BuildActivatedAgent(
         string scopeId,
         Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
-        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null)
+        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null,
+        ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
     {
-        var agent = new TestScopeAgent(onProcess);
+        var agent = new TestScopeAgent(onProcess, runtimeMode);
 
         typeof(GAgentBase)
             .GetProperty(nameof(GAgentBase.Id), BindingFlags.Instance | BindingFlags.Public)!
@@ -201,6 +277,7 @@ public sealed class ProjectionScopeGAgentBaseTests
                     EventId = "evt-duplicate",
                     Version = version,
                     EventData = Any.Pack(new StringValue { Value = "payload" }),
+                    AgentId = "publisher-actor",
                 },
                 StateRoot = Any.Pack(new StringValue { Value = "state" }),
             }),
@@ -216,14 +293,19 @@ public sealed class ProjectionScopeGAgentBaseTests
     private sealed class TestScopeAgent : ProjectionScopeGAgentBase<TestContext>
     {
         private readonly Func<EventEnvelope, ProjectionScopeDispatchResult> _onProcess;
+        private readonly ProjectionRuntimeMode _runtimeMode;
 
-        public TestScopeAgent(Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess)
+        public TestScopeAgent(
+            Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
+            ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
         {
             _onProcess = onProcess;
+            _runtimeMode = runtimeMode;
         }
 
-        protected override ProjectionRuntimeMode RuntimeMode =>
-            ProjectionRuntimeMode.DurableMaterialization;
+        protected override ProjectionRuntimeMode RuntimeMode => _runtimeMode;
+
+        public Task InitializeForTestAsync() => OnActivateAsync(CancellationToken.None);
 
         protected override ValueTask<ProjectionScopeDispatchResult> ProcessObservationCoreAsync(
             TestContext context,
@@ -251,9 +333,14 @@ public sealed class ProjectionScopeGAgentBaseTests
             Task.FromResult<ProjectionScopeState?>(null);
         public void DiscardPendingEvents() => DiscardCallCount++;
         public ProjectionScopeState TransitionState(ProjectionScopeState current, IMessage evt) =>
-            evt is ProjectionScopeWatermarkAdvancedEvent watermark
-                ? ProjectionScopeStateApplier.ApplyWatermarkAdvanced(current, watermark)
-                : current;
+            evt switch
+            {
+                ProjectionScopeWatermarkAdvancedEvent watermark =>
+                    ProjectionScopeStateApplier.ApplyWatermarkAdvanced(current, watermark),
+                ProjectionScopeFailureReplayedEvent replayed =>
+                    ProjectionScopeStateApplier.ApplyFailureReplayed(current, replayed),
+                _ => current,
+            };
     }
 
 }

@@ -10,6 +10,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions.Tools;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 
@@ -79,7 +80,7 @@ public class NyxIdConnectedServiceToolSourceTests
     public async Task DiscoverToolsAsync_RegistersOnlyMarkedOperations()
     {
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var (source, _) = CreateSource(handler);
 
@@ -93,10 +94,135 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DiscoverToolsAsync_UsesConnectedKeysAndCatalogAndPreservesTypedIdentity()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = """
+            {
+              "keys": [
+                {
+                  "id": "connected-service-github",
+                  "name": "github-key",
+                  "label": "Work GitHub",
+                  "slug": "api-github-work",
+                  "catalog_service_slug": "github",
+                  "catalog_service_name": "Legacy GitHub Name",
+                  "connected": true,
+                  "is_active": true,
+                  "status": "active"
+                },
+                {
+                  "id": "connected-service-disconnected",
+                  "name": "github-old",
+                  "label": "Old GitHub",
+                  "slug": "api-github-old",
+                  "catalog_service_slug": "github",
+                  "connected": false,
+                  "is_active": true,
+                  "status": "disconnected"
+                },
+                {
+                  "id": "connected-service-pending",
+                  "name": "github-pending",
+                  "label": "Pending GitHub",
+                  "slug": "api-github-pending",
+                  "catalog_service_slug": "github",
+                  "connected": true,
+                  "is_active": true,
+                  "status": "pending_auth"
+                },
+                {
+                  "id": "connected-service-denied",
+                  "name": "github-denied",
+                  "label": "Denied GitHub",
+                  "slug": "api-github-denied",
+                  "catalog_service_slug": "github",
+                  "connected": true,
+                  "is_active": true,
+                  "status": "active",
+                  "credential_source": { "allowed": false }
+                }
+              ]
+            }
+            """;
+        handler.CatalogByToken["user-token"] = """
+            {
+              "entries": [
+                {
+                  "slug": "github",
+                  "name": "GitHub Connector",
+                  "description": "GitHub repositories and issues",
+                  "icon_url": "https://cdn.example.test/github.png"
+                }
+              ]
+            }
+            """;
+        handler.SpecsByServiceId["connected-service-github"] = SpecWithPing("list_repositories");
+        handler.SpecsByServiceId["connected-service-disconnected"] = SpecWithPing("must_not_be_executable");
+        handler.SpecsByServiceId["connected-service-pending"] = SpecWithPing("pending_must_not_be_executable");
+        handler.SpecsByServiceId["connected-service-denied"] = SpecWithPing("denied_must_not_be_executable");
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Which;
+
+        tool.Name.Should().Be("nyxid_api-github-work__list_repositories");
+        tool.Presentation.InvocationName.Should().Be(tool.Name);
+        tool.Presentation.DisplayName.Should().Be("GitHub Connector - list_repositories");
+        tool.Presentation.Description.Should().Contain("GitHub repositories and issues");
+        tool.Presentation.Kind.Should().Be(ToolPresentationKind.NyxIdOperation);
+        tool.Presentation.Availability.Should().Be(ToolAvailability.Available);
+        tool.Presentation.IconUrl.Should().Be("https://cdn.example.test/github.png");
+        tool.Presentation.SourceRefCase.Should()
+            .Be(ToolPresentationDescriptor.SourceRefOneofCase.NyxIdOperation);
+        tool.Presentation.NyxIdOperation.ConnectedServiceId.Should().Be("connected-service-github");
+        tool.Presentation.NyxIdOperation.ServiceSlug.Should().Be("api-github-work");
+        tool.Presentation.NyxIdOperation.CatalogServiceSlug.Should().Be("github");
+        tool.Presentation.NyxIdOperation.ConnectionLabel.Should().Be("Work GitHub");
+        tool.Presentation.NyxIdOperation.ConnectorDisplayName.Should().Be("GitHub Connector");
+        tool.Presentation.NyxIdOperation.OperationId.Should().Be("list_repositories");
+        handler.SpecRequests.Should().ContainSingle().Which.Should().Be("connected-service-github");
+        handler.ProxyServiceDiscoveryRequests.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_ActiveKeyWithoutConnectedField_RemainsExecutable()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = """
+            {
+              "keys": [
+                {
+                  "id": "connected-service-existing",
+                  "name": "existing-key",
+                  "label": "Existing Connection",
+                  "slug": "api-existing",
+                  "catalog_service_slug": "existing",
+                  "is_active": true,
+                  "status": "active"
+                }
+              ]
+            }
+            """;
+        handler.CatalogByToken["user-token"] = """
+            { "entries": [{ "slug": "existing", "name": "Existing Connector" }] }
+            """;
+        handler.SpecsByServiceId["connected-service-existing"] = SpecWithPing("read_existing");
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Which;
+
+        tool.Name.Should().Be("nyxid_api-existing__read_existing");
+        tool.Presentation.NyxIdOperation.ConnectedServiceId.Should().Be("connected-service-existing");
+        handler.SpecRequests.Should().ContainSingle().Which.Should().Be("connected-service-existing");
+    }
+
+    [Fact]
     public async Task DiscoveredTools_ApprovalAndReadOnlyMetadata()
     {
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var (source, _) = CreateSource(handler);
 
@@ -116,7 +242,7 @@ public class NyxIdConnectedServiceToolSourceTests
     public async Task ExecuteTool_MapsPathQueryAndBodyToProxyRequest()
     {
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var (source, _) = CreateSource(handler);
 
@@ -147,7 +273,7 @@ public class NyxIdConnectedServiceToolSourceTests
     public async Task ExecuteTool_ShouldNotLogQueryValues()
     {
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var logger = new RecordingLogger<NyxIdConnectedServiceToolSource>();
         var (source, _) = CreateSource(handler, logger: logger);
@@ -167,7 +293,7 @@ public class NyxIdConnectedServiceToolSourceTests
     public async Task ExecuteTool_MissingRequiredBody_ReturnsErrorWithoutCallingProxy()
     {
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var (source, _) = CreateSource(handler);
 
@@ -185,7 +311,7 @@ public class NyxIdConnectedServiceToolSourceTests
     public async Task ExecuteTool_MissingRequiredPathParam_ReturnsErrorWithoutCallingProxy()
     {
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var (source, _) = CreateSource(handler);
 
@@ -212,7 +338,7 @@ public class NyxIdConnectedServiceToolSourceTests
                     "application/json"),
             },
         };
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var (source, _) = CreateSource(handler);
 
@@ -230,6 +356,7 @@ public class NyxIdConnectedServiceToolSourceTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
         receipt.AuthorizationRequired.Should().NotBeNull();
         receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-shop");
+        receipt.AuthorizationRequired.UserServiceId.Should().Be("svc-1");
         receipt.AuthorizationRequired.ResourceUri.Should().Be("/orders/o-1");
         receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
         receipt.AuthorizationRequired.SafeMessage.Should().NotBeNullOrWhiteSpace();
@@ -250,7 +377,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json"),
             },
         };
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = ShopSpec;
         var (source, _) = CreateSource(handler);
 
@@ -289,7 +416,7 @@ public class NyxIdConnectedServiceToolSourceTests
             }
             """;
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.AddConnectedService("user-token", "api-shop", "svc-1");
         handler.SpecsByServiceId["svc-1"] = conflictSpec;
         var (source, _) = CreateSource(handler);
 
@@ -304,8 +431,8 @@ public class NyxIdConnectedServiceToolSourceTests
     public async Task DiscoverToolsAsync_DualToken_RoutesEachServiceThroughItsOwningToken()
     {
         var handler = new FakeNyxIdHandler();
-        handler.ServicesByToken["user-token"] = """[{ "slug": "api-user", "id": "svc-u" }]""";
-        handler.ServicesByToken["org-token"] = """[{ "slug": "api-org", "id": "svc-o" }]""";
+        handler.AddConnectedService("user-token", "api-user", "svc-u");
+        handler.AddConnectedService("org-token", "api-org", "svc-o");
         handler.SpecsByServiceId["svc-u"] = SpecWithPing("ping_user");
         handler.SpecsByServiceId["svc-o"] = SpecWithPing("ping_org");
         var (source, _) = CreateSource(handler);
@@ -322,6 +449,55 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Single(r => r.RelativePath == "api-user/ping").Token.Should().Be("user-token");
         handler.ProxyRequests.Single(r => r.RelativePath == "api-org/ping").Token.Should().Be("org-token",
             "an org-only service must be proxied with the org token, matching NyxIdProxyTool visibility");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_DuplicateSlug_PreservesExactInstancesAndRoutesByServiceId()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = """
+            {
+              "keys": [
+                {
+                  "id": "us-home-alpha",
+                  "slug": "home-assistant",
+                  "catalog_service_slug": "home-assistant",
+                  "connected": true,
+                  "is_active": true,
+                  "status": "active"
+                },
+                {
+                  "id": "us-home-beta",
+                  "slug": "home-assistant",
+                  "catalog_service_slug": "home-assistant",
+                  "connected": true,
+                  "is_active": true,
+                  "status": "active"
+                }
+              ]
+            }
+            """;
+        handler.CatalogByToken["user-token"] = """
+            { "entries": [{ "slug": "home-assistant", "name": "Home Assistant" }] }
+            """;
+        handler.SpecsByServiceId["us-home-alpha"] = SpecWithPing("list_devices");
+        handler.SpecsByServiceId["us-home-beta"] = SpecWithPing("list_devices");
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().HaveCount(2);
+        tools.Select(static tool => tool.Name).Should().OnlyHaveUniqueItems();
+        tools.Should().OnlyContain(static tool => tool.Description.Contains("home-assistant", StringComparison.Ordinal));
+
+        foreach (var tool in tools)
+            await tool.ExecuteAsync("{}");
+
+        handler.ProxyRequests.Should().HaveCount(2);
+        handler.ProxyRequests.Select(static request => request.Query).Should()
+            .Contain(query => query.Contains("_nyxid_via=us-home-alpha", StringComparison.Ordinal))
+            .And.Contain(query => query.Contains("_nyxid_via=us-home-beta", StringComparison.Ordinal));
     }
 
     private static string SpecWithPing(string operationId) => $$"""
@@ -377,10 +553,36 @@ public class NyxIdConnectedServiceToolSourceTests
         private readonly object _lock = new();
 
         public Dictionary<string, string> ServicesByToken { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> KeysByToken { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> CatalogByToken { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> SpecsByServiceId { get; } = new(StringComparer.Ordinal);
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
+        public List<string> SpecRequests { get; } = [];
         public int DiscoveryRequests { get; private set; }
+        public int ProxyServiceDiscoveryRequests { get; private set; }
         public Func<HttpResponseMessage>? ProxyResponseFactory { get; init; }
+
+        public void AddConnectedService(string token, string slug, string serviceId)
+        {
+            KeysByToken[token] = $$"""
+                {
+                  "keys": [{
+                    "id": "{{serviceId}}",
+                    "name": "{{slug}}",
+                    "label": "{{slug}}",
+                    "slug": "{{slug}}",
+                    "catalog_service_slug": "{{slug}}",
+                    "catalog_service_name": "{{slug}}",
+                    "connected": true,
+                    "is_active": true,
+                    "status": "active"
+                  }]
+                }
+                """;
+            CatalogByToken[token] = $$"""
+                { "entries": [{ "slug": "{{slug}}", "name": "{{slug}}" }] }
+                """;
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -390,14 +592,29 @@ public class NyxIdConnectedServiceToolSourceTests
             if (path == "/api/v1/proxy/services")
             {
                 lock (_lock)
+                {
                     DiscoveryRequests++;
+                    ProxyServiceDiscoveryRequests++;
+                }
                 return Json(ServicesByToken.TryGetValue(token, out var services) ? services : "[]");
             }
+
+            if (path == "/api/v1/keys")
+            {
+                lock (_lock)
+                    DiscoveryRequests++;
+                return Json(KeysByToken.TryGetValue(token, out var keys) ? keys : "{\"keys\":[]}");
+            }
+
+            if (path == "/api/v1/catalog")
+                return Json(CatalogByToken.TryGetValue(token, out var catalog) ? catalog : "{\"entries\":[]}");
 
             if (path.StartsWith("/api/v1/proxy/services/", StringComparison.Ordinal) &&
                 path.EndsWith("/openapi.json", StringComparison.Ordinal))
             {
                 var id = path["/api/v1/proxy/services/".Length..^"/openapi.json".Length];
+                lock (_lock)
+                    SpecRequests.Add(id);
                 return SpecsByServiceId.TryGetValue(id, out var spec)
                     ? Json(spec)
                     : new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("{}") };

@@ -12,6 +12,8 @@ using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.ExternalCapabilities;
 using Aevatar.Workflow.Application.Observatory;
 using Aevatar.Workflow.Application.Queries;
 using Aevatar.Workflow.Application.Reporting;
@@ -37,6 +39,13 @@ public static class ServiceCollectionExtensions
         var runBehaviorOptions = new WorkflowRunBehaviorOptions();
         configureRunBehavior?.Invoke(runBehaviorOptions);
         services.AddSingleton(runBehaviorOptions);
+        services.TryAddTransient<ExternalWorkflowCapabilityReadinessService>();
+        services.TryAddTransient<IExternalWorkflowCapabilityListPort>(provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+        services.TryAddTransient<IExternalWorkflowCapabilityReadinessPort>(provider =>
+            provider.GetRequiredService<ExternalWorkflowCapabilityReadinessService>());
+        services.TryAddTransient<IWorkflowExternalCapabilityAdmissionService,
+            WorkflowExternalCapabilityAdmissionService>();
 
         services.AddSingleton<IWorkflowDefinitionCatalog>(_ =>
         {

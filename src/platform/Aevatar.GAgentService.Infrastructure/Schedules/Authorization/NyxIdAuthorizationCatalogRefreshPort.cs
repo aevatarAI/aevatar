@@ -345,7 +345,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         }
 
         var scopePlan = scopePlanResult.Value!;
-        if (!MatchesPersonalCatalog(scopePlan, normalizedOwner, selectedServiceIds))
+        if (!MatchesPersonalCatalog(scopePlan, normalizedOwner, eligibleServices))
         {
             await InvalidateUnstableAsync(
                 normalizedOwner,
@@ -678,17 +678,44 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
     private static bool MatchesPersonalCatalog(
         NyxIdApiKeyScopePlan scopePlan,
         AuthorizationOwnerIdentity owner,
-        IReadOnlyList<string> selectedServiceIds) =>
-        string.Equals(scopePlan.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) &&
-        scopePlan.AuthenticatedActor == new NyxIdScopePlanPrincipal(
-            owner.OwnerSubject,
-            NyxIdScopePlanPrincipalKind.Personal) &&
-        scopePlan.IntendedKeyOwner == new NyxIdScopePlanPrincipal(
-            owner.OwnerSubject,
-            NyxIdScopePlanPrincipalKind.Personal) &&
-        scopePlan.AllowedServiceIds.SequenceEqual(selectedServiceIds, StringComparer.Ordinal) &&
-        scopePlan.Services.Select(static service => service.UserServiceId)
-            .SequenceEqual(selectedServiceIds, StringComparer.Ordinal);
+        IReadOnlyList<NyxIdUserService> selectedServices)
+    {
+        var selectedServiceIds = selectedServices.Select(static service => service.Id);
+        return string.Equals(
+                   scopePlan.Authority,
+                   NyxIdAuthorizationAuthorities.NyxId,
+                   StringComparison.Ordinal) &&
+               scopePlan.AuthenticatedActor == new NyxIdScopePlanPrincipal(
+                   owner.OwnerSubject,
+                   NyxIdScopePlanPrincipalKind.Personal) &&
+               scopePlan.IntendedKeyOwner == new NyxIdScopePlanPrincipal(
+                   owner.OwnerSubject,
+                   NyxIdScopePlanPrincipalKind.Personal) &&
+               scopePlan.AllowedServiceIds.SequenceEqual(selectedServiceIds, StringComparer.Ordinal) &&
+               scopePlan.Services.Select(static service => service.UserServiceId)
+                   .SequenceEqual(selectedServices.Select(static service => service.Id), StringComparer.Ordinal) &&
+               scopePlan.Services.Zip(
+                       selectedServices,
+                       (grant, inventory) => MatchesResourceOwnerProvenance(grant, inventory, owner.OwnerSubject))
+                   .All(static matches => matches);
+    }
+
+    private static bool MatchesResourceOwnerProvenance(
+        NyxIdScopePlanServiceGrant grant,
+        NyxIdUserService inventory,
+        string authenticatedOwnerSubject) => inventory.CredentialSource.Kind switch
+    {
+        NyxIdUserServiceCredentialSourceKind.Personal =>
+            grant.ResourceOwner == new NyxIdScopePlanPrincipal(
+                authenticatedOwnerSubject,
+                NyxIdScopePlanPrincipalKind.Personal),
+        NyxIdUserServiceCredentialSourceKind.Organization =>
+            !string.IsNullOrWhiteSpace(inventory.CredentialSource.OrganizationId) &&
+            grant.ResourceOwner == new NyxIdScopePlanPrincipal(
+                inventory.CredentialSource.OrganizationId,
+                NyxIdScopePlanPrincipalKind.Organization),
+        _ => false,
+    };
 
     private static NyxIdAuthorizationServiceEvidence MapServiceEvidence(
         NyxIdUserService inventory,

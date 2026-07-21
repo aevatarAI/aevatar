@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions;
+
 namespace Aevatar.Studio.Application.Provisioning;
 
 /// <summary>
@@ -23,6 +26,9 @@ public sealed record WorkflowScheduleProvisioningRequest(
     string DisplayName,
     string WorkflowYaml)
 {
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+
     /// <summary>Optional user prompt the scheduled run starts from.</summary>
     public string? Prompt { get; init; }
 

@@ -65,13 +65,55 @@ export type RuntimeStepInfo = {
 };
 
 export type RuntimeToolCallInfo = {
+  description?: string;
+  displayName?: string;
   id: string;
+  invocationName?: string;
   name: string;
+  presentation?: RuntimeToolPresentation;
   status: "running" | "done" | "error";
   startedAt: number;
   finishedAt?: number;
   result?: string;
   error?: string;
+};
+
+export type RuntimeToolKind =
+  | "generic"
+  | "builtIn"
+  | "nyxIdOperation"
+  | "mcp"
+  | "skill";
+
+export type RuntimeToolAvailability = "available" | "unavailable";
+
+export type RuntimeToolSourceRef =
+  | { builtIn: { toolId: string }; type: "builtIn" }
+  | {
+      nyxIdOperation: {
+        catalogServiceSlug: string;
+        connectedServiceId: string;
+        connectionLabel: string;
+        connectorDisplayName: string;
+        httpMethod: string;
+        operationId: string;
+        pathTemplate: string;
+        serviceSlug: string;
+      };
+      type: "nyxIdOperation";
+    }
+  | { mcp: { serverName: string; toolName: string }; type: "mcp" }
+  | { skill: { skillName: string; source: string }; type: "skill" };
+
+export type RuntimeToolPresentation = {
+  availability: RuntimeToolAvailability;
+  description: string;
+  displayName: string;
+  iconUrl?: string;
+  invocationName: string;
+  kind: RuntimeToolKind;
+  sourceRef?: RuntimeToolSourceRef;
+  unavailableReason?: string;
 };
 
 export type RuntimeToolApprovalRequestInfo = {
@@ -489,6 +531,129 @@ export function createRuntimeEventAccumulator(input?: {
   };
 }
 
+function readToolKind(record: JsonRecord): RuntimeToolKind {
+  const kind = readOptionalString(record, "kind");
+  return kind === "builtIn" ||
+    kind === "nyxIdOperation" ||
+    kind === "mcp" ||
+    kind === "skill"
+    ? kind
+    : "generic";
+}
+
+function readToolAvailability(record: JsonRecord): RuntimeToolAvailability {
+  return readOptionalString(record, "availability") === "unavailable"
+    ? "unavailable"
+    : "available";
+}
+
+function readToolSourceRef(value: unknown): RuntimeToolSourceRef | undefined {
+  const raw = asRecord(value);
+  const type = readOptionalString(raw, "type");
+  if (type === "builtIn") {
+    const builtIn = asRecord(raw?.builtIn ?? raw?.built_in);
+    return builtIn
+      ? { builtIn: { toolId: readOptionalString(builtIn, "toolId", "tool_id") }, type }
+      : undefined;
+  }
+
+  if (type === "nyxIdOperation") {
+    const operation = asRecord(raw?.nyxIdOperation ?? raw?.nyx_id_operation);
+    return operation
+      ? {
+          nyxIdOperation: {
+            catalogServiceSlug: readOptionalString(
+              operation,
+              "catalogServiceSlug",
+              "catalog_service_slug"
+            ),
+            connectedServiceId: readOptionalString(
+              operation,
+              "connectedServiceId",
+              "connected_service_id"
+            ),
+            connectionLabel: readOptionalString(
+              operation,
+              "connectionLabel",
+              "connection_label"
+            ),
+            connectorDisplayName: readOptionalString(
+              operation,
+              "connectorDisplayName",
+              "connector_display_name"
+            ),
+            httpMethod: readOptionalString(operation, "httpMethod", "http_method"),
+            operationId: readOptionalString(operation, "operationId", "operation_id"),
+            pathTemplate: readOptionalString(
+              operation,
+              "pathTemplate",
+              "path_template"
+            ),
+            serviceSlug: readOptionalString(operation, "serviceSlug", "service_slug"),
+          },
+          type,
+        }
+      : undefined;
+  }
+
+  if (type === "mcp") {
+    const mcp = asRecord(raw?.mcp);
+    return mcp
+      ? {
+          mcp: {
+            serverName: readOptionalString(mcp, "serverName", "server_name"),
+            toolName: readOptionalString(mcp, "toolName", "tool_name"),
+          },
+          type,
+        }
+      : undefined;
+  }
+
+  if (type === "skill") {
+    const skill = asRecord(raw?.skill);
+    return skill
+      ? {
+          skill: {
+            skillName: readOptionalString(skill, "skillName", "skill_name"),
+            source: readOptionalString(skill, "source"),
+          },
+          type,
+        }
+      : undefined;
+  }
+
+  return undefined;
+}
+
+function readToolPresentation(event: RuntimeEvent): RuntimeToolPresentation | undefined {
+  const raw = asRecord((event as unknown as JsonRecord).presentation);
+  if (!raw) {
+    return undefined;
+  }
+
+  const invocationName = readOptionalString(raw, "invocationName", "invocation_name");
+  const displayName = readOptionalString(raw, "displayName", "display_name");
+  if (!invocationName && !displayName) {
+    return undefined;
+  }
+
+  const declaredKind = readToolKind(raw);
+  const parsedSourceRef = readToolSourceRef(raw.sourceRef ?? raw.source_ref);
+  const sourceRef = parsedSourceRef?.type === declaredKind ? parsedSourceRef : undefined;
+  return {
+    availability: readToolAvailability(raw),
+    description: readOptionalString(raw, "description"),
+    displayName: displayName || invocationName,
+    iconUrl: readOptionalString(raw, "iconUrl", "icon_url") || undefined,
+    invocationName,
+    kind: sourceRef?.type ?? "generic",
+    sourceRef,
+    unavailableReason:
+      readOptionalString(raw, "unavailableReason", "unavailable_reason") ||
+      undefined,
+  };
+}
+
 export function applyRuntimeEvent(
   accumulator: RuntimeEventAccumulator,
   event: RuntimeEvent
@@ -563,12 +728,19 @@ export function applyRuntimeEvent(
 
   if (event.type === AGUIEventType.TOOL_CALL_START) {
     const toolName = String(event.toolName || "").trim() || "Tool";
+    const presentation = readToolPresentation(event);
+    const invocationName = presentation?.invocationName || toolName;
+    const displayName = presentation?.displayName || invocationName;
     const toolId =
       String(event.toolCallId || "").trim() ||
       `${toolName}-${accumulator.toolCalls.length + 1}`;
     accumulator.toolCalls.push({
+      description: presentation?.description || undefined,
+      displayName,
       id: toolId,
-      name: toolName,
+      invocationName,
+      name: displayName,
+      presentation,
       startedAt: event.timestamp || Date.now(),
       status: "running",
     });

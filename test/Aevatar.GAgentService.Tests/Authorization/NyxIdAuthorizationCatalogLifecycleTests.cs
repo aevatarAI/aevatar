@@ -1003,6 +1003,9 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     [Theory]
     [InlineData("duplicate_service", "*service identities must be unique*")]
     [InlineData("resource_owner_missing", "*resource owner identity is incomplete*")]
+    [InlineData("resource_owner_other_authority", "*resource owner identity must use NyxID authority*")]
+    [InlineData("resource_owner_uppercase_authority", "*resource owner identity must use NyxID authority*")]
+    [InlineData("resource_owner_trailing_space_authority", "*resource owner identity is incomplete*")]
     [InlineData("required_without_nodes", "*require at least one node identity*")]
     [InlineData("direct_with_nodes", "*cannot carry node authorization evidence*")]
     [InlineData("duplicate_nodes", "*node identities must be ordinal-sorted and unique*")]
@@ -1012,7 +1015,8 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         string expectedMessage)
     {
         var owner = Owner();
-        var agent = CreateAgent(owner);
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
         await BeginRefreshAsync(agent, owner, "refresh-invalid", ObservedAt.AddSeconds(1));
         var command = ObservationCommand(owner, "refresh-invalid", ObservedAt.AddMinutes(1));
 
@@ -1023,6 +1027,15 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
                 break;
             case "resource_owner_missing":
                 command.Services[0].ResourceOwner = null;
+                break;
+            case "resource_owner_other_authority":
+                command.Services[0].ResourceOwner.Authority = "other-authority";
+                break;
+            case "resource_owner_uppercase_authority":
+                command.Services[0].ResourceOwner.Authority = "NYXID";
+                break;
+            case "resource_owner_trailing_space_authority":
+                command.Services[0].ResourceOwner.Authority = "nyxid ";
                 break;
             case "required_without_nodes":
                 command.Services[0].NodeIds.Clear();
@@ -1044,11 +1057,20 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         command.ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
             command.Owner,
             command.Services);
+        var versionBefore = await eventStore.GetVersionAsync(agent.Id);
+        var stateBefore = agent.State.ToByteArray();
+        var observedEventCountBefore = (await eventStore.GetEventsAsync(agent.Id))
+            .Count(static evt => evt.EventData.Is(NyxIdAuthorizationCatalogObservedEvent.Descriptor));
 
         var act = () => agent.HandleObserveAsync(command);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage(expectedMessage);
+        (await eventStore.GetVersionAsync(agent.Id)).Should().Be(versionBefore);
+        agent.State.ToByteArray().Should().Equal(stateBefore);
+        (await eventStore.GetEventsAsync(agent.Id))
+            .Count(static evt => evt.EventData.Is(NyxIdAuthorizationCatalogObservedEvent.Descriptor))
+            .Should().Be(observedEventCountBefore);
     }
 
     [Fact]

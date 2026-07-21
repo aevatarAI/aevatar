@@ -635,6 +635,14 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         {
             throw new InvalidOperationException("Catalog resource owner identity is incomplete.");
         }
+        if (!string.Equals(
+                service.ResourceOwner.Authority,
+                NyxIdAuthorizationAuthorities.NyxId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Catalog resource owner identity must use NyxID authority.");
+        }
 
         string? previousNodeId = null;
         foreach (var nodeId in service.NodeIds)

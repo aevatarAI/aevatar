@@ -13,6 +13,7 @@ using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Studio.Hosting;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -77,6 +78,9 @@ public sealed class StudioHostingNyxIdAuthorizationCatalogCompositionTests
                 IProjectionDocumentReader<NyxIdAuthorizationCatalogDocument, string>));
         services.Should().ContainSingle(static descriptor =>
             descriptor.ServiceType == typeof(NyxIdAuthorizationCatalogGAgent));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(IExternalWorkflowCapabilitySource) &&
+            descriptor.ImplementationType == typeof(NyxIdExternalWorkflowCapabilitySource));
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>()

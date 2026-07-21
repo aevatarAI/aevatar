@@ -1,5 +1,6 @@
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -11,6 +12,13 @@ namespace Aevatar.GAgentService.Tests.Authorization;
 public sealed class ScheduledInvocationAuthorizationPlannerTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-16T08:00:00Z");
+
+    [Fact]
+    public void FailureCodeWireValues_ShouldKeepDistinctDurableAndProjectionPendingSemantics()
+    {
+        ((int)ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable).Should().Be(13);
+        ((int)ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending).Should().Be(14);
+    }
 
     [Fact]
     public async Task PlanAsync_ShouldCanonicalizeServiceAndNodePermissionSets()
@@ -39,6 +47,42 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Plan.PermissionDigest.Should().Be(
             ScheduledInvocationAuthorizationPlanner.ComputeDigest(result.Plan));
         JsonFormatter.Default.Format(result.Plan).Should().NotContain("binding");
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithDuplicateSlugs_ShouldGrantEachExactUserServiceId()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired),
+            Service("us-home-beta", "home-assistant", AuthorizationGrantRequirement.NotRequired))));
+
+        var result = await planner.PlanAsync(Request([
+            NyxIdService("us-home-alpha", "home-assistant"),
+            NyxIdService("us-home-beta", "home-assistant"),
+        ]));
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
+            .Should().Equal("us-home-alpha", "us-home-beta");
+        result.Plan.NyxIdServiceGrants.Select(static grant => grant.ServiceSlug)
+            .Should().OnlyContain(slug => slug == "home-assistant");
+        result.Plan.CredentialPolicy.AllowAllServices.Should().BeFalse();
+        result.Plan.CredentialPolicy.AllowAllNodes.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithMissingExactServiceId_ShouldFailDurableAuthorization()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired))));
+        var request = Request([NyxIdService(string.Empty, "home-assistant")]);
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_exact_service_identity_unavailable");
     }
 
     [Fact]
@@ -105,11 +149,17 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     {
         var organization = Identity(AuthorizationOwnerKind.Organization, "org-alpha");
         var administrator = Identity(AuthorizationOwnerKind.Personal, "admin-alpha");
-        var planner = NewPlanner(new MutableCatalogQueryPort(
-            Snapshot(Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)) with
-            {
-                Owner = organization.Clone(),
-            }));
+        var snapshot = Snapshot(Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)) with
+        {
+            Owner = organization.Clone(),
+        };
+        snapshot = snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                snapshot.Services),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
         var request = Request(["svc-a"]);
         request = request with
         {
@@ -125,6 +175,222 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Success.Should().BeTrue();
         result.Plan!.Owner.Should().BeEquivalentTo(organization);
         result.Plan.AuthenticatedActor.Should().BeEquivalentTo(administrator);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithMissingRequiredNodeTopology_ShouldFailDurableAuthorization()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.Required))));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_node_authorization_topology_unavailable:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(7);
+    }
+
+    [Theory]
+    [InlineData("other-authority")]
+    [InlineData("NYXID")]
+    [InlineData("nyxid ")]
+    public async Task PlanAsync_WithNonNyxIdResourceOwner_ShouldFailDurableAuthorization(
+        string authority)
+    {
+        var service = Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired);
+        service.ResourceOwner.Authority = authority;
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(service)));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_resource_owner_invalid:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithNonNyxIdResourceOwnerOnUnrequestedService_ShouldFailDurableAuthorization()
+    {
+        var invalidService = Service(
+            "us-home-beta",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired);
+        invalidService.ResourceOwner.Authority = "other-authority";
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired),
+            invalidService)));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_resource_owner_invalid:us-home-beta");
+        result.ObservedCatalogStateVersion.Should().Be(7);
+    }
+
+    [Theory]
+    [InlineData("state_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("negative_state_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("not_activated", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("cleaned", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("default_observed_at", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("blank_contract_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("blank_policy_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("default_evaluated_at", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("missing_digest", "nyxid_catalog_content_digest_invalid")]
+    [InlineData("mismatched_digest", "nyxid_catalog_content_digest_invalid")]
+    public async Task PlanAsync_WithLifecycleIneligibleCatalog_ShouldFailClosed(
+        string scenario,
+        string expectedDetail)
+    {
+        var snapshot = Snapshot(Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired));
+        snapshot = scenario switch
+        {
+            "state_version" => snapshot with { StateVersion = 0 },
+            "negative_state_version" => snapshot with { StateVersion = -1 },
+            "not_activated" => snapshot with { Activated = false },
+            "cleaned" => snapshot with { Cleaned = true },
+            "default_observed_at" => snapshot with { ObservedAtUtc = default },
+            "blank_contract_version" => snapshot with { ContractVersion = " " },
+            "blank_policy_version" => snapshot with { PolicyVersion = " " },
+            "default_evaluated_at" => snapshot with { EvaluatedAtUtc = default },
+            "missing_digest" => snapshot with { ContentDigest = string.Empty },
+            "mismatched_digest" => snapshot with { ContentDigest = "forged-digest" },
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be(expectedDetail);
+        result.ObservedCatalogStateVersion.Should().Be(snapshot.StateVersion);
+    }
+
+    [Theory]
+    [InlineData(
+        "owner_mismatch",
+        ScheduledInvocationAuthorizationFailureCode.OwnerMismatch,
+        "nyxid_catalog_owner_mismatch")]
+    [InlineData(
+        "invalidated",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(
+        "cleaned",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_lifecycle_invalid")]
+    [InlineData(
+        "lifecycle",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_lifecycle_invalid")]
+    [InlineData(
+        "digest",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_content_digest_invalid")]
+    public async Task PlanAsync_WithMultipleInvalidCatalogConditions_ShouldRespectValidationOrder(
+        string scenario,
+        ScheduledInvocationAuthorizationFailureCode expectedFailureCode,
+        string expectedDetail)
+    {
+        var snapshot = Snapshot(Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired));
+        snapshot = scenario switch
+        {
+            "owner_mismatch" => snapshot with
+            {
+                Owner = Identity(AuthorizationOwnerKind.Personal, "user-other"),
+                Invalidated = true,
+                Cleaned = true,
+                StateVersion = 0,
+                Activated = false,
+                ObservedAtUtc = default,
+                ContentDigest = "forged-digest",
+                FreshUntilUtc = Now,
+            },
+            "invalidated" => snapshot with
+            {
+                Invalidated = true,
+                Cleaned = true,
+                StateVersion = 0,
+                Activated = false,
+                ContentDigest = "forged-digest",
+            },
+            "cleaned" => snapshot with
+            {
+                Cleaned = true,
+                StateVersion = 0,
+                ContentDigest = "forged-digest",
+            },
+            "lifecycle" => snapshot with
+            {
+                StateVersion = 0,
+                ContentDigest = "forged-digest",
+            },
+            "digest" => snapshot with
+            {
+                ContentDigest = "forged-digest",
+                FreshUntilUtc = Now,
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(expectedFailureCode);
+        result.Detail.Should().Be(expectedDetail);
+        result.ObservedCatalogStateVersion.Should().Be(snapshot.StateVersion);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithChangedSlugSnapshot_ShouldFailSnapshotStale()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired))));
+
+        var result = await planner.PlanAsync(Request([
+            NyxIdService("us-home-alpha", "home-assistant-renamed"),
+        ]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
+        result.Detail.Should().Be("nyxid_service_slug_snapshot_changed:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithConflictingSlugSnapshotsForSameId_ShouldFailSnapshotStale()
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired)));
+        var planner = NewPlanner(catalog);
+
+        var result = await planner.PlanAsync(Request([
+            NyxIdService("us-home-alpha", "home-assistant"),
+            NyxIdService("us-home-alpha", "home-assistant-renamed"),
+        ]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
+        result.Detail.Should().Be("nyxid_service_slug_snapshot_conflict:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(0);
+        catalog.QueryCount.Should().Be(0);
     }
 
     [Fact]
@@ -335,13 +601,13 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_ForScheduledAgent_ShouldComposeOwnerLlmEvidenceFromExecutionScope()
+    public async Task PlanAsync_ForScheduledAgent_ShouldComposeExactOwnerLlmEvidenceFromExecutionScope()
     {
         var evidence = new StudioEvidencePorts
         {
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
                 11,
-                string.Empty,
+                "svc-b",
                 "provider-b",
                 AuthorizationGrantRequirement.Required),
         };
@@ -364,6 +630,31 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_ForScheduledAgent_ShouldNeverResolveOwnerLlmIdentityFromSlug()
+    {
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
+                11,
+                string.Empty,
+                "provider-b",
+                AuthorizationGrantRequirement.Required),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(
+                Service("svc-b-one", "provider-b", AuthorizationGrantRequirement.NotRequired),
+                Service("svc-b-two", "provider-b", AuthorizationGrantRequirement.NotRequired))),
+            ownerLLMQueryPort: evidence);
+
+        var result = await planner.PlanAsync(Request(["svc-a"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("owner_llm_exact_service_identity_unavailable");
+    }
+
+    [Fact]
     public async Task PlanAsync_ForStudioTarget_ShouldComposeStaticWorkflowAndOwnerLlmEvidence()
     {
         var evidence = new StudioEvidencePorts
@@ -371,15 +662,16 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             Member = new ScheduledInvocationMemberEvidence(3, "wf-alpha", "rev-alpha", "svc-alpha"),
             Workflow = new ScheduledInvocationWorkflowEvidence(
                 5,
-                ["calendar"],
+                [
+                    ConnectorCapability("calendar"),
+                    NyxIdCapability("nyx-service-a", "provider-a"),
+                ],
                 true,
-                [],
-                ["provider-a"],
                 AuthorizationGrantRequirement.Required),
             Connector = new ScheduledInvocationConnectorEvidence(7, ["calendar"]),
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
                 11,
-                string.Empty,
+                "nyx-service-b",
                 "provider-b",
                 AuthorizationGrantRequirement.Required),
         };
@@ -415,8 +707,6 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 5,
                 [],
                 false,
-                [],
-                [],
                 AuthorizationGrantRequirement.NotRequired),
         };
         var planner = new ScheduledInvocationAuthorizationPlanner(
@@ -458,6 +748,10 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             MissingEvidencePorts.Instance, NoServiceOwnerLLMEvidencePort.Instance);
 
     private static ScheduledInvocationAuthorizationRequest Request(IReadOnlyList<string> serviceIds) =>
+        Request(serviceIds.Select(static serviceId => NyxIdService(serviceId, string.Empty)).ToArray());
+
+    private static ScheduledInvocationAuthorizationRequest Request(
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> services) =>
         new(
             new ScheduledInvocationTarget
             {
@@ -470,8 +764,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             },
             new AuthenticatedAuthorizationOwnerContext(
                 Owner(), "lark", "tenant-a", "sender-a", "binding-a"),
-            serviceIds,
-            [],
+            services,
             AuthorizationGrantRequirement.Required,
             Now.AddDays(30),
             Now,
@@ -498,23 +791,47 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             new AuthenticatedAuthorizationOwnerContext(
                 Owner(), "lark", "tenant-alpha", "sender-alpha", "binding-alpha"),
             [],
-            [],
             AuthorizationGrantRequirement.NotRequired,
             Now.AddDays(30),
             Now);
 
+    private static NyxIdUserServiceCapabilityRef NyxIdService(string serviceId, string slug) => new()
+    {
+        UserServiceId = serviceId,
+        ServiceSlugSnapshot = slug,
+    };
+
+    private static ExternalWorkflowCapabilityRef NyxIdCapability(string serviceId, string slug) => new()
+    {
+        NyxIdUserService = NyxIdService(serviceId, slug),
+    };
+
+    private static ExternalWorkflowCapabilityRef ConnectorCapability(string connectorRef) => new()
+    {
+        HostConnector = new HostConnectorCapabilityRef
+        {
+            ConnectorCapabilityRef = connectorRef,
+            OperationId = "operation-alpha",
+            ContractDigest = "connector-digest-alpha",
+        },
+    };
+
     private static NyxIdAuthorizationCatalogSnapshot Snapshot(
-        params NyxIdAuthorizationServiceEvidence[] services) =>
-        new(
-            Owner(),
+        params NyxIdAuthorizationServiceEvidence[] services)
+    {
+        var owner = Owner();
+        return new NyxIdAuthorizationCatalogSnapshot(
+            owner,
             7,
             Now.AddMinutes(-1),
             Now.AddMinutes(15),
             "1",
             "api-key-scope-v1",
             Now.AddMinutes(-2),
-            "digest-7",
-            services);
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services),
+            services,
+            Activated: true);
+    }
 
     private static AuthorizationOwnerIdentity Owner() => new()
     {

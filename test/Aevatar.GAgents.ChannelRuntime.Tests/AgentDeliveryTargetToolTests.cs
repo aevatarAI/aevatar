@@ -36,6 +36,7 @@ public sealed class AgentDeliveryTargetToolTests
         properties.TryGetProperty("nyx_api_key", out _).Should().BeFalse();
         properties.TryGetProperty("api_key_id", out _).Should().BeFalse();
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
+        properties.TryGetProperty("nyx_user_service_id", out _).Should().BeTrue();
         document.RootElement.GetProperty("properties")
             .GetProperty("action")
             .GetProperty("enum")
@@ -190,6 +191,7 @@ public sealed class AgentDeliveryTargetToolTests
                   "delivery_target_id": "aelf-twitter-approval",
                   "platform": "lark",
                   "conversation_id": "oc_9f1b8d3835674963417954fad20f8a3c",
+                  "nyx_user_service_id": "svc-lark-2",
                   "nyx_provider_slug": "api-lark-bot-2"
                 }
                 """);
@@ -248,6 +250,43 @@ public sealed class AgentDeliveryTargetToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_Create_RequiresExactUserServiceIdBeforeKeyIssuance()
+    {
+        var queryPort = Substitute.For<IUserAgentCatalogQueryPort>();
+        var commandPort = Substitute.For<IUserAgentCatalogCommandPort>();
+        var issuer = new RecordingApiKeyIssuer();
+        var resolver = Substitute.For<ICallerScopeResolver>();
+        resolver.TryResolveAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<OwnerScope?>(OwnerScope.ForNyxIdNative("user-1")));
+        var tool = CreateCreateTool(
+            queryPort, commandPort, resolver, new InMemorySecretVault(), issuer);
+
+        AgentToolRequestContext.Current = CreateAuthenticatedContext("user-1");
+        try
+        {
+            var result = await tool.ExecuteAsync("""
+                {
+                  "action": "create",
+                  "delivery_target_id": "aelf-twitter-approval",
+                  "platform": "lark",
+                  "conversation_id": "oc_chat_1",
+                  "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            result.Should().Contain("nyx_user_service_id");
+            result.Should().Contain("required");
+            issuer.Issues.Should().BeEmpty();
+            await commandPort.DidNotReceive().UpsertAsync(
+                Arg.Any<UserAgentCatalogUpsertCommand>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_Create_Accepts_NonLark_TargetPlatform_WithoutLarkFields()
     {
         var caller = OwnerScope.ForNyxIdNative("user-1");
@@ -276,6 +315,7 @@ public sealed class AgentDeliveryTargetToolTests
                   "delivery_target_id": "email-approval",
                   "platform": "email",
                   "conversation_id": "approvals@example.com",
+                  "nyx_user_service_id": "svc-email",
                   "nyx_provider_slug": "api-email-outbound"
                 }
                 """);
@@ -325,6 +365,7 @@ public sealed class AgentDeliveryTargetToolTests
                   "delivery_target_id": "approvals",
                   "platform": "email",
                   "conversation_id": "approvals@example.com",
+                  "nyx_user_service_id": "svc-email",
                   "nyx_provider_slug": "api-email-outbound"
                 }
                 """);
@@ -373,6 +414,7 @@ public sealed class AgentDeliveryTargetToolTests
                   "delivery_target_id": "aelf-twitter-approval",
                   "platform": "lark",
                   "conversation_id": "oc_chat_1",
+                  "nyx_user_service_id": "svc-lark",
                   "nyx_provider_slug": "api-lark-bot"
                 }
                 """);
@@ -416,6 +458,7 @@ public sealed class AgentDeliveryTargetToolTests
                   "delivery_target_id": "aelf-twitter-approval",
                   "platform": "lark",
                   "conversation_id": "oc_chat_1",
+                  "nyx_user_service_id": "svc-lark",
                   "nyx_provider_slug": "api-lark-bot"
                 }
                 """);
@@ -1395,6 +1438,12 @@ public sealed class AgentDeliveryTargetToolTests
                 OwnerKind = AuthorizationOwnerKind.Personal,
                 OwnerSubject = "user-1",
             };
+            NyxIdAuthorizationServiceEvidence[] services =
+            [
+                ServiceEvidence(owner, "svc-lark", "api-lark-bot"),
+                ServiceEvidence(owner, "svc-lark-2", "api-lark-bot-2"),
+                ServiceEvidence(owner, "svc-email", "api-email-outbound"),
+            ];
             return new NyxIdAuthorizationCatalogSnapshot(
                 owner,
                 23,
@@ -1403,12 +1452,9 @@ public sealed class AgentDeliveryTargetToolTests
                 "1",
                 "api-key-scope-v1",
                 now.AddMinutes(-1),
-                "catalog-digest-r23",
-                [
-                    ServiceEvidence(owner, "svc-lark", "api-lark-bot"),
-                    ServiceEvidence(owner, "svc-lark-2", "api-lark-bot-2"),
-                    ServiceEvidence(owner, "svc-email", "api-email-outbound"),
-                ]);
+                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services),
+                services,
+                Activated: true);
         }
 
         private static NyxIdAuthorizationServiceEvidence ServiceEvidence(

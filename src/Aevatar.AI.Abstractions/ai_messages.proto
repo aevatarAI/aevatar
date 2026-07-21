@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.AI.Abstractions";
 
 import "Credentials/credential_secret_references.proto";
 import "Protos/voice_presence.proto";
+import "Tools/tool_presentation.proto";
 import "google/protobuf/timestamp.proto";
 
 enum ChatContentPartKind {
@@ -67,6 +68,9 @@ message ChatRequestEvent  {
   string connector_http_authorization = 11;
   aevatar.credentials.DurableCallerCredentialRef caller_durable_credential = 12;
   RoleChatRunContext run_context = 13;
+  // Identity of this dispatch attempt. It is distinct from session_id, which
+  // remains the idempotent turn identity and may already name a final session.
+  string command_attempt_id = 14;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 
@@ -254,7 +258,12 @@ message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
 message MediaContentEvent { string session_id = 1; string agent_id = 2; ChatContentPart part = 3; }
 message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
-message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
+message ToolCallEvent {
+  string tool_name = 1;
+  string arguments_json = 2;
+  string call_id = 3;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 4;
+}
 
 enum AgentToolReceiptStatus {
   AGENT_TOOL_RECEIPT_STATUS_UNSPECIFIED = 0;
@@ -278,6 +287,7 @@ message NyxIdAuthorizationRequiredEvent {
   optional string resource_uri = 3;
   string reason_code = 4;
   string safe_message = 5;
+  optional string user_service_id = 6;
 }
 
 message AgentToolReceipt {
@@ -348,6 +358,8 @@ message RoleChatSessionStartedEvent {
   RoleChatRunContext run_context = 4;
 }
 
+// Legacy committed wire contract retained for rolling upgrades and queued
+// events. New producers publish RoleChatCommandAttemptRejectedEvent.
 enum RoleChatSessionConflictReason {
   ROLE_CHAT_SESSION_CONFLICT_REASON_UNSPECIFIED = 0;
   ROLE_CHAT_SESSION_CONFLICT_REASON_PROMPT_MISMATCH = 1;
@@ -358,6 +370,19 @@ message RoleChatSessionConflictEvent {
   string session_id = 1;
   RoleChatSessionConflictReason reason = 2;
   string safe_message = 3;
+}
+
+enum RoleChatCommandAttemptRejectionReason {
+  ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_UNSPECIFIED = 0;
+  ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_PROMPT_MISMATCH = 1;
+  ROLE_CHAT_COMMAND_ATTEMPT_REJECTION_REASON_INPUT_PARTS_MISMATCH = 2;
+}
+
+message RoleChatCommandAttemptRejectedEvent {
+  string requested_session_id = 1;
+  RoleChatCommandAttemptRejectionReason reason = 2;
+  string safe_message = 3;
+  string command_attempt_id = 4;
 }
 
 enum RoleChatSessionOutcome {
@@ -386,6 +411,87 @@ message RoleChatSessionCompletedEvent {
   google.protobuf.Timestamp terminal_time = 16;
   RoleChatRunContext run_context = 17;
   string actor_id = 18;
+  repeated ToolResultEvent tool_results = 19;
+  // Terminal presentation facts committed and published atomically with the
+  // final session authority. Projectors expand only this typed tail on live
+  // completion; snapshot synthesis remains explicit replay-only behavior.
+  repeated RoleChatSessionProgressedEvent terminal_progress = 20;
+}
+
+message RoleChatTextStartedProgress {
+  string agent_id = 1;
+}
+
+message RoleChatTextDeltaProgress {
+  string delta = 1;
+}
+
+message RoleChatReasoningDeltaProgress {
+  string delta = 1;
+}
+
+message RoleChatMediaProgress {
+  string agent_id = 1;
+  ChatContentPart part = 2;
+}
+
+message RoleChatToolStartedProgress {
+  string call_id = 1;
+  string tool_name = 2;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
+}
+
+message RoleChatToolCompletedProgress {
+  ToolResultEvent result = 1;
+  string tool_name = 2;
+}
+
+message RoleChatUsageProgress {
+  TokenUsagePayload usage = 1;
+  string model = 2;
+}
+
+message RoleChatTextEndedProgress {
+  string message_id = 1;
+}
+
+message RoleChatAuthorizationRequiredProgress {
+  NyxIdAuthorizationRequiredEvent authorization_required = 1;
+}
+
+message RoleChatToolApprovalRequiredProgress {
+  PendingToolApprovalState pending = 1;
+}
+
+message RoleChatTerminalProgress {
+  RoleChatSessionOutcome outcome = 1;
+  string failure_code = 2;
+  string safe_message = 3;
+  string final_content = 4;
+}
+
+message RoleChatReplayProgress {
+  RoleChatSessionCompletedEvent snapshot = 1;
+}
+
+message RoleChatSessionProgressedEvent {
+  string session_id = 1;
+  int64 sequence = 2;
+
+  oneof payload {
+    RoleChatTextStartedProgress text_started = 10;
+    RoleChatTextDeltaProgress text_delta = 11;
+    RoleChatReasoningDeltaProgress reasoning_delta = 12;
+    RoleChatMediaProgress media = 13;
+    RoleChatToolStartedProgress tool_started = 14;
+    RoleChatToolCompletedProgress tool_completed = 15;
+    RoleChatUsageProgress usage = 16;
+    RoleChatTextEndedProgress text_ended = 17;
+    RoleChatAuthorizationRequiredProgress authorization_required = 18;
+    RoleChatTerminalProgress terminal = 19;
+    RoleChatReplayProgress replay = 20;
+    RoleChatToolApprovalRequiredProgress tool_approval_required = 21;
+  }
 }
 
 message RoleChatCompletionNotificationDispatchedEvent {
@@ -507,6 +613,8 @@ message RoleChatSessionState {
   google.protobuf.Timestamp terminal_time = 17;
   RoleChatRunContext run_context = 18;
   bool completion_notification_dispatched = 19;
+  int64 last_progress_sequence = 20;
+  repeated ToolResultEvent tool_results = 21;
 }
 
 message RoleGAgentState {

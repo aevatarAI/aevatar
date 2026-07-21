@@ -250,10 +250,15 @@ public class StreamingToolExecutorTests
         results.Should().HaveCount(2);
         results[0].CallId.Should().Be("tc-fail");
         results[0].IsError.Should().BeTrue();
-        results[0].Result.Should().Contain("boom");
+        results[0].Result.Should().NotContain("boom");
+        results[0].Result.Should().Contain("The tool request failed.");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         results[1].CallId.Should().Be("tc-skip");
         results[1].IsError.Should().BeTrue();
         results[1].Result.Should().Contain("prior tool error");
+        results[1].Receipt.Should().NotBeNull();
+        results[1].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
     }
 
     [Fact]
@@ -595,7 +600,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task UnknownTool_ShouldReturnNotFoundResult()
+    public async Task UnknownTool_ShouldReturnSafeErrorResult()
     {
         var tools = new ToolManager();
         var executor = new StreamingToolExecutor(tools);
@@ -609,7 +614,10 @@ public class StreamingToolExecutorTests
 
         results.Should().HaveCount(1);
         results[0].CallId.Should().Be("tc-1");
-        results[0].Result.Should().Contain("not found");
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Contain("The tool request failed.");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
     }
 
     [Fact]
@@ -790,7 +798,8 @@ public class StreamingToolExecutorTests
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         receipt.ErrorCode.Should().Be("tool_execution_error");
-        receipt.ErrorMessage.Should().Contain("boom");
+        receipt.ErrorMessage.Should().Be("The tool request failed.");
+        receipt.ResultJson.Should().NotContain("boom");
     }
 
     [Fact]
