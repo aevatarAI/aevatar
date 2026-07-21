@@ -117,7 +117,7 @@ NyxID proxy 的权限错误只按真实 structured contract 分类：仅 HTTP `4
 
 HTTP `403` / `forbidden` / `1002` 本身不表示需要重新连接。approval policy denial、approval timeout、scoped permission denial 与普通 upstream `403` 都保持为 safe typed `AgentToolReceipt(status=ERROR)`，不会生成 authorization blocker。只有 connected-service discovery 确认 service 缺失，或模型调用 `nyxid_require_service` 提供 Aevatar-owned positive evidence 时，才生成 typed connection blocker。
 
-失败、拒绝或阻塞 receipt 只保留 `service_slug`、可选 `service_label`、去除 query/fragment 的可选 `resource_uri`、`reason_code` 与 `safe_message`。这类调用的上游 raw error body、credential、token 与 secret-bearing arguments 不进入 receipt、actor state、history、Role completion、AGUI payload 或日志；非成功 tool result 统一替换成 receipt 的 safe `result_json`。
+失败、拒绝或阻塞 receipt 只保留安全的 typed 诊断字段：proxy 调用已经固定 exact instance 时保留 `user_service_id`，并保留 `service_slug`、可选 `service_label`、去除 query/fragment 的可选 `resource_uri`、`reason_code` 与 `safe_message`。这类调用的上游 raw error body、credential、token 与 secret-bearing arguments 不进入 receipt、actor state、history、Role completion、AGUI payload 或日志；非成功 tool result 统一替换成 receipt 的 safe `result_json`。
 
 NyxIdChat 收到该 receipt 后提交 `RoleChatSessionOutcome.BLOCKED`，Projection Pipeline 依次映射为 `CUSTOM nyxid.authorization.required` 与 `RUN_FINISHED(status=blocked)`。该事实只终止当前 turn，不创建 `PendingToolApprovalState`，也不触发 `:approve` continuation。缺少整个 connected service 时，`nyxid_require_service` 提供相同的 deterministic typed blocker 路径。
 

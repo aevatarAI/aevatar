@@ -61,6 +61,7 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("`service_slug_snapshot` is only a display and routing snapshot");
         prompt.Should().Contain("`required_nyx_services`");
         prompt.Should().NotContain("`required_service_slugs`");
+        prompt.Should().NotContain("Omit slug → discover all proxyable services");
     }
 
     [Fact]

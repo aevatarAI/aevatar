@@ -43,8 +43,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
     public string Description =>
         "Make HTTP requests to downstream services through NyxID's credential-injecting proxy. " +
         "NyxID automatically injects the user's stored credentials. " +
-        "Omit slug and service_id to discover caller-visible service instances. " +
-        "Provide exact service_id + slug + path to send a proxied request.";
+        "Use typed capability discovery to select an exact service instance, then provide " +
+        "service_id + slug + path to send a proxied request.";
 
     /// <summary>
     /// No Aevatar-side approval needed. NyxID's proxy layer handles approval
@@ -69,6 +69,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             callId,
             toolName,
             args.Str("slug") ?? args.Str("service") ?? string.Empty,
+            args.Str("service_id"),
             serviceLabel: null,
             args.Str("path"),
             resultJson);
@@ -109,7 +110,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
               "enum": ["text", "file_artifact"],
               "description": "Response handling mode. Omit or use text for the existing JSON/string response. Use file_artifact only for GET binary downloads in a managed workflow run."
             }
-          }
+          },
+          "required": ["service_id", "slug", "path"]
         }
         """;
 
@@ -145,7 +147,6 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         var body = args.RawOrStr("body");
         var headers = args.Headers();
 
-        // No slug → discover mode: merge services from both tokens
         if (string.IsNullOrWhiteSpace(slug))
         {
             if (!string.IsNullOrWhiteSpace(serviceId))
@@ -153,8 +154,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             if (responseMode == FileArtifactResponseMode)
                 return FileArtifactError("file_artifact_requires_slug", "response_mode=file_artifact requires slug.");
 
-            _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery");
-            return await DiscoverMergedServicesAsync(token, orgToken, ct);
+            return """{"error":"'service_id' and 'slug' are required; select an exact service instance through typed capability discovery"}""";
         }
 
         if (string.IsNullOrWhiteSpace(serviceId))
@@ -321,60 +321,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             JsonOptions);
     }
 
-    // ─── Dual-token service discovery + routing ───
-
-    /// <summary>
-    /// Discover services from both user and org tokens, merge into a single list.
-    /// Deduplicates by slug (user takes precedence).
-    /// </summary>
-    private async Task<string> DiscoverMergedServicesAsync(
-        string userToken, string? orgToken, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
-            return await _client.ListServicesAsync(userToken, ct);
-
-        var userServicesJson = await _client.ListServicesAsync(userToken, ct);
-        var orgServicesJson = await _client.ListServicesAsync(orgToken, ct);
-
-        // PR #471 reviewer concern: when both tokens fail discovery, both responses are
-        // NyxID error envelopes, neither has a `services` array, the merge below quietly
-        // synthesizes `[]`, and downstream tool-result classification treats an empty array as
-        // a successful call. Surface the user-token error verbatim instead so the middleware
-        // can classify it. A single-token failure stays masked: the healthy token's slugs
-        // still merge in and the call counts as a successful discovery.
-        if (LooksLikeErrorEnvelope(userServicesJson) && LooksLikeErrorEnvelope(orgServicesJson))
-        {
-            _logger.LogWarning(
-                "[nyxid_proxy] Both user and org discovery returned error envelopes; surfacing user envelope");
-            return userServicesJson;
-        }
-
-        try
-        {
-            using var userDoc = System.Text.Json.JsonDocument.Parse(userServicesJson);
-            using var orgDoc = System.Text.Json.JsonDocument.Parse(orgServicesJson);
-
-            var userServiceIds = ParseServiceIds(userDoc);
-            var merged = new List<System.Text.Json.JsonElement>();
-
-            foreach (var service in EnumerateServiceItems(userDoc.RootElement))
-                merged.Add(service);
-
-            foreach (var service in EnumerateServiceItems(orgDoc.RootElement))
-            {
-                var serviceId = ReadServiceId(service);
-                if (!string.IsNullOrWhiteSpace(serviceId) && userServiceIds.Add(serviceId))
-                    merged.Add(service);
-            }
-
-            return System.Text.Json.JsonSerializer.Serialize(merged);
-        }
-        catch (System.Text.Json.JsonException ex)
-        {
-            _logger.LogWarning(ex, "[nyxid_proxy] Failed to merge service lists, returning user services only");
-            return userServicesJson;
-        }
-    }
+    // ─── Dual-token exact identity routing ───
 
     /// <summary>
     /// Resolve which token to use for a given exact UserService id.
@@ -423,25 +370,6 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
     }
 
     // ─── Helpers ───
-
-    /// <summary>
-    /// Extract service slugs from a NyxID /proxy/services JSON response.
-    /// </summary>
-    internal static HashSet<string> ParseServiceSlugs(System.Text.Json.JsonDocument doc)
-    {
-        var slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var svc in EnumerateServiceItems(doc.RootElement))
-        {
-            if (svc.TryGetProperty("slug", out var slugProp))
-            {
-                var s = slugProp.GetString();
-                if (!string.IsNullOrEmpty(s))
-                    slugs.Add(s);
-            }
-        }
-
-        return slugs;
-    }
 
     internal static HashSet<string> ParseServiceIds(System.Text.Json.JsonDocument doc)
     {
@@ -493,39 +421,6 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
 
             foreach (var item in items.EnumerateArray())
                 yield return item;
-        }
-    }
-
-    /// <summary>
-    /// Detect a NyxID error envelope by the truthy <c>error</c> property
-    /// <see cref="NyxIdApiClient.SendAsync"/> emits on every non-2xx and exception path.
-    /// Used by <see cref="DiscoverMergedServicesAsync"/> to short-circuit the dual-token
-    /// merge when neither call returned a real services list. Conservative on purpose —
-    /// only the explicit <c>error</c> marker counts; bare envelopes like
-    /// <c>{"code": 401}</c> are left to the regular merge path.
-    /// </summary>
-    internal static bool LooksLikeErrorEnvelope(string? response)
-    {
-        if (string.IsNullOrEmpty(response))
-            return false;
-
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(response);
-            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
-                return false;
-            if (!doc.RootElement.TryGetProperty("error", out var errorProp))
-                return false;
-            return errorProp.ValueKind switch
-            {
-                System.Text.Json.JsonValueKind.False => false,
-                System.Text.Json.JsonValueKind.Null => false,
-                _ => true,
-            };
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return false;
         }
     }
 

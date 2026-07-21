@@ -210,6 +210,7 @@ public class NyxIdChatAguiSseEventWriterTests
         var sink = new SseFrameSink();
         var blocker = new NyxIdAuthorizationRequiredEvent
         {
+            UserServiceId = "us-github-alpha",
             ServiceSlug = "api-github",
             ResourceUri = "/repos/private",
             ReasonCode = "NYXID_UNAUTHORIZED",
@@ -238,6 +239,7 @@ public class NyxIdChatAguiSseEventWriterTests
         frames[0].GetProperty("custom").GetProperty("name").GetString()
             .Should().Be("nyxid.authorization.required");
         var payload = frames[0].GetProperty("custom").GetProperty("payload");
+        payload.GetProperty("userServiceId").GetString().Should().Be("us-github-alpha");
         payload.GetProperty("serviceSlug").GetString().Should().Be("api-github");
         payload.GetProperty("resourceUri").GetString().Should().Be("/repos/private");
         payload.GetProperty("reasonCode").GetString().Should().Be("NYXID_UNAUTHORIZED");

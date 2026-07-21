@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -10,6 +11,30 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdProxyToolExactIdentityTests
 {
+    [Fact]
+    public void ParametersSchema_ShouldRequireAdmittedExactOperationTuple()
+    {
+        var tool = CreateTool(new CountingHandler());
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("required").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().BeEquivalentTo("service_id", "slug", "path");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithoutExactIdentity_ShouldRejectBeforeDiscovery()
+    {
+        var handler = new CountingHandler();
+        var tool = CreateTool(handler);
+        using var _scope = PushContext();
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("typed capability discovery");
+        handler.RequestCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task ExecuteAsync_WithSlugButNoServiceId_ShouldRejectBeforeProxy()
     {
@@ -39,6 +64,23 @@ public sealed class NyxIdProxyToolExactIdentityTests
 
         result.Should().Contain("sensitive header");
         handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithAuthorizationFailure_ShouldPreserveExactServiceIdentity()
+    {
+        var tool = CreateTool(new CountingHandler());
+        const string result =
+            """{"error":true,"status":401,"body":"{\"error\":\"unauthorized\",\"error_code\":1001}"}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            """{"service_id":"us-home-alpha","slug":"home-assistant","path":"/api/items"}""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.AuthorizationRequired.UserServiceId.Should().Be("us-home-alpha");
     }
 
     private static NyxIdProxyTool CreateTool(CountingHandler handler)

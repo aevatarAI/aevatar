@@ -356,6 +356,7 @@ public class NyxIdConnectedServiceToolSourceTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
         receipt.AuthorizationRequired.Should().NotBeNull();
         receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-shop");
+        receipt.AuthorizationRequired.UserServiceId.Should().Be("svc-1");
         receipt.AuthorizationRequired.ResourceUri.Should().Be("/orders/o-1");
         receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
         receipt.AuthorizationRequired.SafeMessage.Should().NotBeNullOrWhiteSpace();

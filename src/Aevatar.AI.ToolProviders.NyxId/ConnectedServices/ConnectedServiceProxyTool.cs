@@ -81,6 +81,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             callId,
             toolName,
             _serviceSlug,
+            _userServiceId,
             serviceLabel: null,
             resourceUri,
             resultJson);

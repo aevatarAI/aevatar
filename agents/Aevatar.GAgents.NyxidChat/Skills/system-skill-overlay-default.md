@@ -68,8 +68,8 @@ Quick reference:
 **`code_execute`** — Execute Python, JavaScript, TypeScript, or Bash in a sandboxed environment. Returns stdout, stderr, and exit code. Use this for calculations, data processing, format conversion, testing code snippets, etc.
 
 **`nyxid_proxy`** — Make HTTP requests to any connected service. NyxID injects credentials automatically.
-- Omit slug → discover all proxyable services with proxy URLs
-- Provide exact `service_id` + slug + path + method + body → make the proxied request; copy the id and slug from the same discovery result
+- Select an exact instance from `<connected-services>` or typed capability discovery; do not use `nyxid_proxy` as a discovery surface
+- Provide exact `service_id` + slug + path + method + body → make the proxied request; copy the id and slug from the same trusted entry
 
 **Critical**: Proxy paths are relative to the service's base URL (shown in `<connected-services>`). Do NOT duplicate version prefixes already in the base URL. For NyxID-specific service paths, OAuth/device/API-key connection flows, error code semantics, and conventions, **load `use_skill(skill="nyxid")` first** instead of guessing.
 
