@@ -545,12 +545,15 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
       </Tooltip>
       <div className="workflow-studio-header__title-zone">
         {workflowTitleNode}
-        <fieldset
+        <div
+          aria-atomic="true"
           aria-label={t(
             'teamMemberWorkflowStudio.header.statusAria',
             'Workflow status',
           )}
+          aria-live="polite"
           className="workflow-studio-header__badges"
+          role="status"
         >
           <Tag
             className="workflow-studio-header__status"
@@ -569,7 +572,7 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
               )}
             </Tag>
           ) : null}
-        </fieldset>
+        </div>
       </div>
     </section>
   );

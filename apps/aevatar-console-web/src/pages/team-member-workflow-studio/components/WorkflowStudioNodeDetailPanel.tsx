@@ -44,8 +44,8 @@ const WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY = "#1D4ED8";
 const WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY_HOVER = "#1E40AF";
 const WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY_ACTIVE = "#1E3A8A";
 
-function buildInspectorCss(screenMd: number): string {
-  const compactMaxWidth = Math.max(0, screenMd - 1);
+function buildInspectorCss(screenLg: number): string {
+  const compactMaxWidth = Math.max(0, screenLg - 1);
   return `
 .workflow-studio-node-inspector {
   color: var(--workflow-node-inspector-text);
@@ -129,7 +129,7 @@ function buildInspectorCss(screenMd: number): string {
     border-top: 1px solid var(--workflow-node-inspector-border) !important;
     bottom: 0 !important;
     left: 0 !important;
-    max-height: calc(100vh - var(--workflow-node-inspector-mobile-offset)) !important;
+    max-height: calc(100% - var(--workflow-node-inspector-mobile-offset)) !important;
     max-width: none !important;
     right: 0 !important;
     top: auto !important;
@@ -378,7 +378,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   }
 
   const overlayInset = WORKFLOW_STUDIO_NODE_INSPECTOR_OVERLAY_INSET;
-  const inspectorCss = buildInspectorCss(token.screenMD);
+  const inspectorCss = buildInspectorCss(token.screenLG);
   const inspectorVariables: InspectorCssVariables = {
     "--workflow-node-inspector-border": token.colorBorderSecondary,
     "--workflow-node-inspector-border-strong": token.colorBorder,

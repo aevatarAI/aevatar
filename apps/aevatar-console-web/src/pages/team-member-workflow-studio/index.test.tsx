@@ -3248,6 +3248,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
     const inspector = screen.getByLabelText("Node inspector");
     const resizeHandle = screen.getByLabelText("Resize node inspector");
+    const inspectorStyle = Array.from(document.querySelectorAll("style")).find(
+      (style) => style.textContent?.includes(".workflow-studio-node-inspector"),
+    );
+    expect(inspectorStyle).toHaveTextContent("@media (max-width: 991px)");
+    expect(inspectorStyle).toHaveTextContent(
+      "max-height: calc(100% - var(--workflow-node-inspector-mobile-offset)) !important;",
+    );
     expect(inspector).toHaveStyle({ width: "420px" });
     expect(resizeHandle).toHaveAttribute("aria-valuemin", "360");
     expect(resizeHandle).toHaveAttribute("aria-valuemax", "500");
@@ -3277,6 +3284,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
       "data-viewport-right-inset",
       "392",
+    );
+
+    (Grid.useBreakpoint as jest.Mock).mockReturnValue({
+      xs: true,
+      sm: true,
+      md: true,
+      lg: false,
+      xl: false,
+      xxl: false,
+    });
+    fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "0",
     );
 
     fireEvent.click(
@@ -6138,6 +6159,14 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("Published")).toBeTruthy();
       expect(screen.getByTitle(/Published member workflow is serviceable/)).toBeTruthy();
     });
+    expect(screen.getByRole("status", { name: "Workflow status" })).toHaveAttribute(
+      "aria-live",
+      "polite",
+    );
+    expect(screen.getByRole("status", { name: "Workflow status" })).toHaveAttribute(
+      "aria-atomic",
+      "true",
+    );
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
 

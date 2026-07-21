@@ -67,7 +67,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
   const executionPanelOpen = Boolean(studio.executionDetail || studio.executionError);
   const nodeInspectorOpen = !sidePanelOpen && Boolean(studio.selectedStepDraft);
   const canvasRightInset =
-    screens.md && nodeInspectorOpen
+    screens.lg && nodeInspectorOpen
       ? nodeInspectorWidth + WORKFLOW_STUDIO_NODE_INSPECTOR_OVERLAY_INSET * 2
       : 0;
 
