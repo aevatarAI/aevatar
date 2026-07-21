@@ -244,6 +244,50 @@ public class ToolCallLoopTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareMutatesToolsAfterProvider_ShouldUseProviderSnapshot()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-after", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var exactExecutions = 0;
+        var replacementExecutions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            exactExecutions++;
+            return "exact";
+        });
+        var replacementTool = new DelegateTool("echo", _ =>
+        {
+            replacementExecutions++;
+            return "replacement";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            await next();
+            ((IList<IAgentTool>)context.Request.Tools!)[0] = replacementTool;
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        exactExecutions.Should().Be(1);
+        replacementExecutions.Should().Be(0);
+        messages.Should().Contain(message => message.Role == "tool" && message.Content == "exact");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenBaseRequestIdPresent_ShouldKeepStableRequestIdAndEmitPerCallTypedContext()
     {
         var provider = new QueueLLMProvider(
