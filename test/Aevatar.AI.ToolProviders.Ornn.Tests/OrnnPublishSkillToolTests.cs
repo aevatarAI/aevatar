@@ -6,7 +6,6 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using FluentAssertions;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -44,33 +43,6 @@ public sealed class OrnnPublishSkillToolTests
             "references",
             "assets");
         properties.Should().NotContain(["license", "compatibility", "metadata", "skill_md", "runtime"]);
-    }
-
-    [Fact]
-    public void ContinuationCapability_ShouldMatchOnlyTheOrnnPublishSkillContract()
-    {
-        var tool = CreateTool(new CapturingHandler("""{ "error": true }"""));
-
-        var capability = tool.CaptureContinuationCapability();
-        var contract = capability.Unpack<FixedAgentToolContinuationCapability>();
-
-        contract.ContractId.Should().Be("ornn_publish_skill");
-        contract.ContractVersion.Should().Be(1);
-        tool.MatchesContinuationCapability(capability).Should().BeTrue();
-        tool.MatchesContinuationCapability(Any.Pack(new FixedAgentToolContinuationCapability
-        {
-            ContractId = "different_contract",
-            ContractVersion = 1,
-        })).Should().BeFalse();
-        tool.MatchesContinuationCapability(Any.Pack(new FixedAgentToolContinuationCapability
-        {
-            ContractId = "ornn_publish_skill",
-            ContractVersion = 2,
-        })).Should().BeFalse();
-        tool.MatchesContinuationCapability(Any.Pack(new StringValue
-        {
-            Value = "ornn_publish_skill",
-        })).Should().BeFalse();
     }
 
     [Theory]

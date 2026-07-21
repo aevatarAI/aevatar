@@ -239,11 +239,6 @@ message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
 message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
 
-message FixedAgentToolContinuationCapability {
-  string contract_id = 1;
-  uint32 contract_version = 2;
-}
-
 enum AgentToolReceiptStatus {
   AGENT_TOOL_RECEIPT_STATUS_UNSPECIFIED = 0;
   AGENT_TOOL_RECEIPT_STATUS_SUCCESS = 1;

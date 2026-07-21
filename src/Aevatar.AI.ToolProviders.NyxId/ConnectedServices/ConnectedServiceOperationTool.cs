@@ -2,11 +2,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
-internal sealed class ConnectedServiceOperationTool : IAgentTool, IAgentToolContinuationCapability
+internal sealed class ConnectedServiceOperationTool : IAgentTool
 {
     private readonly NyxIdServiceInstanceClient _client;
     private readonly ConnectedServiceToolOperation _operation;
@@ -35,14 +34,6 @@ internal sealed class ConnectedServiceOperationTool : IAgentTool, IAgentToolCont
     public bool IsReadOnly => _operation.IsReadOnly;
     public bool IsDestructive => _operation.IsDestructive;
     public bool? RequiresApproval(string argumentsJson) => ApprovalMode == ToolApprovalMode.AlwaysRequire;
-
-    public Any CaptureContinuationCapability() =>
-        Any.Pack(NyxIdServiceTools.BuildContinuationCapability(_bindings.Values, _operation));
-
-    public bool MatchesContinuationCapability(Any capability) =>
-        NyxIdServiceTools.MatchesContinuationCapability(
-            capability,
-            NyxIdServiceTools.BuildContinuationCapability(_bindings.Values, _operation));
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

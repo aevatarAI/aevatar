@@ -47,7 +47,12 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             var tools = new List<IAgentTool>(NyxIdServiceTools.Create(_client, bindings));
             var candidates = await DiscoverOperationCandidatesAsync(bindings, ct);
             tools.AddRange(CreateOperationTools(candidates));
-            return ExactAgentToolSet.Create(tools).ToolsByName.Values.ToArray();
+            return tools
+                .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+                .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Where(static group => group.All(tool => ReferenceEquals(tool, group.First())))
+                .Select(static group => group.First())
+                .ToArray();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

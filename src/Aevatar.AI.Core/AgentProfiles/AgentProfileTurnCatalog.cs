@@ -87,7 +87,31 @@ public sealed class AgentProfileTurnCatalog
     }
 
     private static IReadOnlyDictionary<string, IAgentTool> FreezeTools(IEnumerable<IAgentTool>? tools)
-        => ExactAgentToolSet.Create(tools).ToolsByName;
+    {
+        if (tools is null)
+            return FrozenDictionary<string, IAgentTool>.Empty;
+
+        var exactTools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tool in tools.Where(static tool => !string.IsNullOrWhiteSpace(tool.Name)))
+        {
+            var name = tool.Name.Trim();
+            if (collisions.Contains(name))
+                continue;
+            if (!exactTools.TryGetValue(name, out var existing))
+            {
+                exactTools.Add(name, tool);
+                continue;
+            }
+            if (ReferenceEquals(existing, tool))
+                continue;
+
+            exactTools.Remove(name);
+            collisions.Add(name);
+        }
+
+        return exactTools.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+    }
 
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

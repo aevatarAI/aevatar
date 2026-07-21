@@ -87,6 +87,66 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
+    private const string MethodAndHeaderSpec = """
+        {
+          "openapi": "3.0.0",
+          "paths": {
+            "/method/head": {
+              "head": {
+                "operationId": "head_probe",
+                "x-aevatar-tool": { "enabled": true, "readOnly": true, "approval": "auto" }
+              }
+            },
+            "/method/options": {
+              "options": {
+                "operationId": "options_probe",
+                "x-aevatar-tool": { "enabled": true, "readOnly": true, "approval": "auto" }
+              }
+            },
+            "/method/put": {
+              "put": {
+                "operationId": "put_probe",
+                "x-aevatar-tool": { "enabled": true, "readOnly": true, "approval": "auto" },
+                "requestBody": {
+                  "required": true,
+                  "content": {
+                    "application/json": {
+                      "schema": { "type": "object" }
+                    }
+                  }
+                }
+              }
+            },
+            "/method/patch": {
+              "patch": {
+                "operationId": "patch_probe",
+                "x-aevatar-tool": { "enabled": true, "readOnly": true, "approval": "auto" },
+                "parameters": [
+                  { "name": "Accept", "in": "header", "required": false, "schema": { "type": "string" } },
+                  { "name": "Content-Type", "in": "header", "required": false, "schema": { "type": "string" } },
+                  { "name": "If-Match", "in": "header", "required": false, "schema": { "type": "string" } },
+                  { "name": "If-None-Match", "in": "header", "required": false, "schema": { "type": "string" } }
+                ],
+                "requestBody": {
+                  "required": true,
+                  "content": {
+                    "application/json": {
+                      "schema": { "type": "object" }
+                    }
+                  }
+                }
+              }
+            },
+            "/method/delete": {
+              "delete": {
+                "operationId": "delete_probe",
+                "x-aevatar-tool": { "enabled": true, "readOnly": true, "approval": "auto" }
+              }
+            }
+          }
+        }
+        """;
+
     [Fact]
     public async Task DiscoverToolsAsync_NoBaseUrl_ReturnsEmptyWithoutReadingKeys()
     {
@@ -218,6 +278,97 @@ public class NyxIdConnectedServiceToolSourceTests
         postCall.Path.Should().Be("/api/v1/proxy/svc-shop/orders/search");
         using var body = JsonDocument.Parse(postCall.Body);
         body.RootElement.GetProperty("q").GetString().Should().Be("shoes");
+    }
+
+    [Theory]
+    [InlineData(
+        "head_probe",
+        "HEAD",
+        "/method/head",
+        """{ "user_service_id": "us-personal-7" }""",
+        false,
+        true,
+        false)]
+    [InlineData(
+        "options_probe",
+        "OPTIONS",
+        "/method/options",
+        """{ "user_service_id": "us-personal-7" }""",
+        false,
+        true,
+        false)]
+    [InlineData(
+        "put_probe",
+        "PUT",
+        "/method/put",
+        """{ "user_service_id": "us-personal-7", "body": { "value": 1 } }""",
+        true,
+        false,
+        false)]
+    [InlineData(
+        "patch_probe",
+        "PATCH",
+        "/method/patch",
+        """{ "user_service_id": "us-personal-7", "Accept": "application/json", "Content-Type": "application/json", "If-Match": "etag-a", "If-None-Match": "etag-b", "body": { "value": 1 } }""",
+        true,
+        false,
+        false)]
+    [InlineData(
+        "delete_probe",
+        "DELETE",
+        "/method/delete",
+        """{ "user_service_id": "us-personal-7" }""",
+        false,
+        false,
+        true)]
+    public async Task DynamicOperations_MapAllowedMethodsHeadersAndApprovalFloorThroughExactSourceChain(
+        string operationId,
+        string expectedMethod,
+        string expectedRelativePath,
+        string arguments,
+        bool expectsBody,
+        bool expectedReadOnly,
+        bool expectedDestructive)
+    {
+        var handler = new FakeNyxIdHandler();
+        var instance = Instance("us-personal-7", "api-shop", "svc-shop");
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-personal-7"] = instance;
+        handler.SpecsByServiceId["us-personal-7"] = MethodAndHeaderSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token", idempotencyKey: "idem-dynamic");
+        var tool = (await source.DiscoverToolsAsync()).Single(candidate =>
+            candidate.Name == $"nyxid_service_operation__{operationId}");
+        var result = await tool.ExecuteAsync(arguments);
+
+        result.Should().Contain("ok");
+        tool.IsReadOnly.Should().Be(expectedReadOnly);
+        tool.ApprovalMode.Should().Be(expectedReadOnly
+            ? ToolApprovalMode.NeverRequire
+            : ToolApprovalMode.AlwaysRequire);
+        tool.RequiresApproval(arguments).Should().Be(!expectedReadOnly);
+        tool.IsDestructive.Should().Be(expectedDestructive);
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-personal-7");
+        var proxy = handler.ProxyRequests.Should().ContainSingle().Subject;
+        proxy.Method.Should().Be(expectedMethod);
+        proxy.Path.Should().Be($"/api/v1/proxy/svc-shop{expectedRelativePath}");
+        proxy.Query.Should().Be("?_nyxid_via=us-personal-7");
+        proxy.Accept.Should().Be("application/json");
+        proxy.ContentType.Should().Be(expectsBody ? "application/json" : null);
+        proxy.IdempotencyKey.Should().Be(expectedReadOnly ? null : "idem-dynamic");
+        if (expectsBody)
+        {
+            using var body = JsonDocument.Parse(proxy.Body);
+            body.RootElement.GetProperty("value").GetInt32().Should().Be(1);
+        }
+        else
+        {
+            proxy.Body.Should().BeEmpty();
+        }
+
+        proxy.IfMatch.Should().Be(expectedMethod == "PATCH" ? "etag-a" : null);
+        proxy.IfNoneMatch.Should().Be(expectedMethod == "PATCH" ? "etag-b" : null);
     }
 
     [Fact]
@@ -483,10 +634,14 @@ public class NyxIdConnectedServiceToolSourceTests
         return new NyxIdConnectedServiceToolSource(options, new NyxIdServiceInstanceClient(client));
     }
 
-    private static AgentToolContextScope PushContext(string userToken, string? organizationToken = null) =>
+    private static AgentToolContextScope PushContext(
+        string userToken,
+        string? organizationToken = null,
+        string? idempotencyKey = null) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
             Credentials = new AgentToolCredentials(userToken, organizationToken, null),
+            Request = new AgentToolRequestIdentity("request-1", "call-1", idempotencyKey),
         });
 
     private static string Instance(
@@ -535,7 +690,17 @@ public class NyxIdConnectedServiceToolSourceTests
     private static string Keys(params string[] instances) =>
         $$"""{ "keys": [{{string.Join(',', instances)}}] }""";
 
-    private sealed record ProxyRequestRecord(string Method, string Path, string Query, string Body, string Token);
+    private sealed record ProxyRequestRecord(
+        string Method,
+        string Path,
+        string Query,
+        string Body,
+        string Token,
+        string? Accept,
+        string? ContentType,
+        string? IfMatch,
+        string? IfNoneMatch,
+        string? IdempotencyKey);
 
     private sealed class FakeNyxIdHandler : HttpMessageHandler
     {
@@ -596,7 +761,12 @@ public class NyxIdConnectedServiceToolSourceTests
                     path,
                     request.RequestUri?.Query ?? string.Empty,
                     body,
-                    token));
+                    token,
+                    ReadHeader(request, "Accept"),
+                    request.Content?.Headers.ContentType?.MediaType,
+                    ReadHeader(request, "If-Match"),
+                    ReadHeader(request, "If-None-Match"),
+                    ReadHeader(request, "Idempotency-Key")));
                 return Json("""{ "ok": true }""");
             }
 
@@ -607,5 +777,8 @@ public class NyxIdConnectedServiceToolSourceTests
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+
+        private static string? ReadHeader(HttpRequestMessage request, string name) =>
+            request.Headers.TryGetValues(name, out var values) ? values.Single() : null;
     }
 }

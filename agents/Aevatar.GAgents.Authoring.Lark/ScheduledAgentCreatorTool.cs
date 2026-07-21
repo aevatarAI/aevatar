@@ -1,16 +1,14 @@
 using System.Text.Json;
-using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Scheduled;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Authoring.Lark;
 
-public sealed class ScheduledAgentCreatorTool : IAgentTool, IAgentToolContinuationCapability
+public sealed class ScheduledAgentCreatorTool : IAgentTool
 {
     private readonly IScheduledWorkflowAgentCreationPort _scheduledWorkflowAgentCreationPort;
     private readonly ICallerScopeResolver _callerScopeResolver;
@@ -158,15 +156,6 @@ public sealed class ScheduledAgentCreatorTool : IAgentTool, IAgentToolContinuati
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
-
-    public Any CaptureContinuationCapability() => Any.Pack(new FixedAgentToolContinuationCapability
-    {
-        ContractId = "scheduled_agent_creator",
-        ContractVersion = 1,
-    });
-
-    public bool MatchesContinuationCapability(Any capability) =>
-        capability.Equals(CaptureContinuationCapability());
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

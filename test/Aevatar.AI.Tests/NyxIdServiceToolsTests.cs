@@ -7,8 +7,6 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using FluentAssertions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.Tests;
 
@@ -51,15 +49,6 @@ public sealed class NyxIdServiceToolsTests
         { "DELETE", true, true, true },
     };
 
-    public static TheoryData<string, NyxIdServiceToolKind> FixedToolCases => new()
-    {
-        { "nyxid_service_inventory", NyxIdServiceToolKind.Inventory },
-        { "nyxid_service_update", NyxIdServiceToolKind.Update },
-        { "nyxid_service_route", NyxIdServiceToolKind.Route },
-        { "nyxid_service_delete", NyxIdServiceToolKind.Delete },
-        { "nyxid_service_request", NyxIdServiceToolKind.Request },
-    };
-
     [Fact]
     public async Task DiscoverToolsAsync_ShouldExposeFiveFixedToolsAndOneMultiInstanceOperation()
     {
@@ -91,109 +80,6 @@ public sealed class NyxIdServiceToolsTests
             .GetProperty("enum").EnumerateArray().Select(static item => item.GetString())
             .Should().BeEquivalentTo("us-personal-7", "us-personal-8");
         operation.ParametersSchema.Should().NotContain("token").And.NotContain("credential");
-    }
-
-    [Fact]
-    public async Task OperationContinuationCapability_WhenRediscoveredAuthorityIsIdentical_ShouldMatch()
-    {
-        var handler = new ServiceHandler();
-        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
-        handler.KeysByToken["user-token"] = Keys(instance);
-        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
-        var source = CreateSource(handler);
-
-        using var scope = PushContext("user-token");
-        var authorizedTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == "nyxid_service_operation__get_order");
-        var capability = authorizedTool.CaptureContinuationCapability();
-        var rediscoveredTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == "nyxid_service_operation__get_order");
-
-        rediscoveredTool.MatchesContinuationCapability(capability).Should().BeTrue();
-        Encoding.UTF8.GetString(capability.ToByteArray()).Should().NotContain("user-token");
-    }
-
-    [Fact]
-    public async Task OperationContinuationCapability_WhenInstanceAuthorityChanges_ShouldNotMatch()
-    {
-        var handler = new ServiceHandler();
-        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
-        handler.KeysByToken["user-token"] = Keys(instance);
-        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
-        var source = CreateSource(handler);
-
-        using var scope = PushContext("user-token");
-        var authorizedTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == "nyxid_service_operation__get_order");
-        var capability = authorizedTool.CaptureContinuationCapability();
-        handler.KeysByToken["user-token"] = Keys(WithNodeId(instance, "node-b"));
-        var rediscoveredTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == "nyxid_service_operation__get_order");
-
-        rediscoveredTool.MatchesContinuationCapability(capability).Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task OperationContinuationCapability_WhenOperationContractChanges_ShouldNotMatch()
-    {
-        var handler = new ServiceHandler();
-        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
-        handler.KeysByToken["user-token"] = Keys(instance);
-        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
-        var source = CreateSource(handler);
-
-        using var scope = PushContext("user-token");
-        var authorizedTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == "nyxid_service_operation__get_order");
-        var capability = authorizedTool.CaptureContinuationCapability();
-        handler.SpecsByServiceId["us-personal-7"] = OperationSpec.Replace(
-            "\"type\": \"string\"",
-            "\"type\": \"integer\"",
-            StringComparison.Ordinal);
-        var rediscoveredTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == "nyxid_service_operation__get_order");
-
-        rediscoveredTool.MatchesContinuationCapability(capability).Should().BeFalse();
-    }
-
-    [Theory]
-    [MemberData(nameof(FixedToolCases))]
-    public async Task FixedToolContinuationCapability_ShouldMatchOnlyExactAuthorityAndContract(
-        string toolName,
-        NyxIdServiceToolKind expectedToolKind)
-    {
-        var handler = new ServiceHandler();
-        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
-        handler.KeysByToken["user-token"] = Keys(instance);
-        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
-        var source = CreateSource(handler);
-
-        using var scope = PushContext("user-token");
-        var authorizedTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == toolName);
-        var capability = authorizedTool.CaptureContinuationCapability();
-        var captured = capability.Unpack<NyxIdServiceToolContinuationCapability>();
-        var unchangedTools = await source.DiscoverToolsAsync();
-        var unchangedTool = (IAgentToolContinuationCapability)unchangedTools.Single(tool => tool.Name == toolName);
-        var differentKindTool = (IAgentToolContinuationCapability)unchangedTools
-            .First(tool => tool.Name.StartsWith("nyxid_service_", StringComparison.Ordinal) &&
-                           !tool.Name.StartsWith("nyxid_service_operation__", StringComparison.Ordinal) &&
-                           tool.Name != toolName);
-
-        captured.ContractVersion.Should().Be(1);
-        captured.FixedTool.Should().Be(expectedToolKind);
-        Encoding.UTF8.GetString(capability.ToByteArray()).Should().NotContain("user-token");
-        unchangedTool.MatchesContinuationCapability(capability).Should().BeTrue();
-        differentKindTool.MatchesContinuationCapability(capability).Should().BeFalse();
-
-        var changedVersion = captured.Clone();
-        changedVersion.ContractVersion++;
-        unchangedTool.MatchesContinuationCapability(Any.Pack(changedVersion)).Should().BeFalse();
-
-        handler.KeysByToken["user-token"] = Keys(WithNodeId(instance, "node-b"));
-        var changedAuthorityTool = (IAgentToolContinuationCapability)(await source.DiscoverToolsAsync())
-            .Single(tool => tool.Name == toolName);
-        changedAuthorityTool.MatchesContinuationCapability(capability).Should().BeFalse();
     }
 
     [Fact]

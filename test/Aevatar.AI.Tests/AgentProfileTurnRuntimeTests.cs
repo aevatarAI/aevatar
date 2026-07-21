@@ -90,8 +90,8 @@ public sealed class AgentProfileTurnRuntimeTests
 
         await executor.ExecuteToolStepAsync(
             [new ToolCall { Id = "route-call", Name = "route-only", ArgumentsJson = "{}" }],
-            request.Tools,
-            request.ToolContext,
+            requestMetadata: null,
+            toolContext: null,
             CancellationToken.None);
 
         request.Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnlyExactTool);
@@ -134,8 +134,8 @@ public sealed class AgentProfileTurnRuntimeTests
                 new ToolCall { Id = "hidden-call", Name = "hidden", ArgumentsJson = "{}" },
                 new ToolCall { Id = "visible-call", Name = "visible", ArgumentsJson = "{}" },
             ],
-            request.Tools,
-            request.ToolContext,
+            requestMetadata: null,
+            toolContext: null,
             CancellationToken.None);
 
         request.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
@@ -401,43 +401,6 @@ public sealed class AgentProfileTurnRuntimeTests
         providerRequest.Tools.Should().ContainSingle().Which.Name.Should().Be("visible");
         providerRequest.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
         providerRequest.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task StepTurn_LlmMiddlewareRemoval_ShouldRejectForgedToolCallInFollowingToolStep()
-    {
-        var exact = new CountingTool("visible");
-        var replacement = new CountingTool("visible");
-        var provider = new ForgedToolProvider("visible");
-        var executor = NewRuntime(
-                provider,
-                NewToolManager(exact),
-                [new ReplacingRequestMiddleware(replacement)])
-            .CreateStepExecutor(NewCatalog(["visible"]));
-        var request = executor.BuildLlmStepRequest(
-            [ChatMessage.User("run")],
-            requestId: null,
-            metadata: null,
-            toolContext: null,
-            llmControl: null,
-            round: 0,
-            finalNoTools: false);
-
-        var llmResult = await executor.ExecuteLlmStepAsync(
-            provider,
-            request,
-            onChunkAsync: null,
-            CancellationToken.None);
-        var toolResults = await executor.ExecuteToolStepAsync(
-            llmResult.ToolCalls!,
-            llmResult.AuthorizedTools,
-            llmResult.AuthorizedToolContext,
-            CancellationToken.None);
-
-        provider.Requests.Should().ContainSingle().Which.Tools.Should().BeNull();
-        toolResults.Should().ContainSingle().Which.Result.Should().Contain("not found");
-        exact.ExecuteCount.Should().Be(0);
-        replacement.ExecuteCount.Should().Be(0);
     }
 
     [Fact]

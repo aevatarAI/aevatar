@@ -1,9 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
-using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.Channel;
 
@@ -17,7 +15,7 @@ namespace Aevatar.AI.ToolProviders.Channel;
 /// <see cref="IInteractiveReplyCollector"/> + dispatcher pair. When the tool fires outside an
 /// active collector scope (for example, non-relay paths) the intent is silently discarded.
 /// </remarks>
-public sealed class ReplyWithInteractionTool : IAgentTool, IAgentToolContinuationCapability
+public sealed class ReplyWithInteractionTool : IAgentTool
 {
     private static readonly JsonSerializerOptions ParseOptions = new()
     {
@@ -44,15 +42,6 @@ public sealed class ReplyWithInteractionTool : IAgentTool, IAgentToolContinuatio
     public bool IsReadOnly => false;
 
     public bool IsDestructive => false;
-
-    public Any CaptureContinuationCapability() => Any.Pack(new FixedAgentToolContinuationCapability
-    {
-        ContractId = "reply_with_interaction",
-        ContractVersion = 1,
-    });
-
-    public bool MatchesContinuationCapability(Any capability) =>
-        capability.Equals(CaptureContinuationCapability());
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

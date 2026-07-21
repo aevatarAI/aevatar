@@ -167,200 +167,6 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
-    public async Task HandleNextLlmStepAsync_WithToolCall_ShouldPersistItsContinuationCapability()
-    {
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            new DispatchingActorRuntime(),
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        SetState(runtime, BuildStepRunState("persist-capability", nextStepIndex: 1));
-        var capability = BuildToolCapability("continuation_tool");
-
-        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-persist-capability",
-            CorrelationId = "corr-persist-capability",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 2,
-            Request = BuildStepRequest("persist-capability"),
-            LlmStepResult = new AgentRunLlmStepResult
-            {
-                ToolCalls =
-                {
-                    new AgentRunToolCall
-                    {
-                        Id = "call-1",
-                        Name = "continuation_tool",
-                        ArgumentsJson = "{}",
-                    },
-                },
-                AuthorizedToolCapabilities = { capability },
-            },
-        });
-
-        runtime.State.GenerationStep!.PendingToolCalls.Should().ContainSingle()
-            .Which.Name.Should().Be("continuation_tool");
-        runtime.State.GenerationStep.AuthorizedToolCapabilities.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(capability);
-        executor.ToolStepExecutions.Should().ContainSingle();
-        executor.ToolStepExecutions[0].StepState.AuthorizedToolCapabilities.Should().ContainSingle()
-            .Which.Should().BeEquivalentTo(capability);
-    }
-
-    [Fact]
-    public async Task HandleNextToolStepAsync_AfterCompletion_ShouldClearContinuationCapability()
-    {
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            new DispatchingActorRuntime(),
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        var state = BuildStepRunState("tool-complete", nextStepIndex: 2);
-        state.GenerationStep!.PendingToolCalls.Add(new AgentRunToolCall
-        {
-            Id = "call-1",
-            Name = "continuation_tool",
-            ArgumentsJson = "{}",
-        });
-        state.GenerationStep.AuthorizedToolCapabilities.Add(BuildToolCapability("continuation_tool"));
-        SetState(runtime, state);
-
-        await runtime.HandleNextToolStepAsync(new AgentRunNextToolStepRequestedEvent
-        {
-            RunId = "run-tool-complete",
-            CorrelationId = "corr-tool-complete",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 3,
-            Request = BuildStepRequest("tool-complete"),
-            ToolStepResult = new AgentRunToolStepResult { AdvanceRound = true },
-        });
-
-        runtime.State.GenerationStep!.PendingToolCalls.Should().BeEmpty();
-        runtime.State.GenerationStep.AuthorizedToolCapabilities.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_WhenAdvancingToFinalNoTools_ShouldClearContinuationCapability()
-    {
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            new DispatchingActorRuntime(),
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        var state = BuildStepRunState("final-no-tools", nextStepIndex: 3);
-        state.GenerationStep!.Round = 1;
-        state.GenerationStep.MaxToolRounds = 1;
-        state.GenerationStep.AuthorizedToolCapabilities.Add(BuildToolCapability("continuation_tool"));
-        SetState(runtime, state);
-
-        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-final-no-tools",
-            CorrelationId = "corr-final-no-tools",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 3,
-            Request = BuildStepRequest("final-no-tools"),
-        });
-
-        runtime.State.GenerationStep!.FinalNoToolsStep.Should().BeTrue();
-        runtime.State.GenerationStep.AuthorizedToolCapabilities.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task HandleNextLlmStepAsync_WhenAdvancingToEmptyRetry_ShouldClearContinuationCapability()
-    {
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            new DispatchingActorRuntime(),
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        var state = BuildStepRunState("empty-retry", nextStepIndex: 1);
-        state.GenerationStep!.AuthorizedToolCapabilities.Add(BuildToolCapability("continuation_tool"));
-        SetState(runtime, state);
-
-        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
-        {
-            RunId = "run-empty-retry",
-            CorrelationId = "corr-empty-retry",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 2,
-            Request = BuildStepRequest("empty-retry"),
-            LlmStepResult = new AgentRunLlmStepResult { FinishReason = "stop" },
-        });
-
-        runtime.State.GenerationStep!.EmptyReplyRetry.Should().BeTrue();
-        runtime.State.GenerationStep.AuthorizedToolCapabilities.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task HandleOwnerFallbackStepAsync_ShouldClearContinuationCapability()
-    {
-        var executor = new PausedReplyGenerationExecutor();
-        var runtime = CreateRunAgentWithExecutor(
-            new DispatchingActorRuntime(),
-            executor,
-            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
-        var state = BuildStepRunState("owner-fallback", nextStepIndex: 2);
-        state.GenerationStep!.AuthorizedToolCapabilities.Add(BuildToolCapability("continuation_tool"));
-        SetState(runtime, state);
-
-        await runtime.HandleOwnerFallbackStepAsync(new AgentRunOwnerFallbackStepRequested
-        {
-            RunId = "run-owner-fallback",
-            CorrelationId = "corr-owner-fallback",
-            TargetActorId = "actor-1",
-            Attempt = 1,
-            StepIndex = 3,
-            Request = BuildStepRequest("owner-fallback"),
-            Reason = "provider_unavailable",
-        });
-
-        runtime.State.GenerationStep!.FinalNoToolsStep.Should().BeTrue();
-        runtime.State.GenerationStep.AuthorizedToolCapabilities.Should().BeEmpty();
-    }
-
-    private static AgentRunGAgentState BuildStepRunState(string suffix, int nextStepIndex) =>
-        new()
-        {
-            RunId = $"run-{suffix}",
-            CorrelationId = $"corr-{suffix}",
-            TargetActorId = "actor-1",
-            Status = AgentRunStatus.ReplyGenerationRequested,
-            GenerationAttempt = 1,
-            GenerationStep = new AgentRunReplyStepState
-            {
-                RunId = $"run-{suffix}",
-                CorrelationId = $"corr-{suffix}",
-                TargetActorId = "actor-1",
-                Attempt = 1,
-                NextStepIndex = nextStepIndex,
-                MaxToolRounds = 4,
-            },
-        };
-
-    private static NeedsLlmReplyEvent BuildStepRequest(string suffix) =>
-        new()
-        {
-            RunId = $"run-{suffix}",
-            CorrelationId = $"corr-{suffix}",
-            TargetActorId = "actor-1",
-            RegistrationId = "reg-1",
-            Activity = BuildRelayActivity(),
-        };
-
-    private static AgentRunToolCapability BuildToolCapability(string name) =>
-        new()
-        {
-            Name = name,
-            ProviderCapability = Any.Pack(new StringValue { Value = $"{name}/v1" }),
-        };
-
-    [Fact]
     public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_RetriesOnceKeepingToolsInsteadOfFailing()
     {
         // Regression for the prod incident where a reasoning model spent the whole
@@ -3848,8 +3654,6 @@ public sealed class AgentRunGAgentTests
 
         public List<AgentRunReplyStepExecutionRequest> LlmStepExecutions { get; } = [];
 
-        public List<AgentRunReplyStepExecutionRequest> ToolStepExecutions { get; } = [];
-
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
             CancellationToken ct)
@@ -3875,15 +3679,8 @@ public sealed class AgentRunGAgentTests
             return Task.CompletedTask;
         }
 
-        public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
-        {
-            ToolStepExecutions.Add(request with
-            {
-                Request = request.Request.Clone(),
-                StepState = request.StepState.Clone(),
-            });
-            return Task.CompletedTask;
-        }
+        public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
+            Task.CompletedTask;
 
         public Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
             AgentRunReplyStepExecutionRequest request,
@@ -4933,7 +4730,7 @@ public sealed class AgentRunGAgentTests
     private sealed class RecordingAgentTool(
         string name,
         List<string> order,
-        string resultJson) : IAgentTool, IAgentToolContinuationCapability
+        string resultJson) : IAgentTool
     {
         public string Name => name;
 
@@ -4942,12 +4739,6 @@ public sealed class AgentRunGAgentTests
         public string ParametersSchema => """{"type":"object","additionalProperties":true}""";
 
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
-
-        public Any CaptureContinuationCapability() =>
-            Any.Pack(new StringValue { Value = $"{name}/v1" });
-
-        public bool MatchesContinuationCapability(Any capability) =>
-            capability.Equals(CaptureContinuationCapability());
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {

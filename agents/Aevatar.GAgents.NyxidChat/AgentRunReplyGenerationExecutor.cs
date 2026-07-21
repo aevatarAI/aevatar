@@ -321,10 +321,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (TryTakeOutboundIntent(generator) is { } outboundIntent)
             result.OutboundIntent = outboundIntent.Clone();
         if (effectiveToolCalls is { Count: > 0 })
-        {
             result.ToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
-            result.AuthorizedToolCapabilities.AddRange(CaptureContinuationCapabilities(llmResult.AuthorizedTools));
-        }
 
         return new AgentRunNextLlmStepRequestedEvent
         {
@@ -410,25 +407,13 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
-        var candidateRequest = plan.StepExecutor.BuildBaseRequest(
-            requestId: null,
-            plan.Metadata,
-            plan.ToolContext,
-            plan.LlmControl);
-        var authorizedTools = ResolveContinuationCapabilities(
-            candidateRequest.Tools,
-            workItem.StepState.AuthorizedToolCapabilities);
         // Interactive reply tools (reply_with_interaction) execute here, during the tool
         // step — not during the LLM step that emitted the tool calls. The AsyncLocal
         // collector scope does not survive the actor continuation hop between steps, so
         // the tool step must open its own scope for relay turns and return the captured
         // intent as a typed fact on the step result.
         using var interactiveScope = TryBeginInteractiveScope(request);
-        var results = await plan.StepExecutor.ExecuteToolStepAsync(
-                toolCalls,
-                authorizedTools,
-                candidateRequest.ToolContext,
-                ct)
+        var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
             .ConfigureAwait(false);
 
         var toolStepResult = new AgentRunToolStepResult
@@ -464,72 +449,6 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
             Request = request.Clone(),
             ToolStepResult = toolStepResult,
         };
-    }
-
-    private static IEnumerable<AgentRunToolCapability> CaptureContinuationCapabilities(
-        IEnumerable<IAgentTool> tools)
-    {
-        foreach (var tool in tools)
-        {
-            if (tool is not IAgentToolContinuationCapability continuationTool ||
-                string.IsNullOrWhiteSpace(tool.Name))
-            {
-                continue;
-            }
-
-            var providerCapability = continuationTool.CaptureContinuationCapability();
-            if (providerCapability is null || string.IsNullOrWhiteSpace(providerCapability.TypeUrl))
-                continue;
-            yield return new AgentRunToolCapability
-            {
-                Name = tool.Name.Trim(),
-                ProviderCapability = providerCapability.Clone(),
-            };
-        }
-    }
-
-    private static IReadOnlyList<IAgentTool> ResolveContinuationCapabilities(
-        IEnumerable<IAgentTool>? candidates,
-        IEnumerable<AgentRunToolCapability> capabilities)
-    {
-        var exactCandidates = ExactAgentToolSet.Create(candidates);
-        var capabilitiesByName = new Dictionary<string, Any>(StringComparer.OrdinalIgnoreCase);
-        var conflicts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var capability in capabilities)
-        {
-            if (string.IsNullOrWhiteSpace(capability.Name) ||
-                capability.ProviderCapability is null ||
-                string.IsNullOrWhiteSpace(capability.ProviderCapability.TypeUrl))
-            {
-                continue;
-            }
-
-            var name = capability.Name.Trim();
-            if (conflicts.Contains(name))
-                continue;
-            if (!capabilitiesByName.TryGetValue(name, out var existing))
-            {
-                capabilitiesByName.Add(name, capability.ProviderCapability);
-                continue;
-            }
-            if (existing.Equals(capability.ProviderCapability))
-                continue;
-
-            capabilitiesByName.Remove(name);
-            conflicts.Add(name);
-        }
-
-        var resolved = new List<IAgentTool>();
-        foreach (var (name, providerCapability) in capabilitiesByName)
-        {
-            if (exactCandidates.ToolsByName.TryGetValue(name, out var tool) &&
-                tool is IAgentToolContinuationCapability continuationTool &&
-                continuationTool.MatchesContinuationCapability(providerCapability))
-            {
-                resolved.Add(tool);
-            }
-        }
-        return resolved;
     }
 
     private IAgentRunStepConversationReplyGenerator RequireStepGenerator() =>
