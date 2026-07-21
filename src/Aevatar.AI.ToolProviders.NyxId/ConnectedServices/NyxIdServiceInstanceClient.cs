@@ -22,7 +22,6 @@ public sealed class NyxIdServiceInstanceClient
         candidates.AddRange(ParseBindings(
             await _client.ListServicesAsync(userToken, ct),
             userToken,
-            NyxIdServiceCredentialSource.Personal,
             NyxIdServiceAccessTokenSource.User));
         if (!string.IsNullOrWhiteSpace(organizationToken) &&
             !string.Equals(userToken, organizationToken, StringComparison.Ordinal))
@@ -30,7 +29,6 @@ public sealed class NyxIdServiceInstanceClient
             candidates.AddRange(ParseBindings(
                 await _client.ListServicesAsync(organizationToken, ct),
                 organizationToken,
-                NyxIdServiceCredentialSource.Organization,
                 NyxIdServiceAccessTokenSource.Organization));
         }
 
@@ -76,7 +74,6 @@ public sealed class NyxIdServiceInstanceClient
         var current = ParseSingleBinding(
             response,
             candidate.AccessToken,
-            candidate.Instance.CredentialSource,
             candidate.Instance.AccessTokenSource);
         if (current is null ||
             !current.Instance.IsActive ||
@@ -228,7 +225,6 @@ public sealed class NyxIdServiceInstanceClient
     private static IReadOnlyList<NyxIdServiceInstanceBinding> ParseBindings(
         string? json,
         string token,
-        NyxIdServiceCredentialSource credentialSource,
         NyxIdServiceAccessTokenSource tokenSource)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -237,7 +233,7 @@ public sealed class NyxIdServiceInstanceClient
         {
             using var document = JsonDocument.Parse(json);
             return EnumerateItems(document.RootElement)
-                .Select(item => ParseBinding(item, token, credentialSource, tokenSource))
+                .Select(item => ParseBinding(item, token, tokenSource))
                 .Where(static binding => binding is not null)
                 .Select(static binding => binding!)
                 .ToArray();
@@ -251,7 +247,6 @@ public sealed class NyxIdServiceInstanceClient
     private static NyxIdServiceInstanceBinding? ParseSingleBinding(
         string? json,
         string token,
-        NyxIdServiceCredentialSource credentialSource,
         NyxIdServiceAccessTokenSource tokenSource)
     {
         if (string.IsNullOrWhiteSpace(json))
@@ -268,7 +263,7 @@ public sealed class NyxIdServiceInstanceClient
                         root = nested;
                 }
             }
-            return ParseBinding(root, token, credentialSource, tokenSource);
+            return ParseBinding(root, token, tokenSource);
         }
         catch (JsonException)
         {
@@ -279,7 +274,6 @@ public sealed class NyxIdServiceInstanceClient
     private static NyxIdServiceInstanceBinding? ParseBinding(
         JsonElement item,
         string token,
-        NyxIdServiceCredentialSource credentialSource,
         NyxIdServiceAccessTokenSource tokenSource)
     {
         if (item.ValueKind != JsonValueKind.Object)
@@ -287,16 +281,20 @@ public sealed class NyxIdServiceInstanceClient
         var id = ReadString(item, "user_service_id") ?? ReadString(item, "id");
         var slug = ReadString(item, "service_slug") ?? ReadString(item, "slug");
         var catalogId = ReadString(item, "catalog_service_id") ?? ReadString(item, "service_id");
-        if (string.IsNullOrWhiteSpace(id) || (string.IsNullOrWhiteSpace(catalogId) && string.IsNullOrWhiteSpace(slug)))
+        var active = ReadBool(item, "is_active");
+        if (string.IsNullOrWhiteSpace(id) ||
+            (string.IsNullOrWhiteSpace(catalogId) && string.IsNullOrWhiteSpace(slug)) ||
+            !active.HasValue ||
+            !TryReadCredentialSource(item, out var credentialSource, out var credentialAllowed))
+        {
             return null;
+        }
 
         var routeConstraint = new NyxIdProxyRouteConstraint();
         if (!string.IsNullOrWhiteSpace(catalogId))
             routeConstraint.CatalogServiceId = catalogId;
         else
             routeConstraint.ServiceSlug = slug;
-        var active = ReadBool(item, "is_active") ?? ReadBool(item, "active") ?? true;
-        var allowed = ReadBool(item, "credential_allowed") ?? ReadBool(item, "allowed") ?? true;
         var instance = new NyxIdServiceInstance
         {
             UserServiceId = id,
@@ -304,12 +302,12 @@ public sealed class NyxIdServiceInstanceClient
             Label = ReadString(item, "label") ?? ReadString(item, "name") ?? slug ?? string.Empty,
             EndpointUrl = ReadString(item, "endpoint_url") ?? ReadString(item, "base_url") ?? string.Empty,
             EndpointId = ReadString(item, "endpoint_id") ?? string.Empty,
-            IsActive = active,
+            IsActive = active.Value,
             CredentialSource = credentialSource,
             AccessTokenSource = tokenSource,
             ProxySpecServiceId = ReadString(item, "proxy_spec_service_id") ?? catalogId ?? string.Empty,
             RouteConstraint = routeConstraint,
-            CredentialAllowed = allowed,
+            CredentialAllowed = credentialAllowed,
         };
         if (!string.IsNullOrWhiteSpace(catalogId))
             instance.CatalogServiceId = catalogId;
@@ -317,6 +315,34 @@ public sealed class NyxIdServiceInstanceClient
         if (!string.IsNullOrWhiteSpace(nodeId))
             instance.NodeId = nodeId;
         return new NyxIdServiceInstanceBinding(instance, token);
+    }
+
+    private static bool TryReadCredentialSource(
+        JsonElement item,
+        out NyxIdServiceCredentialSource credentialSource,
+        out bool credentialAllowed)
+    {
+        credentialSource = NyxIdServiceCredentialSource.Unspecified;
+        credentialAllowed = false;
+        if (!item.TryGetProperty("credential_source", out var source) ||
+            source.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        switch (ReadString(source, "type"))
+        {
+            case "personal":
+                credentialSource = NyxIdServiceCredentialSource.Personal;
+                credentialAllowed = true;
+                return true;
+            case "org" when ReadBool(source, "allowed") is { } allowed:
+                credentialSource = NyxIdServiceCredentialSource.Organization;
+                credentialAllowed = allowed;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static IEnumerable<JsonElement> EnumerateItems(JsonElement root)

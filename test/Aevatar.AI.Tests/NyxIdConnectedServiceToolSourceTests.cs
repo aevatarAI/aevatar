@@ -126,6 +126,14 @@ public class NyxIdConnectedServiceToolSourceTests
 
         inventory.Should().Contain("us-personal").And.Contain("us-org-allowed");
         inventory.Should().NotContain("us-org-denied");
+        using var inventoryDocument = JsonDocument.Parse(inventory);
+        var allowedOrg = inventoryDocument.RootElement.GetProperty("instances").EnumerateArray()
+            .Single(instance => instance.GetProperty("userServiceId").GetString() == "us-org-allowed");
+        allowedOrg.GetProperty("credentialSource").GetString()
+            .Should().Be("NYX_ID_SERVICE_CREDENTIAL_SOURCE_ORGANIZATION");
+        allowedOrg.GetProperty("accessTokenSource").GetString()
+            .Should().Be("NYX_ID_SERVICE_ACCESS_TOKEN_SOURCE_USER");
+        allowedOrg.GetProperty("credentialAllowed").GetBoolean().Should().BeTrue();
         tools.Select(static tool => tool.Name).Should().Contain("nyxid_service_operation__ping_personal")
             .And.Contain("nyxid_service_operation__ping_org_allowed")
             .And.NotContain("nyxid_service_operation__ping_org_denied");
