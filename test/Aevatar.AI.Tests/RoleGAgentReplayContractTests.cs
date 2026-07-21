@@ -133,6 +133,60 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task RetryStartedAppendFailure_ShouldNotDuplicateFenceOnNextCommandOrReplay()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        const string actorId = "role-profiled-retry-fail";
+        await inner.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-a",
+                    Prompt = "hello",
+                }),
+                StateEventFor(actorId, 2, new AgentProfileTurnAuthorityCommittedEvent
+                {
+                    CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                    Authority = TurnAuthority("session-a", 1, "intent-a", "skill-a"),
+                }),
+            ],
+            expectedVersion: 0);
+        var store = new FailOnceOnRetryStartedEventStore(inner);
+        var services = BuildServices(store);
+        var agent = CreateProfiledAgent(services, actorId);
+        var committedPublisher = AttachCommittedPublisher(agent);
+        await agent.ActivateAsync();
+        agent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
+        var request = new ChatRequestEvent { SessionId = "session-a", Prompt = "hello" };
+
+        await FluentActions.Awaiting(() => agent.HandleChatRequest(request))
+            .Should().ThrowAsync<InvalidOperationException>().WithMessage("*retry started*");
+        agent.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(1);
+
+        await agent.HandleChatRequest(request.Clone());
+
+        var retryEvents = (await inner.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Where(authorityEvent => authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted)
+            .ToArray();
+        retryEvents.Should().ContainSingle(authorityEvent =>
+            authorityEvent.Authority.ReconciliationKey.Attempt == 2);
+        committedPublisher.Published
+            .Where(published => published.StateEvent.EventData.Is(
+                AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(published => published.StateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Should().ContainSingle(authorityEvent =>
+                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted &&
+                authorityEvent.Authority.ReconciliationKey.Attempt == 2);
+
+        var replayed = CreateProfiledAgent(services, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(2);
+    }
+
+    [Fact]
     public async Task StartedAuthorityReplay_ShouldRespectFrozenExactRefRetryBoundaryWithoutReclassification()
     {
         var store = new InMemoryEventStoreForTests();
@@ -1700,6 +1754,40 @@ public class RoleGAgentReplayContractTests
             {
                 _shouldFail = false;
                 throw new InvalidOperationException("Simulated reconcile failure.");
+            }
+
+            return inner.AppendAsync(agentId, batch, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId, long? fromVersion = null, CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FailOnceOnRetryStartedEventStore(InMemoryEventStoreForTests inner) : IEventStore
+    {
+        private bool _shouldFail = true;
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.ToArray();
+            if (_shouldFail && batch.Any(stateEvent =>
+                    stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
+                    stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind ==
+                    AgentProfileTurnAuthorityCommitKind.RetryStarted))
+            {
+                _shouldFail = false;
+                throw new InvalidOperationException("Simulated retry started failure.");
             }
 
             return inner.AppendAsync(agentId, batch, expectedVersion, ct);
