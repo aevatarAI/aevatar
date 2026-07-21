@@ -455,6 +455,65 @@ message AgentProfileBoundEvent {
   AgentProfileSnapshot profile = 1;
 }
 
+enum AgentProfileTurnAuthorityKind {
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_UNSPECIFIED = 0;
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_RESTRICTED_EMPTY = 1;
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_RECOVERY = 2;
+  AGENT_PROFILE_TURN_AUTHORITY_KIND_SELECTED = 3;
+}
+
+enum AgentProfileTurnAuthorityCommitKind {
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_UNSPECIFIED = 0;
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_INITIAL = 1;
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_RETRY_STARTED = 2;
+  AGENT_PROFILE_TURN_AUTHORITY_COMMIT_KIND_RECONCILE = 3;
+}
+
+enum AgentProfileTurnDegradationReason {
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_UNSPECIFIED = 0;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_PROFILE_INVALID = 1;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_ROUTE_TOOL_SET_UNAVAILABLE = 2;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_SET_UNAVAILABLE = 3;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_DISCOVERY_FAILED = 4;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_NAME_COLLISION = 5;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_CAPABILITY_REJECTED = 6;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_NO_MATCH = 7;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_FAILED = 8;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_SHADOW_MODE = 9;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_FETCH_FAILED = 10;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_IDENTITY_MISMATCH = 11;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_SELECTED_SKILL_BODY_INVALID = 12;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_LEGACY_AUTHORITY_MISSING = 13;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZER_UNAVAILABLE = 14;
+  AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZATION_FAILED = 15;
+}
+
+message AgentProfileTurnReconciliationKey {
+  string session_id = 1;
+  int32 attempt = 2;
+}
+
+message AgentProfileTurnCandidateRouteIdentity {
+  string profile_id = 1;
+  string profile_version = 2;
+  string policy_revision = 3;
+  string intent_id = 4;
+}
+
+message AgentProfileTurnAuthorityState {
+  AgentProfileTurnReconciliationKey reconciliation_key = 1;
+  AgentProfileTurnCandidateRouteIdentity candidate_route = 2;
+  ExactRemoteSkillRef selected_exact_skill_ref = 3;
+  AgentProfileTurnAuthorityKind authority_kind = 4;
+  repeated AgentProfileTurnDegradationReason degradation_reasons = 5;
+  repeated string authority_ceiling_tool_names = 6;
+}
+
+message AgentProfileTurnAuthorityCommittedEvent {
+  AgentProfileTurnAuthorityCommitKind commit_kind = 1;
+  AgentProfileTurnAuthorityState authority = 2;
+}
+
 // Retired (issue #2498): no longer emitted — the overlay is sourced by the host-level provider, not
 // materialized per-actor. Kept defined so historical journals / queued durable timeouts still
 // deserialize and replay through their no-op handlers. Remove in a later release once no grain journal
@@ -518,6 +577,7 @@ message RoleGAgentState {
   reserved 11;
   reserved "system_skill_overlay";
   AgentProfileSnapshot agent_profile = 12;
+  AgentProfileTurnAuthorityState agent_profile_turn_authority = 13;
 }
 
 // ─── Multi-turn tool approval continuation ───

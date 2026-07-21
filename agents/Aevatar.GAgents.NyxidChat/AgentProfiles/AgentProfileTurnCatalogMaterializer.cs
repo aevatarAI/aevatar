@@ -36,10 +36,10 @@ public sealed class AgentProfileTurnCatalogMaterializer
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task<AgentProfileTurnCatalog> MaterializeAsync(
+    public async Task<AgentProfileTurnAuthorityPreparation> PrepareAsync(
         AgentProfileSnapshot profile,
+        string sessionId,
         string userMessage,
-        string? accessToken,
         IReadOnlyList<IAgentTool> registeredTools,
         AgentToolExecutionContext toolContext,
         CancellationToken ct = default)
@@ -47,6 +47,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(registeredTools);
         ArgumentNullException.ThrowIfNull(toolContext);
+        if (string.IsNullOrWhiteSpace(sessionId))
+            throw new ArgumentException("A profiled turn requires a session id.", nameof(sessionId));
 
         var diagnostics = new List<AgentProfileTurnDiagnostic>();
         if (!AgentProfileSnapshotCodec.Verify(profile))
@@ -54,7 +56,13 @@ public sealed class AgentProfileTurnCatalogMaterializer
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ProfileInvalid,
                 "snapshot_digest_invalid"));
-            return BuildCatalog(profile, [], null, null, null, diagnostics);
+            return CreatePreparation(
+                sessionId,
+                candidate: null,
+                selectedExactSkillRef: null,
+                AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                [],
+                diagnostics);
         }
 
         var routeTools = await DiscoverToolSetAsync(
@@ -74,42 +82,194 @@ public sealed class AgentProfileTurnCatalogMaterializer
         var recoveryNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
         if (routeTools.HadFailure || registered.HadFailure || maximum.HadFailure || recovery.HadFailure)
-            return BuildCatalog(profile, recoveryNames, null, null, null, diagnostics);
+        {
+            return CreatePreparation(
+                sessionId,
+                candidate: null,
+                selectedExactSkillRef: null,
+                recoveryNames.Count == 0
+                    ? AgentProfileTurnAuthorityKind.RestrictedEmpty
+                    : AgentProfileTurnAuthorityKind.Recovery,
+                recoveryNames,
+                diagnostics);
+        }
 
         var candidate = await SelectCandidateAsync(profile, userMessage, diagnostics, ct);
         if (candidate is null)
-            return BuildCatalog(profile, recoveryNames, null, null, null, diagnostics);
+        {
+            return CreatePreparation(
+                sessionId,
+                candidate: null,
+                selectedExactSkillRef: null,
+                AgentProfileTurnAuthorityKind.Recovery,
+                recoveryNames,
+                diagnostics);
+        }
 
+        var candidateIdentity = new AgentProfileTurnCandidateRouteIdentity
+        {
+            ProfileId = profile.ProfileId,
+            ProfileVersion = profile.ProfileVersion,
+            PolicyRevision = profile.PolicyRevision,
+            IntentId = candidate.IntentId,
+        };
         if (profile.ActivationMode != AgentProfileActivationMode.Enforced)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ShadowCandidate,
                 candidate.IntentId));
-            return BuildCatalog(profile, recoveryNames, null, candidate.IntentId, null, diagnostics);
+            return CreatePreparation(
+                sessionId,
+                candidateIdentity,
+                selectedExactSkillRef: null,
+                AgentProfileTurnAuthorityKind.Recovery,
+                recoveryNames,
+                diagnostics);
+        }
+
+        var taskPolicy = await ResolvePolicyAsync(candidate.TaskToolPolicy, toolContext, diagnostics, ct);
+        if (taskPolicy.HadFailure)
+        {
+            return CreatePreparation(
+                sessionId,
+                candidateIdentity,
+                candidate.SkillRef,
+                AgentProfileTurnAuthorityKind.Recovery,
+                recoveryNames,
+                diagnostics);
+        }
+
+        var selectedPolicy = new HashSet<string>(recovery.Names, StringComparer.OrdinalIgnoreCase);
+        selectedPolicy.UnionWith(taskPolicy.Names);
+        var ceiling = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
+        ceiling.IntersectWith(selectedPolicy);
+        return CreatePreparation(
+            sessionId,
+            candidateIdentity,
+            candidate.SkillRef,
+            AgentProfileTurnAuthorityKind.Selected,
+            ceiling,
+            diagnostics);
+    }
+
+    public async Task<AgentProfileTurnCatalogMaterialization> MaterializeCommittedAsync(
+        AgentProfileSnapshot profile,
+        AgentProfileTurnAuthorityState committedAuthority,
+        string? accessToken,
+        IReadOnlyList<IAgentTool> registeredTools,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(committedAuthority);
+        ArgumentNullException.ThrowIfNull(registeredTools);
+        ArgumentNullException.ThrowIfNull(toolContext);
+
+        var diagnostics = DiagnosticsFromAuthority(committedAuthority);
+        if (!AgentProfileSnapshotCodec.Verify(profile) ||
+            !MatchesCommittedProfile(profile, committedAuthority.CandidateRoute))
+        {
+            if (diagnostics.All(static diagnostic =>
+                    diagnostic.Code != AgentProfileTurnDiagnosticCode.ProfileInvalid))
+            {
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ProfileInvalid,
+                    "committed_profile_mismatch"));
+            }
+            return BuildMaterialization(
+                profile,
+                committedAuthority,
+                AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                [],
+                selectedIntentId: null,
+                selectedSkillPromptLayer: null,
+                diagnostics);
+        }
+
+        var routeTools = await DiscoverToolSetAsync(
+            profile.RouteToolSetRef,
+            toolContext,
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+            diagnostics,
+            ct);
+        var registered = ToEligibleToolNames(registeredTools, toolContext, diagnostics);
+        var eligible = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
+        eligible.IntersectWith(registered.Names);
+        eligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
+        var maximum = await ResolvePolicyAsync(profile.MaximumToolPolicy, toolContext, diagnostics, ct);
+        eligible.IntersectWith(maximum.Names);
+        eligible.IntersectWith(committedAuthority.AuthorityCeilingToolNames);
+        var recovery = await ResolvePolicyAsync(profile.RecoveryToolPolicy, toolContext, diagnostics, ct);
+        var recoveryNames = new HashSet<string>(eligible, StringComparer.OrdinalIgnoreCase);
+        recoveryNames.IntersectWith(recovery.Names);
+
+        if (routeTools.HadFailure || registered.HadFailure || maximum.HadFailure || recovery.HadFailure)
+        {
+            return BuildMaterialization(
+                profile,
+                committedAuthority,
+                NarrowAuthority(
+                    committedAuthority.AuthorityKind,
+                    recoveryNames.Count == 0
+                        ? AgentProfileTurnAuthorityKind.RestrictedEmpty
+                        : AgentProfileTurnAuthorityKind.Recovery),
+                recoveryNames,
+                selectedIntentId: null,
+                selectedSkillPromptLayer: null,
+                diagnostics);
+        }
+
+        if (committedAuthority.SelectedExactSkillRef is null)
+        {
+            return BuildMaterialization(
+                profile,
+                committedAuthority,
+                committedAuthority.AuthorityKind,
+                eligible,
+                selectedIntentId: null,
+                selectedSkillPromptLayer: null,
+                diagnostics);
+        }
+
+        var candidate = ResolveCommittedCandidate(profile, committedAuthority);
+        if (candidate is null)
+        {
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch,
+                "committed_candidate_mismatch"));
+            return BuildMaterialization(
+                profile,
+                committedAuthority,
+                NarrowAuthority(committedAuthority.AuthorityKind, AgentProfileTurnAuthorityKind.Recovery),
+                recoveryNames,
+                selectedIntentId: null,
+                selectedSkillPromptLayer: null,
+                diagnostics);
         }
 
         var fetched = await FetchSelectedSkillAsync(profile, candidate, accessToken, diagnostics, ct);
         if (fetched is null)
-            return BuildCatalog(profile, recoveryNames, null, candidate.IntentId, null, diagnostics);
-
-        var taskPolicy = await ResolvePolicyAsync(candidate.TaskToolPolicy, toolContext, diagnostics, ct);
-        if (taskPolicy.HadFailure)
-            return BuildCatalog(profile, recoveryNames, null, candidate.IntentId, null, diagnostics);
-
-        var selectedPolicy = new HashSet<string>(recovery.Names, StringComparer.OrdinalIgnoreCase);
-        selectedPolicy.UnionWith(taskPolicy.Names);
-        var finalNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
-        finalNames.IntersectWith(selectedPolicy);
+        {
+            return BuildMaterialization(
+                profile,
+                committedAuthority,
+                NarrowAuthority(committedAuthority.AuthorityKind, AgentProfileTurnAuthorityKind.Recovery),
+                recoveryNames,
+                selectedIntentId: null,
+                selectedSkillPromptLayer: null,
+                diagnostics);
+        }
 
         var selectedLayer = new SelectedSkillPromptLayer(
             fetched,
             new SelectedSkillPromptProvenance(
-                $"ornn:{candidate.SkillRef.Guid}@{candidate.SkillRef.LiteralVersion}"),
+                $"ornn:{committedAuthority.SelectedExactSkillRef.Guid}@{committedAuthority.SelectedExactSkillRef.LiteralVersion}"),
             new PromptLayerBounds(profile.MaxSelectedSkillBytes, Math.Max(1, profile.MaxSelectedSkillBytes / 4)));
-        return BuildCatalog(
+        return BuildMaterialization(
             profile,
-            finalNames,
-            candidate.IntentId,
+            committedAuthority,
+            committedAuthority.AuthorityKind,
+            eligible,
             candidate.IntentId,
             selectedLayer,
             diagnostics);
@@ -433,6 +593,170 @@ public sealed class AgentProfileTurnCatalogMaterializer
                    StringComparer.Ordinal) ||
                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken);
     }
+
+    private static AgentProfileTurnAuthorityPreparation CreatePreparation(
+        string sessionId,
+        AgentProfileTurnCandidateRouteIdentity? candidate,
+        ExactRemoteSkillRef? selectedExactSkillRef,
+        AgentProfileTurnAuthorityKind authorityKind,
+        IEnumerable<string> ceilingToolNames,
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
+    {
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = sessionId,
+                Attempt = 1,
+            },
+            CandidateRoute = candidate?.Clone(),
+            SelectedExactSkillRef = selectedExactSkillRef?.Clone(),
+            AuthorityKind = authorityKind,
+        };
+        authority.AuthorityCeilingToolNames.Add(CanonicalToolNames(ceilingToolNames));
+        authority.DegradationReasons.Add(
+            diagnostics
+                .Select(static diagnostic => ToDegradationReason(diagnostic.Code))
+                .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
+                .Distinct()
+                .OrderBy(static reason => (int)reason));
+        return AgentProfileTurnAuthorityPreparation.Create(authority);
+    }
+
+    private static AgentProfileTurnCatalogMaterialization BuildMaterialization(
+        AgentProfileSnapshot profile,
+        AgentProfileTurnAuthorityState committedAuthority,
+        AgentProfileTurnAuthorityKind authorityKind,
+        IEnumerable<string> ceilingToolNames,
+        string? selectedIntentId,
+        SelectedSkillPromptLayer? selectedSkillPromptLayer,
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
+    {
+        var proposal = committedAuthority.Clone();
+        proposal.AuthorityKind = authorityKind;
+        proposal.AuthorityCeilingToolNames.Clear();
+        proposal.AuthorityCeilingToolNames.Add(CanonicalToolNames(ceilingToolNames));
+        proposal.DegradationReasons.Clear();
+        proposal.DegradationReasons.Add(
+            committedAuthority.DegradationReasons
+                .Concat(diagnostics.Select(static diagnostic => ToDegradationReason(diagnostic.Code)))
+                .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
+                .Distinct()
+                .OrderBy(static reason => (int)reason));
+        var catalog = BuildCatalog(
+            profile,
+            proposal.AuthorityCeilingToolNames,
+            selectedIntentId,
+            committedAuthority.CandidateRoute?.IntentId,
+            selectedSkillPromptLayer,
+            diagnostics);
+        return AgentProfileTurnCatalogMaterialization.Create(catalog, proposal);
+    }
+
+    private static IReadOnlyList<string> CanonicalToolNames(IEnumerable<string> names) =>
+        names
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool MatchesCommittedProfile(
+        AgentProfileSnapshot profile,
+        AgentProfileTurnCandidateRouteIdentity? candidate) =>
+        candidate is null ||
+        string.Equals(profile.ProfileId, candidate.ProfileId, StringComparison.Ordinal) &&
+        string.Equals(profile.ProfileVersion, candidate.ProfileVersion, StringComparison.Ordinal) &&
+        string.Equals(profile.PolicyRevision, candidate.PolicyRevision, StringComparison.Ordinal);
+
+    private static AgentProfileSkillMember? ResolveCommittedCandidate(
+        AgentProfileSnapshot profile,
+        AgentProfileTurnAuthorityState committedAuthority)
+    {
+        var candidate = committedAuthority.CandidateRoute;
+        var exactRef = committedAuthority.SelectedExactSkillRef;
+        if (candidate is null || exactRef is null)
+            return null;
+
+        return profile.Members.SingleOrDefault(member =>
+            string.Equals(member.IntentId, candidate.IntentId, StringComparison.Ordinal) &&
+            member.SkillRef is not null &&
+            string.Equals(member.SkillRef.Guid, exactRef.Guid, StringComparison.Ordinal) &&
+            string.Equals(member.SkillRef.LiteralVersion, exactRef.LiteralVersion, StringComparison.Ordinal));
+    }
+
+    private static AgentProfileTurnAuthorityKind NarrowAuthority(
+        AgentProfileTurnAuthorityKind current,
+        AgentProfileTurnAuthorityKind proposed)
+    {
+        if (current == AgentProfileTurnAuthorityKind.RestrictedEmpty ||
+            proposed == AgentProfileTurnAuthorityKind.RestrictedEmpty)
+        {
+            return AgentProfileTurnAuthorityKind.RestrictedEmpty;
+        }
+
+        if (current == AgentProfileTurnAuthorityKind.Recovery ||
+            proposed == AgentProfileTurnAuthorityKind.Recovery)
+        {
+            return AgentProfileTurnAuthorityKind.Recovery;
+        }
+
+        return AgentProfileTurnAuthorityKind.Selected;
+    }
+
+    private static List<AgentProfileTurnDiagnostic> DiagnosticsFromAuthority(
+        AgentProfileTurnAuthorityState authority) =>
+        authority.DegradationReasons
+            .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
+            .Distinct()
+            .OrderBy(static reason => (int)reason)
+            .Select(static reason => new AgentProfileTurnDiagnostic(
+                ToDiagnosticCode(reason),
+                reason.ToString()))
+            .ToList();
+
+    private static AgentProfileTurnDegradationReason ToDegradationReason(
+        AgentProfileTurnDiagnosticCode code) => code switch
+    {
+        AgentProfileTurnDiagnosticCode.ProfileInvalid => AgentProfileTurnDegradationReason.ProfileInvalid,
+        AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable =>
+            AgentProfileTurnDegradationReason.RouteToolSetUnavailable,
+        AgentProfileTurnDiagnosticCode.ToolSetUnavailable => AgentProfileTurnDegradationReason.ToolSetUnavailable,
+        AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed => AgentProfileTurnDegradationReason.ToolDiscoveryFailed,
+        AgentProfileTurnDiagnosticCode.ToolNameCollision => AgentProfileTurnDegradationReason.ToolNameCollision,
+        AgentProfileTurnDiagnosticCode.ToolCapabilityRejected =>
+            AgentProfileTurnDegradationReason.ToolCapabilityRejected,
+        AgentProfileTurnDiagnosticCode.ClassifierNoMatch => AgentProfileTurnDegradationReason.ClassifierNoMatch,
+        AgentProfileTurnDiagnosticCode.ClassifierFailed => AgentProfileTurnDegradationReason.ClassifierFailed,
+        AgentProfileTurnDiagnosticCode.ShadowCandidate => AgentProfileTurnDegradationReason.ShadowMode,
+        AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed => AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
+        AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch =>
+            AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch,
+        AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid =>
+            AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid,
+        _ => AgentProfileTurnDegradationReason.Unspecified,
+    };
+
+    private static AgentProfileTurnDiagnosticCode ToDiagnosticCode(
+        AgentProfileTurnDegradationReason reason) => reason switch
+    {
+        AgentProfileTurnDegradationReason.RouteToolSetUnavailable =>
+            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
+        AgentProfileTurnDegradationReason.ToolSetUnavailable => AgentProfileTurnDiagnosticCode.ToolSetUnavailable,
+        AgentProfileTurnDegradationReason.ToolDiscoveryFailed => AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed,
+        AgentProfileTurnDegradationReason.ToolNameCollision => AgentProfileTurnDiagnosticCode.ToolNameCollision,
+        AgentProfileTurnDegradationReason.ToolCapabilityRejected =>
+            AgentProfileTurnDiagnosticCode.ToolCapabilityRejected,
+        AgentProfileTurnDegradationReason.ClassifierNoMatch => AgentProfileTurnDiagnosticCode.ClassifierNoMatch,
+        AgentProfileTurnDegradationReason.ClassifierFailed => AgentProfileTurnDiagnosticCode.ClassifierFailed,
+        AgentProfileTurnDegradationReason.ShadowMode => AgentProfileTurnDiagnosticCode.ShadowCandidate,
+        AgentProfileTurnDegradationReason.ExactSkillFetchFailed => AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed,
+        AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch =>
+            AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch,
+        AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid =>
+            AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid,
+        _ => AgentProfileTurnDiagnosticCode.ProfileInvalid,
+    };
 
     private static AgentProfileTurnCatalog BuildCatalog(
         AgentProfileSnapshot profile,
