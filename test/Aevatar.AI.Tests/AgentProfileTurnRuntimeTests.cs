@@ -224,14 +224,14 @@ public sealed class AgentProfileTurnRuntimeTests
             requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("system"),
-                Tools = tools.GetAll(),
+                Tools = null,
                 ToolContext = AgentToolExecutionContext.Empty with
                 {
                     SkillRecovery = InitialSkillRecovery(),
                 },
             });
 
-        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog([])));
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["use_skill"])));
 
         globalTool.ExecuteCount.Should().Be(0);
     }

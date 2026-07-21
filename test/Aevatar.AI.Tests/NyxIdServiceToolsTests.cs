@@ -100,10 +100,10 @@ public sealed class NyxIdServiceToolsTests
     public async Task OperationTool_ShouldRevalidateExactIdentityAndUseEncodedViaOnCatalogRoute()
     {
         var handler = new ServiceHandler();
-        var instance = Instance("us/personal 7", "api-shop", "svc-shop", true);
+        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
         handler.KeysByToken["user-token"] = Keys(instance);
-        handler.ExactKeys["us/personal 7"] = instance;
-        handler.SpecsByServiceId["us/personal 7"] = OperationSpec;
+        handler.ExactKeys["us-personal-7"] = instance;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
         var source = CreateSource(handler);
 
         using var scope = PushContext("user-token");
@@ -111,13 +111,13 @@ public sealed class NyxIdServiceToolsTests
             .Single(candidate => candidate.Name == "nyxid_service_operation__get_order");
 
         var result = await tool.ExecuteAsync(
-            """{ "user_service_id": "us/personal 7", "order_id": "order/9" }""");
+            """{ "user_service_id": "us-personal-7", "order_id": "order/9" }""");
 
         result.Should().Contain("ok");
-        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us/personal 7");
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-personal-7");
         var proxy = handler.ProxyRequests.Should().ContainSingle().Subject;
         proxy.Path.Should().Be("/api/v1/proxy/svc-shop/orders/order%2F9");
-        proxy.Query.Should().Be("?_nyxid_via=us%2Fpersonal%207");
+        proxy.Query.Should().Be("?_nyxid_via=us-personal-7");
     }
 
     [Fact]

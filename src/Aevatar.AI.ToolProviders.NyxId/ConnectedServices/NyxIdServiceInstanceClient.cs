@@ -295,7 +295,7 @@ public sealed class NyxIdServiceInstanceClient
             routeConstraint.CatalogServiceId = catalogId;
         else
             routeConstraint.ServiceSlug = slug;
-        var proxySpecServiceId = ResolveProxySpecServiceId(item, id, catalogId);
+        var proxySpecServiceId = ResolveProxySpecServiceId(item, id);
         var instance = new NyxIdServiceInstance
         {
             UserServiceId = id,
@@ -318,7 +318,7 @@ public sealed class NyxIdServiceInstanceClient
         return new NyxIdServiceInstanceBinding(instance, token);
     }
 
-    private static string? ResolveProxySpecServiceId(JsonElement item, string userServiceId, string? catalogServiceId)
+    private static string? ResolveProxySpecServiceId(JsonElement item, string userServiceId)
     {
         var openApiUrl = ReadString(item, "openapi_url");
         if (!Uri.TryCreate(openApiUrl, UriKind.Absolute, out var uri) ||
@@ -338,8 +338,7 @@ public sealed class NyxIdServiceInstanceClient
         }
 
         var specServiceId = Uri.UnescapeDataString(segments[^2]);
-        var expectedServiceId = catalogServiceId ?? userServiceId;
-        return string.Equals(specServiceId, expectedServiceId, StringComparison.Ordinal)
+        return string.Equals(specServiceId, userServiceId, StringComparison.Ordinal)
             ? specServiceId
             : null;
     }
@@ -395,6 +394,7 @@ public sealed class NyxIdServiceInstanceClient
         string.Equals(left.DisplaySlug, right.DisplaySlug, StringComparison.Ordinal) &&
         string.Equals(left.EndpointId, right.EndpointId, StringComparison.Ordinal) &&
         string.Equals(left.EndpointUrl, right.EndpointUrl, StringComparison.Ordinal) &&
+        string.Equals(left.NodeId, right.NodeId, StringComparison.Ordinal) &&
         string.Equals(left.ProxySpecServiceId, right.ProxySpecServiceId, StringComparison.Ordinal) &&
         Equals(left.RouteConstraint, right.RouteConstraint);
 
