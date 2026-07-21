@@ -495,17 +495,46 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
-    public async Task WorkflowAdapter_ShouldInferWorkflowName_WhenNotProvided()
+    public async Task WorkflowAdapter_ShouldInferWorkflowNameAndPreserveExactCapabilityEvidence_WhenNotProvided()
     {
         var dependencies = new WorkflowAuthorizationDependencies
         {
             OwnerLlmRouteRequired = true,
             ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
         };
-        dependencies.ConnectorCapabilityRefs.Add("calendar");
-        dependencies.NyxIdServiceIds.Add("service-alpha");
-        dependencies.NyxIdServiceSlugs.Add("provider-alpha");
-        dependencies.NyxIdServiceSlugs.Add("provider-alpha");
+        dependencies.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
+        {
+            HostConnector = new HostConnectorCapabilityRef
+            {
+                ConnectorCapabilityRef = "connector-calendar-alpha",
+                OperationId = "create_event",
+                ContractDigest = "connector-digest-alpha",
+            },
+        });
+        dependencies.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-home-alpha",
+                ServiceSlugSnapshot = "home-assistant",
+                OperationId = "read_states",
+                HttpMethod = "GET",
+                PathTemplate = "/api/states",
+                ContractDigest = "nyxid-digest-alpha",
+            },
+        });
+        dependencies.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-home-beta",
+                ServiceSlugSnapshot = "home-assistant",
+                OperationId = "read_states",
+                HttpMethod = "GET",
+                PathTemplate = "/api/states",
+                ContractDigest = "nyxid-digest-beta",
+            },
+        });
         var workflowPort = new RecordingWorkflowRunActorPort
         {
             ParseResult = WorkflowYamlParseResult.Success("inferred-workflow", dependencies),
@@ -532,10 +561,10 @@ public sealed class ServiceImplementationAdaptersTests
         artifact.Endpoints.Should().ContainSingle(x => x.Kind == ServiceEndpointKind.Chat);
         artifact.DeploymentPlan.WorkflowPlan.WorkflowName.Should().Be("inferred-workflow");
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.OwnerLlmRouteRequired.Should().BeTrue();
-        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ConnectorCapabilityRefs.Should().Equal("calendar");
-        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.NyxIdServiceIds.Should().Equal("service-alpha");
-        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.NyxIdServiceSlugs.Should()
-            .Equal("provider-alpha", "provider-alpha");
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ExternalCapabilities.Should()
+            .Equal(dependencies.ExternalCapabilities);
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ExternalCapabilities.Should()
+            .OnlyContain(capability => dependencies.ExternalCapabilities.All(source => !ReferenceEquals(source, capability)));
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
             .Be(Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required);
         workflowPort.ParseCalls.Should().ContainSingle("name: inferred-workflow");

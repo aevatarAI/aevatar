@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
 
 namespace Aevatar.GAgentService.Application.Schedules.Authorization;
@@ -52,8 +53,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotStale, "nyxid_catalog_snapshot_stale");
 
         var grants = ResolveGrants(
-            evidence.RequiredServiceIds,
-            evidence.RequiredServiceSlugs,
+            evidence.RequiredServices,
             evidence.ServiceGrantRequirement,
             snapshot.Services);
         if (grants.Failure != null)
@@ -111,8 +111,10 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     {
         if (request.InvocationTarget.TargetCase != ScheduledInvocationTarget.TargetOneofCase.StudioMember)
         {
-            var directServiceIds = NormalizeStrings(request.RequiredNyxIdServiceIds).ToList();
-            var directServiceSlugs = NormalizeStrings(request.RequiredNyxIdServiceSlugs).ToList();
+            var directServices = NormalizeRequiredServices(request.RequiredNyxIdServices);
+            if (directServices.Failure != null)
+                return TargetEvidenceResolution.Failed(directServices.Failure);
+            var directRequiredServices = directServices.Services.ToList();
             var directGrantRequirement = request.ServiceGrantRequirement;
             var directSourceStamps = (request.SourceStamps ?? []).Select(static stamp => stamp.Clone()).ToList();
             var ownerLLMScopeId = request.InvocationTarget.TargetCase ==
@@ -123,8 +125,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             {
                 var ownerLLM = await ResolveOwnerLLMEvidenceAsync(
                     ownerLLMScopeId,
-                    directServiceIds,
-                    directServiceSlugs,
+                    directRequiredServices,
                     directGrantRequirement,
                     directSourceStamps,
                     ct);
@@ -137,8 +138,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             if (stamps.Failure != null)
                 return TargetEvidenceResolution.Failed(stamps.Failure);
             return new TargetEvidenceResolution(
-                directServiceIds,
-                directServiceSlugs,
+                directRequiredServices,
                 directGrantRequirement,
                 stamps.SourceStamps,
                 null);
@@ -176,8 +176,10 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 "workflow_service_grant_requirement_invalid"));
         }
 
-        var requiredServiceIds = NormalizeStrings(workflow.NyxIdServiceIds).ToList();
-        var requiredServiceSlugs = NormalizeStrings(workflow.NyxIdServiceSlugs).ToList();
+        var capabilities = ResolveWorkflowCapabilities(workflow.ExternalCapabilities);
+        if (capabilities.Failure != null)
+            return TargetEvidenceResolution.Failed(capabilities.Failure);
+        var requiredServices = capabilities.Services.ToList();
         var serviceGrantRequirement = workflow.ServiceGrantRequirement;
         var sourceStamps = new List<AuthorizationSourceStamp>
         {
@@ -195,8 +197,8 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             },
         };
 
-        var connectorRefs = NormalizeStrings(workflow.ConnectorCapabilityRefs);
-        if (connectorRefs.Length > 0)
+        var connectorRefs = capabilities.ConnectorCapabilityRefs;
+        if (connectorRefs.Count > 0)
         {
             var connector = await _connectorQueryPort.GetAsync(target.ScopeId, ct);
             if (connector == null)
@@ -230,8 +232,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         {
             var ownerLLM = await ResolveOwnerLLMEvidenceAsync(
                 target.ScopeId,
-                requiredServiceIds,
-                requiredServiceSlugs,
+                requiredServices,
                 serviceGrantRequirement,
                 sourceStamps,
                 ct);
@@ -245,8 +246,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         if (canonicalStamps.Failure != null)
             return TargetEvidenceResolution.Failed(canonicalStamps.Failure);
         return new TargetEvidenceResolution(
-            requiredServiceIds,
-            requiredServiceSlugs,
+            requiredServices,
             serviceGrantRequirement,
             canonicalStamps.SourceStamps,
             null);
@@ -254,8 +254,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
     private async Task<OwnerLLMEvidenceResolution> ResolveOwnerLLMEvidenceAsync(
         string scopeId,
-        List<string> requiredServiceIds,
-        List<string> requiredServiceSlugs,
+        List<NyxIdUserServiceCapabilityRef> requiredServices,
         AuthorizationGrantRequirement serviceGrantRequirement,
         List<AuthorizationSourceStamp> sourceStamps,
         CancellationToken ct)
@@ -279,16 +278,17 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         var ownerServiceSlug = ownerLLM.NyxIdServiceSlug?.Trim() ?? string.Empty;
         if (ownerLLM.ServiceGrantRequirement == AuthorizationGrantRequirement.Required)
         {
-            if ((ownerServiceId.Length == 0) == (ownerServiceSlug.Length == 0))
+            if (ownerServiceId.Length == 0)
             {
                 return OwnerLLMEvidenceResolution.Failed(Failed(
-                    ScheduledInvocationAuthorizationFailureCode.ServiceAmbiguous,
-                    "owner_llm_service_identity_invalid"));
+                    ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                    "owner_llm_exact_service_identity_unavailable"));
             }
-            if (ownerServiceId.Length > 0)
-                requiredServiceIds.Add(ownerServiceId);
-            else
-                requiredServiceSlugs.Add(ownerServiceSlug);
+            requiredServices.Add(new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = ownerServiceId,
+                ServiceSlugSnapshot = ownerServiceSlug,
+            });
             serviceGrantRequirement = AuthorizationGrantRequirement.Required;
         }
         else if (ownerServiceId.Length > 0 || ownerServiceSlug.Length > 0)
@@ -308,16 +308,15 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     }
 
     private static GrantResolution ResolveGrants(
-        IReadOnlyList<string> requiredServiceIds,
-        IReadOnlyList<string> requiredServiceSlugs,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> requiredServices,
         AuthorizationGrantRequirement serviceGrantRequirement,
         IReadOnlyList<NyxIdAuthorizationServiceEvidence> services)
     {
         var servicesById = new Dictionary<string, NyxIdAuthorizationServiceEvidence>(StringComparer.Ordinal);
         foreach (var service in services)
         {
-            if (!TryValidateServiceEvidence(service, out var detail))
-                return GrantResolution.Failed(Failed(ScheduledInvocationAuthorizationFailureCode.UnknownEnum, detail));
+            if (!TryValidateServiceEvidence(service, out var failureCode, out var detail))
+                return GrantResolution.Failed(Failed(failureCode, detail));
             if (!servicesById.TryAdd(service.UserServiceId.Trim(), service))
             {
                 return GrantResolution.Failed(Failed(
@@ -326,35 +325,18 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             }
         }
 
-        var selectedIds = new List<string>(requiredServiceIds);
-        foreach (var slug in requiredServiceSlugs)
-        {
-            var matches = services.Where(service =>
-                    string.Equals(service.ServiceSlug.Trim(), slug, StringComparison.Ordinal))
-                .Select(static service => service.UserServiceId.Trim())
-                .ToArray();
-            if (matches.Length == 0)
-                return GrantResolution.Failed(Failed(
-                    ScheduledInvocationAuthorizationFailureCode.ServiceNotFound,
-                    $"nyxid_service_slug_not_found:{slug}"));
-            if (matches.Length != 1)
-                return GrantResolution.Failed(Failed(
-                    ScheduledInvocationAuthorizationFailureCode.ServiceAmbiguous,
-                    $"nyxid_service_slug_ambiguous:{slug}"));
-            selectedIds.Add(matches[0]);
-        }
-
-        if (selectedIds.Count == 0 && serviceGrantRequirement == AuthorizationGrantRequirement.Required)
+        if (requiredServices.Count == 0 && serviceGrantRequirement == AuthorizationGrantRequirement.Required)
         {
             return GrantResolution.Failed(Failed(
-                ScheduledInvocationAuthorizationFailureCode.ServiceNotFound,
-                "nyxid_service_grants_empty"));
+                ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                "nyxid_exact_service_identity_unavailable"));
         }
 
         var serviceGrants = new List<NyxIdServiceGrant>();
         var nodeGrants = new List<NyxIdNodeGrant>();
-        foreach (var serviceId in selectedIds)
+        foreach (var requiredService in requiredServices)
         {
+            var serviceId = requiredService.UserServiceId.Trim();
             if (!servicesById.TryGetValue(serviceId, out var service))
                 return GrantResolution.Failed(Failed(
                     ScheduledInvocationAuthorizationFailureCode.ServiceNotFound,
@@ -363,6 +345,14 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 return GrantResolution.Failed(Failed(
                     ScheduledInvocationAuthorizationFailureCode.ServiceAccessDenied,
                     $"nyxid_service_access_denied:{serviceId}"));
+            var slugSnapshot = requiredService.ServiceSlugSnapshot?.Trim() ?? string.Empty;
+            if (slugSnapshot.Length > 0 &&
+                !string.Equals(slugSnapshot, service.ServiceSlug.Trim(), StringComparison.Ordinal))
+            {
+                return GrantResolution.Failed(Failed(
+                    ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+                    $"nyxid_service_slug_snapshot_changed:{serviceId}"));
+            }
 
             serviceGrants.Add(new NyxIdServiceGrant
             {
@@ -389,12 +379,24 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
     private static bool TryValidateServiceEvidence(
         NyxIdAuthorizationServiceEvidence service,
+        out ScheduledInvocationAuthorizationFailureCode failureCode,
         out string detail)
     {
+        failureCode = ScheduledInvocationAuthorizationFailureCode.UnknownEnum;
         detail = string.Empty;
-        if (string.IsNullOrWhiteSpace(service.UserServiceId) ||
-            string.IsNullOrWhiteSpace(service.ServiceSlug) ||
-            service.Access == NyxIdAuthorizationAccess.Unspecified ||
+        if (string.IsNullOrWhiteSpace(service.UserServiceId))
+        {
+            failureCode = ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable;
+            detail = "nyxid_exact_service_identity_unavailable";
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(service.ServiceSlug))
+        {
+            failureCode = ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable;
+            detail = $"nyxid_service_route_snapshot_unavailable:{service.UserServiceId.Trim()}";
+            return false;
+        }
+        if (service.Access == NyxIdAuthorizationAccess.Unspecified ||
             !Enum.IsDefined(service.Access) ||
             service.NodeGrantRequirement == AuthorizationGrantRequirement.Unspecified ||
             !Enum.IsDefined(service.NodeGrantRequirement))
@@ -406,17 +408,22 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         var primaryNodeIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var node in service.Nodes)
         {
-            if (string.IsNullOrWhiteSpace(node.NodeId) ||
-                node.Role == NyxIdNodeRole.Unspecified ||
+            if (node.Role == NyxIdNodeRole.Unspecified ||
                 !Enum.IsDefined(node.Role) ||
                 node.EdgeKind == NyxIdNodeEdgeKind.Unspecified ||
-                !Enum.IsDefined(node.EdgeKind) ||
+                !Enum.IsDefined(node.EdgeKind))
+            {
+                detail = $"nyxid_node_evidence_invalid:{service.UserServiceId.Trim()}";
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(node.NodeId) ||
                 node.EdgeKind == NyxIdNodeEdgeKind.NodeBinding &&
                 string.IsNullOrWhiteSpace(node.BindingId) ||
                 node.EdgeKind == NyxIdNodeEdgeKind.UserServicePrimary &&
                 (!string.IsNullOrWhiteSpace(node.BindingId) || node.Role != NyxIdNodeRole.Primary))
             {
-                detail = $"nyxid_node_evidence_invalid:{service.UserServiceId.Trim()}";
+                failureCode = ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable;
+                detail = $"nyxid_node_authorization_topology_unavailable:{service.UserServiceId.Trim()}";
                 return false;
             }
             if (node.Role == NyxIdNodeRole.Primary)
@@ -425,12 +432,14 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         if (service.NodeGrantRequirement == AuthorizationGrantRequirement.Required &&
             (service.Nodes.Count == 0 || primaryNodeIds.Count != 1))
         {
-            detail = $"nyxid_node_primary_invalid:{service.UserServiceId.Trim()}";
+            failureCode = ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable;
+            detail = $"nyxid_node_authorization_topology_unavailable:{service.UserServiceId.Trim()}";
             return false;
         }
         if (service.NodeGrantRequirement == AuthorizationGrantRequirement.NotRequired && service.Nodes.Count != 0)
         {
-            detail = $"nyxid_direct_service_has_node_evidence:{service.UserServiceId.Trim()}";
+            failureCode = ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable;
+            detail = $"nyxid_node_authorization_topology_unavailable:{service.UserServiceId.Trim()}";
             return false;
         }
         return true;
@@ -522,6 +531,69 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             .Select(static value => value.Trim())
             .ToArray();
 
+    private static RequiredServiceResolution NormalizeRequiredServices(
+        IEnumerable<NyxIdUserServiceCapabilityRef> services)
+    {
+        var normalized = new List<NyxIdUserServiceCapabilityRef>();
+        foreach (var service in services)
+        {
+            if (service == null || string.IsNullOrWhiteSpace(service.UserServiceId))
+            {
+                return RequiredServiceResolution.Failed(Failed(
+                    ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                    "nyxid_exact_service_identity_unavailable"));
+            }
+
+            var clone = service.Clone();
+            clone.UserServiceId = clone.UserServiceId.Trim();
+            clone.ServiceSlugSnapshot = clone.ServiceSlugSnapshot.Trim();
+            normalized.Add(clone);
+        }
+        return new RequiredServiceResolution(normalized, null);
+    }
+
+    private static WorkflowCapabilityResolution ResolveWorkflowCapabilities(
+        IEnumerable<ExternalWorkflowCapabilityRef> capabilities)
+    {
+        var connectorRefs = new List<string>();
+        var services = new List<NyxIdUserServiceCapabilityRef>();
+        foreach (var capability in capabilities)
+        {
+            if (capability == null)
+            {
+                return WorkflowCapabilityResolution.Failed(Failed(
+                    ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                    "workflow_external_capability_identity_unavailable"));
+            }
+
+            switch (capability.CapabilityCase)
+            {
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector:
+                    if (string.IsNullOrWhiteSpace(capability.HostConnector.ConnectorCapabilityRef))
+                    {
+                        return WorkflowCapabilityResolution.Failed(Failed(
+                            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                            "connector_exact_capability_identity_unavailable"));
+                    }
+                    connectorRefs.Add(capability.HostConnector.ConnectorCapabilityRef.Trim());
+                    break;
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
+                {
+                    var required = NormalizeRequiredServices([capability.NyxIdUserService]);
+                    if (required.Failure != null)
+                        return WorkflowCapabilityResolution.Failed(required.Failure);
+                    services.Add(required.Services[0]);
+                    break;
+                }
+                default:
+                    return WorkflowCapabilityResolution.Failed(Failed(
+                        ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                        "workflow_external_capability_identity_unavailable"));
+            }
+        }
+        return new WorkflowCapabilityResolution(connectorRefs, services, null);
+    }
+
     private static bool OwnerEquals(AuthorizationOwnerIdentity left, AuthorizationOwnerIdentity right) =>
         string.Equals(left.Authority.Trim(), right.Authority.Trim(), StringComparison.Ordinal) &&
         left.OwnerKind == right.OwnerKind &&
@@ -532,14 +604,30 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         string detail) => ScheduledInvocationAuthorizationPlanResult.Failed(code, detail);
 
     private sealed record TargetEvidenceResolution(
-        IReadOnlyList<string> RequiredServiceIds,
-        IReadOnlyList<string> RequiredServiceSlugs,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredServices,
         AuthorizationGrantRequirement ServiceGrantRequirement,
         IReadOnlyList<AuthorizationSourceStamp> SourceStamps,
         ScheduledInvocationAuthorizationPlanResult? Failure)
     {
         public static TargetEvidenceResolution Failed(ScheduledInvocationAuthorizationPlanResult failure) =>
-            new([], [], AuthorizationGrantRequirement.Unspecified, [], failure);
+            new([], AuthorizationGrantRequirement.Unspecified, [], failure);
+    }
+
+    private sealed record RequiredServiceResolution(
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> Services,
+        ScheduledInvocationAuthorizationPlanResult? Failure)
+    {
+        public static RequiredServiceResolution Failed(ScheduledInvocationAuthorizationPlanResult failure) =>
+            new([], failure);
+    }
+
+    private sealed record WorkflowCapabilityResolution(
+        IReadOnlyList<string> ConnectorCapabilityRefs,
+        IReadOnlyList<NyxIdUserServiceCapabilityRef> Services,
+        ScheduledInvocationAuthorizationPlanResult? Failure)
+    {
+        public static WorkflowCapabilityResolution Failed(ScheduledInvocationAuthorizationPlanResult failure) =>
+            new([], [], failure);
     }
 
     private sealed record GrantResolution(

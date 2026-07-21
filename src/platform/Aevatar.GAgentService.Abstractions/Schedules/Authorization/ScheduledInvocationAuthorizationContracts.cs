@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Aevatar.Workflow.Abstractions;
 using Google.Protobuf;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -20,8 +21,7 @@ public sealed record AuthenticatedAuthorizationOwnerContext(
 public sealed record ScheduledInvocationAuthorizationRequest(
     ScheduledInvocationTarget InvocationTarget,
     AuthenticatedAuthorizationOwnerContext OwnerContext,
-    IReadOnlyList<string> RequiredNyxIdServiceIds,
-    IReadOnlyList<string> RequiredNyxIdServiceSlugs,
+    IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredNyxIdServices,
     AuthorizationGrantRequirement ServiceGrantRequirement,
     DateTimeOffset ExpiresAtUtc,
     DateTimeOffset EvaluatedAtUtc,
@@ -172,10 +172,8 @@ public sealed record ScheduledInvocationMemberEvidence(
 
 public sealed record ScheduledInvocationWorkflowEvidence(
     long StateVersion,
-    IReadOnlyList<string> ConnectorCapabilityRefs,
+    IReadOnlyList<ExternalWorkflowCapabilityRef> ExternalCapabilities,
     bool OwnerLLMRouteRequired,
-    IReadOnlyList<string> NyxIdServiceIds,
-    IReadOnlyList<string> NyxIdServiceSlugs,
     AuthorizationGrantRequirement ServiceGrantRequirement);
 
 public sealed record ScheduledInvocationConnectorEvidence(

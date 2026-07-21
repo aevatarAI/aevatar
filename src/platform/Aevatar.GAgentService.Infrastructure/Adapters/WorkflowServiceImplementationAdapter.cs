@@ -114,9 +114,8 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                 _ => AuthorizationGrantRequirement.Unspecified,
             },
         };
-        evidence.ConnectorCapabilityRefs.Add(dependencies.ConnectorCapabilityRefs);
-        evidence.NyxIdServiceIds.Add(dependencies.NyxIdServiceIds);
-        evidence.NyxIdServiceSlugs.Add(dependencies.NyxIdServiceSlugs);
+        evidence.ExternalCapabilities.Add(
+            dependencies.ExternalCapabilities.Select(static capability => capability.Clone()));
         return evidence;
     }
 

@@ -848,7 +848,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 target,
                 request.AuthenticatedOwner,
                 [],
-                [],
                 AuthorizationGrantRequirement.Required,
                 credentialExpiresAtUtc ?? _schedulePolicy.ResolveCredentialExpiresAtUtc(evaluatedAtUtc),
                 evaluatedAtUtc));
