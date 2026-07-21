@@ -246,6 +246,36 @@ public sealed class ScriptBehaviorCompletionNotificationTests
     }
 
     [Fact]
+    public async Task DeadlineZero_ShouldRemainUnlimitedAndDispatchOutcome()
+    {
+        var scheduler = new RecordingCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var actor = await CreateBoundAgentAsync(
+            new InMemoryEventStore(),
+            publisher,
+            scheduler,
+            new FixedTimeProvider(FixedNow));
+
+        await CompleteRunAsync(
+            actor,
+            "run-no-deadline",
+            "cmd-no-deadline",
+            "delivery-no-deadline",
+            CompletionActorId,
+            expiresAtUnixMs: 0);
+
+        publisher.SuccessfulSends.Should().ContainSingle()
+            .Which.TargetActorId.Should().Be(CompletionActorId);
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        var delivery = actor.State.RunOutcomes.Should()
+            .ContainKey("run-no-deadline").WhoseValue;
+        delivery.ExpiresAtUnixTimeMs.Should().Be(0);
+        delivery.Attempt.Should().Be(0);
+        delivery.Status.Should().Be(ScriptRunOutcomeDeliveryStatus.Dispatched);
+        delivery.Status.Should().NotBe(ScriptRunOutcomeDeliveryStatus.Expired);
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldAttemptEveryPendingOutcomeInOccurrenceOrder()
     {
         var eventStore = new InMemoryEventStore();
