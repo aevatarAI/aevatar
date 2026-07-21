@@ -91,13 +91,13 @@ const workflowStudioHeaderCss = `
 
 .workflow-studio-header__identity {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  column-gap: 10px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-rows: auto auto;
   min-width: 0;
   overflow: visible;
-  row-gap: 6px;
-  white-space: normal;
+  row-gap: 2px;
 }
 
 .workflow-studio-header__back-button {
@@ -106,6 +106,8 @@ const workflowStudioHeaderCss = `
   color: #374151;
   display: inline-flex;
   flex: 0 0 auto;
+  grid-column: 1;
+  grid-row: 2;
   height: 30px;
   justify-content: center;
   width: 30px;
@@ -119,32 +121,44 @@ const workflowStudioHeaderCss = `
 .workflow-studio-header__title-zone {
   align-items: center;
   display: flex;
-  flex: 1 1 280px;
   gap: 8px;
+  grid-column: 2;
+  grid-row: 2;
   max-width: 100%;
   min-width: 0;
+  overflow: hidden;
 }
 
 .workflow-studio-header__breadcrumbs {
   align-items: center;
   color: #6b7280;
   display: inline-flex;
-  flex: 0 1 auto;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   gap: 6px;
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   overflow: hidden;
+  padding-inline-start: 7px;
 }
 
 .workflow-studio-header__breadcrumb-link {
   color: #6b7280;
   display: inline-block;
-  max-width: 140px;
+  min-width: 0;
   overflow: hidden;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workflow-studio-header__breadcrumb-link:first-child {
+  flex: 0 0 auto;
+}
+
+.workflow-studio-header__breadcrumb-link:last-child {
+  flex: 0 1 auto;
 }
 
 .workflow-studio-header__breadcrumb-link:hover {
@@ -156,13 +170,6 @@ const workflowStudioHeaderCss = `
   flex: 0 0 auto;
 }
 
-.workflow-studio-header__title-divider {
-  background: #d1d5db;
-  flex: 0 0 auto;
-  height: 18px;
-  width: 1px;
-}
-
 .workflow-studio-header__title-shell {
   align-items: center;
   background: transparent;
@@ -171,7 +178,7 @@ const workflowStudioHeaderCss = `
   display: inline-flex;
   flex: 1 1 180px;
   gap: 4px;
-  max-width: min(360px, 100%);
+  max-width: min(480px, 100%);
   min-width: 0;
   padding: 0 2px 0 6px;
 }
@@ -195,11 +202,8 @@ const workflowStudioHeaderCss = `
   font-weight: 700;
   height: 28px;
   line-height: 24px;
-  padding: 0;
-}
-
-.workflow-studio-header__title-input input {
   overflow: hidden;
+  padding: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -217,7 +221,8 @@ const workflowStudioHeaderCss = `
 }
 
 .workflow-studio-header__title-shell:hover .workflow-studio-header__edit-button,
-.workflow-studio-header__title-shell--focused .workflow-studio-header__edit-button {
+.workflow-studio-header__title-shell--focused .workflow-studio-header__edit-button,
+.workflow-studio-header__edit-button:focus-visible {
   opacity: 1;
 }
 
@@ -225,8 +230,8 @@ const workflowStudioHeaderCss = `
   align-items: center;
   border: 0;
   display: inline-flex;
-  flex: 0 1 auto;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   gap: 6px;
   margin: 0;
   min-inline-size: 0;
@@ -251,7 +256,7 @@ const workflowStudioHeaderCss = `
 .workflow-studio-header__actions {
   align-items: center;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   justify-content: flex-end;
   max-width: 100%;
@@ -293,27 +298,12 @@ const workflowStudioHeaderCss = `
   width: 30px;
 }
 
-@media (max-width: 1320px) {
-  .workflow-studio-header__breadcrumbs {
-    display: none;
-  }
-
-  .workflow-studio-header__title-divider {
-    display: none;
-  }
-
-  .workflow-studio-header__title-shell {
-    max-width: 320px;
-  }
-
-  .workflow-studio-header__action-label--secondary {
-    display: none;
-  }
-
-  .workflow-studio-header__compact-button {
-    min-width: 34px;
-    padding-inline: 8px;
-  }
+.workflow-studio-header__action-divider {
+  background: #e5e7eb;
+  flex: 0 0 auto;
+  height: 20px;
+  margin-inline: 4px;
+  width: 1px;
 }
 
 @media (max-width: 980px) {
@@ -323,6 +313,7 @@ const workflowStudioHeaderCss = `
   }
 
   .workflow-studio-header__actions {
+    flex-wrap: wrap;
     justify-content: flex-start;
   }
 }
@@ -347,6 +338,10 @@ const workflowStudioHeaderCss = `
   }
 
   .workflow-studio-header__action-label {
+    display: none;
+  }
+
+  .workflow-studio-header__action-divider {
     display: none;
   }
 
@@ -410,8 +405,9 @@ const HeaderBreadcrumb: React.FC<HeaderBreadcrumbProps> = ({
         event.preventDefault();
         onNavigateToTeams();
       }}
+      title={t('teamMemberWorkflowStudio.header.teamBreadcrumb', 'Teams')}
     >
-      {t('teamMemberWorkflowStudio.header.teamBreadcrumb', 'Team')}
+      {t('teamMemberWorkflowStudio.header.teamBreadcrumb', 'Teams')}
     </a>
     <span
       aria-hidden="true"
@@ -426,6 +422,10 @@ const HeaderBreadcrumb: React.FC<HeaderBreadcrumbProps> = ({
         event.preventDefault();
         onNavigateToTeam();
       }}
+      title={
+        teamName ||
+        t('teamMemberWorkflowStudio.header.currentTeam', 'Current team')
+      }
     >
       {teamName ||
         t('teamMemberWorkflowStudio.header.currentTeam', 'Current team')}
@@ -485,10 +485,13 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
         onChange={(event) => onTitleChange(event.target.value)}
         onFocus={() => setTitleFocused(true)}
         ref={titleInputRef}
-        title={t(
-          'teamMemberWorkflowStudio.header.editWorkflowName',
-          'Edit workflow name',
-        )}
+        title={
+          workflowTitle ||
+          t(
+            'teamMemberWorkflowStudio.header.editWorkflowName',
+            'Edit workflow name',
+          )
+        }
         value={workflowTitle}
         variant="borderless"
       />
@@ -522,6 +525,13 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
       className="workflow-studio-header__identity"
       data-testid="workflow-header-identity"
     >
+      <HeaderBreadcrumb
+        onNavigateToTeam={onNavigateToTeam}
+        onNavigateToTeams={onNavigateToTeams}
+        teamHref={teamHref}
+        teamName={teamName}
+        teamsHref={teamsHref}
+      />
       <Tooltip title={t('teamMemberWorkflowStudio.header.back', 'Back')}>
         <Button
           aria-label={t('teamMemberWorkflowStudio.header.back', 'Back')}
@@ -534,44 +544,33 @@ const HeaderIdentity: React.FC<HeaderIdentityProps> = ({
         />
       </Tooltip>
       <div className="workflow-studio-header__title-zone">
-        <HeaderBreadcrumb
-          onNavigateToTeam={onNavigateToTeam}
-          onNavigateToTeams={onNavigateToTeams}
-          teamHref={teamHref}
-          teamName={teamName}
-          teamsHref={teamsHref}
-        />
-        <span
-          aria-hidden="true"
-          className="workflow-studio-header__title-divider"
-        />
         {workflowTitleNode}
-      </div>
-      <fieldset
-        aria-label={t(
-          'teamMemberWorkflowStudio.header.statusAria',
-          'Workflow status',
-        )}
-        className="workflow-studio-header__badges"
-      >
-        <Tag
-          className="workflow-studio-header__status"
-          color={
-            publishStatusColor === 'default' ? 'default' : publishStatusColor
-          }
-          title={publishStatusTitle}
+        <fieldset
+          aria-label={t(
+            'teamMemberWorkflowStudio.header.statusAria',
+            'Workflow status',
+          )}
+          className="workflow-studio-header__badges"
         >
-          {publishStatusLabel}
-        </Tag>
-        {dirty ? (
-          <Tag className="workflow-studio-header__status" color="gold">
-            {t(
-              'teamMemberWorkflowStudio.header.unsavedChanges',
-              'Unsaved changes',
-            )}
+          <Tag
+            className="workflow-studio-header__status"
+            color={
+              publishStatusColor === 'default' ? 'default' : publishStatusColor
+            }
+            title={publishStatusTitle}
+          >
+            {publishStatusLabel}
           </Tag>
-        ) : null}
-      </fieldset>
+          {dirty ? (
+            <Tag className="workflow-studio-header__status" color="gold">
+              {t(
+                'teamMemberWorkflowStudio.header.unsavedChanges',
+                'Unsaved changes',
+              )}
+            </Tag>
+          ) : null}
+        </fieldset>
+      </div>
     </section>
   );
 };
@@ -661,17 +660,79 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         'teamMemberWorkflowStudio.header.deleteSelectedNode',
         'Delete selected node',
       );
-  const moreMenuItems: WorkflowHeaderMenuItem[] = [
+  const invokeLabel = t('teamMemberWorkflowStudio.header.invoke', 'Invoke');
+  const publishedRunsLabel = t(
+    'teamMemberWorkflowStudio.header.publishedRuns',
+    'Published runs',
+  );
+  const recurringWorkLabel = t(
+    'teamMemberWorkflowStudio.header.recurringWork',
+    'Recurring work',
+  );
+  const automationsActionTitle = canOpenAutomations
+    ? t(
+        'teamMemberWorkflowStudio.header.openAutomations',
+        'Open recurring work for this member',
+      )
+    : automationsPlaceholderReason;
+  const contextualMenuItems: WorkflowHeaderMenuItem[] =
     hasSelectedConnection || hasSelectedNode
-      ? {
-          danger: true,
-          icon: <DeleteOutlined />,
-          key: hasSelectedConnection ? 'delete-connection' : 'delete-node',
-          label: deleteSelectionLabel,
-        }
-      : null,
-  ].filter(Boolean) as WorkflowHeaderMenuItem[];
-  const moreMenuHasActions = Boolean(moreMenuItems.length);
+      ? [
+          {
+            type: 'divider',
+          },
+          {
+            danger: true,
+            icon: <DeleteOutlined />,
+            key: hasSelectedConnection ? 'delete-connection' : 'delete-node',
+            label: deleteSelectionLabel,
+          },
+        ]
+      : [];
+  const moreMenuItems: WorkflowHeaderMenuItem[] = [
+    {
+      disabled: !canOpenInvoke,
+      icon: <PlayCircleOutlined />,
+      key: 'invoke',
+      label: canOpenInvoke ? (
+        <a href={invokeHref} title={invokePlaceholderReason}>
+          {invokeLabel}
+        </a>
+      ) : (
+        <span title={invokePlaceholderReason}>{invokeLabel}</span>
+      ),
+      title: invokePlaceholderReason,
+    },
+    {
+      disabled: !canOpenPublishedRuns,
+      icon: <HistoryOutlined />,
+      key: 'published-runs',
+      label: canOpenPublishedRuns ? (
+        <a href={publishedRunsHref} title={publishedRunsPlaceholderReason}>
+          {publishedRunsLabel}
+        </a>
+      ) : (
+        <span title={publishedRunsPlaceholderReason}>
+          {publishedRunsLabel}
+        </span>
+      ),
+      title: publishedRunsPlaceholderReason,
+    },
+    {
+      disabled: !canOpenAutomations,
+      icon: <ClockCircleOutlined />,
+      key: 'recurring-work',
+      label: canOpenAutomations ? (
+        <a href={automationsHref} title={automationsActionTitle}>
+          {recurringWorkLabel}
+        </a>
+      ) : (
+        <span title={automationsActionTitle}>{recurringWorkLabel}</span>
+      ),
+      title: automationsActionTitle,
+    },
+    ...contextualMenuItems,
+  ];
 
   return (
     <section
@@ -704,78 +765,113 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         </span>
       </Button>
       <Button
-        aria-label={t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
-        className="workflow-studio-header__compact-button"
-        disabled={!canOpenInvoke}
-        href={canOpenInvoke ? invokeHref : undefined}
-        icon={<PlayCircleOutlined />}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpenInvoke();
-        }}
-        size="small"
-        title={invokePlaceholderReason}
-      >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t('teamMemberWorkflowStudio.header.invoke', 'Invoke')}
-        </span>
-      </Button>
-      <Button
         aria-label={t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
         className="workflow-studio-header__compact-button"
         icon={<PlusOutlined />}
         onClick={onAddNode}
         size="small"
       >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
+        <span className="workflow-studio-header__action-label">
           {t('teamMemberWorkflowStudio.header.addNode', 'Add node')}
         </span>
       </Button>
-      <Button
-        aria-label={t(
-          'teamMemberWorkflowStudio.header.publishedRuns',
-          'Published runs',
-        )}
-        className="workflow-studio-header__compact-button"
-        disabled={!canOpenPublishedRuns}
-        href={canOpenPublishedRuns ? publishedRunsHref : undefined}
-        icon={<HistoryOutlined />}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpenPublishedRuns();
+      <Dropdown
+        menu={{
+          items: moreMenuItems,
+          onClick: ({ domEvent, key }) => {
+            if (key === 'invoke') {
+              domEvent.preventDefault();
+              if (canOpenInvoke) {
+                onOpenInvoke();
+              }
+              return;
+            }
+
+            if (key === 'published-runs') {
+              domEvent.preventDefault();
+              if (canOpenPublishedRuns) {
+                onOpenPublishedRuns();
+              }
+              return;
+            }
+
+            if (key === 'recurring-work') {
+              domEvent.preventDefault();
+              if (canOpenAutomations) {
+                onOpenAutomations();
+              }
+              return;
+            }
+
+            if (key === 'delete-node') {
+              const confirmed =
+                typeof window === 'undefined' ||
+                window.confirm(
+                  t(
+                    'teamMemberWorkflowStudio.header.confirmDeleteNode',
+                    'Delete the selected node? This cannot be undone.',
+                  ),
+                );
+              if (confirmed) {
+                onDeleteNode();
+              }
+              return;
+            }
+
+            if (key === 'delete-connection') {
+              const confirmed =
+                typeof window === 'undefined' ||
+                window.confirm(
+                  t(
+                    'teamMemberWorkflowStudio.header.confirmDeleteConnection',
+                    'Delete the selected connection? This cannot be undone.',
+                  ),
+                );
+              if (confirmed) {
+                onDeleteConnection();
+              }
+            }
+          },
         }}
-        size="small"
-        title={publishedRunsPlaceholderReason}
+        placement="bottomRight"
+        trigger={['click']}
       >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t('teamMemberWorkflowStudio.header.publishedRuns', 'Published runs')}
-        </span>
-      </Button>
+        <Button
+          aria-label={t(
+            'teamMemberWorkflowStudio.header.moreActions',
+            'More workflow actions',
+          )}
+          className="workflow-studio-header__icon-button"
+          icon={<MoreOutlined />}
+          size="small"
+          title={t('teamMemberWorkflowStudio.header.more', 'More')}
+        />
+      </Dropdown>
+      <span
+        aria-hidden="true"
+        className="workflow-studio-header__action-divider"
+      />
       <Button
-        aria-label={t(
-          'teamMemberWorkflowStudio.header.recurringWork',
-          'Recurring work',
-        )}
+        aria-label={t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
         className="workflow-studio-header__compact-button"
-        disabled={!canOpenAutomations}
-        href={canOpenAutomations ? automationsHref : undefined}
-        icon={<ClockCircleOutlined />}
-        onClick={(event) => {
-          event.preventDefault();
-          onOpenAutomations();
-        }}
+        disabled={!canEditYaml}
+        icon={<CodeOutlined />}
+        onClick={onEditYaml}
         size="small"
         title={
-          canOpenAutomations
+          canEditYaml
             ? t(
-                'teamMemberWorkflowStudio.header.openAutomations',
-                'Open recurring work for this member',
+                'teamMemberWorkflowStudio.header.editYamlTitle',
+                'Edit workflow YAML',
               )
-            : automationsPlaceholderReason
+            : t(
+                'teamMemberWorkflowStudio.header.editYamlUnavailable',
+                'Load the workflow draft before editing YAML.',
+              )
         }
       >
-        <span className="workflow-studio-header__action-label workflow-studio-header__action-label--secondary">
-          {t('teamMemberWorkflowStudio.header.recurringWork', 'Recurring work')}
+        <span className="workflow-studio-header__action-label">
+          {t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
         </span>
       </Button>
       <Button
@@ -815,6 +911,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
                     'Publish member workflow',
                   )
             }
+            type={!publishDisabled && !canSave ? 'primary' : 'default'}
           >
             <span className="workflow-studio-header__action-label">
               {t('teamMemberWorkflowStudio.header.publish', 'Publish')}
@@ -845,79 +942,6 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
             </span>
           </Button>
         )
-      ) : null}
-      <Button
-        aria-label={t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
-        className="workflow-studio-header__compact-button"
-        disabled={!canEditYaml}
-        icon={<CodeOutlined />}
-        onClick={onEditYaml}
-        size="small"
-        title={
-          canEditYaml
-            ? t(
-                'teamMemberWorkflowStudio.header.editYamlTitle',
-                'Edit workflow YAML',
-              )
-            : t(
-                'teamMemberWorkflowStudio.header.editYamlUnavailable',
-                'Load the workflow draft before editing YAML.',
-              )
-        }
-      >
-        <span className="workflow-studio-header__action-label">
-          {t('teamMemberWorkflowStudio.header.editYaml', 'Edit YAML')}
-        </span>
-      </Button>
-      {moreMenuHasActions ? (
-        <Dropdown
-          menu={{
-            items: moreMenuItems,
-            onClick: ({ key }) => {
-              if (key === 'delete-node') {
-                const confirmed =
-                  typeof window === 'undefined' ||
-                  window.confirm(
-                    t(
-                      'teamMemberWorkflowStudio.header.confirmDeleteNode',
-                      'Delete the selected node? This cannot be undone.',
-                    ),
-                  );
-                if (confirmed) {
-                  onDeleteNode();
-                }
-                return;
-              }
-
-              if (key === 'delete-connection') {
-                const confirmed =
-                  typeof window === 'undefined' ||
-                  window.confirm(
-                    t(
-                      'teamMemberWorkflowStudio.header.confirmDeleteConnection',
-                      'Delete the selected connection? This cannot be undone.',
-                    ),
-                  );
-                if (confirmed) {
-                  onDeleteConnection();
-                }
-              }
-            },
-          }}
-          placement="bottomRight"
-          trigger={['click']}
-        >
-          <Button
-            aria-label={t(
-              'teamMemberWorkflowStudio.header.moreActions',
-              'More workflow actions',
-            )}
-            className="workflow-studio-header__icon-button"
-            icon={<MoreOutlined />}
-            size="small"
-            title={t('teamMemberWorkflowStudio.header.more', 'More')}
-          />
-        </Dropdown>
       ) : null}
     </section>
   );

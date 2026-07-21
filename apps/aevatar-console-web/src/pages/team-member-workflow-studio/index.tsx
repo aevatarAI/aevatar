@@ -1,9 +1,12 @@
-import { Alert, Spin } from "antd";
+import { Alert, Grid, Spin } from "antd";
 import React from "react";
 import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
 import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPanel";
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
-import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
+import WorkflowStudioNodeDetailPanel, {
+  WORKFLOW_STUDIO_NODE_INSPECTOR_DEFAULT_WIDTH,
+  WORKFLOW_STUDIO_NODE_INSPECTOR_OVERLAY_INSET,
+} from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
 import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioYamlPanel from "./components/WorkflowStudioYamlPanel";
@@ -47,6 +50,7 @@ function resolveExecutionPanelMaxHeight(container: HTMLElement | null) {
 
 const TeamMemberWorkflowStudioPage: React.FC = () => {
   const studio = useTeamMemberWorkflowStudio();
+  const screens = Grid.useBreakpoint();
   const mainRef = React.useRef<HTMLElement | null>(null);
   const editorRegionRef = React.useRef<HTMLElement | null>(null);
   const resizeCleanupRef = React.useRef<(() => void) | null>(null);
@@ -56,8 +60,16 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
   const [executionPanelHeight, setExecutionPanelHeight] = React.useState(
     EXECUTION_PANEL_DEFAULT_HEIGHT,
   );
+  const [nodeInspectorWidth, setNodeInspectorWidth] = React.useState(
+    WORKFLOW_STUDIO_NODE_INSPECTOR_DEFAULT_WIDTH,
+  );
   const sidePanelOpen = studio.draftRunPanelOpen || studio.yamlPanelOpen;
   const executionPanelOpen = Boolean(studio.executionDetail || studio.executionError);
+  const nodeInspectorOpen = !sidePanelOpen && Boolean(studio.selectedStepDraft);
+  const canvasRightInset =
+    screens.md && nodeInspectorOpen
+      ? nodeInspectorWidth + WORKFLOW_STUDIO_NODE_INSPECTOR_OVERLAY_INSET * 2
+      : 0;
 
   React.useEffect(
     () => () => {
@@ -330,6 +342,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             onNodeSelect={studio.selectNode}
             selectedEdgeId={studio.selectedEdgeId}
             selectedNodeId={studio.selectedNodeId}
+            viewportRightInset={canvasRightInset}
           />
         )}
         <WorkflowStudioNodeLibrary
@@ -407,7 +420,9 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             onClose={studio.selectCanvas}
             onConfigurationChange={studio.updateSelectedStepConfiguration}
             onConfigurationErrorChange={studio.setSelectedStepConfigurationError}
+            onWidthChange={setNodeInspectorWidth}
             stepDraft={studio.selectedStepDraft}
+            width={nodeInspectorWidth}
           />
         )}
       </section>

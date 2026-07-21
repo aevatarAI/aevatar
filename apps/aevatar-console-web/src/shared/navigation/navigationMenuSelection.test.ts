@@ -1,6 +1,10 @@
 import { getNavigationSelectedKeys } from "./navigationMenuSelection";
 
 describe("getNavigationSelectedKeys", () => {
+  it("selects Chat for its primary route", () => {
+    expect(getNavigationSelectedKeys("/chat")).toEqual(["/chat"]);
+  });
+
   it("does not select a primary navigation item for removed Team compatibility routes", () => {
     expect(getNavigationSelectedKeys("/teams/new")).toEqual([]);
   });
