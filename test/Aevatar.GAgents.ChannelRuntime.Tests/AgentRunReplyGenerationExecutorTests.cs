@@ -154,6 +154,58 @@ public sealed class AgentRunReplyGenerationExecutorTests
         provider.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ToolStep_WhenMiddlewareRemovedToolInPriorLlmStep_ShouldRejectForgedCall()
+    {
+        var tool = new CountingTool("visible");
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var provider = new ForgedToolProvider("visible");
+        var runtime = new ChatRuntime(
+            () => provider,
+            new ChatHistory(),
+            new ToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() },
+            llmMiddlewares: [new RemovingToolsMiddleware()]);
+        var plan = new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(turnCatalog: null),
+            new Dictionary<string, string>(),
+            LLMControlContext.Empty,
+            AgentToolExecutionContext.Empty,
+            InitialMessages: [],
+            MaxToolRounds: 1);
+        var executor = new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            new StaticStepPlanReplyGenerator(plan),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+
+        var llmContinuation = await executor.BuildLlmStepContinuationAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolStepState = llmWorkItem.StepState.Clone();
+        toolStepState.PendingToolCalls.AddRange(
+            llmContinuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
+        toolStepState.AuthorizedToolCapabilities.AddRange(
+            llmContinuation.LlmStepResult.AuthorizedToolCapabilities.Select(static capability => capability.Clone()));
+        var toolContinuation = await executor.BuildToolStepContinuationAsync(
+            llmWorkItem with
+            {
+                StepIndex = 2,
+                StepState = toolStepState,
+            },
+            CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle().Which.Tools.Should().BeNull();
+        llmContinuation.LlmStepResult.AuthorizedToolCapabilities.Should().BeEmpty();
+        toolContinuation.ToolStepResult.ResultMessages.Should().ContainSingle()
+            .Which.Content.Should().Contain("not found");
+        tool.ExecuteCount.Should().Be(0);
+    }
+
     private static AgentRunReplyGenerationExecutor CreateExecutor(
         RecordingProvider provider,
         IFileArtifactReadPort? fileArtifactReadPort = null)
@@ -219,6 +271,38 @@ public sealed class AgentRunReplyGenerationExecutorTests
             stepState);
     }
 
+    private static AgentRunReplyStepExecutionRequest BuildToolEnabledWorkItem()
+    {
+        var request = new NeedsLlmReplyEvent
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-1",
+            TargetActorId = "conversation-actor",
+            Activity = new ChatActivity
+            {
+                Id = "activity-1",
+                Content = new MessageContent { Text = "run" },
+            },
+        };
+        var stepState = new AgentRunReplyStepState
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-1",
+            TargetActorId = "conversation-actor",
+            Attempt = 1,
+            NextStepIndex = 1,
+            MaxToolRounds = 1,
+        };
+        stepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User("run")));
+        return new AgentRunReplyStepExecutionRequest(
+            "run-1",
+            "channel-agent-run:run-1",
+            Attempt: 1,
+            StepIndex: 1,
+            request,
+            stepState);
+    }
+
     private sealed class RecordingProvider : ILLMProvider
     {
         public string Name => "recording-provider";
@@ -231,6 +315,68 @@ public sealed class AgentRunReplyGenerationExecutorTests
             Requests.Add(request);
             yield return new LLMStreamChunk { DeltaContent = "final" };
             await Task.Yield();
+        }
+    }
+
+    private sealed class ForgedToolProvider(string toolName) : ILLMProvider
+    {
+        public string Name => "forged-tool-provider";
+        public List<LLMRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "forged-call",
+                    Name = toolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            await Task.Yield();
+        }
+    }
+
+    private sealed class RemovingToolsMiddleware : Aevatar.AI.Abstractions.Middleware.ILLMCallMiddleware
+    {
+        public async Task InvokeAsync(
+            Aevatar.AI.Abstractions.Middleware.LLMCallContext context,
+            Func<Task> next)
+        {
+            context.Request = new LLMRequest
+            {
+                Messages = context.Request.Messages,
+                RequestId = context.Request.RequestId,
+                Metadata = context.Request.Metadata,
+                CallerContext = context.Request.CallerContext,
+                ToolContext = context.Request.ToolContext,
+                RoutingContext = context.Request.RoutingContext,
+                LlmControl = context.Request.LlmControl,
+                Tools = null,
+                Model = context.Request.Model,
+                Temperature = context.Request.Temperature,
+                MaxTokens = context.Request.MaxTokens,
+                ResponseFormat = context.Request.ResponseFormat,
+            };
+            await next();
+        }
+    }
+
+    private sealed class CountingTool(string name) : IAgentTool
+    {
+        public int ExecuteCount { get; private set; }
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
         }
     }
 

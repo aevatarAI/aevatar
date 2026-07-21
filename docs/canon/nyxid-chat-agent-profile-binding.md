@@ -51,6 +51,8 @@ NyxID materializer 先从 route-owned tool set、当前已注册工具、既有 
 
 `ChatRuntimeRequestBuilder` 把这些 exact 对象并入最终 `LLMRequest.Tools`，再与 `FinalAllowedToolNames` 和既有 `AgentToolVisibilityScope` 取交集。每次 LLM call 在 middleware 前捕获 schema object + visibility authorization fence，middleware 只能继续缩权；返回同名但引用不同的工具时，fence 整名拒绝。模型 schema 和执行能力因此由同一组 object capability 决定，而不是由名称清单与 actor-level `ToolManager` 分别决定。
 
-main、step、structured tool call、text fallback、final fallback、skill recovery、tool outcome lookup 与 direct `ToolCallLoop` 都只从当前 final request 的 `Tools` 构造 request-local `ToolManager`。`Tools = null` 表示本次请求没有工具能力，不得回查 actor-level manager；模型伪造、middleware 替换或后续 fallback 恢复出的非 exact tool call 都在执行前拒绝。
+main、同一 turn 内的 step、structured tool call、text fallback、final fallback、skill recovery、tool outcome lookup 与 direct `ToolCallLoop` 都只从当前 final request 的 `Tools` 构造 request-local `ToolManager`。`Tools = null` 表示本次请求没有工具能力，不得回查 actor-level manager；模型伪造、middleware 替换或后续 fallback 恢复出的非 exact tool call 都在执行前拒绝。
+
+AgentRun 的 LLM step 与 tool step 跨 actor turn 时，不传递进程内对象，也不按名称重建授权。LLM step 把 final request 中每个 surviving tool 的名称与完整 contract digest 写入 typed result，run actor 将该 capability snapshot 作为 step state 的权威记录持久化。tool step 重新发现的对象只是候选，只有实现类型、schema、description、approval、side-effect 与 capability flags 的摘要全部匹配 snapshot 才能兑换为当前 exact executable object；snapshot 缺失、冲突或不匹配都 fail closed，并在 tool step、final-no-tools 或 fallback 转换后清理。
 
 `SHADOW` 只保留当前请求的 candidate identity 与 bounded diagnostic，权限和 prompt body 固定为 recovery，不读取、解析或注入 candidate skill body，也不解析 candidate task tool set。profile digest、classifier、registry、tool discovery、collision、capability、exact fetch、identity、integrity或正文校验任一失败，都只能降为继续取交集后的 recovery；若交集为空则保持 restricted-empty，不能退回 unrestricted。

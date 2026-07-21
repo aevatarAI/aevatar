@@ -72,29 +72,8 @@ internal static class ChatRuntimeRequestBuilder
         IEnumerable<IAgentTool>? baseTools,
         IEnumerable<IAgentTool>? routeOwnedTools)
     {
-        var merged = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-        var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tool in (baseTools ?? []).Concat(routeOwnedTools ?? []))
-        {
-            if (string.IsNullOrWhiteSpace(tool.Name))
-                continue;
-
-            var name = tool.Name.Trim();
-            if (collisions.Contains(name))
-                continue;
-            if (!merged.TryGetValue(name, out var existing))
-            {
-                merged.Add(name, tool);
-                continue;
-            }
-            if (ReferenceEquals(existing, tool))
-                continue;
-
-            merged.Remove(name);
-            collisions.Add(name);
-        }
-
-        return merged.Count == 0 ? null : merged.Values.ToArray();
+        var exact = ExactAgentToolSet.Create((baseTools ?? []).Concat(routeOwnedTools ?? []));
+        return exact.ToolsByName.Count == 0 ? null : exact.ToolsByName.Values.ToArray();
     }
 
     private static AgentToolVisibilityScope IntersectVisibility(
@@ -166,7 +145,7 @@ internal static class ChatRuntimeRequestBuilder
             IEnumerable<IAgentTool> schemaTools,
             AgentToolVisibilityScope toolVisibility)
         {
-            _schemaTools = FreezeExactTools(schemaTools);
+            _schemaTools = ExactAgentToolSet.Create(schemaTools).ToolsByName;
             _toolVisibility = FreezeVisibility(toolVisibility);
         }
 
@@ -211,13 +190,11 @@ internal static class ChatRuntimeRequestBuilder
                 return null;
 
             var accepted = new List<IAgentTool>();
-            foreach (var group in requestTools
-                         .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
-                         .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+            foreach (var (name, tool) in ExactAgentToolSet.Create(requestTools).ToolsByName)
             {
-                if (!_schemaTools.TryGetValue(group.Key, out var exact) ||
-                    !visibility.Allows(group.Key) ||
-                    group.Any(tool => !ReferenceEquals(tool, exact)))
+                if (!_schemaTools.TryGetValue(name, out var exact) ||
+                    !visibility.Allows(name) ||
+                    !ReferenceEquals(tool, exact))
                 {
                     continue;
                 }
@@ -226,30 +203,6 @@ internal static class ChatRuntimeRequestBuilder
             }
 
             return accepted.Count == 0 ? null : accepted;
-        }
-
-        private static IReadOnlyDictionary<string, IAgentTool> FreezeExactTools(IEnumerable<IAgentTool> tools)
-        {
-            var exact = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-            var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var tool in tools.Where(static tool => !string.IsNullOrWhiteSpace(tool.Name)))
-            {
-                var name = tool.Name.Trim();
-                if (collisions.Contains(name))
-                    continue;
-                if (!exact.TryGetValue(name, out var existing))
-                {
-                    exact.Add(name, tool);
-                    continue;
-                }
-                if (ReferenceEquals(existing, tool))
-                    continue;
-
-                exact.Remove(name);
-                collisions.Add(name);
-            }
-
-            return exact.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
         }
 
         private static AgentToolVisibilityScope FreezeVisibility(AgentToolVisibilityScope visibility) =>

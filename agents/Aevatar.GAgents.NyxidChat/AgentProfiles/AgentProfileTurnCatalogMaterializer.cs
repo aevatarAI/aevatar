@@ -389,32 +389,28 @@ public sealed class AgentProfileTurnCatalogMaterializer
         AgentToolExecutionContext toolContext,
         List<AgentProfileTurnDiagnostic> diagnostics)
     {
+        var exact = ExactAgentToolSet.Create(tools);
         var eligibleTools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-        var hadFailure = false;
-        foreach (var group in tools
-                     .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
-                     .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        var hadFailure = exact.CollisionNames.Count > 0;
+        foreach (var name in exact.CollisionNames)
         {
-            var tool = group.First();
-            if (group.Any(candidate => !ReferenceEquals(candidate, tool)))
-            {
-                hadFailure = true;
-                diagnostics.Add(new AgentProfileTurnDiagnostic(
-                    AgentProfileTurnDiagnosticCode.ToolNameCollision,
-                    group.Key));
-                continue;
-            }
+            diagnostics.Add(new AgentProfileTurnDiagnostic(
+                AgentProfileTurnDiagnosticCode.ToolNameCollision,
+                name));
+        }
 
+        foreach (var (name, tool) in exact.ToolsByName)
+        {
             if (!IsEligible(tool, toolContext))
             {
                 hadFailure = true;
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ToolCapabilityRejected,
-                    group.Key));
+                    name));
                 continue;
             }
 
-            eligibleTools.Add(group.Key, tool);
+            eligibleTools.Add(name, tool);
         }
 
         return new ToolDiscoveryResolution(eligibleTools, hadFailure);
@@ -426,26 +422,16 @@ public sealed class AgentProfileTurnCatalogMaterializer
         List<AgentProfileTurnDiagnostic> diagnostics,
         out bool hadFailure)
     {
-        var merged = new Dictionary<string, IAgentTool>(routeTools, StringComparer.OrdinalIgnoreCase);
-        hadFailure = false;
-        foreach (var (name, tool) in registeredTools)
+        var merged = ExactAgentToolSet.Create(routeTools.Values.Concat(registeredTools.Values));
+        hadFailure = merged.CollisionNames.Count > 0;
+        foreach (var name in merged.CollisionNames)
         {
-            if (!merged.TryGetValue(name, out var existing))
-            {
-                merged.Add(name, tool);
-                continue;
-            }
-            if (ReferenceEquals(existing, tool))
-                continue;
-
-            merged.Remove(name);
-            hadFailure = true;
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 AgentProfileTurnDiagnosticCode.ToolNameCollision,
                 name));
         }
 
-        return merged;
+        return merged.ToolsByName;
     }
 
     private static IEnumerable<IAgentTool> SelectTools(

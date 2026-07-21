@@ -39,9 +39,6 @@ public sealed class ToolCallLoop
         _budgetTracker = budgetTracker;
     }
 
-    /// <summary>Exposes the tool manager for streaming tool execution.</summary>
-    internal ToolManager Tools => _tools;
-
     /// <summary>Exposes the tool middlewares for streaming tool execution.</summary>
     internal IReadOnlyList<IToolCallMiddleware> ToolMiddlewares => _toolMiddlewares;
 

@@ -5,7 +5,7 @@ using Google.Protobuf;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
-internal sealed class ConnectedServiceOperationTool : IAgentTool
+internal sealed class ConnectedServiceOperationTool : IAgentTool, IAgentToolAuthorizationIdentity
 {
     private readonly NyxIdServiceInstanceClient _client;
     private readonly ConnectedServiceToolOperation _operation;
@@ -23,6 +23,7 @@ internal sealed class ConnectedServiceOperationTool : IAgentTool
         _bindings = bindings.ToDictionary(
             static binding => binding.Instance.UserServiceId,
             StringComparer.Ordinal);
+        AuthorizationIdentity = NyxIdServiceTools.BuildAuthorizationIdentity(bindings);
         ParametersSchema = BuildParametersSchema();
     }
 
@@ -30,6 +31,7 @@ internal sealed class ConnectedServiceOperationTool : IAgentTool
     public string Description =>
         $"{_operation.Summary ?? _operation.OperationId} ({_operation.Method} {_operation.PathTemplate})";
     public string ParametersSchema { get; }
+    public string AuthorizationIdentity { get; }
     public ToolApprovalMode ApprovalMode => _operation.ApprovalMode;
     public bool IsReadOnly => _operation.IsReadOnly;
     public bool IsDestructive => _operation.IsDestructive;

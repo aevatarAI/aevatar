@@ -321,7 +321,18 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (TryTakeOutboundIntent(generator) is { } outboundIntent)
             result.OutboundIntent = outboundIntent.Clone();
         if (effectiveToolCalls is { Count: > 0 })
+        {
             result.ToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
+            result.AuthorizedToolCapabilities.AddRange(llmResult.AuthorizedTools.Select(tool =>
+            {
+                var capability = AgentToolCapability.Capture(tool);
+                return new AgentRunToolCapability
+                {
+                    Name = capability.Name,
+                    ContractDigest = capability.ContractDigest,
+                };
+            }));
+        }
 
         return new AgentRunNextLlmStepRequestedEvent
         {
@@ -407,13 +418,26 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 ct)
             .ConfigureAwait(false);
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
+        var candidateRequest = plan.StepExecutor.BuildBaseRequest(
+            requestId: null,
+            plan.Metadata,
+            plan.ToolContext,
+            plan.LlmControl);
+        var authorizedTools = AgentToolCapability.Resolve(
+            candidateRequest.Tools,
+            workItem.StepState.AuthorizedToolCapabilities.Select(static capability =>
+                new AgentToolCapability(capability.Name, capability.ContractDigest)));
         // Interactive reply tools (reply_with_interaction) execute here, during the tool
         // step — not during the LLM step that emitted the tool calls. The AsyncLocal
         // collector scope does not survive the actor continuation hop between steps, so
         // the tool step must open its own scope for relay turns and return the captured
         // intent as a typed fact on the step result.
         using var interactiveScope = TryBeginInteractiveScope(request);
-        var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
+        var results = await plan.StepExecutor.ExecuteToolStepAsync(
+                toolCalls,
+                authorizedTools,
+                candidateRequest.ToolContext,
+                ct)
             .ConfigureAwait(false);
 
         var toolStepResult = new AgentRunToolStepResult

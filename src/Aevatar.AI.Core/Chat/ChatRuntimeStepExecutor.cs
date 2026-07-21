@@ -122,21 +122,18 @@ public sealed class ChatRuntimeStepExecutor
                 result.ToolCalls,
                 result.Terminated,
                 result.FinishReason,
-                result.Usage);
+                result.Usage,
+                result.AuthorizedTools,
+                result.AuthorizedToolContext);
         }
     }
 
     public async Task<IReadOnlyList<ToolExecutionResult>> ExecuteToolStepAsync(
         IReadOnlyList<ToolCall> toolCalls,
-        IReadOnlyDictionary<string, string>? requestMetadata,
+        IReadOnlyList<IAgentTool>? authorizedTools,
         AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
-        var baseRequest = BuildBaseRequest(
-            requestId: null,
-            metadata: requestMetadata,
-            toolContext: toolContext,
-            llmControl: null);
         var runtime = new ChatRuntime(
             _providerFactory,
             new ChatHistory(),
@@ -144,12 +141,7 @@ public sealed class ChatRuntimeStepExecutor
             _hooks,
             _requestBuilder,
             llmMiddlewares: _llmMiddlewares);
-        var executionToolContext = _turnCatalog is null
-            ? toolContext
-            : baseRequest.ToolContext;
-        // Refactor (issue1574): Old pattern: core tool step accepted Metadata as a fallback control source.
-        // New principle: metadata is retained for outer legacy planning only; core tool execution uses typed context.
-        return await runtime.ExecuteSingleToolStepAsync(toolCalls, baseRequest.Tools, executionToolContext, ct)
+        return await runtime.ExecuteSingleToolStepAsync(toolCalls, authorizedTools, toolContext, ct)
             .ConfigureAwait(false);
     }
 
@@ -177,4 +169,6 @@ public sealed record ChatRuntimeStepLlmResult(
     IReadOnlyList<ToolCall>? ToolCalls,
     bool Terminated,
     string? FinishReason,
-    TokenUsage? Usage);
+    TokenUsage? Usage,
+    IReadOnlyList<IAgentTool> AuthorizedTools,
+    AgentToolExecutionContext AuthorizedToolContext);

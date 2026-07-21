@@ -270,6 +270,31 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Theory]
+    [InlineData("{", "invalid_arguments")]
+    [InlineData("[]", "invalid_arguments")]
+    [InlineData("{ \"user_service_id\": \"us-forged\", \"orderId\": \"o-1\" }", "identity_not_authorized")]
+    public async Task DynamicOperations_InvalidArguments_FailBeforeExactIdentityRead(
+        string arguments,
+        string expectedError)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop"));
+        handler.SpecsByServiceId["us-personal-7"] = ShopSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync())
+            .Single(candidate => candidate.Name == "nyxid_service_operation__get_order");
+        var result = await tool.ExecuteAsync(arguments);
+
+        using var response = JsonDocument.Parse(result);
+        response.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
+        handler.ExactReads.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
     [InlineData("nyxid_service_operation__orders_by_status", "missing_required_query_parameter")]
     [InlineData("nyxid_service_operation__conditional_order", "missing_required_header")]
     public async Task DynamicOperations_MissingRequiredQueryOrHeader_FailsBeforeRevalidation(
@@ -421,6 +446,28 @@ public class NyxIdConnectedServiceToolSourceTests
         await action.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("{")]
+    [InlineData("{}")]
+    [InlineData("{ \"unknown\": [] }")]
+    [InlineData("{ \"keys\": {} }")]
+    [InlineData("true")]
+    public async Task DiscoverToolsAsync_InvalidKeysResponse_FailsClosedWithoutDownstreamRequests(string keysResponse)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = keysResponse;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.SpecRequests.Should().BeEmpty();
+        handler.ExactReads.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
     private static string SpecWithPing(string operationId) => $$"""
         { "paths": { "/ping": { "get": { "operationId": "{{operationId}}", "x-aevatar-tool": true } } } }
         """;
@@ -498,6 +545,7 @@ public class NyxIdConnectedServiceToolSourceTests
         public HashSet<string> FailingSpecIds { get; } = new(StringComparer.Ordinal);
         public HashSet<string> CancelledSpecIds { get; } = new(StringComparer.Ordinal);
         public CancellationTokenSource? SpecCancellationSource { get; set; }
+        public List<string> SpecRequests { get; } = [];
         public List<string> ExactReads { get; } = [];
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
         public int DiscoveryRequests { get; private set; }
@@ -527,6 +575,7 @@ public class NyxIdConnectedServiceToolSourceTests
                 path.EndsWith("/openapi.json", StringComparison.Ordinal))
             {
                 var id = path["/api/v1/proxy/services/".Length..^"/openapi.json".Length];
+                SpecRequests.Add(id);
                 if (CancelledSpecIds.Contains(id))
                 {
                     SpecCancellationSource?.Cancel();

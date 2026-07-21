@@ -58,13 +58,6 @@ message NyxIdServiceInstance {
   bool credential_allowed = 13;
 }
 
-message NyxIdServiceInventoryRequest {
-  oneof selection {
-    bool list = 1;
-    string user_service_id = 2;
-  }
-}
-
 message NyxIdServiceUpdateRequest {
   string user_service_id = 1;
   optional string label = 2;
@@ -78,10 +71,6 @@ message NyxIdServiceRouteRequest {
     bool direct = 2;
     string node_id = 3;
   }
-}
-
-message NyxIdServiceDeleteRequest {
-  string user_service_id = 1;
 }
 
 message NyxIdServiceQueryEntry {
@@ -110,7 +99,8 @@ message NyxIdServiceInventoryResult {
 message NyxIdServiceMutationResult {
   string user_service_id = 1;
   bool accepted = 2;
-  optional NyxIdServiceInstance instance = 3;
+  reserved 3;
+  reserved "instance";
   string response_json = 4;
 }
 

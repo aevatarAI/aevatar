@@ -45,62 +45,9 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
                 return [];
 
             var tools = new List<IAgentTool>(NyxIdServiceTools.Create(_client, bindings));
-            var candidates = new List<OperationCandidate>();
-            foreach (var binding in bindings)
-            {
-                IReadOnlyList<ConnectedServiceToolOperation> operations;
-                try
-                {
-                    var spec = await _client.GetSpecAsync(binding, ct);
-                    operations = OpenApiToolSpecParser.Parse(spec).AdmittedOperations().ToArray();
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "NyxID connected-service spec discovery failed for instance {UserServiceId}",
-                        binding.Instance.UserServiceId);
-                    continue;
-                }
-
-                candidates.AddRange(operations.Select(operation => new OperationCandidate(
-                    ConnectedServiceToolNaming.Build(operation.Marker?.Name ?? operation.OperationId),
-                    operation,
-                    binding)));
-            }
-
-            foreach (var group in candidates.GroupBy(static candidate => candidate.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                var first = group.First();
-                var contract = first.Operation.CanonicalContract();
-                if (group.Any(candidate =>
-                        !string.Equals(contract, candidate.Operation.CanonicalContract(), StringComparison.Ordinal)))
-                {
-                    _logger.LogWarning("NyxID operation contract collision on tool {ToolName}", group.Key);
-                    continue;
-                }
-                if (group.Any(candidate =>
-                        !Equals(first.Binding.Instance.RouteConstraint, candidate.Binding.Instance.RouteConstraint)))
-                {
-                    _logger.LogWarning("NyxID operation route collision on tool {ToolName}", group.Key);
-                    continue;
-                }
-
-                var groupedBindings = ResolveBindings(group);
-                if (groupedBindings.Count == 0)
-                    continue;
-                tools.Add(new ConnectedServiceOperationTool(
-                    _client,
-                    group.Key,
-                    first.Operation,
-                    groupedBindings));
-            }
-
-            return RemoveNameCollisions(tools);
+            var candidates = await DiscoverOperationCandidatesAsync(bindings, ct);
+            tools.AddRange(CreateOperationTools(candidates));
+            return ExactAgentToolSet.Create(tools).ToolsByName.Values.ToArray();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -110,6 +57,63 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         {
             _logger.LogWarning(ex, "NyxID connected-service tool discovery failed");
             return [];
+        }
+    }
+
+    private async Task<IReadOnlyList<OperationCandidate>> DiscoverOperationCandidatesAsync(
+        IReadOnlyList<NyxIdServiceInstanceBinding> bindings,
+        CancellationToken ct)
+    {
+        var candidates = new List<OperationCandidate>();
+        foreach (var binding in bindings)
+        {
+            try
+            {
+                var spec = await _client.GetSpecAsync(binding, ct);
+                candidates.AddRange(OpenApiToolSpecParser.Parse(spec)
+                    .AdmittedOperations()
+                    .Select(operation => new OperationCandidate(
+                        ConnectedServiceToolNaming.Build(operation.Marker?.Name ?? operation.OperationId),
+                        operation,
+                        binding)));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "NyxID connected-service spec discovery failed for instance {UserServiceId}",
+                    binding.Instance.UserServiceId);
+            }
+        }
+        return candidates;
+    }
+
+    private IEnumerable<IAgentTool> CreateOperationTools(IReadOnlyList<OperationCandidate> candidates)
+    {
+        foreach (var group in candidates.GroupBy(static candidate => candidate.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var first = group.First();
+            var contract = first.Operation.CanonicalContract();
+            if (group.Any(candidate =>
+                    !string.Equals(contract, candidate.Operation.CanonicalContract(), StringComparison.Ordinal)))
+            {
+                _logger.LogWarning("NyxID operation contract collision on tool {ToolName}", group.Key);
+                continue;
+            }
+            if (group.Any(candidate =>
+                    !Equals(first.Binding.Instance.RouteConstraint, candidate.Binding.Instance.RouteConstraint)))
+            {
+                _logger.LogWarning("NyxID operation route collision on tool {ToolName}", group.Key);
+                continue;
+            }
+
+            var groupedBindings = ResolveBindings(group);
+            if (groupedBindings.Count > 0)
+                yield return new ConnectedServiceOperationTool(_client, group.Key, first.Operation, groupedBindings);
         }
     }
 
@@ -134,28 +138,6 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
             conflicts.Add(id);
         }
         return bindings.Values.OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal).ToArray();
-    }
-
-    private static IReadOnlyList<IAgentTool> RemoveNameCollisions(IEnumerable<IAgentTool> tools)
-    {
-        var exact = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
-        var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tool in tools)
-        {
-            if (collisions.Contains(tool.Name))
-                continue;
-            if (!exact.TryGetValue(tool.Name, out var existing))
-            {
-                exact.Add(tool.Name, tool);
-                continue;
-            }
-            if (ReferenceEquals(existing, tool))
-                continue;
-
-            exact.Remove(tool.Name);
-            collisions.Add(tool.Name);
-        }
-        return exact.Values.ToArray();
     }
 
     private sealed record OperationCandidate(

@@ -264,8 +264,8 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         var toolResults = await executor.ExecuteToolStepAsync(
             [new ToolCall { Id = "tool-1", Name = "capture", ArgumentsJson = """{"x":1}""" }],
-            metadata,
-            stepRequest.ToolContext,
+            stepResult.AuthorizedTools,
+            stepResult.AuthorizedToolContext,
             CancellationToken.None);
 
         toolResults.Should().ContainSingle();
@@ -359,7 +359,7 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         var toolResults = await executor.ExecuteToolStepAsync(
             [new ToolCall { Id = "tool-1", Name = "capture", ArgumentsJson = "{}" }],
-            metadata,
+            executor.BuildBaseRequest(null, null, null, null).Tools,
             toolContext: null,
             CancellationToken.None);
 

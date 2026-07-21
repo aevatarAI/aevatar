@@ -18,12 +18,26 @@ internal static class NyxIdServiceTools
         new RequestTool(client, bindings),
     ];
 
-    private abstract class ServiceToolBase(IReadOnlyList<NyxIdServiceInstanceBinding> bindings) : IAgentTool
+    internal static string BuildAuthorizationIdentity(IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
     {
-        protected IReadOnlyDictionary<string, NyxIdServiceInstanceBinding> Bindings { get; } =
-            bindings.ToDictionary(
+        var instances = new NyxIdServiceInventoryResult();
+        instances.Instances.Add(bindings
+            .OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal)
+            .Select(static binding => binding.Instance.Clone()));
+        return Convert.ToBase64String(instances.ToByteArray());
+    }
+
+    private abstract class ServiceToolBase : IAgentTool, IAgentToolAuthorizationIdentity
+    {
+        protected ServiceToolBase(IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
+        {
+            Bindings = bindings.ToDictionary(
                 static binding => binding.Instance.UserServiceId,
                 StringComparer.Ordinal);
+            AuthorizationIdentity = BuildAuthorizationIdentity(bindings);
+        }
+
+        protected IReadOnlyDictionary<string, NyxIdServiceInstanceBinding> Bindings { get; }
 
         public abstract string Name { get; }
         public abstract string Description { get; }
@@ -31,6 +45,7 @@ internal static class NyxIdServiceTools
         public virtual ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
         public virtual bool IsReadOnly => false;
         public virtual bool IsDestructive => false;
+        public string AuthorizationIdentity { get; }
         public virtual bool? RequiresApproval(string argumentsJson) => null;
         public abstract Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default);
 

@@ -31,8 +31,9 @@ public sealed class AgentRunToolStepInteractiveReplyTests
     public async Task BuildToolStepContinuation_OnRelayTurn_CapturesReplyWithInteractionIntent()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
-        var executor = CreateExecutor(collector);
-        var workItem = BuildToolStepWorkItem(relay: true);
+        var tool = new ReplyWithInteractionTool(collector);
+        var executor = CreateExecutor(collector, tool);
+        var workItem = BuildToolStepWorkItem(relay: true, tool);
 
         var continuation = await executor.BuildToolStepContinuationAsync(workItem, CancellationToken.None);
 
@@ -48,8 +49,9 @@ public sealed class AgentRunToolStepInteractiveReplyTests
     public async Task BuildToolStepContinuation_OnNonRelayTurn_KeepsScopeInactive()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
-        var executor = CreateExecutor(collector);
-        var workItem = BuildToolStepWorkItem(relay: false);
+        var tool = new ReplyWithInteractionTool(collector);
+        var executor = CreateExecutor(collector, tool);
+        var workItem = BuildToolStepWorkItem(relay: false, tool);
 
         var continuation = await executor.BuildToolStepContinuationAsync(workItem, CancellationToken.None);
 
@@ -58,10 +60,12 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         continuation.ToolStepResult.OutboundIntent.Should().BeNull();
     }
 
-    private static AgentRunReplyGenerationExecutor CreateExecutor(AsyncLocalInteractiveReplyCollector collector)
+    private static AgentRunReplyGenerationExecutor CreateExecutor(
+        AsyncLocalInteractiveReplyCollector collector,
+        IAgentTool tool)
     {
         var tools = new ToolManager();
-        tools.Register(new ReplyWithInteractionTool(collector));
+        tools.Register(tool);
         var plan = new AgentRunReplyStepPlan(
             CreateStepExecutor(tools),
             new Dictionary<string, string>(),
@@ -88,7 +92,7 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         return runtime.CreateStepExecutor(turnCatalog: null);
     }
 
-    private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(bool relay)
+    private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(bool relay, IAgentTool tool)
     {
         var activity = new ChatActivity
         {
@@ -131,6 +135,12 @@ public sealed class AgentRunToolStepInteractiveReplyTests
                 },
             },
         };
+        var capability = AgentToolCapability.Capture(tool);
+        stepState.AuthorizedToolCapabilities.Add(new AgentRunToolCapability
+        {
+            Name = capability.Name,
+            ContractDigest = capability.ContractDigest,
+        });
 
         return new AgentRunReplyStepExecutionRequest(
             "run-1",
