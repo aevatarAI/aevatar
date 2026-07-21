@@ -1169,6 +1169,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 fullReasoning.Length);
         }
 
+        var sessionFailure = ResolveSideEffectingToolFailure(toolReceipts);
         return new SessionReplayRecord(
             response,
             fullReasoning.ToString(),
@@ -1178,10 +1179,32 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             Usage: usage,
             Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0,
-            Outcome: authorizationRequired == null
-                ? RoleChatSessionOutcome.Completed
-                : RoleChatSessionOutcome.Blocked,
+            Outcome: authorizationRequired != null
+                ? RoleChatSessionOutcome.Blocked
+                : sessionFailure is null
+                    ? RoleChatSessionOutcome.Completed
+                    : RoleChatSessionOutcome.Failed,
+            FailureCode: sessionFailure?.FailureCode ?? string.Empty,
+            SafeMessage: sessionFailure?.SafeMessage ?? string.Empty,
             AuthorizationRequired: authorizationRequired);
+    }
+
+    private static SideEffectingToolFailure? ResolveSideEffectingToolFailure(
+        IReadOnlyList<AgentToolReceipt> toolReceipts)
+    {
+        var receipt = toolReceipts.LastOrDefault(static candidate =>
+            (candidate.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied) &&
+            (candidate.IsDestructive || !string.IsNullOrWhiteSpace(candidate.SideEffectKind)));
+        if (receipt is null)
+            return null;
+
+        var failureCode = string.IsNullOrWhiteSpace(receipt.ErrorCode)
+            ? receipt.Status == AgentToolReceiptStatus.Denied ? "TOOL_SIDE_EFFECT_DENIED" : "TOOL_SIDE_EFFECT_FAILED"
+            : receipt.ErrorCode.Trim();
+        var safeMessage = string.IsNullOrWhiteSpace(receipt.ErrorMessage)
+            ? "A required side-effecting tool did not complete successfully."
+            : receipt.ErrorMessage.Trim();
+        return new SideEffectingToolFailure(failureCode, safeMessage);
     }
 
     private Task PersistSessionCompletionAsync(ChatRequestEvent request, SessionReplayRecord replayRecord) =>
@@ -1960,6 +1983,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         return true;
     }
+
+    private sealed record SideEffectingToolFailure(string FailureCode, string SafeMessage);
 
     private sealed record SessionReplayRecord(
         string Content,

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -892,6 +893,35 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenTypedNyxIdAuthorityPresent_ShouldUseItAsAuthorizationOwner()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-typed", "typed-user"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        var owner = schedulePort.LastRequest!.AuthenticatedOwner;
+        owner.Owner.OwnerSubject.Should().Be("typed-user");
+        owner.SubjectPlatform.Should().Be("nyxid");
+        owner.SubjectTenant.Should().Be("tenant-typed");
+        owner.SubjectExternalUserId.Should().Be("typed-user");
+        owner.VerifiedBindingId.Should().Be("nyxid:typed-user");
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenUncertainCallIsRetried_ShouldReuseStableOperationIdentity()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
@@ -1143,12 +1173,69 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_CreateResultReceipt_WhenNestedError_ShouldReturnErrorReceipt()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
+                false,
+                null,
+                ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+                "nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale"),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, "{}", output);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.SideEffectKind.Should().Be("studio.member.workflow.schedule");
+        receipt.ErrorCode.Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.SnapshotStale));
+        receipt.ErrorMessage.Should().Be("nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale");
+        receipt.ResultJson.Should().Be(output);
+    }
+
+    [Fact]
     public async Task ScheduleTool_ShouldDeclareDirectChannelChatExclusion()
     {
         var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
 
         var descriptor = tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>().Subject;
         descriptor.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
+    }
+
+    [Fact]
+    public async Task ScheduleTool_CreateResultReceipt_WhenNestedError_ShouldReturnErrorReceipt()
+    {
+        var port = new RecordingProvisioningPort
+        {
+            Throw = new InvalidOperationException("workflow_yaml is required."),
+        };
+        var tool = await DiscoverToolAsync(port);
+
+        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_yaml": "name: demo\n",
+              "display_name": "Demo"
+            }
+            """);
+        var receipt = tool.CreateResultReceipt("call-1", tool.Name, "{}", output);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
+        receipt.ErrorCode.Should().Be("invalid_arguments");
+        receipt.ErrorMessage.Should().Be("workflow_yaml is required.");
+        receipt.ResultJson.Should().Be(output);
     }
 
     [Fact]
@@ -1449,7 +1536,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? requestId = "request-1",
         string? callId = "call-1",
         string? idempotencyKey = null,
-        string? ownerScopeId = null)
+        string? ownerScopeId = null,
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
@@ -1460,7 +1548,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
             AgentSkillRecoveryContext.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal)));
+            new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
+        });
     }
 
     private static string? ErrorCode(string output)

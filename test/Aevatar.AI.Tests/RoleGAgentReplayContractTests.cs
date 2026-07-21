@@ -430,6 +430,43 @@ public class RoleGAgentReplayContractTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_WhenSideEffectingToolReturnsErrorReceipt_ShouldCommitFailedOutcome()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var provider = new SideEffectingToolErrorLlmProviderFactory();
+        var services = BuildServices(store, collection =>
+            collection.AddSingleton<IAgentToolSource>(
+                new StaticToolSource([new SideEffectingErrorReceiptTool()])));
+        var agent = CreateAgent(services, "role-side-effect-error", provider);
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "schedule the workflow",
+            SessionId = "turn-side-effect-error",
+        });
+
+        var completed = (await store.GetEventsAsync("role-side-effect-error"))
+            .Where(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
+            .Select(evt => evt.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Should()
+            .ContainSingle()
+            .Which;
+        completed.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        completed.FailureCode.Should().Be("SnapshotStale");
+        completed.SafeMessage.Should().Be("nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale");
+        completed.ToolReceipts.Should().ContainSingle(receipt =>
+            receipt.Status == AgentToolReceiptStatus.Error &&
+            receipt.SideEffectKind == "studio.member.workflow.schedule");
+    }
+
+    [Fact]
     public async Task CompletionNotification_ShouldReplayCommittedTerminalFactAfterRestart()
     {
         var store = new InMemoryEventStoreForTests();
@@ -1284,6 +1321,70 @@ public class RoleGAgentReplayContractTests
                 Usage = new TokenUsage(1, 1, 2),
             };
         }
+    }
+
+    private sealed class SideEffectingToolErrorLlmProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public int StreamCallCount { get; private set; }
+        public string Name => "side-effecting-tool-error";
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            StreamCallCount++;
+            if (StreamCallCount == 1)
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-schedule",
+                        Name = "schedule_error_receipt_test_tool",
+                        ArgumentsJson = "{}",
+                    },
+                };
+            }
+            else
+            {
+                yield return new LLMStreamChunk { DeltaContent = "The schedule was not created." };
+            }
+
+            await Task.CompletedTask;
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+    }
+
+    private sealed class SideEffectingErrorReceiptTool : IAgentTool
+    {
+        public string Name => "schedule_error_receipt_test_tool";
+        public string Description => "Returns a side-effecting error receipt.";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => false;
+        public string SideEffectKind => "studio.member.workflow.schedule";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"error":{"code":"SnapshotStale","message":"nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale"}}""");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Error,
+                SideEffectKind = SideEffectKind,
+                ErrorCode = "SnapshotStale",
+                ErrorMessage = "nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale",
+                ResultJson = resultJson,
+            };
     }
 
     private sealed class AuthorizationThenSuccessLlmProviderFactory : ILLMProviderFactory, ILLMProvider

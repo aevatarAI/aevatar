@@ -28,6 +28,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private readonly IScheduledDispatchApplicationService _scheduleService;
     private readonly IScheduledInvocationAuthorizationPlanner _authorizationPlanner;
     private readonly IScheduledInvocationAuthorizationRevalidator _authorizationRevalidator;
+    private readonly INyxIdAuthorizationCatalogRefreshPort? _catalogRefreshPort;
     private readonly IStudioScheduledCredentialMaterializer _credentialMaterializer;
     private readonly StudioMemberWorkflowSchedulePolicy _schedulePolicy;
     private readonly TimeProvider _timeProvider;
@@ -40,6 +41,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         IScheduledInvocationAuthorizationRevalidator authorizationRevalidator,
         IStudioScheduledCredentialMaterializer credentialMaterializer,
         StudioMemberWorkflowSchedulePolicy schedulePolicy,
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
         ILogger<StudioMemberWorkflowSchedulePort>? logger = null)
         : this(
             memberService,
@@ -49,6 +51,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             credentialMaterializer,
             schedulePolicy,
             TimeProvider.System,
+            catalogRefreshPort,
             logger)
     {
     }
@@ -60,6 +63,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         IScheduledInvocationAuthorizationRevalidator authorizationRevalidator,
         IStudioScheduledCredentialMaterializer credentialMaterializer,
         TimeProvider timeProvider,
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
         ILogger<StudioMemberWorkflowSchedulePort>? logger = null)
         : this(
             memberService,
@@ -69,6 +73,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             credentialMaterializer,
             new StudioMemberWorkflowSchedulePolicy(),
             timeProvider,
+            catalogRefreshPort,
             logger)
     {
     }
@@ -81,6 +86,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         IStudioScheduledCredentialMaterializer credentialMaterializer,
         StudioMemberWorkflowSchedulePolicy schedulePolicy,
         TimeProvider timeProvider,
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
         ILogger<StudioMemberWorkflowSchedulePort>? logger = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
@@ -88,6 +94,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         _authorizationPlanner = authorizationPlanner ?? throw new ArgumentNullException(nameof(authorizationPlanner));
         _authorizationRevalidator = authorizationRevalidator
             ?? throw new ArgumentNullException(nameof(authorizationRevalidator));
+        _catalogRefreshPort = catalogRefreshPort;
         _credentialMaterializer = credentialMaterializer ?? throw new ArgumentNullException(nameof(credentialMaterializer));
         _schedulePolicy = schedulePolicy ?? throw new ArgumentNullException(nameof(schedulePolicy));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
@@ -101,9 +108,71 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ArgumentNullException.ThrowIfNull(request);
 
         var resolved = await ResolveAuthorizationRequestAsync(request, ct);
-        var result = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
+        var result = await PlanWithCatalogRefreshRetryAsync(
+            resolved.AuthorizationRequest,
+            request.ProvisioningBearerToken,
+            ct);
         return new StudioMemberWorkflowAuthorizationResult(
             result.Success, result.Plan, result.FailureCode, result.Detail);
+    }
+
+    private async Task<ScheduledInvocationAuthorizationPlanResult> PlanWithCatalogRefreshRetryAsync(
+        ScheduledInvocationAuthorizationRequest authorizationRequest,
+        string? provisioningBearerToken,
+        CancellationToken ct)
+    {
+        var first = await _authorizationPlanner.PlanAsync(authorizationRequest, ct);
+        if (first.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(first))
+            return first;
+
+        var bearerToken = NormalizeOptional(provisioningBearerToken);
+        if (bearerToken is null)
+        {
+            return ScheduledInvocationAuthorizationPlanResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_requires_bearer_token:{first.Detail}");
+        }
+
+        if (_catalogRefreshPort is null)
+        {
+            return ScheduledInvocationAuthorizationPlanResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_unavailable:{first.Detail}");
+        }
+
+        NyxIdAuthorizationCatalogRefreshResult refresh;
+        try
+        {
+            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
+                authorizationRequest.Owner.OwnerKind);
+            return ScheduledInvocationAuthorizationPlanResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_failed:{ex.GetType().Name}");
+        }
+
+        if (!refresh.Success)
+        {
+            var failureCode = string.IsNullOrWhiteSpace(refresh.FailureCode)
+                ? refresh.Status.ToString()
+                : refresh.FailureCode.Trim();
+            return ScheduledInvocationAuthorizationPlanResult.Failed(
+                first.FailureCode,
+                $"nyxid_catalog_refresh_failed:{failureCode}");
+        }
+
+        var second = await _authorizationPlanner.PlanAsync(authorizationRequest, ct);
+        if (second.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(second))
+            return second;
+
+        return ScheduledInvocationAuthorizationPlanResult.Failed(
+            second.FailureCode,
+            $"nyxid_catalog_refresh_observed_but_snapshot_unavailable:{second.Detail}");
     }
 
     public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
@@ -1291,6 +1360,21 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private static bool IsStableErrorCode(string value) =>
         value.Length <= 128 && value.All(static c =>
             char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
+
+    private static bool IsRecoverableNyxIdCatalogSnapshotFailure(
+        ScheduledInvocationAuthorizationPlanResult result)
+    {
+        if (result.FailureCode is not (ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound or
+            ScheduledInvocationAuthorizationFailureCode.SnapshotStale))
+        {
+            return false;
+        }
+
+        var detail = NormalizeOptional(result.Detail);
+        return detail is "nyxid_catalog_snapshot_not_found" or
+            "nyxid_catalog_snapshot_invalidated" or
+            "nyxid_catalog_snapshot_stale";
+    }
 
     private static string NormalizeRequired(string? value, string fieldName)
     {

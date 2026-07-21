@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Abstractions.Workflows;
@@ -97,12 +98,24 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
     public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
+    public string SideEffectKind => "studio.workflow.schedule.provision";
 
     // Observatory-delivered, never chat-delivered: declare the generic surface signal so a
     // direct channel/chat agent (e.g. the Lark/NyxID reply path) filters this out by capability
     // rather than by hardcoding the tool name. The workflow allowlist path still selects it.
     public IReadOnlyCollection<string> Capabilities { get; } =
         [AgentToolCapabilities.ExcludeFromDirectChannelChat];
+
+    public AgentToolReceipt? CreateResultReceipt(
+        string callId,
+        string toolName,
+        string argumentsJson,
+        string resultJson) =>
+        StudioProvisioningToolReceiptJson.CreateErrorReceiptFromNestedError(
+            this,
+            callId,
+            toolName,
+            resultJson);
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
@@ -135,6 +148,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         if (displayName is null)
             return ErrorJson("invalid_arguments", "display_name is required.");
 
+        var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
             DisplayName: displayName,
@@ -144,7 +158,13 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             ScheduleCron = Normalize(args.ScheduleCron),
             ScheduleTimezone = Normalize(args.ScheduleTimezone),
             RunImmediately = args.RunImmediately ?? true,
-            CallerSubjectExternalUserId = Normalize(AgentToolRequestContext.OwnerSubject),
+            CallerSubjectPlatform = typedAuthority.IsComplete
+                ? Normalize(typedAuthority.Platform) ?? "nyxid"
+                : "nyxid",
+            CallerSubjectTenant = typedAuthority.IsComplete ? Normalize(typedAuthority.Tenant) : null,
+            CallerSubjectExternalUserId = typedAuthority.IsComplete
+                ? Normalize(typedAuthority.ExternalUserId)
+                : Normalize(AgentToolRequestContext.OwnerSubject),
         };
 
         try
