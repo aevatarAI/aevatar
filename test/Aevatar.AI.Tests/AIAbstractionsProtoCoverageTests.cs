@@ -117,6 +117,26 @@ public sealed class AIAbstractionsProtoCoverageTests
             .SelectMany(descriptor => descriptor.Fields.InDeclarationOrder()).Select(field => field.Name).Should()
             .NotContain(name => forbiddenFragments.Any(fragment =>
                 name.Contains(fragment, StringComparison.OrdinalIgnoreCase)));
+        RoleGAgentState.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Contain((13, "agent_profile_turn_authority"));
+        AgentProfileTurnAuthorityCommittedEvent.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Equal(
+                (1, "commit_kind"),
+                (2, "authority"));
+        AgentProfileTurnAuthorityState.Descriptor.Fields.InFieldNumberOrder()
+            .Select(field => (field.FieldNumber, field.Name))
+            .Should()
+            .Equal(
+                (1, "reconciliation_key"),
+                (2, "candidate_route"),
+                (3, "selected_exact_skill_ref"),
+                (4, "authority_kind"),
+                (5, "degradation_reasons"),
+                (6, "authority_ceiling_tool_names"));
     }
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
