@@ -11,6 +11,8 @@ namespace Aevatar.AI.Tests;
 
 public class NyxIdConnectedServiceToolSourceTests
 {
+    private const string PersonalCredentialSource = """{ "type": "personal" }""";
+
     private static readonly string[] FixedToolNames =
     [
         "nyxid_service_inventory",
@@ -102,6 +104,31 @@ public class NyxIdConnectedServiceToolSourceTests
         tools.Should().NotContain(tool => tool.Name.Contains("secret", StringComparison.Ordinal));
         tools.Should().OnlyContain(tool => !tool.Name.Contains("api-shop", StringComparison.Ordinal));
         handler.DiscoveryRequests.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_RealCredentialSources_ShouldExposePersonalAndAllowedOrgOnly()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal", "api-shop", "svc-personal"),
+            Instance("us-org-allowed", "api-shop", "svc-org-allowed", OrganizationCredentialSource(true)),
+            Instance("us-org-denied", "api-shop", "svc-org-denied", OrganizationCredentialSource(false)));
+        handler.SpecsByServiceId["svc-personal"] = SpecWithPing("ping_personal");
+        handler.SpecsByServiceId["svc-org-allowed"] = SpecWithPing("ping_org_allowed");
+        handler.SpecsByServiceId["svc-org-denied"] = SpecWithPing("ping_org_denied");
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+        var inventory = await tools.Single(tool => tool.Name == "nyxid_service_inventory")
+            .ExecuteAsync("{}");
+
+        inventory.Should().Contain("us-personal").And.Contain("us-org-allowed");
+        inventory.Should().NotContain("us-org-denied");
+        tools.Select(static tool => tool.Name).Should().Contain("nyxid_service_operation__ping_personal")
+            .And.Contain("nyxid_service_operation__ping_org_allowed")
+            .And.NotContain("nyxid_service_operation__ping_org_denied");
     }
 
     [Fact]
@@ -227,7 +254,11 @@ public class NyxIdConnectedServiceToolSourceTests
     {
         var handler = new FakeNyxIdHandler();
         var personal = Instance("us-personal-7", "api-shop", "svc-personal");
-        var organization = Instance("us-org-9", "api-shop", "svc-organization");
+        var organization = Instance(
+            "us-org-9",
+            "api-shop",
+            "svc-organization",
+            OrganizationCredentialSource(true));
         handler.KeysByToken["user-token"] = Keys(personal);
         handler.KeysByToken["org-token"] = Keys(organization);
         handler.ExactKeys["us-personal-7"] = personal;
@@ -252,6 +283,24 @@ public class NyxIdConnectedServiceToolSourceTests
             "?_nyxid_via=us-org-9");
     }
 
+    [Fact]
+    public async Task DiscoverToolsAsync_DualTokenConflictingIdentity_ShouldExposeNoToolsForThatId()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-shared", "api-shop", "svc-personal"));
+        handler.KeysByToken["org-token"] = Keys(
+            Instance("us-shared", "api-shop", "svc-organization", OrganizationCredentialSource(true)));
+        handler.SpecsByServiceId["svc-personal"] = SpecWithPing("ping_personal");
+        handler.SpecsByServiceId["svc-organization"] = SpecWithPing("ping_organization");
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token", "org-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+    }
+
     private static string SpecWithPing(string operationId) => $$"""
         { "paths": { "/ping": { "get": { "operationId": "{{operationId}}", "x-aevatar-tool": true } } } }
         """;
@@ -273,20 +322,36 @@ public class NyxIdConnectedServiceToolSourceTests
             Credentials = new AgentToolCredentials(userToken, organizationToken, null),
         });
 
-    private static string Instance(string id, string slug, string catalogServiceId) => $$"""
+    private static string Instance(
+        string id,
+        string slug,
+        string catalogServiceId,
+        string credentialSource = PersonalCredentialSource) => $$"""
         {
           "id": "{{id}}",
           "slug": "{{slug}}",
           "label": "Shop",
-          "service_id": "{{catalogServiceId}}",
+          "catalog_service_id": "{{catalogServiceId}}",
           "endpoint_id": "endpoint-1",
           "endpoint_url": "https://shop.test",
-          "active": true,
-          "credential_allowed": true
+          "is_active": true,
+          "credential_source": {{credentialSource}}
         }
         """;
 
-    private static string Keys(params string[] instances) => $"[{string.Join(',', instances)}]";
+    private static string OrganizationCredentialSource(bool allowed) => $$"""
+        {
+          "type": "org",
+          "org_id": "org-1",
+          "org_name": "Example Org",
+          "avatar_url": null,
+          "role": "member",
+          "allowed": {{allowed.ToString().ToLowerInvariant()}}
+        }
+        """;
+
+    private static string Keys(params string[] instances) =>
+        $$"""{ "keys": [{{string.Join(',', instances)}}] }""";
 
     private sealed record ProxyRequestRecord(string Method, string Path, string Query, string Body, string Token);
 

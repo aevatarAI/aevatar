@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -11,6 +12,8 @@ namespace Aevatar.AI.Tests;
 
 public sealed class NyxIdServiceToolsTests
 {
+    private const string PersonalCredentialSource = """{ "type": "personal" }""";
+
     private const string OperationSpec = """
         {
           "paths": {
@@ -26,6 +29,16 @@ public sealed class NyxIdServiceToolsTests
           }
         }
         """;
+
+    public static TheoryData<NyxIdServiceHeaderName, string, string> RejectedHeaderCases => new()
+    {
+        { NyxIdServiceHeaderName.Unspecified, "value", "header_not_allowed" },
+        { NyxIdServiceHeaderName.ContentType, "text/plain", "unsupported_media_type" },
+        { NyxIdServiceHeaderName.ContentType, "application/json", "content_type_without_body" },
+        { NyxIdServiceHeaderName.IfMatch, string.Empty, "invalid_conditional_header" },
+        { NyxIdServiceHeaderName.IfMatch, new string('x', 1025), "invalid_conditional_header" },
+        { NyxIdServiceHeaderName.IfMatch, "etag\r\nInjected: value", "invalid_conditional_header" },
+    };
 
     [Fact]
     public async Task DiscoverToolsAsync_ShouldExposeFiveFixedToolsAndOneMultiInstanceOperation()
@@ -146,6 +159,186 @@ public sealed class NyxIdServiceToolsTests
         handler.ProxyRequests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("changed_source", false)]
+    [InlineData("missing_source", true)]
+    [InlineData("missing_active", false)]
+    [InlineData("org_missing_allowed", true)]
+    [InlineData("org_denied", false)]
+    public async Task SideEffectTool_InvalidRevalidationFacts_ShouldFailBeforeMutationOrProxy(
+        string scenario,
+        bool useRequestTool)
+    {
+        var handler = new ServiceHandler();
+        var discovered = scenario.StartsWith("org_", StringComparison.Ordinal)
+            ? Instance("us-7", "api-shop", "svc-shop", true, OrganizationCredentialSource(true))
+            : Instance("us-7", "api-shop", "svc-shop", true);
+        var exact = scenario switch
+        {
+            "changed_source" => Instance(
+                "us-7",
+                "api-shop",
+                "svc-shop",
+                true,
+                OrganizationCredentialSource(true)),
+            "missing_source" => WithoutProperty(discovered, "credential_source"),
+            "missing_active" => WithoutProperty(discovered, "is_active"),
+            "org_missing_allowed" => Instance(
+                "us-7",
+                "api-shop",
+                "svc-shop",
+                true,
+                OrganizationCredentialSource(null)),
+            "org_denied" => Instance(
+                "us-7",
+                "api-shop",
+                "svc-shop",
+                true,
+                OrganizationCredentialSource(false)),
+            _ => throw new InvalidOperationException($"Unknown scenario: {scenario}"),
+        };
+        handler.KeysByToken["user-token"] = Keys(discovered);
+        handler.ExactKeys["us-7"] = exact;
+        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+        var result = useRequestTool
+            ? await tools.Single(tool => tool.Name == "nyxid_service_request")
+                .ExecuteAsync("""{ "user_service_id": "us-7", "method": "GET", "relative_path": "orders" }""")
+            : await tools.Single(tool => tool.Name == "nyxid_service_update")
+                .ExecuteAsync("""{ "user_service_id": "us-7", "label": "Changed" }""");
+
+        ResponseErrorCode(result).Should().Be("identity_revalidation_failed");
+        handler.ExactReads.Should().ContainSingle().Which.Should().Be("us-7");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("https://evil.test/orders")]
+    [InlineData("orders?expand=items")]
+    [InlineData("orders#fragment")]
+    [InlineData("orders/../secret")]
+    public async Task RequestTool_InvalidRelativePath_ShouldFailBeforeProxy(string relativePath)
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-7"] = instance;
+        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync())
+            .Single(candidate => candidate.Name == "nyxid_service_request");
+        var result = await tool.ExecuteAsync(JsonSerializer.Serialize(new
+        {
+            user_service_id = "us-7",
+            method = "GET",
+            relative_path = relativePath,
+        }));
+
+        ResponseErrorCode(result).Should().Be("invalid_relative_path");
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RequestTool_ReservedNyxIdQuery_ShouldFailBeforeProxy()
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-7"] = instance;
+        handler.SpecsByServiceId["svc-shop"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync())
+            .Single(candidate => candidate.Name == "nyxid_service_request");
+        var result = await tool.ExecuteAsync(
+            """
+            {
+              "user_service_id": "us-7",
+              "method": "GET",
+              "relative_path": "orders",
+              "query": [{ "name": "_nyxid_via", "value": "forged" }]
+            }
+            """);
+
+        ResponseErrorCode(result).Should().Be("reserved_query_name");
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(RejectedHeaderCases))]
+    public async Task ServiceRequest_RejectedHeader_ShouldFailBeforeProxy(
+        NyxIdServiceHeaderName headerName,
+        string headerValue,
+        string expectedError)
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-7", "api-shop", "svc-shop", true);
+        handler.ExactKeys["us-7"] = instance;
+        var client = new NyxIdServiceInstanceClient(CreateClient(handler));
+        var request = new NyxIdServiceRequest
+        {
+            UserServiceId = "us-7",
+            Method = NyxIdServiceHttpMethod.Get,
+            RelativePath = "headers",
+        };
+        request.Headers.Add(new NyxIdServiceHeader { Name = headerName, Value = headerValue });
+
+        var result = await client.RequestAsync(PersonalBinding(), request, CancellationToken.None);
+
+        ErrorCode(result.ResponseJson).Should().Be(expectedError);
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProxyExactServiceRequestAsync_MissingRouteConstraint_ShouldFailBeforeHttp()
+    {
+        var handler = new ServiceHandler();
+        var client = CreateClient(handler);
+
+        var action = () => client.ProxyExactServiceRequestAsync(
+            "user-token",
+            new NyxIdProxyRouteConstraint(),
+            "us-7",
+            "orders",
+            NyxIdServiceHttpMethod.Get,
+            [],
+            null,
+            null,
+            CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("missing_route_constraint");
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ProxyExactServiceRequestAsync_UnsupportedMethod_ShouldFailBeforeHttp()
+    {
+        var handler = new ServiceHandler();
+        var client = CreateClient(handler);
+
+        var action = () => client.ProxyExactServiceRequestAsync(
+            "user-token",
+            new NyxIdProxyRouteConstraint { CatalogServiceId = "svc-shop" },
+            "us-7",
+            "orders",
+            NyxIdServiceHttpMethod.Unspecified,
+            [],
+            null,
+            null,
+            CancellationToken.None);
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("unsupported_http_method");
+        handler.Requests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task FixedTools_ShouldExposeCodeOwnedApprovalFloor()
     {
@@ -235,9 +428,30 @@ public sealed class NyxIdServiceToolsTests
     private static NyxIdConnectedServiceToolSource CreateSource(ServiceHandler handler)
     {
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
-        var client = new NyxIdApiClient(options, new HttpClient(handler));
+        var client = CreateClient(handler);
         return new NyxIdConnectedServiceToolSource(options, new NyxIdServiceInstanceClient(client));
     }
+
+    private static NyxIdApiClient CreateClient(ServiceHandler handler) =>
+        new(new NyxIdToolOptions { BaseUrl = "https://nyx.test" }, new HttpClient(handler));
+
+    private static NyxIdServiceInstanceBinding PersonalBinding() => new(
+        new NyxIdServiceInstance
+        {
+            UserServiceId = "us-7",
+            DisplaySlug = "api-shop",
+            Label = "Shop",
+            EndpointUrl = "https://shop.test",
+            EndpointId = "endpoint-1",
+            IsActive = true,
+            CatalogServiceId = "svc-shop",
+            CredentialSource = NyxIdServiceCredentialSource.Personal,
+            AccessTokenSource = NyxIdServiceAccessTokenSource.User,
+            ProxySpecServiceId = "svc-shop",
+            RouteConstraint = new NyxIdProxyRouteConstraint { CatalogServiceId = "svc-shop" },
+            CredentialAllowed = true,
+        },
+        "user-token");
 
     private static AgentToolContextScope PushContext(string userToken) =>
         AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
@@ -246,19 +460,63 @@ public sealed class NyxIdServiceToolsTests
             Request = new AgentToolRequestIdentity("request-1", "call-1", "idem-1"),
         });
 
-    private static string Instance(string id, string slug, string serviceId, bool active) => $$"""
+    private static string Instance(
+        string id,
+        string slug,
+        string serviceId,
+        bool active,
+        string credentialSource = PersonalCredentialSource) => $$"""
         {
           "id": "{{id}}",
           "slug": "{{slug}}",
           "label": "Shop",
-          "service_id": "{{serviceId}}",
+          "catalog_service_id": "{{serviceId}}",
           "endpoint_id": "endpoint-1",
           "endpoint_url": "https://shop.test",
-          "active": {{active.ToString().ToLowerInvariant()}}
+          "is_active": {{active.ToString().ToLowerInvariant()}},
+          "credential_source": {{credentialSource}}
         }
         """;
 
-    private static string Keys(params string[] instances) => $"[{string.Join(',', instances)}]";
+    private static string OrganizationCredentialSource(bool? allowed)
+    {
+        var allowedProperty = allowed.HasValue
+            ? $", \"allowed\": {allowed.Value.ToString().ToLowerInvariant()}"
+            : string.Empty;
+        return $$"""
+            {
+              "type": "org",
+              "org_id": "org-1",
+              "org_name": "Example Org",
+              "avatar_url": null,
+              "role": "member"{{allowedProperty}}
+            }
+            """;
+    }
+
+    private static string WithoutProperty(string json, string propertyName)
+    {
+        var root = JsonNode.Parse(json)!.AsObject();
+        root.Remove(propertyName);
+        return root.ToJsonString();
+    }
+
+    private static string Keys(params string[] instances) =>
+        $$"""{ "keys": [{{string.Join(',', instances)}}] }""";
+
+    private static string? ResponseErrorCode(string toolResult)
+    {
+        using var result = JsonDocument.Parse(toolResult);
+        return ErrorCode(result.RootElement.GetProperty("responseJson").GetString()!);
+    }
+
+    private static string? ErrorCode(string responseJson)
+    {
+        using var response = JsonDocument.Parse(responseJson);
+        return response.RootElement.TryGetProperty("error", out var error)
+            ? error.GetString()
+            : null;
+    }
 
     private sealed record RequestRecord(
         string Method,
