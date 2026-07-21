@@ -539,8 +539,9 @@ public sealed class WorkflowFileSubmitToolSource(
             string error,
             string detail,
             int? httpStatus = null,
-            int? providerCode = null) =>
-            WorkflowToolExecutionResult.Success(JsonSerializer.Serialize(
+            int? providerCode = null)
+        {
+            var resultJson = JsonSerializer.Serialize(
                 new WorkflowFileSubmitResult(
                     Success: false,
                     Error: error,
@@ -551,7 +552,9 @@ public sealed class WorkflowFileSubmitToolSource(
                     ProviderCode: providerCode,
                     Destination: destination,
                     File: null),
-                JsonOptions));
+                JsonOptions);
+            return WorkflowToolExecutionResult.Failed(resultJson, error, detail);
+        }
 
         private static bool HasStableFileRef(FileArtifactRef fileRef) =>
             !string.IsNullOrWhiteSpace(fileRef.FileId) ||
