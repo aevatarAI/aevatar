@@ -1,0 +1,144 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
+using Aevatar.Workflow.Abstractions;
+
+namespace Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+
+/// <summary>
+/// Per-request authority used for live capability reads. Credentials are transient and are
+/// deliberately kept out of Protobuf contracts, persistence, receipts, and generated string output.
+/// </summary>
+public sealed class ExternalWorkflowCapabilityAccessContext
+{
+    public ExternalWorkflowCapabilityAccessContext(
+        string scopeId,
+        string callerId,
+        string? nyxIdCallerBearerToken = null,
+        string? nyxIdOrganizationBearerToken = null)
+    {
+        ScopeId = Normalize(scopeId);
+        CallerId = Normalize(callerId);
+        NyxIdCallerBearerToken = NormalizeOptional(nyxIdCallerBearerToken);
+        NyxIdOrganizationBearerToken = NormalizeOptional(nyxIdOrganizationBearerToken);
+    }
+
+    public string ScopeId { get; }
+
+    public string CallerId { get; }
+
+    public string? NyxIdCallerBearerToken { get; }
+
+    public string? NyxIdOrganizationBearerToken { get; }
+
+    public override string ToString() =>
+        $"{nameof(ExternalWorkflowCapabilityAccessContext)} {{ ScopeId = {ScopeId}, CallerId = {CallerId}, Credentials = [REDACTED] }}";
+
+    private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public sealed record ListExternalWorkflowCapabilitiesRequest(
+    ExternalWorkflowCapabilityAccessContext Access);
+
+public sealed record InspectExternalWorkflowCapabilityReadinessRequest(
+    ExternalWorkflowCapabilityAccessContext Access,
+    ExternalWorkflowCapabilityRef Capability,
+    ExternalCapabilityExecutionMode ExecutionMode);
+
+public sealed class WorkflowExternalCapabilityAdmissionRequest
+{
+    public WorkflowExternalCapabilityAdmissionRequest(
+        ExternalWorkflowCapabilityAccessContext access,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string sourceKind,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        Access = access ?? throw new ArgumentNullException(nameof(access));
+        WorkflowYaml = workflowYaml ?? string.Empty;
+        InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
+        SourceKind = sourceKind?.Trim() ?? string.Empty;
+        ExecutionMode = executionMode;
+    }
+
+    public ExternalWorkflowCapabilityAccessContext Access { get; }
+
+    public string WorkflowYaml { get; }
+
+    public IReadOnlyDictionary<string, string> InlineWorkflowYamls { get; }
+
+    public string SourceKind { get; }
+
+    public ExternalCapabilityExecutionMode ExecutionMode { get; }
+
+    public override string ToString() =>
+        $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, Definition = [REDACTED] }}";
+}
+
+public interface IExternalWorkflowCapabilitySource
+{
+    ExternalWorkflowCapabilityRef.CapabilityOneofCase CapabilityKind { get; }
+
+    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+        ExternalWorkflowCapabilityAccessContext access,
+        CancellationToken cancellationToken = default);
+
+    Task<ExternalCapabilityReadiness> InspectAsync(
+        ExternalWorkflowCapabilityAccessContext access,
+        ExternalWorkflowCapabilityRef capability,
+        ExternalCapabilityExecutionMode executionMode,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IExternalWorkflowCapabilityListPort
+{
+    Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+        ListExternalWorkflowCapabilitiesRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IExternalWorkflowCapabilityReadinessPort
+{
+    Task<ExternalCapabilityReadiness> InspectAsync(
+        InspectExternalWorkflowCapabilityReadinessRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IWorkflowExternalCapabilityAdmissionService
+{
+    Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
+        WorkflowExternalCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Length-prefixed SHA-256 for stable capability and source contract fingerprints.</summary>
+public static class ExternalWorkflowCapabilityContractDigest
+{
+    public static string Compute(params string?[] components) => Compute((IEnumerable<string?>)components);
+
+    public static string Compute(IEnumerable<string?> components)
+    {
+        ArgumentNullException.ThrowIfNull(components);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> lengthBuffer = stackalloc byte[sizeof(int)];
+        foreach (var component in components)
+        {
+            if (component is null)
+            {
+                BinaryPrimitives.WriteInt32BigEndian(lengthBuffer, -1);
+                hash.AppendData(lengthBuffer);
+                continue;
+            }
+
+            var bytes = Encoding.UTF8.GetBytes(component);
+            BinaryPrimitives.WriteInt32BigEndian(lengthBuffer, bytes.Length);
+            hash.AppendData(lengthBuffer);
+            hash.AppendData(bytes);
+        }
+
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
+}
