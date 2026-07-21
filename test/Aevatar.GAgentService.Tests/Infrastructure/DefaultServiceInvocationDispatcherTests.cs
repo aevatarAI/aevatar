@@ -197,6 +197,68 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
+    public async Task ScriptingDispatch_ShouldForwardDeliveryIdAndExpiry()
+    {
+        var scriptPort = new RecordingScriptRuntimeCommandPort();
+        var registry = new RecordingServiceRunRegistrationPort
+        {
+            RegistrationResult = new ServiceRunRegistrationResult("service-run:tenant:svc:run-script", "run-script"),
+        };
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            scriptPort,
+            new RecordingWorkflowRunActorPort(),
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Scripting,
+            endpointId: "run",
+            requestTypeUrl: Any.Pack(new StringValue()).TypeUrl);
+        target.Artifact.DeploymentPlan.ScriptingPlan = new ScriptingServiceDeploymentPlan
+        {
+            Revision = "rev-1",
+            DefinitionActorId = "definition-1",
+        };
+        const long workOrderExpiry = 1_775_000_000_000;
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "run",
+            CommandId = "cmd-script",
+            CorrelationId = "corr-script",
+            RequestedRunId = "run-script",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+            ServiceRunCompletionNotificationTarget = new ServiceRunCompletionNotificationTarget
+            {
+                ActorId = "work-order:tenant:wo-script",
+                DeliveryId = "work-order-terminal-script",
+                ExpiresAtUnixMs = workOrderExpiry,
+            },
+        });
+
+        var withWorkOrder = scriptPort.Calls.Should().ContainSingle().Subject;
+        withWorkOrder.completionNotificationDeliveryId.Should()
+            .Be("service-run-source:run-script:cmd-script");
+        withWorkOrder.completionNotificationExpiresAtUnixMs.Should().Be(workOrderExpiry);
+
+        scriptPort.Calls.Clear();
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "run",
+            CommandId = "cmd-script-without-target",
+            CorrelationId = "corr-script-without-target",
+            RequestedRunId = "run-script-without-target",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        var withoutWorkOrder = scriptPort.Calls.Should().ContainSingle().Subject;
+        withoutWorkOrder.completionNotificationDeliveryId.Should()
+            .Be("service-run-source:run-script-without-target:cmd-script-without-target");
+        withoutWorkOrder.completionNotificationExpiresAtUnixMs.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldCreateWorkflowRun_AndSendEnvelope()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
@@ -1280,7 +1342,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
     private sealed class RecordingScriptRuntimeCommandPort : IScriptRuntimeCommandPort
     {
-        public List<(string runtimeActorId, string runId, string commandId, string correlationId, Any? payload, string revision, string definitionActorId, string requestedEventType, string? scopeId, string? completionNotificationActorId)> Calls { get; } = [];
+        public List<(string runtimeActorId, string runId, string commandId, string correlationId, Any? payload, string revision, string definitionActorId, string requestedEventType, string? scopeId, string? completionNotificationActorId, string? completionNotificationDeliveryId, long completionNotificationExpiresAtUnixMs)> Calls { get; } = [];
 
         public Task RunRuntimeAsync(
             string runtimeActorId,
@@ -1291,7 +1353,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string requestedEventType,
             CancellationToken ct)
         {
-            Calls.Add((runtimeActorId, runId, runId, runId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, null, null));
+            Calls.Add((runtimeActorId, runId, runId, runId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, null, null, null, 0));
             return Task.CompletedTask;
         }
 
@@ -1305,7 +1367,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string? scopeId,
             CancellationToken ct)
         {
-            Calls.Add((runtimeActorId, runId, runId, runId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, scopeId, null));
+            Calls.Add((runtimeActorId, runId, runId, runId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, scopeId, null, null, 0));
             return Task.CompletedTask;
         }
 
@@ -1321,7 +1383,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string? scopeId,
             CancellationToken ct)
         {
-            Calls.Add((runtimeActorId, runId, commandId, correlationId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, scopeId, null));
+            Calls.Add((runtimeActorId, runId, commandId, correlationId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, scopeId, null, null, 0));
             return Task.CompletedTask;
         }
 
@@ -1336,9 +1398,11 @@ public sealed class DefaultServiceInvocationDispatcherTests
             string requestedEventType,
             string? scopeId,
             string? completionNotificationActorId,
+            string? completionNotificationDeliveryId,
+            long completionNotificationExpiresAtUnixMs,
             CancellationToken ct)
         {
-            Calls.Add((runtimeActorId, runId, commandId, correlationId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, scopeId, completionNotificationActorId));
+            Calls.Add((runtimeActorId, runId, commandId, correlationId, inputPayload?.Clone(), scriptRevision, definitionActorId, requestedEventType, scopeId, completionNotificationActorId, completionNotificationDeliveryId, completionNotificationExpiresAtUnixMs));
             return Task.CompletedTask;
         }
     }

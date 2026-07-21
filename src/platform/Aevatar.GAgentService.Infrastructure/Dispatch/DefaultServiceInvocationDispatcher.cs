@@ -119,6 +119,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             request.Payload?.TypeUrl ?? string.Empty,
             request.Identity?.TenantId,
             registration.RunActorId,
+            $"service-run-source:{runId}:{commandId}",
+            request.ServiceRunCompletionNotificationTarget?.ExpiresAtUnixMs ?? 0,
             ct);
         return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
     }

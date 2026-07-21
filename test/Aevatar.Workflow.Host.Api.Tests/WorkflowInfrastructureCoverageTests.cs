@@ -1411,6 +1411,10 @@ public sealed class WorkflowInfrastructureCoverageTests
 
     private sealed class RecordingScriptRuntimeCommandPort : IScriptRuntimeCommandPort
     {
+        public string? CompletionNotificationDeliveryId { get; private set; }
+
+        public long CompletionNotificationExpiresAtUnixMs { get; private set; }
+
         public Task RunRuntimeAsync(
             string runtimeActorId,
             string runId,
@@ -1422,8 +1426,12 @@ public sealed class WorkflowInfrastructureCoverageTests
             string requestedEventType,
             string? scopeId,
             string? completionNotificationActorId,
+            string? completionNotificationDeliveryId,
+            long completionNotificationExpiresAtUnixMs,
             CancellationToken ct)
         {
+            CompletionNotificationDeliveryId = completionNotificationDeliveryId;
+            CompletionNotificationExpiresAtUnixMs = completionNotificationExpiresAtUnixMs;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }

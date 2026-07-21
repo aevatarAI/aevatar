@@ -825,7 +825,7 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
 
     private sealed class RecordingRuntimeCommandPort : IScriptRuntimeCommandPort
     {
-        public List<(string RuntimeActorId, string RunId, string Revision, string DefinitionActorId, string RequestedEventType)> RunCalls { get; } = [];
+        public List<(string RuntimeActorId, string RunId, string Revision, string DefinitionActorId, string RequestedEventType, string? CompletionNotificationDeliveryId, long CompletionNotificationExpiresAtUnixMs)> RunCalls { get; } = [];
 
         public Task RunRuntimeAsync(
             string runtimeActorId,
@@ -838,6 +838,8 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             string requestedEventType,
             string? scopeId,
             string? completionNotificationActorId,
+            string? completionNotificationDeliveryId,
+            long completionNotificationExpiresAtUnixMs,
             CancellationToken ct)
         {
             _ = inputPayload;
@@ -846,7 +848,14 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             _ = scopeId;
             _ = completionNotificationActorId;
             ct.ThrowIfCancellationRequested();
-            RunCalls.Add((runtimeActorId, runId, scriptRevision, definitionActorId, requestedEventType));
+            RunCalls.Add((
+                runtimeActorId,
+                runId,
+                scriptRevision,
+                definitionActorId,
+                requestedEventType,
+                completionNotificationDeliveryId,
+                completionNotificationExpiresAtUnixMs));
             return Task.CompletedTask;
         }
     }

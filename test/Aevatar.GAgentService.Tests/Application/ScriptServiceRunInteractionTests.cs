@@ -524,6 +524,8 @@ public sealed class ScriptServiceRunInteractionTests
             string requestedEventType,
             string? scopeId,
             string? completionNotificationActorId,
+            string? completionNotificationDeliveryId,
+            long completionNotificationExpiresAtUnixMs,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
@@ -536,7 +538,9 @@ public sealed class ScriptServiceRunInteractionTests
                 scriptRevision,
                 definitionActorId,
                 requestedEventType,
-                scopeId));
+                scopeId,
+                completionNotificationDeliveryId,
+                completionNotificationExpiresAtUnixMs));
             if (DispatchException != null)
                 throw DispatchException;
 
@@ -553,7 +557,9 @@ public sealed class ScriptServiceRunInteractionTests
         string ScriptRevision,
         string DefinitionActorId,
         string RequestedEventType,
-        string? ScopeId);
+        string? ScopeId,
+        string? CompletionNotificationDeliveryId,
+        long CompletionNotificationExpiresAtUnixMs);
 
     private sealed class RecordingScriptServiceRunInteraction
         : ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>

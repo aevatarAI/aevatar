@@ -217,7 +217,8 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             .EventData
             .Unpack<ScriptRunOutcomeRecordedEvent>();
         committedTerminal.Status.Should().Be(ScriptRunOutcomeStatus.Succeeded);
-        script.State.LastRunOutcomeNotificationDispatched.Should().BeTrue();
+        script.State.RunOutcomes[requestedRunId].Status.Should()
+            .Be(ScriptRunOutcomeDeliveryStatus.Dispatched);
 
         serviceRun.State.Record.Status.Should().Be(ServiceRunStatus.Completed);
         serviceRun.State.TerminalNotificationDeliveryStatus.Should()
