@@ -61,38 +61,21 @@ public sealed class RoleGAgentStateCoverageTests
     [Fact]
     public void ApplyTurnAuthorityInitial_ShouldReplaceOnlyForNewActiveSession()
     {
-        var current = new RoleGAgentState
-        {
-            MessageCount = 2,
-            AgentProfileTurnAuthority = TurnAuthority("session-old", 1, "intent-a", "skill-a"),
-            Sessions = { ["session-older"] = new RoleChatSessionState { Sequence = 0 },
-                ["session-old"] = new RoleChatSessionState { Sequence = 1 },
-                ["session-same"] = new RoleChatSessionState { Sequence = 1 },
-                ["session-new"] = new RoleChatSessionState { Sequence = 2 } },
-        };
-        ApplyAuthority(
-                current,
-                AgentProfileTurnAuthorityCommitKind.Initial,
-                current.AgentProfileTurnAuthority.Clone())
-            .Should().BeSameAs(current);
-        var mutatedDuplicate = current.AgentProfileTurnAuthority.Clone();
-        mutatedDuplicate.CandidateRoute.IntentId = "intent-mutated";
-        ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Initial, mutatedDuplicate)
-            .Should().BeSameAs(current);
+        var current = StateWithIncompleteAuthority(TurnAuthority("session-old", 1, "intent-a", "skill-a"));
+        current.MessageCount = 2;
+        current.Sessions.Add("session-older", new RoleChatSessionState { Sequence = 0 });
+        current.Sessions.Add("session-same", new RoleChatSessionState { Sequence = 1 });
+        current.Sessions.Add("session-new", new RoleChatSessionState { Sequence = 2 });
+        void AssertRejected(AgentProfileTurnAuthorityState authority) =>
+            ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Initial, authority).Should().BeSameAs(current);
+        AssertRejected(current.AgentProfileTurnAuthority.Clone());
+        AssertRejected(MutateAuthority(current, authority => authority.CandidateRoute.IntentId = "intent-mutated"));
         foreach (var staleSessionId in new[] { "session-older", "session-same" })
-        {
-            ApplyAuthority(
-                    current,
-                    AgentProfileTurnAuthorityCommitKind.Initial,
-                    TurnAuthority(staleSessionId, 1, "intent-a", "skill-a"))
-                .Should().BeSameAs(current);
-        }
+            AssertRejected(TurnAuthority(staleSessionId, 1, "intent-a", "skill-a"));
         var initial = TurnAuthority("session-new", 1, "intent-a", "skill-a");
         initial.AuthorityCeilingToolNames.Clear();
         initial.AuthorityCeilingToolNames.Add([" task ", "Search", "TASK"]);
-        initial.DegradationReasons.Add([AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
-            AgentProfileTurnDegradationReason.ClassifierFailed,
-            AgentProfileTurnDegradationReason.ExactSkillFetchFailed]);
+        initial.DegradationReasons.Add([AgentProfileTurnDegradationReason.ExactSkillFetchFailed, AgentProfileTurnDegradationReason.ClassifierFailed, AgentProfileTurnDegradationReason.ExactSkillFetchFailed]);
         var next = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Initial, initial);
         next.Should().NotBeSameAs(current);
         next.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-new");
@@ -100,9 +83,7 @@ public sealed class RoleGAgentStateCoverageTests
         next.AgentProfileTurnAuthority.DegradationReasons.Should().Equal(
             AgentProfileTurnDegradationReason.ClassifierFailed,
             AgentProfileTurnDegradationReason.ExactSkillFetchFailed);
-        var invalidAttempt = initial.Clone();
-        invalidAttempt.ReconciliationKey.Attempt = 2;
-        ApplyAuthority(next, AgentProfileTurnAuthorityCommitKind.Initial, invalidAttempt).Should().BeSameAs(next);
+        ApplyAuthority(next, AgentProfileTurnAuthorityCommitKind.Initial, MutateAuthority(next, authority => authority.ReconciliationKey.Attempt = 2)).Should().BeSameAs(next);
     }
     [Fact]
     public void ApplyTurnAuthorityRetryStarted_ShouldAdvanceExactlyOneAttemptAndFreezeCandidate()

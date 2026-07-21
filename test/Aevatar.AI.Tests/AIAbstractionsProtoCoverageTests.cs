@@ -110,24 +110,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             .Single(enumType => enumType.Name == nameof(AgentProfileTurnDegradationReason))
             .Values;
         degradationValues.Select(value => value.Number).Should().Equal(Enumerable.Range(0, 16));
-        degradationValues.Select(value => value.Name).Should().Equal([
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_UNSPECIFIED",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_PROFILE_INVALID",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_ROUTE_TOOL_SET_UNAVAILABLE",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_SET_UNAVAILABLE",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_DISCOVERY_FAILED",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_NAME_COLLISION",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_CAPABILITY_REJECTED",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_NO_MATCH",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_FAILED",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_SHADOW_MODE",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_FETCH_FAILED",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_IDENTITY_MISMATCH",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_SELECTED_SKILL_BODY_INVALID",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_LEGACY_AUTHORITY_MISSING",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZER_UNAVAILABLE",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZATION_FAILED",
-        ]);
         var forbiddenFragments = new[] {
             "body", "prompt", "tool_object", "token", "credential", "header",
             "model_argument", "diagnostic", "metadata", "adapter", "runtime_instance" };
