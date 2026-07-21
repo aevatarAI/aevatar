@@ -61,6 +61,32 @@ public class NyxIdConnectedServiceToolSourceTests
         }
         """;
 
+    private const string RequiredInputSpec = """
+        {
+          "openapi": "3.0.0",
+          "paths": {
+            "/orders/by-status": {
+              "get": {
+                "operationId": "orders_by_status",
+                "x-aevatar-tool": true,
+                "parameters": [
+                  { "name": "status", "in": "query", "required": true, "schema": { "type": "string" } }
+                ]
+              }
+            },
+            "/orders/conditional": {
+              "get": {
+                "operationId": "conditional_order",
+                "x-aevatar-tool": true,
+                "parameters": [
+                  { "name": "If-Match", "in": "header", "required": true, "schema": { "type": "string" } }
+                ]
+              }
+            }
+          }
+        }
+        """;
+
     [Fact]
     public async Task DiscoverToolsAsync_NoBaseUrl_ReturnsEmptyWithoutReadingKeys()
     {
@@ -239,6 +265,29 @@ public class NyxIdConnectedServiceToolSourceTests
         var result = await tool.ExecuteAsync(arguments);
 
         result.Should().Contain(expectedError);
+        handler.ExactReads.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("nyxid_service_operation__orders_by_status", "missing_required_query_parameter")]
+    [InlineData("nyxid_service_operation__conditional_order", "missing_required_header")]
+    public async Task DynamicOperations_MissingRequiredQueryOrHeader_FailsBeforeRevalidation(
+        string toolName,
+        string expectedError)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop"));
+        handler.SpecsByServiceId["us-personal-7"] = RequiredInputSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync()).Single(candidate => candidate.Name == toolName);
+        var result = await tool.ExecuteAsync("""{ "user_service_id": "us-personal-7" }""");
+
+        using var response = JsonDocument.Parse(result);
+        response.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
         handler.ExactReads.Should().BeEmpty();
         handler.ProxyRequests.Should().BeEmpty();
     }

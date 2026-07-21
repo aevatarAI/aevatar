@@ -100,7 +100,7 @@ public sealed class NyxIdServiceInstanceClient
         if (request.HasEndpointUrl)
             body["endpoint_url"] = request.EndpointUrl;
         if (request.HasIsActive)
-            body["active"] = request.IsActive;
+            body["is_active"] = request.IsActive;
         var response = await _client.UpdateServiceAsync(
             current.AccessToken,
             current.Instance.UserServiceId,

@@ -478,6 +478,32 @@ public sealed class NyxIdServiceToolsTests
     }
 
     [Fact]
+    public async Task UpdateTool_IsActive_ShouldUseNyxIdWireContract()
+    {
+        var handler = new ServiceHandler();
+        var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
+        handler.KeysByToken["user-token"] = Keys(instance);
+        handler.ExactKeys["us-personal-7"] = instance;
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var update = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_update");
+
+        var result = await update.ExecuteAsync(
+            """{ "user_service_id": "us-personal-7", "is_active": false }""");
+
+        result.Should().Contain("\"accepted\": true");
+        var mutation = handler.Requests.Should().ContainSingle().Subject;
+        mutation.Method.Should().Be("PUT");
+        mutation.Path.Should().Be("/api/v1/keys/us-personal-7");
+        using var body = JsonDocument.Parse(mutation.Body);
+        body.RootElement.GetProperty("is_active").GetBoolean().Should().BeFalse();
+        body.RootElement.TryGetProperty("active", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task RouteTool_Direct_ShouldRevalidateAndClearNodeId()
     {
         var handler = new ServiceHandler();

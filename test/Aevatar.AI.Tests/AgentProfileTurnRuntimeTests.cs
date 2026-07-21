@@ -264,6 +264,90 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
+    public async Task FinalSkillRecovery_RequestExcludesTool_ShouldNotExecuteGlobalTool()
+    {
+        var globalTool = new CountingTool("use_skill");
+        var history = new ChatHistory();
+        var runtime = new ChatRuntime(
+            () => new RecordingProvider(),
+            history,
+            new ToolCallLoop(NewToolManager(globalTool)),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = history.BuildMessages("system"),
+                Tools = null,
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    SkillRecovery = FinalSkillRecovery(),
+                },
+            });
+
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["use_skill"])));
+
+        globalTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task FinalSkillRecovery_SameNameGlobalTool_ShouldExecuteExactRequestObject()
+    {
+        var globalTool = new CountingTool("use_skill");
+        var requestExactTool = new CountingTool("use_skill");
+        var history = new ChatHistory();
+        var runtime = new ChatRuntime(
+            () => new RecordingProvider(),
+            history,
+            new ToolCallLoop(NewToolManager(globalTool)),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = history.BuildMessages("system"),
+                Tools = [requestExactTool],
+                ToolContext = AgentToolExecutionContext.Empty with
+                {
+                    SkillRecovery = FinalSkillRecovery(),
+                },
+            });
+
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["use_skill"])));
+
+        requestExactTool.ExecuteCount.Should().Be(1);
+        globalTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ToolOutcomeClassification_SameNameTools_ShouldUseExactRequestObject()
+    {
+        var globalMutatingTool = new CountingTool("shared", isReadOnly: false);
+        var requestReadOnlyTool = new CountingTool("shared", isReadOnly: true);
+        var provider = new ForgedToolProvider("shared");
+        var history = new ChatHistory();
+        var runtime = new ChatRuntime(
+            () => provider,
+            history,
+            new ToolCallLoop(NewToolManager(globalMutatingTool)),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest
+            {
+                Messages = history.BuildMessages("system"),
+                Tools = [requestReadOnlyTool],
+            });
+
+        await DrainAsync(runtime.ChatStreamAsync(
+            "run",
+            maxToolRounds: 1,
+            NewCatalog(["shared"])));
+
+        requestReadOnlyTool.ExecuteCount.Should().Be(1);
+        globalMutatingTool.ExecuteCount.Should().Be(0);
+        provider.Requests.Should().HaveCount(2);
+        provider.Requests[1].Messages.Should().ContainSingle(message =>
+            message.Role == "system" &&
+            message.Content != null &&
+            message.Content.Contains("no successful mutating tool execution", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task UnprofiledTurn_LlmMiddlewareRestrictionShouldRemainEffectiveForProviderAndExecutor()
     {
         var visible = new CountingTool("visible");
@@ -440,6 +524,14 @@ public sealed class AgentProfileTurnRuntimeTests
         PrimarySkillName: "project-summary",
         MaxOrnnSearchAttempts: 1);
 
+    private static AgentSkillRecoveryContext FinalSkillRecovery() => new(
+        RequireInitialOrnnSearch: false,
+        RequireOrnnSearchOnBlocker: true,
+        CommandName: "summary",
+        OriginalCommand: "/summary",
+        PrimarySkillName: "project-summary",
+        MaxOrnnSearchAttempts: 1);
+
     private static ChatRuntime NewRuntime(
         ILLMProvider provider,
         ToolManager tools,
@@ -467,12 +559,13 @@ public sealed class AgentProfileTurnRuntimeTests
         }
     }
 
-    private sealed class CountingTool(string name) : IAgentTool
+    private sealed class CountingTool(string name, bool isReadOnly = false) : IAgentTool
     {
         public int ExecuteCount { get; private set; }
         public string Name => name;
         public string Description => name;
         public string ParametersSchema => "{}";
+        public bool IsReadOnly => isReadOnly;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
         {
