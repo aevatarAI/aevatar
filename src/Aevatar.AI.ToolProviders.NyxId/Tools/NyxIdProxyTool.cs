@@ -10,7 +10,7 @@ using System.Text.Json.Serialization;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to make proxied requests to downstream services through NyxID.</summary>
-public sealed class NyxIdProxyTool : IAgentTool
+public sealed class NyxIdProxyTool : INyxIdBuiltInTool
 {
     private const string TextResponseMode = "text";
     private const string FileArtifactResponseMode = "file_artifact";

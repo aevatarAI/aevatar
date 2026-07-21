@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdOrgTool : IAgentTool, IAgentToolCapabilityDescriptor
+public sealed class NyxIdOrgTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 

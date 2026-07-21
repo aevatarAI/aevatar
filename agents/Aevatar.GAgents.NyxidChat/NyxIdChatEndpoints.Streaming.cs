@@ -153,6 +153,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "STREAM_TIMEOUT",
                         "The chat request timed out. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -173,6 +174,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "STREAM_FAILURE",
                         "The chat request failed. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -308,6 +310,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "APPROVAL_STREAM_TIMEOUT",
                         "The approval continuation timed out. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -328,6 +331,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "STREAM_FAILURE",
                         "The approval continuation failed. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -360,6 +364,7 @@ public static partial class NyxIdChatEndpoints
                     NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
                     _ => message,
                 },
+                0,
                 token),
             CancellationToken.None);
     }

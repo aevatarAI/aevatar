@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-public sealed class NyxIdRequireServiceTool : IAgentTool
+public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 {
     public string Name => "nyxid_require_service";
 

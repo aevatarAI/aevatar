@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 
@@ -70,6 +71,38 @@ public sealed class UseSkillTool : IAgentTool
           "required": ["skill"]
         }
         """;
+
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.Skill(
+            Name,
+            "Use skill",
+            Description,
+            skillName: string.Empty,
+            source: "local-or-remote");
+
+    public ToolPresentationDescriptor ResolvePresentation(string argumentsJson)
+    {
+        var requestedSkillName = ParseArguments(argumentsJson).SkillName.Trim();
+        if (string.IsNullOrWhiteSpace(requestedSkillName))
+            return Presentation;
+
+        if (_localCatalog.TryGet(requestedSkillName, out var localSkill) && localSkill != null)
+        {
+            return ToolPresentationDescriptors.Skill(
+                Name,
+                localSkill.Name,
+                localSkill.Description,
+                localSkill.Name,
+                source: "local");
+        }
+
+        return ToolPresentationDescriptors.Skill(
+            Name,
+            requestedSkillName,
+            Description,
+            requestedSkillName,
+            source: "local-or-remote");
+    }
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
