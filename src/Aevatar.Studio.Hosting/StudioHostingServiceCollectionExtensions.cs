@@ -16,7 +16,6 @@ using Aevatar.Studio.Projection.DependencyInjection;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
-using System.Net.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -66,14 +65,7 @@ internal static class StudioHostingServiceCollectionExtensions
                     : configuredRoute.Trim();
             });
         services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
-        services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort>(sp =>
-            new NyxIdAuthorizationCatalogRefreshPort(
-                sp.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>(),
-                sp.GetRequiredService<IHttpClientFactory>(),
-                configuration,
-                sp.GetService<TimeProvider>() ?? TimeProvider.System,
-                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdAuthorizationCatalogRefreshPort>>(),
-                sp.GetService<INyxIdAuthorizationCatalogQueryPort>()));
+        services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
         services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(
             sp.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>(),
             configuration,
