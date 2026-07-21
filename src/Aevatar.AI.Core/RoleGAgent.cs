@@ -1169,7 +1169,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 fullReasoning.Length);
         }
 
-        var sessionFailure = ResolveSideEffectingToolFailure(toolReceipts);
         return new SessionReplayRecord(
             response,
             fullReasoning.ToString(),
@@ -1179,54 +1178,11 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             Usage: usage,
             Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0,
-            Outcome: authorizationRequired != null
-                ? RoleChatSessionOutcome.Blocked
-                : sessionFailure is null
-                    ? RoleChatSessionOutcome.Completed
-                    : RoleChatSessionOutcome.Failed,
-            FailureCode: sessionFailure?.FailureCode ?? string.Empty,
-            SafeMessage: sessionFailure?.SafeMessage ?? string.Empty,
+            Outcome: authorizationRequired == null
+                ? RoleChatSessionOutcome.Completed
+                : RoleChatSessionOutcome.Blocked,
             AuthorizationRequired: authorizationRequired);
     }
-
-    private static SideEffectingToolFailure? ResolveSideEffectingToolFailure(
-        IReadOnlyList<AgentToolReceipt> toolReceipts)
-    {
-        var completedOperations = new HashSet<SideEffectOperationKey>();
-        for (var index = toolReceipts.Count - 1; index >= 0; index--)
-        {
-            var receipt = toolReceipts[index];
-            if (!IsSideEffectingReceipt(receipt))
-                continue;
-
-            var operationKey = SideEffectOperationKey.From(receipt);
-            if (receipt.Status == AgentToolReceiptStatus.Success)
-            {
-                if (operationKey.HasSubjectIdentity)
-                    completedOperations.Add(operationKey);
-                continue;
-            }
-
-            if (receipt.Status is not (AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied) ||
-                completedOperations.Contains(operationKey))
-            {
-                continue;
-            }
-
-            var failureCode = string.IsNullOrWhiteSpace(receipt.ErrorCode)
-                ? receipt.Status == AgentToolReceiptStatus.Denied ? "TOOL_SIDE_EFFECT_DENIED" : "TOOL_SIDE_EFFECT_FAILED"
-                : receipt.ErrorCode.Trim();
-            var safeMessage = string.IsNullOrWhiteSpace(receipt.ErrorMessage)
-                ? "A required side-effecting tool did not complete successfully."
-                : receipt.ErrorMessage.Trim();
-            return new SideEffectingToolFailure(failureCode, safeMessage);
-        }
-
-        return null;
-    }
-
-    private static bool IsSideEffectingReceipt(AgentToolReceipt receipt) =>
-        receipt.IsDestructive || !string.IsNullOrWhiteSpace(receipt.SideEffectKind);
 
     private Task PersistSessionCompletionAsync(ChatRequestEvent request, SessionReplayRecord replayRecord) =>
         PersistRoleChatSessionCompletionAsync(
@@ -2003,47 +1959,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         }
 
         return true;
-    }
-
-    private sealed record SideEffectingToolFailure(string FailureCode, string SafeMessage);
-
-    private sealed record SideEffectOperationKey(
-        string ToolName,
-        string SideEffectKind,
-        bool IsDestructive,
-        string SubjectKind,
-        string SubjectId,
-        string SubjectVersion,
-        string SubjectHash)
-    {
-        public bool HasSubjectIdentity => SubjectKind.Length > 0 ||
-            SubjectId.Length > 0 ||
-            SubjectVersion.Length > 0 ||
-            SubjectHash.Length > 0;
-
-        public static SideEffectOperationKey From(AgentToolReceipt receipt)
-        {
-            var subjectKind = Normalize(receipt.SubjectKind);
-            var subjectId = Normalize(receipt.SubjectId);
-            var subjectVersion = Normalize(receipt.SubjectVersion);
-            var subjectHash = Normalize(receipt.SubjectHash);
-            var hasSubject = subjectKind.Length > 0 ||
-                subjectId.Length > 0 ||
-                subjectVersion.Length > 0 ||
-                subjectHash.Length > 0;
-
-            return new SideEffectOperationKey(
-                Normalize(receipt.ToolName),
-                Normalize(receipt.SideEffectKind),
-                receipt.IsDestructive,
-                hasSubject ? subjectKind : string.Empty,
-                hasSubject ? subjectId : string.Empty,
-                hasSubject ? subjectVersion : string.Empty,
-                hasSubject ? subjectHash : string.Empty);
-        }
-
-        private static string Normalize(string? value) =>
-            string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
     }
 
     private sealed record SessionReplayRecord(

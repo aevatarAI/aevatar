@@ -74,18 +74,6 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
     public bool IsDestructive => false;
     public string SideEffectKind => "studio.member.workflow.schedule";
 
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioProvisioningToolReceiptJson.CreateReceiptFromResult(
-            this,
-            callId,
-            toolName,
-            argumentsJson,
-            resultJson);
-
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();

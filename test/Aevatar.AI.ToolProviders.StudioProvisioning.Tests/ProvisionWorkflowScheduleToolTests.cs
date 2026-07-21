@@ -1173,113 +1173,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
-    public async Task ScheduleMemberWorkflow_CreateResultReceipt_WhenNestedError_ShouldReturnErrorReceipt()
-    {
-        var schedulePort = new RecordingMemberWorkflowSchedulePort
-        {
-            PreflightResult = new StudioMemberWorkflowAuthorizationResult(
-                false,
-                null,
-                ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
-                "nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale"),
-        };
-        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
-
-        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
-        var output = await tool.ExecuteAsync("""
-            {
-              "member_id": "member-alpha",
-              "schedule_cron": "0 9 * * *",
-              "schedule_timezone": "Asia/Shanghai"
-            }
-            """);
-        var receipt = tool.CreateResultReceipt("call-1", tool.Name, "{}", output);
-
-        receipt.Should().NotBeNull();
-        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
-        receipt.SideEffectKind.Should().Be("studio.member.workflow.schedule");
-        receipt.ErrorCode.Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.SnapshotStale));
-        receipt.ErrorMessage.Should().Be("nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale");
-        receipt.ResultJson.Should().Be(output);
-    }
-
-    [Fact]
-    public async Task ScheduleMemberWorkflow_CreateResultReceipt_WhenSuccess_ShouldReturnSubjectReceipt()
-    {
-        var tool = await DiscoverScheduleMemberWorkflowToolAsync(new RecordingMemberWorkflowSchedulePort());
-        const string argumentsJson = """
-            {
-              "member_id": "member-alpha",
-              "schedule_cron": "0 9 * * *",
-              "schedule_timezone": "Asia/Shanghai"
-            }
-            """;
-        const string resultJson = """
-            {
-              "success": true,
-              "status": "pending",
-              "scope_id": "scope-current",
-              "member_id": "member-alpha",
-              "schedule_id": "schedule-alpha",
-              "published_service_id": "svc-alpha",
-              "observatory_url": "/workflow/observatory"
-            }
-            """;
-
-        var receipt = tool.CreateResultReceipt("call-1", tool.Name, argumentsJson, resultJson);
-        var reorderedReceipt = tool.CreateResultReceipt("call-2", tool.Name, """
-            {
-              "schedule_timezone": "Asia/Shanghai",
-              "schedule_cron": "0 9 * * *",
-              "member_id": "member-alpha"
-            }
-            """, resultJson);
-
-        receipt.Should().NotBeNull();
-        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
-        receipt.SideEffectKind.Should().Be("studio.member.workflow.schedule");
-        receipt.SubjectKind.Should().Be("studio.member.workflow.schedule");
-        receipt.SubjectId.Should().NotBeEmpty();
-        receipt.SubjectHash.Should().Be(receipt.SubjectId);
-        receipt.ResultJson.Should().Be(resultJson);
-        reorderedReceipt.Should().NotBeNull();
-        reorderedReceipt!.SubjectHash.Should().Be(receipt.SubjectHash);
-    }
-
-    [Fact]
     public async Task ScheduleTool_ShouldDeclareDirectChannelChatExclusion()
     {
         var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
 
         var descriptor = tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>().Subject;
         descriptor.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
-    }
-
-    [Fact]
-    public async Task ScheduleTool_CreateResultReceipt_WhenNestedError_ShouldReturnErrorReceipt()
-    {
-        var port = new RecordingProvisioningPort
-        {
-            Throw = new InvalidOperationException("workflow_yaml is required."),
-        };
-        var tool = await DiscoverToolAsync(port);
-
-        using var _ = PushContext(scopeId: "scope-1", ownerSubject: "owner-1", accessToken: "access-token-1");
-        var output = await tool.ExecuteAsync("""
-            {
-              "team_id": "team-1",
-              "workflow_yaml": "name: demo\n",
-              "display_name": "Demo"
-            }
-            """);
-        var receipt = tool.CreateResultReceipt("call-1", tool.Name, "{}", output);
-
-        receipt.Should().NotBeNull();
-        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
-        receipt.SideEffectKind.Should().Be("studio.workflow.schedule.provision");
-        receipt.ErrorCode.Should().Be("invalid_arguments");
-        receipt.ErrorMessage.Should().Be("workflow_yaml is required.");
-        receipt.ResultJson.Should().Be(output);
     }
 
     [Fact]

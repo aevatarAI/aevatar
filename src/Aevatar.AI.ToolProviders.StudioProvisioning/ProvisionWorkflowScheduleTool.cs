@@ -98,25 +98,12 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
     public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
-    public string SideEffectKind => "studio.workflow.schedule.provision";
 
     // Observatory-delivered, never chat-delivered: declare the generic surface signal so a
     // direct channel/chat agent (e.g. the Lark/NyxID reply path) filters this out by capability
     // rather than by hardcoding the tool name. The workflow allowlist path still selects it.
     public IReadOnlyCollection<string> Capabilities { get; } =
         [AgentToolCapabilities.ExcludeFromDirectChannelChat];
-
-    public AgentToolReceipt? CreateResultReceipt(
-        string callId,
-        string toolName,
-        string argumentsJson,
-        string resultJson) =>
-        StudioProvisioningToolReceiptJson.CreateReceiptFromResult(
-            this,
-            callId,
-            toolName,
-            argumentsJson,
-            resultJson);
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
