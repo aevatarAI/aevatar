@@ -106,13 +106,27 @@ public sealed class AIAbstractionsProtoCoverageTests
         new[] { (int)AgentProfileTurnAuthorityCommitKind.Initial, (int)AgentProfileTurnAuthorityCommitKind.RetryStarted,
             (int)AgentProfileTurnAuthorityCommitKind.Reconcile }.Should().Equal(1, 2, 3);
         ((int)AgentProfileTurnDegradationReason.MaterializationFailed).Should().Be(15);
-        AiMessagesReflection.Descriptor.EnumTypes
+        var degradationValues = AiMessagesReflection.Descriptor.EnumTypes
             .Single(enumType => enumType.Name == nameof(AgentProfileTurnDegradationReason))
-            .Values.Select(value => value.Name).Should().Contain([
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_ALIAS_COLLISION",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_NOT_CONFIGURED",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_INVOCATION_FAILED",
-            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_UNKNOWN_INTENT",
+            .Values;
+        degradationValues.Select(value => value.Number).Should().Equal(Enumerable.Range(0, 16));
+        degradationValues.Select(value => value.Name).Should().Equal([
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_UNSPECIFIED",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_PROFILE_INVALID",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_ROUTE_TOOL_SET_UNAVAILABLE",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_SET_UNAVAILABLE",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_DISCOVERY_FAILED",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_NAME_COLLISION",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_TOOL_CAPABILITY_REJECTED",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_NO_MATCH",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_FAILED",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_SHADOW_MODE",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_FETCH_FAILED",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_EXACT_SKILL_IDENTITY_MISMATCH",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_SELECTED_SKILL_BODY_INVALID",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_LEGACY_AUTHORITY_MISSING",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZER_UNAVAILABLE",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_MATERIALIZATION_FAILED",
         ]);
         var forbiddenFragments = new[] {
             "body", "prompt", "tool_object", "token", "credential", "header",

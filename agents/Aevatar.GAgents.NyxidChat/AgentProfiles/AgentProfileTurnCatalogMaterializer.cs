@@ -620,7 +620,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
                 .Distinct()
                 .OrderBy(static reason => (int)reason));
-        return AgentProfileTurnAuthorityPreparation.Create(authority);
+        return AgentProfileTurnAuthorityPreparation.Create(authority, diagnostics);
     }
 
     private static AgentProfileTurnCatalogMaterialization BuildMaterialization(
@@ -730,14 +730,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
             AgentProfileTurnDegradationReason.ToolCapabilityRejected,
         (AgentProfileTurnDiagnosticCode.ClassifierNoMatch, _) =>
             AgentProfileTurnDegradationReason.ClassifierNoMatch,
-        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "alias_collision") =>
-            AgentProfileTurnDegradationReason.ClassifierAliasCollision,
-        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_not_configured") =>
-            AgentProfileTurnDegradationReason.ClassifierNotConfigured,
-        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_exception") =>
-            AgentProfileTurnDegradationReason.ClassifierInvocationFailed,
-        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "unknown_intent") =>
-            AgentProfileTurnDegradationReason.ClassifierUnknownIntent,
         (AgentProfileTurnDiagnosticCode.ClassifierFailed, _) =>
             AgentProfileTurnDegradationReason.ClassifierFailed,
         (AgentProfileTurnDiagnosticCode.ShadowCandidate, _) => AgentProfileTurnDegradationReason.ShadowMode,
@@ -770,14 +762,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
             new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierNoMatch, reason.ToString()),
         AgentProfileTurnDegradationReason.ClassifierFailed =>
             new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, reason.ToString()),
-        AgentProfileTurnDegradationReason.ClassifierAliasCollision =>
-            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "alias_collision"),
-        AgentProfileTurnDegradationReason.ClassifierNotConfigured =>
-            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_not_configured"),
-        AgentProfileTurnDegradationReason.ClassifierInvocationFailed =>
-            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_exception"),
-        AgentProfileTurnDegradationReason.ClassifierUnknownIntent =>
-            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "unknown_intent"),
         AgentProfileTurnDegradationReason.ShadowMode =>
             new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ShadowCandidate, reason.ToString()),
         AgentProfileTurnDegradationReason.ExactSkillFetchFailed =>

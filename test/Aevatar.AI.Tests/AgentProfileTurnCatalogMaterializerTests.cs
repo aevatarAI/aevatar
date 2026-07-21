@@ -100,6 +100,77 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         create.Should().Throw<InvalidOperationException>().WithMessage("*ceiling*");
     }
 
+    [Theory]
+    [InlineData("profile_id", AgentProfileTurnDegradationReason.ProfileInvalid,
+        AgentProfileTurnAuthorityKind.RestrictedEmpty)]
+    [InlineData("profile_version", AgentProfileTurnDegradationReason.ProfileInvalid,
+        AgentProfileTurnAuthorityKind.RestrictedEmpty)]
+    [InlineData("policy_revision", AgentProfileTurnDegradationReason.ProfileInvalid,
+        AgentProfileTurnAuthorityKind.RestrictedEmpty)]
+    [InlineData("exact_guid", AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch,
+        AgentProfileTurnAuthorityKind.Recovery)]
+    [InlineData("exact_version", AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch,
+        AgentProfileTurnAuthorityKind.Recovery)]
+    public async Task MaterializeCommittedAsync_FrozenIdentityDrift_ShouldFailClosedWithoutExactFetch(
+        string mutation,
+        AgentProfileTurnDegradationReason expectedReason,
+        AgentProfileTurnAuthorityKind expectedKind)
+    {
+        var tools = NewTools("recovery", "task", "extra");
+        var profile = SealProfile(BuildProfile(withAlias: true));
+        var preparation = await NewMaterializer(
+                RegistryWithRoute(tools),
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .PrepareAsync(
+                profile,
+                "session-a",
+                "/alpha run",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+        var committedAuthority = preparation.Authority;
+        switch (mutation)
+        {
+            case "profile_id":
+                committedAuthority.CandidateRoute.ProfileId = "profile-drifted";
+                break;
+            case "profile_version":
+                committedAuthority.CandidateRoute.ProfileVersion = "profile-v2";
+                break;
+            case "policy_revision":
+                committedAuthority.CandidateRoute.PolicyRevision = "policy-v2";
+                break;
+            case "exact_guid":
+                committedAuthority.SelectedExactSkillRef.Guid = "22222222-2222-2222-2222-222222222222";
+                break;
+            case "exact_version":
+                committedAuthority.SelectedExactSkillRef.LiteralVersion = "9.9";
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+        }
+        var classifier = new RecordingClassifier(new InvalidOperationException("must not classify"));
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var materialization = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeCommittedAsync(
+                profile,
+                committedAuthority,
+                "token",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        materialization.Catalog.FinalAllowedToolNames.Should().NotContain("task");
+        materialization.Catalog.SelectedIntentId.Should().BeNull();
+        materialization.Catalog.SelectedSkillPromptLayer.Should().BeNull();
+        materialization.ReconcileProposal.AuthorityKind.Should().Be(expectedKind);
+        materialization.ReconcileProposal.DegradationReasons.Should().Contain(expectedReason);
+        classifier.CallCount.Should().Be(0);
+        fetcher.CallCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task MaterializeCommittedAsync_ShouldReturnSameKeyMonotonicReconcileForSuccessAndFailure()
     {
@@ -296,22 +367,25 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
         var fetcher = new RecordingFetcher(SuccessfulFetch());
 
-        var catalog = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
-            .MaterializeAsync(
+        var result = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeWithPreparationAsync(
                 SealProfile(profile),
                 "/alpha",
                 "token",
                 tools,
                 ToolContext(),
                 CancellationToken.None);
+        var catalog = result.Catalog;
 
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
         catalog.SelectedIntentId.Should().BeNull();
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
-        catalog.Diagnostics.Should().Contain(diagnostic =>
+        result.Preparation.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
             diagnostic.Detail == "alias_collision");
+        result.Preparation.Authority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.ClassifierFailed);
         classifier.CallCount.Should().Be(0);
         fetcher.CallCount.Should().Be(0);
     }
@@ -431,22 +505,25 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-alpha"));
         var fetcher = new RecordingFetcher(SuccessfulFetch());
 
-        var catalog = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
-            .MaterializeAsync(
+        var result = await NewMaterializer(RegistryWithRoute(tools), classifier, fetcher)
+            .MaterializeWithPreparationAsync(
                 SealProfile(profile),
                 "classify",
                 "token",
                 tools,
                 ToolContext(),
                 CancellationToken.None);
+        var catalog = result.Catalog;
 
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
         catalog.SelectedIntentId.Should().BeNull();
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
-        catalog.Diagnostics.Should().ContainSingle(diagnostic =>
+        result.Preparation.Diagnostics.Should().ContainSingle(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
             diagnostic.Detail == "classifier_not_configured");
+        result.Preparation.Authority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.ClassifierFailed);
         classifier.CallCount.Should().Be(0);
         fetcher.CallCount.Should().Be(0);
     }
@@ -506,22 +583,25 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         var tools = NewTools("recovery", "task", "extra");
         var classifier = new RecordingClassifier(new InvalidOperationException("classifier failed"));
 
-        var catalog = await NewMaterializer(
+        var result = await NewMaterializer(
                 RegistryWithRoute(tools),
                 classifier,
                 new RecordingFetcher(SuccessfulFetch()))
-            .MaterializeAsync(
+            .MaterializeWithPreparationAsync(
                 SealProfile(BuildProfile()),
                 "classify",
                 "token",
                 tools,
                 ToolContext(),
                 CancellationToken.None);
+        var catalog = result.Catalog;
 
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
-        catalog.Diagnostics.Should().Contain(diagnostic =>
+        result.Preparation.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
             diagnostic.Detail == "classifier_exception");
+        result.Preparation.Authority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.ClassifierFailed);
     }
 
     [Fact]
@@ -530,26 +610,29 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         var tools = NewTools("recovery", "task", "extra");
         var fetcher = new RecordingFetcher(SuccessfulFetch());
 
-        var catalog = await NewMaterializer(
+        var result = await NewMaterializer(
                 RegistryWithRoute(tools),
                 new RecordingClassifier(AgentProfileTurnClassificationResult.Matched("intent-outside-profile")),
                 fetcher)
-            .MaterializeAsync(
+            .MaterializeWithPreparationAsync(
                 SealProfile(BuildProfile()),
                 "classify",
                 "token",
                 tools,
                 ToolContext(),
                 CancellationToken.None);
+        var catalog = result.Catalog;
 
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
         catalog.FinalAllowedToolNames.Should().NotContain("task");
         catalog.SelectedIntentId.Should().BeNull();
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
-        catalog.Diagnostics.Should().Contain(diagnostic =>
+        result.Preparation.Diagnostics.Should().Contain(diagnostic =>
             diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
             diagnostic.Detail == "unknown_intent");
+        result.Preparation.Authority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.ClassifierFailed);
         fetcher.CallCount.Should().Be(0);
     }
 
@@ -1283,6 +1366,27 @@ internal static class AgentProfileTurnCatalogMaterializerTestExtensions
         AgentToolExecutionContext toolContext,
         CancellationToken ct = default)
     {
+        var result = await materializer.MaterializeWithPreparationAsync(
+            profile,
+            userMessage,
+            accessToken,
+            registeredTools,
+            toolContext,
+            ct);
+        return result.Catalog;
+    }
+
+    public static async Task<(
+        AgentProfileTurnCatalog Catalog,
+        AgentProfileTurnAuthorityPreparation Preparation)> MaterializeWithPreparationAsync(
+        this AgentProfileTurnCatalogMaterializer materializer,
+        AgentProfileSnapshot profile,
+        string userMessage,
+        string? accessToken,
+        IReadOnlyList<IAgentTool> registeredTools,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct = default)
+    {
         var preparation = await materializer.PrepareAsync(
             profile,
             "materializer-test-session",
@@ -1297,6 +1401,6 @@ internal static class AgentProfileTurnCatalogMaterializerTestExtensions
             registeredTools,
             toolContext,
             ct);
-        return materialization.Catalog;
+        return (materialization.Catalog, preparation);
     }
 }

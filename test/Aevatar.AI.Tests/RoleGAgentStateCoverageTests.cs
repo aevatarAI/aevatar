@@ -65,9 +65,28 @@ public sealed class RoleGAgentStateCoverageTests
         {
             MessageCount = 2,
             AgentProfileTurnAuthority = TurnAuthority("session-old", 1, "intent-a", "skill-a"),
-            Sessions = { ["session-old"] = new RoleChatSessionState { Sequence = 1 },
+            Sessions = { ["session-older"] = new RoleChatSessionState { Sequence = 0 },
+                ["session-old"] = new RoleChatSessionState { Sequence = 1 },
+                ["session-same"] = new RoleChatSessionState { Sequence = 1 },
                 ["session-new"] = new RoleChatSessionState { Sequence = 2 } },
         };
+        ApplyAuthority(
+                current,
+                AgentProfileTurnAuthorityCommitKind.Initial,
+                current.AgentProfileTurnAuthority.Clone())
+            .Should().BeSameAs(current);
+        var mutatedDuplicate = current.AgentProfileTurnAuthority.Clone();
+        mutatedDuplicate.CandidateRoute.IntentId = "intent-mutated";
+        ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Initial, mutatedDuplicate)
+            .Should().BeSameAs(current);
+        foreach (var staleSessionId in new[] { "session-older", "session-same" })
+        {
+            ApplyAuthority(
+                    current,
+                    AgentProfileTurnAuthorityCommitKind.Initial,
+                    TurnAuthority(staleSessionId, 1, "intent-a", "skill-a"))
+                .Should().BeSameAs(current);
+        }
         var initial = TurnAuthority("session-new", 1, "intent-a", "skill-a");
         initial.AuthorityCeilingToolNames.Clear();
         initial.AuthorityCeilingToolNames.Add([" task ", "Search", "TASK"]);

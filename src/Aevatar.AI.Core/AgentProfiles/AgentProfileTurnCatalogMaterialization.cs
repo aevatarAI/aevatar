@@ -5,18 +5,26 @@ namespace Aevatar.AI.Core.AgentProfiles;
 public sealed class AgentProfileTurnAuthorityPreparation
 {
     private readonly AgentProfileTurnAuthorityState _authority;
+    private readonly IReadOnlyList<AgentProfileTurnDiagnostic> _diagnostics;
 
-    private AgentProfileTurnAuthorityPreparation(AgentProfileTurnAuthorityState authority)
+    private AgentProfileTurnAuthorityPreparation(
+        AgentProfileTurnAuthorityState authority,
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
     {
         _authority = authority.Clone();
+        _diagnostics = diagnostics.ToArray();
     }
 
     public AgentProfileTurnAuthorityState Authority => _authority.Clone();
 
-    public static AgentProfileTurnAuthorityPreparation Create(AgentProfileTurnAuthorityState authority)
+    public IReadOnlyList<AgentProfileTurnDiagnostic> Diagnostics => _diagnostics.ToArray();
+
+    public static AgentProfileTurnAuthorityPreparation Create(
+        AgentProfileTurnAuthorityState authority,
+        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(authority);
-        return new AgentProfileTurnAuthorityPreparation(authority);
+        return new AgentProfileTurnAuthorityPreparation(authority, diagnostics ?? []);
     }
 }
 
