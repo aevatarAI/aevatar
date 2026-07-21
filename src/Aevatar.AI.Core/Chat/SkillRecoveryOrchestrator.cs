@@ -155,7 +155,8 @@ internal sealed class SkillRecoveryOrchestrator
                 var toolMsg = ToolCallLoop.BuildToolResultMessage(
                     result.CallId,
                     result.ToolName,
-                    ToolExecutionResultHistory.ResolveSafeContent(result));
+                    ToolExecutionResultHistory.ResolveSafeContent(result),
+                    result.Receipt);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
                 yield return SkillRecoveryToolProgress.Completed(result);

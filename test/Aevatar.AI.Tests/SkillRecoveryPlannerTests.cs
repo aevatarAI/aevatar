@@ -486,6 +486,65 @@ public sealed class SkillRecoveryPlannerTests
         directive.ToolCall.ArgumentsJson.Should().Contain("backend unavailable");
     }
 
+    [Fact]
+    public void TryPlanNextDirective_WhenChannelWorkflowDeliveryRequiresConfiguration_ShouldNotSearchForAnotherSkill()
+    {
+        const string displayText = "当前 channel workflow delivery 不可用。";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "invoke-1",
+            ToolName = "aevatar_invoke_team",
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable,
+            ErrorMessage = "Open /channels and choose Repair workflow replies.",
+            ResultJson = """{"error":{"code":"channel_workflow_delivery_unavailable"}}""",
+        };
+        var messages = MessagesWithInvocationFailure(displayText, receipt);
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(requireInitialSearch: false, primarySkillName: null, maxAttempts: 2),
+            messages,
+            finalContent: "当前 channel workflow delivery 不可用。 The workflow is unavailable.",
+            recoveryAttempts: 0,
+            callIdPrefix: "request-alpha",
+            out var directive);
+
+        messages.Last().ToolResultView!.Failure!.ErrorCode.Should().Be(
+            AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable);
+        forced.Should().BeFalse();
+        directive.ToolCall.Should().BeNull();
+    }
+
+    [Fact]
+    public void TryPlanNextDirective_WhenSameDisplayTextHasAnotherErrorCode_ShouldRetainBlockerSearch()
+    {
+        const string displayText = "当前 channel workflow delivery 不可用。";
+        var receipt = new AgentToolReceipt
+        {
+            CallId = "invoke-1",
+            ToolName = "aevatar_invoke_team",
+            Status = AgentToolReceiptStatus.Error,
+            ApprovalMode = AgentToolReceiptApprovalMode.NeverRequire,
+            ErrorCode = "backend_unavailable",
+            ErrorMessage = displayText,
+            ResultJson = """{"error":{"code":"backend_unavailable"}}""",
+        };
+        var messages = MessagesWithInvocationFailure(displayText, receipt);
+
+        var forced = SkillRecoveryPlanner.TryPlanNextDirective(
+            Recovery(requireInitialSearch: false, primarySkillName: null, maxAttempts: 2),
+            messages,
+            finalContent: "当前 channel workflow delivery 不可用。 The workflow is unavailable.",
+            recoveryAttempts: 0,
+            callIdPrefix: "request-beta",
+            out var directive);
+
+        forced.Should().BeTrue();
+        directive.ToolCall.Should().NotBeNull();
+        directive.ToolCall!.Name.Should().Be("ornn_search_skills");
+    }
+
     [Theory]
     [InlineData("无法完成请求")]
     [InlineData("The command cannot complete")]
@@ -568,8 +627,28 @@ public sealed class SkillRecoveryPlannerTests
             ],
         };
 
-    private static ChatMessage ToolResult(string callId, string toolName, string rawResult) =>
-        ToolCallLoop.BuildToolResultMessage(callId, toolName, rawResult);
+    private static List<ChatMessage> MessagesWithInvocationFailure(
+        string displayText,
+        AgentToolReceipt receipt) =>
+    [
+        ChatMessage.User("/goal ship"),
+        AssistantToolCall("use-1", "use_skill", """{"skill":"project-summary"}"""),
+        ToolResult("use-1", "use_skill", LoadResult(
+            status: "success",
+            skillName: "project-summary",
+            loaded: true,
+            error: null,
+            text: "# project-summary\n\nInstructions")),
+        AssistantToolCall("invoke-1", "aevatar_invoke_team", """{"team_id":"team-alpha"}"""),
+        ToolResult("invoke-1", "aevatar_invoke_team", displayText, receipt),
+    ];
+
+    private static ChatMessage ToolResult(
+        string callId,
+        string toolName,
+        string rawResult,
+        AgentToolReceipt? receipt = null) =>
+        ToolCallLoop.BuildToolResultMessage(callId, toolName, rawResult, receipt);
 
     private static string SearchResult(
         string status,
