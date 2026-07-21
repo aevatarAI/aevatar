@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -14,6 +15,10 @@ namespace Aevatar.GAgentService.Core.GAgents;
 [GAgent("gagent.service.run")]
 public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
 {
+    private const string TerminalNotificationRetryCallbackPrefix = "service-run-terminal-retry";
+    private const int TerminalNotificationRetryInitialDelayMs = 250;
+    private const int TerminalNotificationRetryMaxDelayMs = 30_000;
+
     public ServiceRunGAgent()
     {
         InitializeId();
@@ -134,6 +139,29 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             implementationTerminalEvidence: true);
     }
 
+    [EventHandler]
+    public Task HandleTerminalNotificationRetryFiredAsync(
+        ServiceRunTerminalNotificationRetryFiredEvent retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        var pending = State.PendingTerminalNotification;
+        if (pending == null ||
+            !string.Equals(pending.DeliveryId, retry.DeliveryId, StringComparison.Ordinal))
+        {
+            return Task.CompletedTask;
+        }
+
+        var matchesScheduledAttempt =
+            State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled &&
+            retry.Attempt == State.TerminalNotificationAttempt;
+        var matchesScheduleBeforeCommitRecovery =
+            State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.Prepared &&
+            retry.Attempt == State.TerminalNotificationAttempt + 1;
+        return matchesScheduledAttempt || matchesScheduleBeforeCommitRecovery
+            ? DeliverPendingTerminalNotificationAsync(failedAttempt: retry.Attempt)
+            : Task.CompletedTask;
+    }
+
     private async Task ApplyStatusUpdateAsync(
         UpdateServiceRunStatusRequested command,
         Timestamp? sourceTerminalAt,
@@ -159,7 +187,8 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             implementationTerminalEvidence &&
             IsTerminal(command.Status) &&
             HasCompletionNotificationTarget(existing.CompletionNotificationTarget) &&
-            State.PendingTerminalNotification == null;
+            State.PendingTerminalNotification == null &&
+            State.TerminalNotificationDeliveryStatus == ServiceRunTerminalNotificationDeliveryStatus.Unspecified;
         if (existing.Status == command.Status && !outputChanged && !errorChanged)
         {
             if (shouldPrepareTerminalNotification)
@@ -228,6 +257,7 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             .On<ServiceRunRegisteredEvent>(ApplyRegistered)
             .On<ServiceRunStatusUpdatedEvent>(ApplyStatusUpdated)
             .On<ServiceRunTerminalNotificationPreparedEvent>(ApplyTerminalNotificationPrepared)
+            .On<ServiceRunTerminalNotificationRetryScheduledEvent>(ApplyTerminalNotificationRetryScheduled)
             .On<ServiceRunTerminalNotificationDispatchedEvent>(ApplyTerminalNotificationDispatched)
             .On<ServiceRunTerminalNotificationExpiredEvent>(ApplyTerminalNotificationExpired)
             .OrCurrent();
@@ -264,8 +294,28 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
         var next = state.Clone();
         next.PendingTerminalNotification = evt.Notification?.Clone();
         next.TerminalNotificationDeliveryStatus = ServiceRunTerminalNotificationDeliveryStatus.Prepared;
+        next.TerminalNotificationAttempt = 0;
+        next.TerminalNotificationRetryCallbackId = string.Empty;
+        next.TerminalNotificationRetryAt = null;
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record?.RunId}:terminal-notification:prepared";
+        return next;
+    }
+
+    private static ServiceRunState ApplyTerminalNotificationRetryScheduled(
+        ServiceRunState state,
+        ServiceRunTerminalNotificationRetryScheduledEvent evt)
+    {
+        var next = state.Clone();
+        if (string.Equals(next.PendingTerminalNotification?.DeliveryId, evt.DeliveryId, StringComparison.Ordinal))
+        {
+            next.TerminalNotificationDeliveryStatus = ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled;
+            next.TerminalNotificationAttempt = evt.Attempt;
+            next.TerminalNotificationRetryCallbackId = evt.CallbackId ?? string.Empty;
+            next.TerminalNotificationRetryAt = evt.RetryAt?.Clone();
+        }
+        next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
+        next.LastEventId = $"{next.Record?.RunId}:terminal-notification:retry-scheduled:{evt.Attempt}";
         return next;
     }
 
@@ -275,7 +325,10 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
     {
         var next = state.Clone();
         if (string.Equals(next.PendingTerminalNotification?.DeliveryId, evt.DeliveryId, StringComparison.Ordinal))
+        {
             next.TerminalNotificationDeliveryStatus = ServiceRunTerminalNotificationDeliveryStatus.Dispatched;
+            ClearPendingTerminalNotification(next);
+        }
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record?.RunId}:terminal-notification:dispatched";
         return next;
@@ -287,10 +340,20 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
     {
         var next = state.Clone();
         if (string.Equals(next.PendingTerminalNotification?.DeliveryId, evt.DeliveryId, StringComparison.Ordinal))
+        {
             next.TerminalNotificationDeliveryStatus = ServiceRunTerminalNotificationDeliveryStatus.Expired;
+            ClearPendingTerminalNotification(next);
+        }
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;
         next.LastEventId = $"{next.Record?.RunId}:terminal-notification:expired";
         return next;
+    }
+
+    private static void ClearPendingTerminalNotification(ServiceRunState state)
+    {
+        state.PendingTerminalNotification = null;
+        state.TerminalNotificationRetryCallbackId = string.Empty;
+        state.TerminalNotificationRetryAt = null;
     }
 
     private static bool IsTerminal(ServiceRunStatus status) =>
@@ -438,7 +501,9 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             TerminalAt = terminalAt.Clone(),
         };
 
-    private async Task DeliverPendingTerminalNotificationAsync(CancellationToken ct = default)
+    private async Task DeliverPendingTerminalNotificationAsync(
+        CancellationToken ct = default,
+        int? failedAttempt = null)
     {
         if (State.TerminalNotificationDeliveryStatus is
             ServiceRunTerminalNotificationDeliveryStatus.Dispatched or
@@ -463,22 +528,87 @@ public sealed class ServiceRunGAgent : GAgentBase<ServiceRunState>
             return;
         }
 
-        await SendToAsync(
-            target.ActorId.Trim(),
-            notification,
-            ct,
-            new EventEnvelopePublishOptions
-            {
-                Delivery = new EventEnvelopeDeliveryOptions
+        try
+        {
+            await SendToAsync(
+                target.ActorId.Trim(),
+                notification,
+                ct,
+                new EventEnvelopePublishOptions
                 {
-                    DeduplicationOperationId = $"service-run-terminal-{notification.DeliveryId}",
-                },
-            });
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        DeduplicationOperationId = $"service-run-terminal-{notification.DeliveryId}",
+                    },
+                });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ScheduleTerminalNotificationRetryAsync(
+                target,
+                notification,
+                failedAttempt ?? State.TerminalNotificationAttempt,
+                ct);
+            return;
+        }
+
         await PersistDomainEventAsync(new ServiceRunTerminalNotificationDispatchedEvent
         {
             DeliveryId = notification.DeliveryId,
-            DispatchedAt = Timestamp.FromDateTimeOffset(now),
+            DispatchedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         }, ct);
+    }
+
+    private async Task ScheduleTerminalNotificationRetryAsync(
+        ServiceRunCompletionNotificationTarget target,
+        ServiceRunTerminalNotification notification,
+        int failedAttempt,
+        CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var nowUnixMs = now.ToUnixTimeMilliseconds();
+        if (target.ExpiresAtUnixMs <= nowUnixMs)
+        {
+            await PersistDomainEventAsync(new ServiceRunTerminalNotificationExpiredEvent
+            {
+                DeliveryId = notification.DeliveryId,
+                ExpiredAt = Timestamp.FromDateTimeOffset(now),
+            }, ct);
+            return;
+        }
+
+        var attempt = Math.Max(State.TerminalNotificationAttempt, failedAttempt) + 1;
+        var retryDelayMs = CalculateTerminalNotificationRetryDelayMs(attempt);
+        var remainingDeadlineMs = target.ExpiresAtUnixMs - nowUnixMs;
+        var dueTime = TimeSpan.FromMilliseconds(Math.Min(retryDelayMs, remainingDeadlineMs));
+        var retryAt = now.Add(dueTime);
+        var callbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
+            TerminalNotificationRetryCallbackPrefix,
+            notification.DeliveryId);
+
+        await ScheduleSelfDurableTimeoutAsync(
+            callbackId,
+            dueTime,
+            new ServiceRunTerminalNotificationRetryFiredEvent
+            {
+                DeliveryId = notification.DeliveryId,
+                Attempt = attempt,
+            },
+            ct: ct);
+        await PersistDomainEventAsync(new ServiceRunTerminalNotificationRetryScheduledEvent
+        {
+            DeliveryId = notification.DeliveryId,
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAt = Timestamp.FromDateTimeOffset(retryAt),
+        }, ct);
+    }
+
+    private static long CalculateTerminalNotificationRetryDelayMs(int attempt)
+    {
+        var exponent = Math.Clamp(attempt - 1, 0, 7);
+        var delayMs = TerminalNotificationRetryInitialDelayMs * (1L << exponent);
+        return Math.Min(delayMs, TerminalNotificationRetryMaxDelayMs);
     }
 
     private static bool HasCompletionNotificationTarget(ServiceRunCompletionNotificationTarget? target) =>

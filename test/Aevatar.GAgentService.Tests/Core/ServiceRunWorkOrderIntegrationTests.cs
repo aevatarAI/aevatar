@@ -222,6 +222,7 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         serviceRun.State.Record.Status.Should().Be(ServiceRunStatus.Completed);
         serviceRun.State.TerminalNotificationDeliveryStatus.Should()
             .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        serviceRun.State.PendingTerminalNotification.Should().BeNull();
 
         workOrder.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Completed);
         workOrder.State.Execution.StartedAtUtc.Should().BeNull();

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.GAgents;
@@ -8,6 +9,7 @@ using Aevatar.Scripting.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Tests.Core;
 
@@ -333,45 +335,147 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_ShouldRedeliverPreparedTerminalNotificationAfterRestart()
+    public async Task TerminalSendFailure_ShouldScheduleDurableRetryWithoutDeactivation()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
+        actor.State.TerminalNotificationAttempt.Should().Be(1);
+        actor.State.PendingTerminalNotification.Should().NotBeNull();
+        var callback = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        callback.DueTime.Should().BeCloseTo(TimeSpan.FromMilliseconds(250), TimeSpan.FromMilliseconds(50));
+        callback.CallbackId.Should().Be(actor.State.TerminalNotificationRetryCallbackId);
+        var retry = callback.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>();
+        retry.DeliveryId.Should().Be("delivery-1");
+        retry.Attempt.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RetryFired_WhenPending_ShouldDispatchAndCommitDispatched(
+        bool retryScheduleWasCommitted)
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = retryScheduleWasCommitted
+                ? new InvalidOperationException("simulated terminal notification failure")
+                : new OperationCanceledException("simulated schedule-before-commit crash"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+        var terminalUpdate = () => actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+        if (retryScheduleWasCommitted)
+            await terminalUpdate();
+        else
+            await terminalUpdate.Should().ThrowAsync<OperationCanceledException>();
+        publisher.SendException = null;
+
+        await actor.HandleTerminalNotificationRetryFiredAsync(new ServiceRunTerminalNotificationRetryFiredEvent
+        {
+            DeliveryId = "delivery-1",
+            Attempt = 1,
+        });
+
+        publisher.Sends.Should().ContainSingle();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        actor.State.TerminalNotificationRetryCallbackId.Should().BeEmpty();
+        actor.State.TerminalNotificationRetryAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RetryFired_WhenAttemptIsStale_ShouldNotSend()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+        publisher.SendException = null;
+        var version = actor.State.LastAppliedEventVersion;
+
+        await actor.HandleTerminalNotificationRetryFiredAsync(new ServiceRunTerminalNotificationRetryFiredEvent
+        {
+            DeliveryId = "delivery-1",
+            Attempt = 2,
+        });
+
+        publisher.Sends.Should().BeEmpty();
+        actor.State.LastAppliedEventVersion.Should().Be(version);
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
+    }
+
+    [Fact]
+    public async Task TerminalDelivery_WhenDeadlineElapsed_ShouldCommitExpired()
+    {
+        var publisher = new RecordingEventPublisher();
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent());
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddSeconds(-1));
+
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+
+        publisher.Sends.Should().BeEmpty();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Expired);
+        actor.State.PendingTerminalNotification.Should().BeNull();
+        actor.State.TerminalNotificationRetryCallbackId.Should().BeEmpty();
+        actor.State.TerminalNotificationRetryAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ActivateAsync_WhenRetryScheduled_ShouldRecoverPendingNotification()
     {
         var eventStore = new InMemoryEventStore();
-        var failingPublisher = new RecordingEventPublisher { FailSends = true };
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var failingPublisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
         var first = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
             eventStore,
             "service-run:run-1",
-            static () => new ServiceRunGAgent());
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
         first.EventPublisher = failingPublisher;
-        var record = BuildRecord("run-1");
-        record.CompletionNotificationTarget = new ServiceRunCompletionNotificationTarget
-        {
-            ActorId = "work-order:scope-1:wo-1",
-            DeliveryId = "delivery-1",
-            ExpiresAtUnixMs = long.MaxValue,
-        };
-        record.TargetActorId = "role-actor-1";
-        await first.HandleRegisterAsync(new RegisterServiceRunRequested { Record = record });
-
-        var terminalUpdate = () => first.HandleRoleChatCompletedAsync(new RoleChatSessionCompletedEvent
-        {
-            ActorId = "role-actor-1",
-            RunContext = new RoleChatRunContext
-            {
-                RunId = "run-1",
-                CommandId = "cmd-run-1",
-                CorrelationId = "corr-run-1",
-                CompletionNotificationActorId = first.Id,
-            },
-            Outcome = RoleChatSessionOutcome.Failed,
-            FailureCode = "ROLE_EXECUTION_FAILED",
-            SafeMessage = "failed",
-            TerminalTime = Timestamp.FromDateTimeOffset(
-                DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000)),
-        });
-        await terminalUpdate.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("simulated terminal notification failure");
+        await RegisterNotificationRunAsync(first, DateTimeOffset.UtcNow.AddMinutes(1));
+        await first.HandleRoleChatCompletedAsync(BuildTerminalEvent(first.Id));
         first.State.TerminalNotificationDeliveryStatus.Should()
-            .Be(ServiceRunTerminalNotificationDeliveryStatus.Prepared);
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
 
         var recoveredPublisher = new RecordingEventPublisher();
         var recovered = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
@@ -387,6 +491,31 @@ public sealed class ServiceRunGAgentTests
             .Which.Error.Should().Be("failed");
         recovered.State.TerminalNotificationDeliveryStatus.Should()
             .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        recovered.State.PendingTerminalNotification.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TerminalSendCancellation_ShouldPropagateWithoutSchedulingRetry()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new OperationCanceledException("simulated cancellation"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+
+        var act = () => actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Prepared);
     }
 
     [Fact]
@@ -551,6 +680,39 @@ public sealed class ServiceRunGAgentTests
             CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         };
 
+    private static async Task RegisterNotificationRunAsync(
+        ServiceRunGAgent actor,
+        DateTimeOffset expiresAt)
+    {
+        var record = BuildRecord("run-1");
+        record.TargetActorId = "role-actor-1";
+        record.CompletionNotificationTarget = new ServiceRunCompletionNotificationTarget
+        {
+            ActorId = "work-order:scope-1:wo-1",
+            DeliveryId = "delivery-1",
+            ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
+        };
+        await actor.HandleRegisterAsync(new RegisterServiceRunRequested { Record = record });
+    }
+
+    private static RoleChatSessionCompletedEvent BuildTerminalEvent(string completionNotificationActorId) =>
+        new()
+        {
+            ActorId = "role-actor-1",
+            RunContext = new RoleChatRunContext
+            {
+                RunId = "run-1",
+                CommandId = "cmd-run-1",
+                CorrelationId = "corr-run-1",
+                CompletionNotificationActorId = completionNotificationActorId,
+            },
+            Outcome = RoleChatSessionOutcome.Failed,
+            FailureCode = "ROLE_EXECUTION_FAILED",
+            SafeMessage = "failed",
+            TerminalTime = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000)),
+        };
+
     private static EventEnvelope BuildInboundEnvelope(IMessage payload, string publisherActorId) =>
         new()
         {
@@ -564,7 +726,7 @@ public sealed class ServiceRunGAgentTests
 
     private sealed class RecordingEventPublisher : IEventPublisher
     {
-        public bool FailSends { get; init; }
+        public Exception? SendException { get; set; }
 
         public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> Sends { get; } = [];
 
@@ -585,11 +747,47 @@ public sealed class ServiceRunGAgentTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            if (FailSends)
-                throw new InvalidOperationException("simulated terminal notification failure");
+            if (SendException != null)
+                throw SendException;
 
             Sends.Add((targetActorId, evt, options));
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
+            {
+                ActorId = request.ActorId,
+                CallbackId = request.CallbackId,
+                TriggerEnvelope = request.TriggerEnvelope.Clone(),
+                DueTime = request.DueTime,
+                DeliveryMode = request.DeliveryMode,
+            });
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                TimeoutRequests.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 }
