@@ -57,7 +57,6 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
         var conversationResolution = await ResolveConversationAsync(
                 scopeId,
                 userText,
-                workflowActorId,
                 request.Conversation,
                 ct)
             .ConfigureAwait(false);
@@ -87,6 +86,20 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             ? CreateIdentity()
             : conversationResolution.TurnId;
         var deliveryActorId = ChatTurnHistoryDeliveryActorIds.FromDeliveryId(deliveryId);
+        if (!string.IsNullOrWhiteSpace(conversationResolution.CreateIdempotencyKey) &&
+            await _actorRuntime.ExistsAsync(deliveryActorId).ConfigureAwait(false))
+        {
+            var replayReservation = new WorkflowChatHistoryTerminalDeliveryReservation(
+                deliveryActorId,
+                deliveryId,
+                workflowActorId,
+                workflowCommandId);
+            return WorkflowChatHistoryTerminalDeliveryReservationResult.Success(
+                replayReservation,
+                new WorkflowChatContext(scopeId, conversationResolution.ConversationId, turnId),
+                replayed: true);
+        }
+
         if (!await _actorRuntime.ExistsAsync(deliveryActorId).ConfigureAwait(false))
             await _actorRuntime.CreateAsync<ChatTurnHistoryDeliveryGAgent>(deliveryActorId, ct).ConfigureAwait(false);
 
@@ -126,7 +139,6 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
     private async Task<ConversationIdentityResolution> ResolveConversationAsync(
         string scopeId,
         string userText,
-        string workflowActorId,
         WorkflowChatConversationIntent conversation,
         CancellationToken ct)
     {
@@ -135,7 +147,6 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             WorkflowChatConversationIntentKind.Create => await ResolveCreateConversationAsync(
                     scopeId,
                     userText,
-                    workflowActorId,
                     conversation.CreateIdempotency,
                     ct)
                 .ConfigureAwait(false),
@@ -148,7 +159,6 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
     private async Task<ConversationIdentityResolution> ResolveCreateConversationAsync(
         string scopeId,
         string userText,
-        string workflowActorId,
         WorkflowChatCreateIdempotencyIdentity? createIdempotency,
         CancellationToken ct)
     {
@@ -156,7 +166,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             return ConversationIdentityResolution.Create(CreateIdentity());
 
         var createIdempotencyKey = createIdempotency.CreateIdempotencyKey;
-        var requestHash = createIdempotency.BuildRequestHash(scopeId, userText, workflowActorId);
+        var requestHash = createIdempotency.BuildRequestHash(scopeId, userText);
         var recoveryRecord = _createRecoveryReader is null
             ? null
             : await _createRecoveryReader.FindAsync(scopeId, createIdempotencyKey, ct).ConfigureAwait(false);

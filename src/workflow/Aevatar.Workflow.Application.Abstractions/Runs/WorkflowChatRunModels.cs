@@ -101,9 +101,8 @@ public sealed record WorkflowChatCreateIdempotencyIdentity
 
     public string BuildRequestHash(
         string scopeId,
-        string userText,
-        string workflowActorId) =>
-        HashTuple(scopeId, CreateIdempotencyKey, userText, workflowActorId);
+        string userText) =>
+        HashTuple(scopeId, CreateIdempotencyKey, userText);
 
     private static string HashTuple(params string[] parts)
     {

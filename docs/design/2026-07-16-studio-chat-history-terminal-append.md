@@ -66,9 +66,8 @@ Create idempotency is explicit and client-controlled. A create request may carry
 - trusted `scope_id`
 - `create_idempotency_key`
 - archived user text
-- workflow actor id
 
-For an idempotent create, the first reservation derives deterministic `conversation_id`, `turn_id`, and delivery actor identity from the trusted scope and create idempotency key. If the recovery read model already contains the key and the request hash matches, reservation returns `Replayed = true` with the authoritative `WorkflowChatContext` and `WorkflowChatRunInteractionService` does not dispatch another workflow command. If the key exists with a different hash, reservation fails with `IdempotencyConflict`.
+For an idempotent create, the first reservation derives deterministic `conversation_id`, `turn_id`, and delivery actor identity from the trusted scope and create idempotency key. If the deterministic delivery actor has already admitted the key before the recovery read model materializes, reservation returns `Replayed = true` with the same `WorkflowChatContext` and `WorkflowChatRunInteractionService` does not dispatch another workflow command. If the recovery read model already contains the key and the request hash matches, reservation also returns `Replayed = true` with the authoritative `WorkflowChatContext`; if the key exists with a different hash, reservation fails with `IdempotencyConflict`.
 
 This is intentionally not a generic idempotency framework. The contract is scoped to Chat History create recovery and is backed by committed delivery state plus a read model.
 

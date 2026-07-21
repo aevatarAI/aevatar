@@ -54,7 +54,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         var dispatch = new RecordingActorDispatchPort();
         var recoveryReader = new RecordingChatCreateRecoveryReader();
         var createIdentity = new WorkflowChatCreateIdempotencyIdentity("create-alpha");
-        var requestHash = createIdentity.BuildRequestHash("scope-alpha", "original user text", WorkflowActorId);
+        var requestHash = createIdentity.BuildRequestHash("scope-alpha", "original user text");
         recoveryReader.Seed(new ChatCreateRecoveryRecord(
             ScopeId: "scope-alpha",
             CreateIdempotencyKey: "create-alpha",
@@ -106,7 +106,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     }
 
     [Fact]
-    public async Task ReserveAsync_ShouldUseStableConversationTurnAndDeliveryIdsForCreateIdentity()
+    public async Task ReserveAsync_ShouldReplayExistingCreateIdentityBeforeRecoveryMaterializes()
     {
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
@@ -120,13 +120,12 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
 
         first.Succeeded.Should().BeTrue();
         second.Succeeded.Should().BeTrue();
+        second.Replayed.Should().BeTrue();
         second.ChatContext.Should().BeEquivalentTo(first.ChatContext);
         second.Reservation!.DeliveryActorId.Should().Be(first.Reservation!.DeliveryActorId);
-        dispatch.Calls.Should().HaveCount(2);
-        dispatch.Calls
-            .Select(call => call.Envelope.Payload.Unpack<ChatTurnHistoryDeliveryReserveRequested>().CreateIdempotencyKey)
-            .Should()
-            .Equal("create-alpha", "create-alpha");
+        dispatch.Calls.Should().ContainSingle();
+        dispatch.Calls[0].Envelope.Payload.Unpack<ChatTurnHistoryDeliveryReserveRequested>()
+            .CreateIdempotencyKey.Should().Be("create-alpha");
     }
 
     [Fact]
