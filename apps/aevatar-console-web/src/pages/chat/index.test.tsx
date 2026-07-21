@@ -12,10 +12,21 @@ jest.mock("@/shared/auth/fetch", () => ({
 }));
 
 jest.mock("./chatHistoryApi", () => ({
+  ChatHistoryApiError: class MockChatHistoryApiError extends Error {
+    code?: string;
+    status: number;
+
+    constructor(message: string, status: number, code?: string) {
+      super(message);
+      this.code = code;
+      this.status = status;
+    }
+  },
   chatHistoryApi: {
     deleteConversation: jest.fn(),
     listConversationMetas: jest.fn(),
     loadConversation: jest.fn(),
+    recoverCreate: jest.fn(),
   },
 }));
 
@@ -209,6 +220,10 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([]);
     (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([]);
     (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(undefined);
+    const { ChatHistoryApiError } = jest.requireMock("./chatHistoryApi");
+    (chatHistoryApi.recoverCreate as jest.Mock).mockRejectedValue(
+      new ChatHistoryApiError("Recovery is not materialized.", 404)
+    );
   });
 
   it("loads server history and restores its detail without local-only controls", async () => {
@@ -233,6 +248,42 @@ describe("ChatPage server-backed history", () => {
     expect(screen.getByText("2 turns")).toBeTruthy();
     expect(screen.queryByText("History is stored in this browser.")).toBeNull();
     expect(screen.queryByRole("button", { name: /rename/i })).toBeNull();
+  });
+
+  it("recovers a create identity when the stream completes without context", async () => {
+    (authFetch as jest.Mock).mockResolvedValue(
+      createSseResponse([
+        { runFinished: { result: { output: "Recovered response" } } },
+      ])
+    );
+    (chatHistoryApi.recoverCreate as jest.Mock).mockResolvedValue({
+      conversationId: "recovered-conversation",
+      sourceVersion: 2,
+      status: "append_committed",
+      turnId: "recovered-turn",
+    });
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Recover this create");
+
+    expect(await screen.findByText("Recovered response")).toBeTruthy();
+    const [body] = chatRequestBodies();
+    expect(body.conversation).toEqual({
+      createIdempotencyKey: expect.any(String),
+    });
+    const createIdempotencyKey = String(
+      (body.conversation as { createIdempotencyKey: unknown })
+        .createIdempotencyKey
+    );
+    await waitFor(() =>
+      expect(chatHistoryApi.recoverCreate).toHaveBeenCalledWith(
+        "scope-a",
+        createIdempotencyKey
+      )
+    );
+    expect(
+      await screen.findByRole("button", { name: "Recover this create" })
+    ).toBeTruthy();
   });
 
   it("blocks reads and chat writes when the route scope differs from the authenticated scope", async () => {
@@ -435,7 +486,7 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
     const [body] = chatRequestBodies();
     expect(body).toEqual({
-      conversation: {},
+      conversation: { createIdempotencyKey: expect.any(String) },
       prompt: "Create a support team",
       sessionId: expect.any(String),
       workflow: "studio",
@@ -457,7 +508,11 @@ describe("ChatPage server-backed history", () => {
     await sendPrompt("Start an unbound chat");
 
     expect(
-      await screen.findByText("Chat completed without a conversation context.")
+      await screen.findByText(
+        "Chat completed without a conversation context.",
+        {},
+        { timeout: 5_000 }
+      )
     ).toBeTruthy();
   });
 
@@ -483,7 +538,9 @@ describe("ChatPage server-backed history", () => {
     await screen.findByText("Second answer");
 
     const [firstBody, secondBody] = chatRequestBodies();
-    expect(firstBody.conversation).toEqual({});
+    expect(firstBody.conversation).toEqual({
+      createIdempotencyKey: expect.any(String),
+    });
     expect(secondBody.conversation).toEqual({
       conversationId: "server-conversation",
     });

@@ -1,6 +1,7 @@
 import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { authFetch } from "@/shared/auth/fetch";
 import type {
+  ChatCreateRecovery,
   ChatHistoryIndex,
   ConversationMeta,
   StoredChatMessage,
@@ -179,10 +180,27 @@ export function decodeChatHistoryIndex(value: unknown): ChatHistoryIndex {
     return failContract("$index.conversations", "an array");
   }
 
+  const nextCursor = readOptionalNullableString(record, "nextCursor", "$index");
   return {
     conversations: record.conversations.map((conversation, index) =>
       decodeConversationMeta(conversation, `$index.conversations[${index}]`)
     ),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  };
+}
+
+export function decodeChatCreateRecovery(value: unknown): ChatCreateRecovery {
+  const record = asRecord(value, "$recovery");
+  const sourceVersion = readNumber(record, "sourceVersion", "$recovery");
+  if (!Number.isInteger(sourceVersion) || sourceVersion < 0) {
+    return failContract("$recovery.sourceVersion", "a non-negative integer");
+  }
+
+  return {
+    conversationId: readString(record, "conversationId", "$recovery"),
+    sourceVersion,
+    status: readString(record, "status", "$recovery"),
+    turnId: readString(record, "turnId", "$recovery"),
   };
 }
 
@@ -208,6 +226,20 @@ function buildConversationPath(scopeId: string, conversationId: string): string 
   return `${buildHistoryPath(scopeId)}/conversations/${encodeSegment(
     conversationId
   )}`;
+}
+
+function buildCreateRecoveryPath(
+  scopeId: string,
+  createIdempotencyKey: string
+): string {
+  return `${buildHistoryPath(scopeId)}/create-recoveries/${encodeSegment(
+    createIdempotencyKey
+  )}`;
+}
+
+function buildIndexPagePath(scopeId: string, cursor?: string): string {
+  const path = buildHistoryPath(scopeId);
+  return cursor ? `${path}?cursor=${encodeURIComponent(cursor)}` : path;
 }
 
 async function createApiError(response: Response): Promise<ChatHistoryApiError> {
@@ -239,11 +271,38 @@ async function requestJson<T>(
 
 export const chatHistoryApi = {
   async listConversationMetas(scopeId: string): Promise<ConversationMeta[]> {
-    const index = await requestJson(
-      buildHistoryPath(scopeId),
-      decodeChatHistoryIndex
+    const conversations: ConversationMeta[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const index = await requestJson(
+        buildIndexPagePath(scopeId, cursor),
+        decodeChatHistoryIndex
+      );
+      conversations.push(...index.conversations);
+      const nextCursor = index.nextCursor?.trim() || undefined;
+      if (nextCursor && seenCursors.has(nextCursor)) {
+        throw new ChatHistoryContractError(
+          "$index.nextCursor",
+          "a cursor that advances to the next page"
+        );
+      }
+      if (nextCursor) {
+        seenCursors.add(nextCursor);
+      }
+      cursor = nextCursor;
+    } while (cursor);
+    return conversations;
+  },
+
+  async recoverCreate(
+    scopeId: string,
+    createIdempotencyKey: string
+  ): Promise<ChatCreateRecovery> {
+    return requestJson(
+      buildCreateRecoveryPath(scopeId, createIdempotencyKey),
+      decodeChatCreateRecovery
     );
-    return index.conversations;
   },
 
   async loadConversation(

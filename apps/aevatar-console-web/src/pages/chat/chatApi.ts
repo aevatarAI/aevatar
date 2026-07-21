@@ -16,6 +16,7 @@ const CHAT_HISTORY_CONTEXT_TYPE_URL =
 
 export type ChatConversationIntent = {
   conversationId?: string | null;
+  createIdempotencyKey?: string;
 };
 
 export type ChatStreamRequest = {
@@ -289,9 +290,13 @@ function normalizeConversationIntent(
   const record = asRecord(conversation);
   if (
     !record ||
-    Object.keys(record).some((key) => key !== "conversationId") ||
+    Object.keys(record).some(
+      (key) => key !== "conversationId" && key !== "createIdempotencyKey"
+    ) ||
     (record.conversationId != null &&
-      typeof record.conversationId !== "string")
+      typeof record.conversationId !== "string") ||
+    (record.createIdempotencyKey != null &&
+      typeof record.createIdempotencyKey !== "string")
   ) {
     throw new ChatApiError(
       "Conversation input is invalid.",
@@ -312,7 +317,26 @@ function normalizeConversationIntent(
     );
   }
 
-  return conversationId ? { conversationId } : {};
+  const createIdempotencyKey =
+    typeof record.createIdempotencyKey === "string"
+      ? record.createIdempotencyKey.trim()
+      : undefined;
+  if (record.createIdempotencyKey != null && !createIdempotencyKey) {
+    throw new ChatApiError(
+      "Create idempotency key is invalid.",
+      400,
+      "INVALID_CONVERSATION_INPUT"
+    );
+  }
+  if (conversationId && createIdempotencyKey) {
+    throw new ChatApiError(
+      "Conversation input is invalid.",
+      400,
+      "INVALID_CONVERSATION_INPUT"
+    );
+  }
+
+  return compactObject({ conversationId, createIdempotencyKey });
 }
 
 export async function startChatStream(

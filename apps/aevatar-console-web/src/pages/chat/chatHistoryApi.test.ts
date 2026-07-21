@@ -7,6 +7,7 @@ import {
   ChatHistoryApiError,
   ChatHistoryContractError,
   chatHistoryApi,
+  decodeChatCreateRecovery,
   decodeChatHistoryIndex,
   decodeStoredChatMessages,
 } from "./chatHistoryApi";
@@ -62,6 +63,88 @@ describe("chatHistoryApi", () => {
         method: "GET",
       }
     );
+  });
+
+  it("follows opaque index cursors and combines every page", async () => {
+    (authFetch as jest.Mock)
+      .mockResolvedValueOnce(
+        jsonResponse({
+          conversations: [
+            {
+              createdAt: "2026-07-17T02:30:00+00:00",
+              id: "conversation-new",
+              messageCount: 2,
+              title: "New conversation",
+              updatedAt: "2026-07-17T02:35:00+00:00",
+            },
+          ],
+          nextCursor: "opaque+/cursor==",
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          conversations: [
+            {
+              createdAt: "2026-07-16T02:30:00+00:00",
+              id: "conversation-old",
+              messageCount: 4,
+              title: "Old conversation",
+              updatedAt: "2026-07-16T02:35:00+00:00",
+            },
+          ],
+          nextCursor: null,
+        })
+      );
+
+    await expect(chatHistoryApi.listConversationMetas("scope-a")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "conversation-new" }),
+        expect.objectContaining({ id: "conversation-old" }),
+      ])
+    );
+    expect(authFetch).toHaveBeenNthCalledWith(
+      2,
+      "/api/scopes/scope-a/chat-history?cursor=opaque%2B%2Fcursor%3D%3D",
+      {
+        headers: { Accept: "application/json" },
+        method: "GET",
+      }
+    );
+  });
+
+  it("loads and validates create recovery identity", async () => {
+    (authFetch as jest.Mock).mockResolvedValue(
+      jsonResponse({
+        conversationId: "conversation-a",
+        sourceVersion: 3,
+        status: "append_committed",
+        turnId: "turn-a",
+      })
+    );
+
+    await expect(
+      chatHistoryApi.recoverCreate("scope/a", "create/key")
+    ).resolves.toEqual({
+      conversationId: "conversation-a",
+      sourceVersion: 3,
+      status: "append_committed",
+      turnId: "turn-a",
+    });
+    expect(authFetch).toHaveBeenCalledWith(
+      "/api/scopes/scope%2Fa/chat-history/create-recoveries/create%2Fkey",
+      {
+        headers: { Accept: "application/json" },
+        method: "GET",
+      }
+    );
+    expect(() =>
+      decodeChatCreateRecovery({
+        conversationId: "conversation-a",
+        sourceVersion: -1,
+        status: "reserved",
+        turnId: "turn-a",
+      })
+    ).toThrow(ChatHistoryContractError);
   });
 
   it("preserves documented message fields and unknown role or status strings", async () => {

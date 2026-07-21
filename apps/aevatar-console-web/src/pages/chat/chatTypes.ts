@@ -144,6 +144,14 @@ export type StoredChatMessage = {
 
 export type ChatHistoryIndex = {
   conversations: ConversationMeta[];
+  nextCursor?: string | null;
+};
+
+export type ChatCreateRecovery = {
+  conversationId: string;
+  sourceVersion: number;
+  status: string;
+  turnId: string;
 };
 
 export type ChatSessionState = {

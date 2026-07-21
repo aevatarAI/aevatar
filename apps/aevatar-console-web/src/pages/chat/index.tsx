@@ -42,7 +42,7 @@ import {
   readChatStreamFrames,
   startChatStreamWithProjectionRetry,
 } from "./chatApi";
-import { chatHistoryApi } from "./chatHistoryApi";
+import { ChatHistoryApiError, chatHistoryApi } from "./chatHistoryApi";
 import { ChatInput, ChatMessageBubble } from "./chatPresentation";
 import type {
   ChatMessage,
@@ -66,6 +66,7 @@ import { t } from "@/shared/i18n/messages";
 type ConversationState = {
   clientId: string;
   conversationId?: string;
+  createIdempotencyKey?: string;
   expectedTurnCount: number;
   latestTurnId?: string;
   messages: ChatMessage[];
@@ -121,6 +122,7 @@ function createClientId(): string {
 function createDraftConversation(): ConversationState {
   return {
     clientId: createClientId(),
+    createIdempotencyKey: createClientId(),
     expectedTurnCount: 0,
     messages: [],
     sessionId: createClientId(),
@@ -1115,6 +1117,8 @@ const ChatPage: React.FC = () => {
         typeof extractChatHistoryContext
       > = null;
       let streamingConversation = startedConversation;
+      const createIdempotencyKey =
+        conversation.createIdempotencyKey ?? conversation.clientId;
 
       abortControllerRef.current?.abort();
       if (conversation.conversationId) {
@@ -1139,7 +1143,7 @@ const ChatPage: React.FC = () => {
           {
             conversation: conversation.conversationId
               ? { conversationId: conversation.conversationId }
-              : {},
+              : { createIdempotencyKey },
             prompt: trimmedInput,
             sessionId: conversation.sessionId,
           },
@@ -1238,11 +1242,50 @@ const ChatPage: React.FC = () => {
           return;
         }
         if (!receivedChatHistoryContext) {
-          throw new Error(
-            t(
-              "pages.chat.index.missingChatHistoryContext",
-              "Chat completed without a conversation context."
-            )
+          let recovery: Awaited<ReturnType<typeof chatHistoryApi.recoverCreate>> | null =
+            null;
+          for (const delayMs of [0, 300, 900, 1_800]) {
+            await abortableDelay(delayMs, controller.signal);
+            try {
+              recovery = await chatHistoryApi.recoverCreate(
+                scopeId,
+                createIdempotencyKey
+              );
+              break;
+            } catch (error) {
+              if (
+                !(error instanceof ChatHistoryApiError) ||
+                error.status !== 404
+              ) {
+                throw error;
+              }
+            }
+          }
+          if (!recovery) {
+            throw new Error(
+              t(
+                "pages.chat.index.missingChatHistoryContext",
+                "Chat completed without a conversation context."
+              )
+            );
+          }
+          acceptedChatHistoryContext = {
+            conversationId: recovery.conversationId,
+            scopeId,
+            turnId: recovery.turnId,
+          };
+          receivedChatHistoryContext = true;
+          streamingConversation = {
+            ...streamingConversation,
+            conversationId: recovery.conversationId,
+            expectedTurnCount: conversation.expectedTurnCount + 1,
+            latestTurnId: recovery.turnId,
+          };
+          activeConversationRef.current = streamingConversation;
+          setActiveConversation((current) =>
+            current?.clientId === conversation.clientId
+              ? streamingConversation
+              : current
           );
         }
 

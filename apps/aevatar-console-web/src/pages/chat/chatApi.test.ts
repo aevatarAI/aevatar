@@ -88,7 +88,10 @@ describe("chatApi", () => {
 
     await startChatStream(
       {
-        conversation: { conversationId: null },
+        conversation: {
+          conversationId: null,
+          createIdempotencyKey: " create-key-a ",
+        },
         prompt: "New conversation",
         sessionId: "runtime-session-a",
       },
@@ -106,7 +109,7 @@ describe("chatApi", () => {
     const firstBody = JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body);
     const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
     expect(firstBody).toEqual({
-      conversation: {},
+      conversation: { createIdempotencyKey: "create-key-a" },
       prompt: "New conversation",
       sessionId: "runtime-session-a",
       workflow: "studio",
@@ -117,6 +120,26 @@ describe("chatApi", () => {
       sessionId: "runtime-session-b",
       workflow: "studio",
     });
+  });
+
+  it("rejects a create key on a continuation request", async () => {
+    await expect(
+      startChatStream(
+        {
+          conversation: {
+            conversationId: "conversation-a",
+            createIdempotencyKey: "create-key-a",
+          },
+          prompt: "Continue",
+          sessionId: "session-a",
+        },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({
+      code: "INVALID_CONVERSATION_INPUT",
+      status: 400,
+    });
+    expect(authFetch).not.toHaveBeenCalled();
   });
 
   it("rejects a blank conversation id as a structured request error", async () => {
