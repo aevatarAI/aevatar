@@ -54,6 +54,34 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("\t")]
+    public async Task PrepareAsync_WhenSessionIdIsBlank_ShouldRejectBeforeDiscovery(string sessionId)
+    {
+        var tools = NewTools("recovery", "task");
+        var registry = RegistryWithRoute(tools);
+        var classifier = new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch());
+        var fetcher = new RecordingFetcher(SuccessfulFetch());
+
+        var act = async () => await NewMaterializer(registry, classifier, fetcher)
+            .PrepareAsync(
+                SealProfile(BuildProfile()),
+                sessionId,
+                "route me",
+                tools,
+                ToolContext(),
+                CancellationToken.None);
+
+        await act.Should()
+            .ThrowAsync<ArgumentException>()
+            .WithParameterName("sessionId");
+        registry.ResolveCalls.Should().BeEmpty();
+        classifier.CallCount.Should().Be(0);
+        fetcher.CallCount.Should().Be(0);
+    }
+
+    [Theory]
     [InlineData("classifier-no-match")]
     [InlineData("shadow")]
     [InlineData("task-policy-failure")]
