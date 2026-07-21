@@ -420,6 +420,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         builder.AddAevatarDefaultHost(options =>
         {
+            options.AllowLocalFileSecretsStore = false;
             options.ServiceName = "Aevatar.GAgentService.StandaloneStartup.Tests";
             options.EnableConnectorBootstrap = false;
             options.EnableHealthEndpoints = false;
@@ -466,6 +467,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         builder.AddAevatarDefaultHost(options =>
         {
+            options.AllowLocalFileSecretsStore = false;
             options.ServiceName = "Aevatar.GAgentService.WorkflowProjectionStartup.Tests";
             options.EnableConnectorBootstrap = false;
             options.EnableHealthEndpoints = false;
