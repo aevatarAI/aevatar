@@ -67,6 +67,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         string cronExpression,
         string timezone,
         string displayName,
+        string teamId,
         CancellationToken ct = default)
     {
         var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
@@ -80,6 +81,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
         var (_, yamls) = ResolveWorkflowYamls(skill);
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
+            TeamId: teamId,
             DisplayName: string.IsNullOrWhiteSpace(displayName) ? skill.Name : displayName,
             WorkflowYaml: yamls[0])
         {
@@ -96,8 +98,10 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             return SkillScheduleOutcome.Ok(new SkillScheduleReceipt(
                 ScheduleId: result.ScheduleId ?? string.Empty,
                 MemberId: result.MemberId,
+                TeamId: result.TeamId,
                 Status: result.BindingStatus,
-                ObservatoryUrl: result.ObservatoryUrl));
+                ObservatoryUrl: result.ObservatoryUrl,
+                StudioUrl: result.StudioUrl));
         }
         catch (InvalidOperationException ex)
         {

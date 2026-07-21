@@ -49,8 +49,9 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///   provisions NOTHING — no member, no schedule — so an authoring agent can
 ///   repair the YAML and retry without leaving garbage behind.</item>
 ///   <item><b>Retries converge.</b> One (scope, display name) pair owns exactly
-///   one member, one workflow id, and one schedule: the member id is derived
-///   deterministically from that pair (an existing member is reused, never
+///   one member, one workflow id, and one schedule inside one target Team: the
+///   member id is derived deterministically from that ownership tuple (an
+///   existing member is reused, never
 ///   re-created), and the schedule uses a deterministic id via
 ///   <see cref="IScheduledDispatchApplicationService.EnsureAsync"/> (idempotent
 ///   upsert). Re-provisioning the same display name re-binds and re-schedules the
@@ -97,6 +98,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         ArgumentNullException.ThrowIfNull(callerCredential);
         ArgumentNullException.ThrowIfNull(request);
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var teamId = NormalizeRequired(request.TeamId, "teamId");
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
 
@@ -112,10 +114,10 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
         var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
 
-        // Provision identity: one (scope, display name) pair owns exactly one
-        // member + workflow id + schedule, so retries converge on the same
-        // resources instead of leaving an orphan pair per attempt.
-        var provisionKey = BuildProvisionKey(normalizedScopeId, displayName);
+        // Provision identity: one (scope, team, display name) tuple owns exactly
+        // one member + workflow id + schedule, so retries converge on the same
+        // Team-owned resources instead of leaving an orphan pair per attempt.
+        var provisionKey = BuildProvisionKey(normalizedScopeId, teamId, displayName);
 
         // 1. Resolve the member: reuse the existing one for this (scope, display
         //    name), else create it. The deterministic id is the member's identity;
@@ -124,8 +126,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         //    read from the readmodel and never re-created. The actor stamps the
         //    rename-safe published service id at creation, so both paths read it
         //    straight back — no poll, no recompute of the convention.
-        var (memberId, publishedServiceId, teamId) = await ResolveProvisionedMemberAsync(
-            normalizedScopeId, displayName, $"wf-{provisionKey}", ct);
+        var (memberId, publishedServiceId) = await ResolveProvisionedMemberAsync(
+            normalizedScopeId, teamId, displayName, $"wf-{provisionKey}", ct);
 
         // 2. Bind the inline workflow YAML. WorkflowId is a stable identifier the
         //    bind contract requires; deriving it from the provision key keeps one
@@ -171,13 +173,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         return new ProvisionWorkflowResponse(
             MemberId: memberId,
             ScopeId: normalizedScopeId,
+            TeamId: teamId,
             BindingStatus: ProvisionWorkflowBindingStatusNames.Accepted,
             ObservatoryUrl: ObservatoryPath)
         {
             BindingRunId = NormalizeOptional(bindReceipt.BindingRunId),
             ScheduleId = scheduleId,
-            // The editable Studio page is team-scoped; a freshly provisioned
-            // member has no team yet, so the link is only built once one exists.
             StudioUrl = BuildStudioUrl(normalizedScopeId, teamId, memberId),
         };
     }
@@ -191,8 +192,9 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
     /// created moments ago may not be materialized yet; that create falls
     /// through to the actor's idempotent no-op for identical identity fields.
     /// </summary>
-    private async Task<(string MemberId, string PublishedServiceId, string? TeamId)> ResolveProvisionedMemberAsync(
+    private async Task<(string MemberId, string PublishedServiceId)> ResolveProvisionedMemberAsync(
         string scopeId,
+        string teamId,
         string displayName,
         string memberId,
         CancellationToken ct)
@@ -200,10 +202,16 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         try
         {
             var existing = await _memberService.GetAsync(scopeId, memberId, ct);
+            var existingTeamId = NormalizeOptional(existing.Summary.TeamId);
+            if (!string.Equals(existingTeamId, teamId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Provisioned member '{memberId}' is not assigned to team '{teamId}'.");
+            }
+
             return (
                 existing.Summary.MemberId,
-                NormalizeRequired(existing.Summary.PublishedServiceId, nameof(existing.Summary.PublishedServiceId)),
-                existing.Summary.TeamId);
+                NormalizeRequired(existing.Summary.PublishedServiceId, nameof(existing.Summary.PublishedServiceId)));
         }
         catch (StudioMemberNotFoundException)
         {
@@ -212,12 +220,12 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 new CreateStudioMemberRequest(
                     DisplayName: displayName,
                     ImplementationKind: MemberImplementationKindNames.Workflow,
-                    MemberId: memberId),
+                    MemberId: memberId,
+                    TeamId: teamId),
                 ct);
             return (
                 created.MemberId,
-                NormalizeRequired(created.PublishedServiceId, nameof(created.PublishedServiceId)),
-                created.TeamId);
+                NormalizeRequired(created.PublishedServiceId, nameof(created.PublishedServiceId)));
         }
     }
 
@@ -367,24 +375,18 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 ExternalUserId: NormalizeRequired(credential.ExternalUserId, nameof(credential.ExternalUserId))),
             Scope: NormalizeRequired(credential.Scope, nameof(credential.Scope)));
 
-    private static string? BuildStudioUrl(string scopeId, string? teamId, string memberId)
-    {
-        var normalizedTeamId = NormalizeOptional(teamId);
-        if (normalizedTeamId == null)
-            return null;
-
-        return $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(normalizedTeamId)}/members/{Uri.EscapeDataString(memberId)}/workflow";
-    }
+    private static string BuildStudioUrl(string scopeId, string teamId, string memberId) =>
+        $"/scopes/{Uri.EscapeDataString(scopeId)}/teams/{Uri.EscapeDataString(teamId)}/members/{Uri.EscapeDataString(memberId)}/workflow";
 
     /// <summary>
-    /// Deterministic provision identity for one (scope, display name) pair:
+    /// Deterministic provision identity for one (scope, team, display name) tuple:
     /// 32 hex chars of SHA-256, so the derived member id (<c>wf-{key}</c>, 35
     /// chars) satisfies the member-id slug pattern and length cap while retries
     /// with the same display name land on the same member/workflow/schedule.
     /// </summary>
-    private static string BuildProvisionKey(string scopeId, string displayName)
+    private static string BuildProvisionKey(string scopeId, string teamId, string displayName)
     {
-        var identity = Encoding.UTF8.GetBytes($"{scopeId}\n{displayName}");
+        var identity = Encoding.UTF8.GetBytes($"{scopeId}\n{teamId}\n{displayName}");
         var hash = SHA256.HashData(identity);
         return Convert.ToHexString(hash.AsSpan(0, 16)).ToLowerInvariant();
     }
