@@ -135,11 +135,11 @@ public sealed class AgentRunToolStepInteractiveReplyTests
                 },
             },
         };
-        var capability = AgentToolCapability.Capture(tool);
+        var capability = ((IAgentToolContinuationCapability)tool).CaptureContinuationCapability();
         stepState.AuthorizedToolCapabilities.Add(new AgentRunToolCapability
         {
-            Name = capability.Name,
-            ContractDigest = capability.ContractDigest,
+            Name = tool.Name,
+            ProviderCapability = capability,
         });
 
         return new AgentRunReplyStepExecutionRequest(

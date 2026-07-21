@@ -2,10 +2,11 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.Ornn;
 
-public sealed class OrnnPublishSkillTool : IAgentTool
+public sealed class OrnnPublishSkillTool : IAgentTool, IAgentToolContinuationCapability
 {
     private readonly OrnnSkillPublishValidationPipeline _validationPipeline;
     private readonly OrnnSkillPackageBuilder _packageBuilder;
@@ -36,6 +37,15 @@ public sealed class OrnnPublishSkillTool : IAgentTool
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
 
     public string SideEffectKind => "ornn.publish.skill";
+
+    public Any CaptureContinuationCapability() => Any.Pack(new FixedAgentToolContinuationCapability
+    {
+        ContractId = "ornn_publish_skill",
+        ContractVersion = 1,
+    });
+
+    public bool MatchesContinuationCapability(Any capability) =>
+        capability.Equals(CaptureContinuationCapability());
 
     public AgentToolReceipt? CreateSuccessReceipt(string callId, string toolName, string resultJson)
     {

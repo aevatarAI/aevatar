@@ -8,6 +8,7 @@ import "chat_activity.proto";
 import "conversation_events.proto";
 import "delivery_ledger.proto";
 import "ai_messages.proto";
+import "google/protobuf/any.proto";
 
 enum AgentRunStatus {
   AGENT_RUN_STATUS_UNSPECIFIED = 0;
@@ -191,7 +192,9 @@ message AgentRunToolCall {
 
 message AgentRunToolCapability {
   string name = 1;
-  string contract_digest = 2;
+  reserved 2;
+  reserved "contract_digest";
+  google.protobuf.Any provider_capability = 3;
 }
 
 message AgentRunChatMessage {

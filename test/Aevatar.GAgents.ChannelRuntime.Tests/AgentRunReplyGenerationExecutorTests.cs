@@ -10,6 +10,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
@@ -206,6 +207,118 @@ public sealed class AgentRunReplyGenerationExecutorTests
         tool.ExecuteCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ToolStep_WhenProviderCapabilityMatchesAcrossImplementations_ShouldExecuteRediscoveredTool()
+    {
+        var authorizedTool = new OriginalContinuationTool(
+            "continuation_tool",
+            authorizationIdentity: "tenant-alpha",
+            contractVersion: 1);
+        var rediscoveredTool = new RediscoveredContinuationTool(
+            "continuation_tool",
+            authorizationIdentity: "tenant-alpha",
+            contractVersion: 1);
+
+        var result = await ExecuteAcrossContinuationAsync(authorizedTool, rediscoveredTool);
+
+        result.LlmContinuation.LlmStepResult.AuthorizedToolCapabilities.Should().ContainSingle();
+        result.ToolContinuation.ToolStepResult.ResultMessages.Should().ContainSingle()
+            .Which.Content.Should().NotContain("not found");
+        rediscoveredTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ToolStep_WhenProviderAuthorizationIdentityChanges_ShouldRejectRediscoveredTool()
+    {
+        var authorizedTool = new OriginalContinuationTool(
+            "continuation_tool",
+            authorizationIdentity: "tenant-alpha",
+            contractVersion: 1);
+        var rediscoveredTool = new RediscoveredContinuationTool(
+            "continuation_tool",
+            authorizationIdentity: "tenant-beta",
+            contractVersion: 1);
+
+        var result = await ExecuteAcrossContinuationAsync(authorizedTool, rediscoveredTool);
+
+        result.ToolContinuation.ToolStepResult.ResultMessages.Should().ContainSingle()
+            .Which.Content.Should().Contain("not found");
+        rediscoveredTool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ToolStep_WhenProviderExecutionContractChanges_ShouldRejectRediscoveredTool()
+    {
+        var authorizedTool = new OriginalContinuationTool(
+            "continuation_tool",
+            authorizationIdentity: "tenant-alpha",
+            contractVersion: 1);
+        var rediscoveredTool = new RediscoveredContinuationTool(
+            "continuation_tool",
+            authorizationIdentity: "tenant-alpha",
+            contractVersion: 2);
+
+        var result = await ExecuteAcrossContinuationAsync(authorizedTool, rediscoveredTool);
+
+        result.ToolContinuation.ToolStepResult.ResultMessages.Should().ContainSingle()
+            .Which.Content.Should().Contain("not found");
+        rediscoveredTool.ExecuteCount.Should().Be(0);
+    }
+
+    private static async Task<ContinuationExecutionResult> ExecuteAcrossContinuationAsync(
+        IAgentTool authorizedTool,
+        IAgentTool rediscoveredTool)
+    {
+        var provider = new ForgedToolProvider(authorizedTool.Name);
+        var generator = new SequencedStepPlanReplyGenerator(
+            BuildToolPlan(provider, authorizedTool),
+            BuildToolPlan(provider, rediscoveredTool));
+        var executor = new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            generator,
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var llmWorkItem = BuildToolEnabledWorkItem();
+
+        var llmContinuation = await executor.BuildLlmStepContinuationAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolStepState = llmWorkItem.StepState.Clone();
+        toolStepState.PendingToolCalls.AddRange(
+            llmContinuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
+        toolStepState.AuthorizedToolCapabilities.AddRange(
+            llmContinuation.LlmStepResult.AuthorizedToolCapabilities.Select(static capability => capability.Clone()));
+        var toolContinuation = await executor.BuildToolStepContinuationAsync(
+            llmWorkItem with
+            {
+                StepIndex = 2,
+                StepState = toolStepState,
+            },
+            CancellationToken.None);
+
+        return new ContinuationExecutionResult(llmContinuation, toolContinuation);
+    }
+
+    private static AgentRunReplyStepPlan BuildToolPlan(ILLMProvider provider, IAgentTool tool)
+    {
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = new ChatRuntime(
+            () => provider,
+            new ChatHistory(),
+            new ToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+        return new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(turnCatalog: null),
+            new Dictionary<string, string>(),
+            LLMControlContext.Empty,
+            AgentToolExecutionContext.Empty,
+            InitialMessages: [],
+            MaxToolRounds: 1);
+    }
+
     private static AgentRunReplyGenerationExecutor CreateExecutor(
         RecordingProvider provider,
         IFileArtifactReadPort? fileArtifactReadPort = null)
@@ -379,6 +492,81 @@ public sealed class AgentRunReplyGenerationExecutorTests
             return Task.FromResult("{}");
         }
     }
+
+    private abstract class ContinuationToolBase(
+        string name,
+        string authorizationIdentity,
+        uint contractVersion) : IAgentTool, IAgentToolContinuationCapability
+    {
+        public int ExecuteCount { get; private set; }
+        public string Name => name;
+        public string Description => $"{name}:{contractVersion}";
+        public string ParametersSchema => "{}";
+
+        public Any CaptureContinuationCapability() => Any.Pack(new FixedAgentToolContinuationCapability
+        {
+            ContractId = $"{name}@{authorizationIdentity}",
+            ContractVersion = contractVersion,
+        });
+
+        public bool MatchesContinuationCapability(Any capability) =>
+            capability.Equals(CaptureContinuationCapability());
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
+        }
+    }
+
+    private sealed class OriginalContinuationTool(
+        string name,
+        string authorizationIdentity,
+        uint contractVersion)
+        : ContinuationToolBase(name, authorizationIdentity, contractVersion);
+
+    private sealed class RediscoveredContinuationTool(
+        string name,
+        string authorizationIdentity,
+        uint contractVersion)
+        : ContinuationToolBase(name, authorizationIdentity, contractVersion);
+
+    private sealed class SequencedStepPlanReplyGenerator(params AgentRunReplyStepPlan[] plans)
+        : IAgentRunStepConversationReplyGenerator
+    {
+        private readonly Queue<AgentRunReplyStepPlan> _plans = new(plans);
+
+        public Task<AgentRunReplyStepPlan> BuildStepPlanAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IReadOnlyList<ConversationHistoryEntry>? priorHistory,
+            ChatAttachmentInputContext? attachmentContext,
+            bool forceDisableTools,
+            CancellationToken ct) =>
+            Task.FromResult(_plans.Dequeue());
+
+        public Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            LLMControlContext? llmControl,
+            AgentToolExecutionContext? toolContext,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<ConversationReplyResult> GenerateReplyAsync(
+            ChatActivity activity,
+            IReadOnlyDictionary<string, string> metadata,
+            IStreamingReplySink? streamingSink,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed record ContinuationExecutionResult(
+        AgentRunNextLlmStepRequestedEvent LlmContinuation,
+        AgentRunNextToolStepRequestedEvent ToolContinuation);
 
     private sealed class StaticStepPlanReplyGenerator(AgentRunReplyStepPlan plan) : IAgentRunStepConversationReplyGenerator
     {

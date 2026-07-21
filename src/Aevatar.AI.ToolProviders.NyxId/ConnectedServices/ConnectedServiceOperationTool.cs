@@ -2,10 +2,11 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
-internal sealed class ConnectedServiceOperationTool : IAgentTool, IAgentToolAuthorizationIdentity
+internal sealed class ConnectedServiceOperationTool : IAgentTool, IAgentToolContinuationCapability
 {
     private readonly NyxIdServiceInstanceClient _client;
     private readonly ConnectedServiceToolOperation _operation;
@@ -23,7 +24,6 @@ internal sealed class ConnectedServiceOperationTool : IAgentTool, IAgentToolAuth
         _bindings = bindings.ToDictionary(
             static binding => binding.Instance.UserServiceId,
             StringComparer.Ordinal);
-        AuthorizationIdentity = NyxIdServiceTools.BuildAuthorizationIdentity(bindings);
         ParametersSchema = BuildParametersSchema();
     }
 
@@ -31,11 +31,18 @@ internal sealed class ConnectedServiceOperationTool : IAgentTool, IAgentToolAuth
     public string Description =>
         $"{_operation.Summary ?? _operation.OperationId} ({_operation.Method} {_operation.PathTemplate})";
     public string ParametersSchema { get; }
-    public string AuthorizationIdentity { get; }
     public ToolApprovalMode ApprovalMode => _operation.ApprovalMode;
     public bool IsReadOnly => _operation.IsReadOnly;
     public bool IsDestructive => _operation.IsDestructive;
     public bool? RequiresApproval(string argumentsJson) => ApprovalMode == ToolApprovalMode.AlwaysRequire;
+
+    public Any CaptureContinuationCapability() =>
+        Any.Pack(NyxIdServiceTools.BuildContinuationCapability(_bindings.Values, _operation));
+
+    public bool MatchesContinuationCapability(Any capability) =>
+        NyxIdServiceTools.MatchesContinuationCapability(
+            capability,
+            NyxIdServiceTools.BuildContinuationCapability(_bindings.Values, _operation));
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

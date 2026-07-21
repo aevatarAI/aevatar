@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
@@ -18,23 +19,109 @@ internal static class NyxIdServiceTools
         new RequestTool(client, bindings),
     ];
 
-    internal static string BuildAuthorizationIdentity(IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
+    internal static NyxIdServiceToolContinuationCapability BuildContinuationCapability(
+        IEnumerable<NyxIdServiceInstanceBinding> bindings,
+        NyxIdServiceToolKind fixedTool)
     {
-        var instances = new NyxIdServiceInventoryResult();
-        instances.Instances.Add(bindings
+        var capability = new NyxIdServiceToolContinuationCapability
+        {
+            ContractVersion = 1,
+            FixedTool = fixedTool,
+        };
+        capability.Instances.Add(bindings
             .OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal)
             .Select(static binding => binding.Instance.Clone()));
-        return Convert.ToBase64String(instances.ToByteArray());
+        return capability;
     }
 
-    private abstract class ServiceToolBase : IAgentTool, IAgentToolAuthorizationIdentity
+    internal static NyxIdServiceToolContinuationCapability BuildContinuationCapability(
+        IEnumerable<NyxIdServiceInstanceBinding> bindings,
+        ConnectedServiceToolOperation operation)
+    {
+        var capability = new NyxIdServiceToolContinuationCapability
+        {
+            ContractVersion = 1,
+            Operation = BuildOperationCapability(operation),
+        };
+        capability.Instances.Add(bindings
+            .OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal)
+            .Select(static binding => binding.Instance.Clone()));
+        return capability;
+    }
+
+    internal static bool MatchesContinuationCapability(
+        Any providerCapability,
+        NyxIdServiceToolContinuationCapability expected) =>
+        providerCapability.Is(NyxIdServiceToolContinuationCapability.Descriptor) &&
+        providerCapability.Unpack<NyxIdServiceToolContinuationCapability>().Equals(expected);
+
+    private static NyxIdServiceOperationContinuationCapability BuildOperationCapability(
+        ConnectedServiceToolOperation operation)
+    {
+        var capability = new NyxIdServiceOperationContinuationCapability
+        {
+            OperationId = operation.OperationId,
+            Method = operation.Method,
+            PathTemplate = operation.PathTemplate,
+            RequestBodyRequired = operation.RequestBodyRequired,
+        };
+        if (operation.Summary is not null)
+            capability.Summary = operation.Summary;
+        if (operation.Marker is { } marker)
+            capability.Marker = BuildMarkerCapability(marker);
+        if (operation.RequestBodySchema is not null)
+            capability.RequestBodySchema = JsonParser.Default.Parse<Value>(operation.RequestBodySchema.ToJsonString());
+        if (operation.RequestBodyMediaType is not null)
+            capability.RequestBodyMediaType = operation.RequestBodyMediaType;
+        capability.Parameters.Add(operation.Parameters.Select(BuildParameterCapability));
+        return capability;
+    }
+
+    private static NyxIdServiceToolMarkerCapability BuildMarkerCapability(AevatarToolMarker marker)
+    {
+        var capability = new NyxIdServiceToolMarkerCapability { Enabled = marker.Enabled };
+        if (marker.Name is not null)
+            capability.Name = marker.Name;
+        if (marker.ReadOnly is { } readOnly)
+            capability.ReadOnly = readOnly;
+        if (marker.Destructive is { } destructive)
+            capability.Destructive = destructive;
+        if (marker.Approval is not null)
+            capability.Approval = marker.Approval;
+        if (marker.Description is not null)
+            capability.Description = marker.Description;
+        return capability;
+    }
+
+    private static NyxIdServiceOperationParameterCapability BuildParameterCapability(
+        ConnectedServiceToolParameter parameter)
+    {
+        var capability = new NyxIdServiceOperationParameterCapability
+        {
+            Name = parameter.Name,
+            Location = parameter.In switch
+            {
+                ParameterLocation.Path => NyxIdServiceOperationParameterLocation.Path,
+                ParameterLocation.Query => NyxIdServiceOperationParameterLocation.Query,
+                ParameterLocation.Header => NyxIdServiceOperationParameterLocation.Header,
+                _ => NyxIdServiceOperationParameterLocation.Unspecified,
+            },
+            Required = parameter.Required,
+        };
+        if (parameter.Schema is not null)
+            capability.Schema = JsonParser.Default.Parse<Value>(parameter.Schema.ToJsonString());
+        if (parameter.Description is not null)
+            capability.Description = parameter.Description;
+        return capability;
+    }
+
+    private abstract class ServiceToolBase : IAgentTool, IAgentToolContinuationCapability
     {
         protected ServiceToolBase(IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
         {
             Bindings = bindings.ToDictionary(
                 static binding => binding.Instance.UserServiceId,
                 StringComparer.Ordinal);
-            AuthorizationIdentity = BuildAuthorizationIdentity(bindings);
         }
 
         protected IReadOnlyDictionary<string, NyxIdServiceInstanceBinding> Bindings { get; }
@@ -45,9 +132,17 @@ internal static class NyxIdServiceTools
         public virtual ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
         public virtual bool IsReadOnly => false;
         public virtual bool IsDestructive => false;
-        public string AuthorizationIdentity { get; }
+        protected abstract NyxIdServiceToolKind ContinuationToolKind { get; }
         public virtual bool? RequiresApproval(string argumentsJson) => null;
         public abstract Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default);
+
+        public Any CaptureContinuationCapability() =>
+            Any.Pack(BuildContinuationCapability(Bindings.Values, ContinuationToolKind));
+
+        public bool MatchesContinuationCapability(Any capability) =>
+            NyxIdServiceTools.MatchesContinuationCapability(
+                capability,
+                BuildContinuationCapability(Bindings.Values, ContinuationToolKind));
 
         protected bool TryGetBinding(
             JsonElement root,
@@ -134,6 +229,7 @@ internal static class NyxIdServiceTools
     private sealed class InventoryTool(IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
         : ServiceToolBase(bindings)
     {
+        protected override NyxIdServiceToolKind ContinuationToolKind => NyxIdServiceToolKind.Inventory;
         public override string Name => "nyxid_service_inventory";
         public override string Description => "List or inspect the caller's exact NyxID connected-service instances.";
         public override string ParametersSchema => InstanceChoiceSchema(requireInstance: false);
@@ -168,6 +264,7 @@ internal static class NyxIdServiceTools
         NyxIdServiceInstanceClient client,
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings) : ServiceToolBase(bindings)
     {
+        protected override NyxIdServiceToolKind ContinuationToolKind => NyxIdServiceToolKind.Update;
         public override string Name => "nyxid_service_update";
         public override string Description => "Update mutable fields on one exact NyxID connected-service instance.";
         public override ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
@@ -204,6 +301,7 @@ internal static class NyxIdServiceTools
         NyxIdServiceInstanceClient client,
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings) : ServiceToolBase(bindings)
     {
+        protected override NyxIdServiceToolKind ContinuationToolKind => NyxIdServiceToolKind.Route;
         public override string Name => "nyxid_service_route";
         public override string Description => "Route one exact NyxID connected-service instance directly or through a node.";
         public override ToolApprovalMode ApprovalMode => ToolApprovalMode.AlwaysRequire;
@@ -237,6 +335,7 @@ internal static class NyxIdServiceTools
         NyxIdServiceInstanceClient client,
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings) : ServiceToolBase(bindings)
     {
+        protected override NyxIdServiceToolKind ContinuationToolKind => NyxIdServiceToolKind.Delete;
         public override string Name => "nyxid_service_delete";
         public override string Description => "Delete one exact NyxID connected-service instance.";
         public override string ParametersSchema => InstanceChoiceSchema(requireInstance: true);
@@ -260,6 +359,7 @@ internal static class NyxIdServiceTools
         NyxIdServiceInstanceClient client,
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings) : ServiceToolBase(bindings)
     {
+        protected override NyxIdServiceToolKind ContinuationToolKind => NyxIdServiceToolKind.Request;
         private static readonly string[] Methods = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"];
 
         public override string Name => "nyxid_service_request";

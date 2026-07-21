@@ -4,6 +4,8 @@ package aevatar.ai.tool_providers.nyxid.connected_services;
 
 option csharp_namespace = "Aevatar.AI.ToolProviders.NyxId.ConnectedServices";
 
+import "google/protobuf/struct.proto";
+
 enum NyxIdServiceCredentialSource {
   NYX_ID_SERVICE_CREDENTIAL_SOURCE_UNSPECIFIED = 0;
   NYX_ID_SERVICE_CREDENTIAL_SOURCE_PERSONAL = 1;
@@ -113,4 +115,58 @@ message NyxIdServiceDeleteResult {
 message NyxIdServiceRequestResult {
   string user_service_id = 1;
   string response_json = 2;
+}
+
+enum NyxIdServiceToolKind {
+  NYX_ID_SERVICE_TOOL_KIND_UNSPECIFIED = 0;
+  NYX_ID_SERVICE_TOOL_KIND_INVENTORY = 1;
+  NYX_ID_SERVICE_TOOL_KIND_UPDATE = 2;
+  NYX_ID_SERVICE_TOOL_KIND_ROUTE = 3;
+  NYX_ID_SERVICE_TOOL_KIND_DELETE = 4;
+  NYX_ID_SERVICE_TOOL_KIND_REQUEST = 5;
+}
+
+enum NyxIdServiceOperationParameterLocation {
+  NYX_ID_SERVICE_OPERATION_PARAMETER_LOCATION_UNSPECIFIED = 0;
+  NYX_ID_SERVICE_OPERATION_PARAMETER_LOCATION_PATH = 1;
+  NYX_ID_SERVICE_OPERATION_PARAMETER_LOCATION_QUERY = 2;
+  NYX_ID_SERVICE_OPERATION_PARAMETER_LOCATION_HEADER = 3;
+}
+
+message NyxIdServiceToolMarkerCapability {
+  bool enabled = 1;
+  optional string name = 2;
+  optional bool read_only = 3;
+  optional bool destructive = 4;
+  optional string approval = 5;
+  optional string description = 6;
+}
+
+message NyxIdServiceOperationParameterCapability {
+  string name = 1;
+  NyxIdServiceOperationParameterLocation location = 2;
+  bool required = 3;
+  google.protobuf.Value schema = 4;
+  optional string description = 5;
+}
+
+message NyxIdServiceOperationContinuationCapability {
+  string operation_id = 1;
+  string method = 2;
+  string path_template = 3;
+  optional string summary = 4;
+  NyxIdServiceToolMarkerCapability marker = 5;
+  repeated NyxIdServiceOperationParameterCapability parameters = 6;
+  google.protobuf.Value request_body_schema = 7;
+  bool request_body_required = 8;
+  optional string request_body_media_type = 9;
+}
+
+message NyxIdServiceToolContinuationCapability {
+  uint32 contract_version = 1;
+  repeated NyxIdServiceInstance instances = 2;
+  oneof tool {
+    NyxIdServiceToolKind fixed_tool = 3;
+    NyxIdServiceOperationContinuationCapability operation = 4;
+  }
 }

@@ -53,6 +53,8 @@ NyxID materializer 先从 route-owned tool set、当前已注册工具、既有 
 
 main、同一 turn 内的 step、structured tool call、text fallback、final fallback、skill recovery、tool outcome lookup 与 direct `ToolCallLoop` 都只从当前 final request 的 `Tools` 构造 request-local `ToolManager`。`Tools = null` 表示本次请求没有工具能力，不得回查 actor-level manager；模型伪造、middleware 替换或后续 fallback 恢复出的非 exact tool call 都在执行前拒绝。
 
-AgentRun 的 LLM step 与 tool step 跨 actor turn 时，不传递进程内对象，也不按名称重建授权。LLM step 把 final request 中每个 surviving tool 的名称与完整 contract digest 写入 typed result，run actor 将该 capability snapshot 作为 step state 的权威记录持久化。tool step 重新发现的对象只是候选，只有实现类型、schema、description、approval、side-effect 与 capability flags 的摘要全部匹配 snapshot 才能兑换为当前 exact executable object；snapshot 缺失、冲突或不匹配都 fail closed，并在 tool step、final-no-tools 或 fallback 转换后清理。
+AgentRun 的 LLM step 与 tool step 跨 actor turn 时，不传递进程内对象，也不按名称重建授权。只有实现 `IAgentToolContinuationCapability` 的工具才能导出 provider-owned Protobuf capability；LLM step 把工具名与该 typed payload 写入 result，run actor 将 snapshot 作为 step state 的权威记录持久化。tool step 重新发现的对象只是候选，必须由候选所属 provider 解释并精确匹配 payload，才能兑换为当前 executable object；未声明 continuation contract、snapshot 缺失、同名冲突或 provider contract 不匹配都 fail closed，并在 tool step、final-no-tools、empty-retry 或 owner-fallback 转换后清理。
+
+跨 turn capability 不读取 CLR type、assembly、MVID，也不使用通用 schema/description fingerprint。NyxID connected-service provider 的 typed contract 显式携带 exact instance authority、固定工具种类或完整 operation contract；相同业务 contract 可跨进程、跨构建重新解析，实例授权或 operation 字段变化则拒绝。单 turn 内的 exact object reference 仲裁保持不变。
 
 `SHADOW` 只保留当前请求的 candidate identity 与 bounded diagnostic，权限和 prompt body 固定为 recovery，不读取、解析或注入 candidate skill body，也不解析 candidate task tool set。profile digest、classifier、registry、tool discovery、collision、capability、exact fetch、identity、integrity或正文校验任一失败，都只能降为继续取交集后的 recovery；若交集为空则保持 restricted-empty，不能退回 unrestricted。
