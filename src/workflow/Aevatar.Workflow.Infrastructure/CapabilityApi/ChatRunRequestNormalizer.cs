@@ -64,13 +64,15 @@ internal static class ChatRunRequestNormalizer
             return ChatRunRequestNormalizationResult.Failed(conversationResult.Error);
 
         var chatInput = ToChatInput(input);
-        return NormalizeWithInputParts(
-            chatInput,
-            NormalizeInputParts(input.InputParts),
-            defaultMetadata,
-            trustedCallerCredential,
-            trustedScopeId,
-            conversationResult.Conversation);
+        return WithHttpCommandId(
+            NormalizeWithInputParts(
+                chatInput,
+                NormalizeInputParts(input.InputParts),
+                defaultMetadata,
+                trustedCallerCredential,
+                trustedScopeId,
+                conversationResult.Conversation),
+            input.CommandId);
     }
 
     private readonly record struct CallerCredentialNormalizationResult(
@@ -180,13 +182,15 @@ internal static class ChatRunRequestNormalizer
         var normalizedInputParts = fileIngressPort == null
             ? NormalizeInputParts(input.InputParts)
             : await NormalizeInputPartsAsync(input.InputParts, fileIngressPort, cancellationToken);
-        return NormalizeWithInputParts(
-            ToChatInput(input),
-            normalizedInputParts,
-            defaultMetadata,
-            trustedCallerCredential,
-            trustedScopeId,
-            conversationResult.Conversation);
+        return WithHttpCommandId(
+            NormalizeWithInputParts(
+                ToChatInput(input),
+                normalizedInputParts,
+                defaultMetadata,
+                trustedCallerCredential,
+                trustedScopeId,
+                conversationResult.Conversation),
+            input.CommandId);
     }
 
     private static ChatRunRequestNormalizationResult NormalizeWithInputParts(
@@ -274,6 +278,22 @@ internal static class ChatRunRequestNormalizer
             LlmControl = input.LlmControl,
             ToolContext = input.ToolContext,
         };
+
+    private static ChatRunRequestNormalizationResult WithHttpCommandId(
+        ChatRunRequestNormalizationResult result,
+        string? commandId)
+    {
+        if (!result.Succeeded || result.Request == null)
+            return result;
+
+        var normalizedCommandId = NormalizeOptional(commandId);
+        return normalizedCommandId == null
+            ? result
+            : ChatRunRequestNormalizationResult.Success(result.Request with
+            {
+                CommandIdSeed = normalizedCommandId,
+            });
+    }
 
     private static SourceNormalizationResult NormalizeSource(ChatInput input)
     {

@@ -25,12 +25,24 @@ internal sealed class ProjectionChatConversationContinuationAdmissionReader
 
         var normalizedScopeId = scopeId.Trim();
         var normalizedConversationId = conversationId.Trim();
-        var actorId = ChatHistoryActorIds.Conversation(normalizedScopeId, normalizedConversationId);
-        var document = await _documentReader.GetAsync(actorId, ct).ConfigureAwait(false);
+        var actorIds = new[]
+        {
+            ChatHistoryActorIds.Conversation(normalizedScopeId, normalizedConversationId),
+            ChatHistoryActorIds.LegacyConversation(normalizedScopeId, normalizedConversationId),
+        };
 
-        return document is not null &&
-               !document.Deleted &&
-               string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
-               string.Equals(document.ConversationId, normalizedConversationId, StringComparison.Ordinal);
+        foreach (var actorId in actorIds)
+        {
+            var document = await _documentReader.GetAsync(actorId, ct).ConfigureAwait(false);
+            if (document is not null &&
+                !document.Deleted &&
+                string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
+                string.Equals(document.ConversationId, normalizedConversationId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
