@@ -1,6 +1,5 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
-using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -47,7 +46,8 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
             throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
         }
 
-        var authorizationEvidence = MapAuthorizationEvidence(parse.AuthorizationDependencies);
+        var authorizationDependencies = parse.AuthorizationDependencies
+            ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
         var executionMode = spec.CapabilityAdmissionPlan?.ExecutionMode
             ?? ExternalCapabilityExecutionMode.Interactive;
         var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
@@ -62,63 +62,10 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
                 spec.CapabilityAdmissionPlan),
             ct);
 
-        return new PreparedServiceRevisionArtifact
-        {
-            Identity = request.Spec.Identity.Clone(),
-            RevisionId = request.Spec.RevisionId,
-            ImplementationKind = ServiceImplementationKind.Workflow,
-            Endpoints =
-            {
-                new ServiceEndpointDescriptor
-                {
-                    EndpointId = "chat",
-                    DisplayName = "chat",
-                    Kind = ServiceEndpointKind.Chat,
-                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
-                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
-                    Description = "Workflow chat endpoint.",
-                },
-            },
-            DeploymentPlan = new ServiceDeploymentPlan
-            {
-                WorkflowPlan = new WorkflowServiceDeploymentPlan
-                {
-                    WorkflowName = resolvedWorkflowName,
-                    WorkflowYaml = spec.WorkflowYaml,
-                    DefinitionActorId = spec.DefinitionActorId ?? string.Empty,
-                    InlineWorkflowYamls = { spec.InlineWorkflowYamls },
-                    AuthorizationEvidence = authorizationEvidence,
-                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
-                },
-            },
-        };
+        return WorkflowServiceRevisionArtifactBuilder.Build(
+            request.Spec,
+            resolvedWorkflowName,
+            authorizationDependencies,
+            capabilityAdmissionPlan);
     }
-
-    private static WorkflowRevisionAuthorizationEvidence MapAuthorizationEvidence(
-        WorkflowAuthorizationDependencies? dependencies)
-    {
-        if (dependencies == null ||
-            dependencies.ServiceGrantPolicy == WorkflowServiceGrantPolicy.Unspecified ||
-            !Enum.IsDefined(dependencies.ServiceGrantPolicy))
-        {
-            throw new InvalidOperationException("workflow authorization dependencies are required.");
-        }
-
-        var evidence = new WorkflowRevisionAuthorizationEvidence
-        {
-            OwnerLlmRouteRequired = dependencies.OwnerLlmRouteRequired,
-            ServiceGrantRequirement = dependencies.ServiceGrantPolicy switch
-            {
-                WorkflowServiceGrantPolicy.Required => AuthorizationGrantRequirement.Required,
-                WorkflowServiceGrantPolicy.NotRequiredNoExternalService => AuthorizationGrantRequirement.NotRequired,
-                _ => AuthorizationGrantRequirement.Unspecified,
-            },
-        };
-        evidence.ExternalCapabilities.Add(
-            dependencies.ExternalCapabilities.Select(static capability => capability.Clone()));
-        return evidence;
-    }
-
-    private static string GetTypeUrl(Google.Protobuf.Reflection.MessageDescriptor descriptor) =>
-        $"type.googleapis.com/{descriptor.FullName}";
 }

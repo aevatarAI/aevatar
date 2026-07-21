@@ -539,9 +539,18 @@ public sealed class ServiceImplementationAdaptersTests
         {
             ParseResult = WorkflowYamlParseResult.Success("inferred-workflow", dependencies),
         };
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: inferred-workflow",
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            dependencies.ExternalCapabilities,
+            []);
         var adapter = new WorkflowServiceImplementationAdapter(
             workflowPort,
-            new RecordingWorkflowCapabilityAdmissionService());
+            new RecordingWorkflowCapabilityAdmissionService
+            {
+                Result = admissionPlan,
+            });
 
         var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
         {
@@ -568,6 +577,66 @@ public sealed class ServiceImplementationAdaptersTests
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
             .Be(Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required);
         workflowPort.ParseCalls.Should().ContainSingle("name: inferred-workflow");
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_ShouldUseAdmittedBundleCapabilitiesForAuthorizationEvidence()
+    {
+        const string workflowYaml = "name: root-workflow";
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+        };
+        var admittedCapability = new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-home-alpha",
+                ServiceSlugSnapshot = "home-assistant",
+                OperationId = "read_states",
+                HttpMethod = "GET",
+                PathTemplate = "/api/states",
+                ContractDigest = "nyxid-digest-alpha",
+            },
+        };
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string> { ["child"] = "name: child" },
+            ExternalCapabilityExecutionMode.Durable,
+            [admittedCapability],
+            []);
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = WorkflowYamlParseResult.Success("root-workflow", dependencies),
+        };
+        var adapter = new WorkflowServiceImplementationAdapter(
+            workflowPort,
+            new RecordingWorkflowCapabilityAdmissionService
+            {
+                Result = admissionPlan,
+            });
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "r-bundle",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowYaml = workflowYaml,
+                    InlineWorkflowYamls = { ["child"] = "name: child" },
+                    CapabilityAdmissionPlan = admissionPlan,
+                },
+            },
+        });
+
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ExternalCapabilities.Should()
+            .ContainSingle()
+            .Which.Should().BeEquivalentTo(admittedCapability);
+        artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
+            .Be(Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required);
     }
 
     [Fact]
@@ -778,12 +847,15 @@ public sealed class ServiceImplementationAdaptersTests
     {
         public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
 
+        public WorkflowCapabilityAdmissionPlan? Result { get; init; }
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
         {
             Request = request;
-            return Task.FromResult(request.ExistingPlan?.Clone()
+            return Task.FromResult(Result?.Clone()
+                ?? request.ExistingPlan?.Clone()
                 ?? WorkflowCapabilityAdmissionPlanIntegrity.Create(
                     request.WorkflowYaml,
                     request.InlineWorkflowYamls,

@@ -217,9 +217,25 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     public async Task UpsertAsync_ShouldDispatchExposureIntentAfterAlreadyActiveReplay()
     {
         const string revisionId = "rev-platform-bind-1";
+        const string workflowYaml = "name: main\nsteps:\n  - run: echo hello";
         var commandPort = new RecordingServiceCommandPort();
         var externalExposureIntentPort = new RecordingExternalExposureIntentPort(commandPort);
-        var existingHash = "9FAFFAFE586BDBA6791AF7488B3D09AA3E9AA19B587D21AC772432E52DE86709";
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+        };
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var existingHash = CreateWorkflowArtifactHash(
+            revisionId,
+            "main",
+            workflowYaml,
+            dependencies: dependencies,
+            capabilityAdmissionPlan: capabilityAdmissionPlan);
         var existingService = new ServiceCatalogSnapshot(
             "scope-a:default:default:default",
             ScopeId,
@@ -261,19 +277,26 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         null),
                 ],
                 DateTimeOffset.UtcNow));
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ParseResultsByYaml =
+            {
+                [workflowYaml] = WorkflowYamlParseResult.Success("main", dependencies),
+            },
+        };
         var service = CreateService(
             commandPort,
             lifecyclePort,
             new FakeScopeScriptQueryPort(),
             new FakeScriptDefinitionSnapshotPort(),
-            new FakeWorkflowRunActorPort(),
+            actorPort,
             externalExposureIntentPort: externalExposureIntentPort);
 
         await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
             Workflow: new ScopeBindingWorkflowSpec([
-                "name: main\nsteps:\n  - run: echo hello",
+                workflowYaml,
             ]),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
@@ -1133,8 +1156,25 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     public async Task UpsertAsync_ShouldReuseExistingWorkflowRevision_WhenReplayRevisionMatchesAndArtifactHashMatches()
     {
         const string revisionId = "rev-platform-bind-1";
+        const string workflowYaml = "name: main\nsteps:\n  - run: echo hello";
         var commandPort = new RecordingServiceCommandPort();
-        var existingHash = "9FAFFAFE586BDBA6791AF7488B3D09AA3E9AA19B587D21AC772432E52DE86709";
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            OwnerLlmRouteRequired = false,
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+        };
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var existingHash = CreateWorkflowArtifactHash(
+            revisionId,
+            "main",
+            workflowYaml,
+            dependencies: dependencies,
+            capabilityAdmissionPlan: capabilityAdmissionPlan);
         var lifecyclePort = new FakeServiceLifecycleQueryPort(
             new ServiceCatalogSnapshot(
                 "scope-a:default:default:default",
@@ -1177,14 +1217,20 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 DateTimeOffset.UtcNow));
         var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
         var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
-        var actorPort = new FakeWorkflowRunActorPort();
+        var actorPort = new FakeWorkflowRunActorPort
+        {
+            ParseResultsByYaml =
+            {
+                [workflowYaml] = WorkflowYamlParseResult.Success("main", dependencies),
+            },
+        };
         var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
 
         var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
             Workflow: new ScopeBindingWorkflowSpec([
-                "name: main\nsteps:\n  - run: echo hello",
+                workflowYaml,
             ]),
             RevisionId: revisionId,
             AllowExistingRevisionReplay: true,
@@ -1936,8 +1982,33 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         string workflowName,
         string workflowYaml,
         string endpointDescription = "Workflow chat endpoint.",
-        string? serviceId = null)
+        string? serviceId = null,
+        WorkflowAuthorizationDependencies? dependencies = null,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null)
     {
+        var admittedCapabilities = capabilityAdmissionPlan?.ExternalCapabilities
+            ?? dependencies?.ExternalCapabilities;
+        var serviceGrantRequirement = capabilityAdmissionPlan is not null
+            ? capabilityAdmissionPlan.ExternalCapabilities.Any(static capability =>
+                capability.CapabilityCase ==
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+                ? Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required
+                : Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.NotRequired
+            : dependencies?.ServiceGrantPolicy switch
+            {
+                WorkflowServiceGrantPolicy.Required =>
+                    Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required,
+                WorkflowServiceGrantPolicy.NotRequiredNoExternalService =>
+                    Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.NotRequired,
+                _ => Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Unspecified,
+            };
+        var authorizationEvidence = new Aevatar.GAgentService.Abstractions.Schedules.Authorization.WorkflowRevisionAuthorizationEvidence
+        {
+            OwnerLlmRouteRequired = dependencies?.OwnerLlmRouteRequired ?? false,
+            ServiceGrantRequirement = serviceGrantRequirement,
+        };
+        authorizationEvidence.ExternalCapabilities.Add(
+            (admittedCapabilities ?? []).Select(static capability => capability.Clone()));
         var artifact = new PreparedServiceRevisionArtifact
         {
             Identity = DefaultServiceIdentity(serviceId),
@@ -1961,7 +2032,11 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 {
                     WorkflowName = workflowName,
                     WorkflowYaml = workflowYaml,
-                    DefinitionActorId = $"scope-workflow:{ScopeId}:default",
+                    DefinitionActorId = DefaultOptions.BuildDefinitionActorIdPrefix(
+                        ScopeId,
+                        DefaultOptions.DefaultServiceId),
+                    AuthorizationEvidence = authorizationEvidence,
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
                 },
             },
         };
@@ -2266,7 +2341,12 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             return Task.FromResult(
                 string.IsNullOrWhiteSpace(workflowName)
                     ? WorkflowYamlParseResult.Invalid("Workflow YAML is invalid.")
-                    : WorkflowYamlParseResult.Success(workflowName));
+                    : WorkflowYamlParseResult.Success(
+                        workflowName,
+                        new WorkflowAuthorizationDependencies
+                        {
+                            ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
+                        }));
         }
     }
 

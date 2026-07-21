@@ -225,7 +225,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (string.IsNullOrWhiteSpace(existingRevision.ArtifactHash))
             return false;
 
-        var expectedArtifactHash = ComputeNonScriptingArtifactHash(revisionSpec);
+        var expectedArtifactHash = await ComputeNonScriptingArtifactHashAsync(revisionSpec, ct);
         if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
@@ -235,11 +235,14 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return false;
     }
 
-    private static string ComputeNonScriptingArtifactHash(ServiceRevisionSpec revisionSpec)
+    private async Task<string> ComputeNonScriptingArtifactHashAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct)
     {
         var artifact = revisionSpec.ImplementationSpecCase switch
         {
-            ServiceRevisionSpec.ImplementationSpecOneofCase.WorkflowSpec => BuildWorkflowArtifact(revisionSpec),
+            ServiceRevisionSpec.ImplementationSpecOneofCase.WorkflowSpec =>
+                await BuildWorkflowArtifactAsync(revisionSpec, ct),
             ServiceRevisionSpec.ImplementationSpecOneofCase.StaticSpec => BuildStaticArtifact(revisionSpec),
             _ => throw new InvalidOperationException(
                 $"Unsupported replay implementation spec '{revisionSpec.ImplementationSpecCase}'."),
@@ -292,38 +295,29 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return ComputeArtifactHash(artifact);
     }
 
-    private static PreparedServiceRevisionArtifact BuildWorkflowArtifact(ServiceRevisionSpec revisionSpec)
+    private async Task<PreparedServiceRevisionArtifact> BuildWorkflowArtifactAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct)
     {
         var workflowSpec = revisionSpec.WorkflowSpec
             ?? throw new InvalidOperationException("workflow implementation_spec is required.");
-        return new PreparedServiceRevisionArtifact
-        {
-            Identity = revisionSpec.Identity.Clone(),
-            RevisionId = revisionSpec.RevisionId,
-            ImplementationKind = ServiceImplementationKind.Workflow,
-            Endpoints =
-            {
-                new ServiceEndpointDescriptor
-                {
-                    EndpointId = "chat",
-                    DisplayName = "chat",
-                    Kind = ServiceEndpointKind.Chat,
-                    RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
-                    ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
-                    Description = "Workflow chat endpoint.",
-                },
-            },
-            DeploymentPlan = new ServiceDeploymentPlan
-            {
-                WorkflowPlan = new WorkflowServiceDeploymentPlan
-                {
-                    WorkflowName = workflowSpec.WorkflowName,
-                    WorkflowYaml = workflowSpec.WorkflowYaml,
-                    DefinitionActorId = workflowSpec.DefinitionActorId ?? string.Empty,
-                    InlineWorkflowYamls = { workflowSpec.InlineWorkflowYamls },
-                },
-            },
-        };
+        var parse = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowSpec.WorkflowYaml, ct);
+        if (!parse.Succeeded)
+            throw new InvalidOperationException(parse.Error);
+        var resolvedWorkflowName = string.IsNullOrWhiteSpace(workflowSpec.WorkflowName)
+            ? parse.WorkflowName
+            : workflowSpec.WorkflowName;
+        if (!string.Equals(resolvedWorkflowName, parse.WorkflowName, StringComparison.Ordinal))
+            throw new InvalidOperationException("workflow_name must match workflow_yaml name.");
+        var authorizationDependencies = parse.AuthorizationDependencies
+            ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
+        var capabilityAdmissionPlan = workflowSpec.CapabilityAdmissionPlan
+            ?? throw new InvalidOperationException("workflow capability admission plan is required.");
+        return WorkflowServiceRevisionArtifactBuilder.Build(
+            revisionSpec,
+            resolvedWorkflowName,
+            authorizationDependencies,
+            capabilityAdmissionPlan);
     }
 
     private static PreparedServiceRevisionArtifact BuildStaticArtifact(ServiceRevisionSpec revisionSpec)
