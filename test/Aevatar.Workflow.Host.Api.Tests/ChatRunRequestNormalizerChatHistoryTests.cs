@@ -85,6 +85,7 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
             """
             {
               "prompt": "assistant prompt",
+              "commandId": " create-command-1 ",
               "conversation": {
                 "conversationId": null
               }
@@ -98,8 +99,32 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
 
         result.Succeeded.Should().BeTrue();
         result.Request!.ScopeId.Should().Be("trusted-scope");
+        result.Request.CommandIdSeed.Should().Be("create-command-1");
         result.Request.ChatConversation.Should().BeEquivalentTo(
             WorkflowChatConversationIntent.Create());
+    }
+
+    [Fact]
+    public void Normalize_ShouldMapHttpCommandIdToTrustedCommandSeed()
+    {
+        var input = JsonSerializer.Deserialize<HttpChatInput>(
+            """
+            {
+              "prompt": "assistant prompt",
+              "commandId": " create-command-stable ",
+              "conversation": {
+                "conversationId": null
+              }
+            }
+            """,
+            ChatWebSocketProtocol.JsonOptions)!;
+
+        var result = ChatRunRequestNormalizer.Normalize(
+            input,
+            trustedScopeId: "trusted-scope");
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.CommandIdSeed.Should().Be("create-command-stable");
     }
 
     [Fact]

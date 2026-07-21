@@ -7,13 +7,15 @@ public sealed record WorkflowChatHistoryTerminalDeliveryReservationRequest(
     string UserText,
     string WorkflowActorId,
     string WorkflowCommandId,
-    string WorkflowCorrelationId);
+    string WorkflowCorrelationId,
+    string RequestFingerprint = "");
 
 public sealed record WorkflowChatHistoryTerminalDeliveryReservation(
     string DeliveryActorId,
     string DeliveryId,
     string WorkflowActorId,
-    string WorkflowCommandId);
+    string WorkflowCommandId,
+    bool ExistingReservation = false);
 
 public enum WorkflowChatHistoryTerminalDeliveryReservationFailure
 {
