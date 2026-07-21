@@ -78,7 +78,14 @@ public static class ServiceCollectionExtensions
         Action<NyxIdToolOptions>? configure)
     {
         ArgumentNullException.ThrowIfNull(services);
-        var options = new NyxIdToolOptions();
+        var options = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(NyxIdToolOptions))
+            .Select(static descriptor => descriptor.ImplementationInstance)
+            .OfType<NyxIdToolOptions>()
+            .LastOrDefault() ?? new NyxIdToolOptions();
+        services.RemoveAll<NyxIdToolOptions>();
+        services.AddSingleton(options);
+
         var configuredBaseUrl = FirstConfiguredValue(
             configuration,
             "Aevatar:NyxId:ApiBaseUrl",
@@ -89,9 +96,12 @@ public static class ServiceCollectionExtensions
             options.BaseUrl = configuredBaseUrl;
         configure?.Invoke(options);
 
-        services.RemoveAll<NyxIdToolOptions>();
-        services.AddSingleton(options);
-        services.AddHttpClient<NyxIdApiClient>();
+        if (!services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(NyxIdApiAccessRegistrationMarker)))
+        {
+            services.AddHttpClient<NyxIdApiClient>();
+            services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
+        }
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
         return services;
     }
@@ -111,6 +121,10 @@ public static class ServiceCollectionExtensions
         }
 
         return null;
+    }
+
+    private sealed class NyxIdApiAccessRegistrationMarker
+    {
     }
 
     // Registers the NyxID-backed current-user resolver behind the aevatar admin authorization seam.

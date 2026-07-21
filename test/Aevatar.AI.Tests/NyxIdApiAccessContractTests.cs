@@ -5,6 +5,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.Tests;
@@ -304,6 +305,76 @@ public sealed class NyxIdApiAccessContractTests
         provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be(value);
     }
 
+    [Fact]
+    public void AddNyxIdApiAccess_AfterTools_ShouldOverrideOnlyExplicitApiSettings()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://tools-first.test";
+            options.SandboxServiceSlug = "sandbox-tools-first";
+            options.EnableSshExecTool = true;
+            options.ProxyFileArtifactMaxBytes = 42_000_000;
+        });
+
+        services.AddNyxIdApiAccess(ConfigurationWithApiBaseUrl("https://api-later.test"));
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.BaseUrl.Should().Be("https://api-later.test");
+        options.SandboxServiceSlug.Should().Be("sandbox-tools-first");
+        options.EnableSshExecTool.Should().BeTrue();
+        options.ProxyFileArtifactMaxBytes.Should().Be(42_000_000);
+        AssertApiAccessRegistrationsAreSingle(services);
+    }
+
+    [Fact]
+    public void AddNyxIdTools_AfterApiAccess_ShouldPreserveEarlierApiSettings()
+    {
+        var services = new ServiceCollection();
+        services.AddNyxIdApiAccess(ConfigurationWithApiBaseUrl("https://api-first.test"));
+
+        services.AddNyxIdTools(options =>
+        {
+            options.SandboxServiceSlug = "sandbox-tools-later";
+            options.EnableManagedCodexExecTool = true;
+            options.ProxyFileArtifactMaxBytes = 37_000_000;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var options = provider.GetRequiredService<NyxIdToolOptions>();
+        options.BaseUrl.Should().Be("https://api-first.test");
+        options.SandboxServiceSlug.Should().Be("sandbox-tools-later");
+        options.EnableManagedCodexExecTool.Should().BeTrue();
+        options.ProxyFileArtifactMaxBytes.Should().Be(37_000_000);
+        AssertApiAccessRegistrationsAreSingle(services);
+    }
+
+    [Fact]
+    public void AddNyxIdApiAccess_AfterTypeBasedDefaults_ShouldNormalizeAndComposeHttpAccess()
+    {
+        var services = new ServiceCollection();
+        services.TryAddSingleton<NyxIdToolOptions>();
+        services.TryAddSingleton<NyxIdApiClient>();
+
+        services.AddNyxIdApiAccess(ConfigurationWithApiBaseUrl("https://api-after-defaults.test"));
+        services.AddNyxIdApiAccess();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true,
+        });
+        var createClient = () => provider.GetRequiredService<INyxIdApiClientFactory>().CreateClient();
+        createClient.Should().NotThrow();
+        provider.GetServices<NyxIdToolOptions>().Should().ContainSingle()
+            .Which.BaseUrl.Should().Be("https://api-after-defaults.test");
+        services.Count(static descriptor => descriptor.ServiceType == typeof(NyxIdApiClient))
+            .Should().Be(2);
+        services.Count(static descriptor => descriptor.ServiceType == typeof(INyxIdApiClientFactory))
+            .Should().Be(1);
+    }
+
     public static TheoryData<string> MalformedScopePlans()
     {
         var valid = ValidScopePlanJson();
@@ -359,6 +430,24 @@ public sealed class NyxIdApiAccessContractTests
           "ignored_future_field": "allowed"
         }
         """;
+
+    private static IConfiguration ConfigurationWithApiBaseUrl(string baseUrl) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:ApiBaseUrl"] = baseUrl,
+            })
+            .Build();
+
+    private static void AssertApiAccessRegistrationsAreSingle(IServiceCollection services)
+    {
+        services.Count(static descriptor => descriptor.ServiceType == typeof(NyxIdToolOptions))
+            .Should().Be(1);
+        services.Count(static descriptor => descriptor.ServiceType == typeof(NyxIdApiClient))
+            .Should().Be(1);
+        services.Count(static descriptor => descriptor.ServiceType == typeof(INyxIdApiClientFactory))
+            .Should().Be(1);
+    }
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
