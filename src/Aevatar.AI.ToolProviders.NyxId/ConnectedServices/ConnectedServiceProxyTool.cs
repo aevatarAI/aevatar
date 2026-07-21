@@ -19,6 +19,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
     private readonly NyxIdApiClient _client;
     private readonly ConnectedServiceToolOperation _operation;
     private readonly string _serviceSlug;
+    private readonly string _userServiceId;
     private readonly bool _preferOrgToken;
     private readonly ILogger _logger;
 
@@ -26,6 +27,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         NyxIdApiClient client,
         string name,
         string serviceSlug,
+        string userServiceId,
         ConnectedServiceToolOperation operation,
         bool preferOrgToken,
         ToolPresentationDescriptor presentation,
@@ -34,6 +36,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         _client = client;
         Name = name;
         _serviceSlug = serviceSlug;
+        _userServiceId = userServiceId;
         _operation = operation;
         _preferOrgToken = preferOrgToken;
         Presentation = presentation?.Clone() ?? throw new ArgumentNullException(nameof(presentation));
@@ -50,7 +53,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             : !string.IsNullOrWhiteSpace(operation.Marker?.Description)
                 ? operation.Marker!.Description
                 : operation.OperationId;
-        Description = $"{summary} [NyxID service: {serviceSlug}; {operation.Method} {operation.PathTemplate}]";
+        Description = $"{summary} [NyxID service: {serviceSlug}; instance: {userServiceId}; {operation.Method} {operation.PathTemplate}]";
     }
 
     public string Name { get; }
@@ -116,7 +119,15 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
             "[{Tool}] proxy {Method} slug={Slug} tokenSource={Source}",
             Name, _operation.Method, _serviceSlug, _preferOrgToken ? "org" : "user");
 
-        return await _client.ProxyRequestAsync(token, _serviceSlug, fullPath, _operation.Method, body, headers, ct);
+        return await _client.ProxyRequestAsync(
+            token,
+            _serviceSlug,
+            _userServiceId,
+            fullPath,
+            _operation.Method,
+            body,
+            headers,
+            ct);
     }
 
     private bool TryBuildPath(ToolArgs args, out string path, out string? error)

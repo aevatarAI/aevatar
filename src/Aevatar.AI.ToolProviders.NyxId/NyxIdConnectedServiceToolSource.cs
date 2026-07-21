@@ -79,41 +79,56 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         var tools = new List<IAgentTool>();
         var byName = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        for (var i = 0; i < services.Count; i++)
-        {
-            var service = services[i];
-            var operations = specs[i]
-                .OrderBy(op => op.PathTemplate, StringComparer.Ordinal)
-                .ThenBy(op => op.Method, StringComparer.Ordinal);
-
-            foreach (var operation in operations)
-            {
-                var name = ConnectedServiceToolNaming.Build(
-                    service.Slug,
-                    operation.Marker?.Name ?? operation.OperationId);
-                var identity = $"{service.Slug}:{operation.Method} {operation.PathTemplate}";
-
-                if (byName.TryGetValue(name, out var existing))
-                {
-                    // Observable failure: two operations collapse to the same tool name. Keep the
-                    // first (deterministic order) and drop the rest so the LLM never sees an
-                    // ambiguous duplicate.
-                    _logger.LogWarning(
-                        "NyxID connected-service tool name conflict on '{Name}': keeping {Existing}, dropping {Dropped}",
-                        name, existing, identity);
-                    continue;
-                }
-
-                byName[name] = identity;
-                tools.Add(new ConnectedServiceProxyTool(
-                    _client,
-                    name,
-                    service.Slug,
+        var candidates = services
+            .SelectMany((service, index) => specs[index]
+                .OrderBy(static operation => operation.PathTemplate, StringComparer.Ordinal)
+                .ThenBy(static operation => operation.Method, StringComparer.Ordinal)
+                .Select(operation => new ToolCandidate(
+                    service,
                     operation,
-                    service.PreferOrgToken,
-                    BuildPresentation(service, operation, name),
-                    _logger));
+                    operation.Marker?.Name ?? operation.OperationId,
+                    ConnectedServiceToolNaming.Build(
+                        service.Slug,
+                        operation.Marker?.Name ?? operation.OperationId))))
+            .ToArray();
+        var ambiguousNames = candidates
+            .GroupBy(static candidate => candidate.BaseName, StringComparer.Ordinal)
+            .Where(static group => group
+                .Select(static candidate => candidate.Service.ServiceId)
+                .Distinct(StringComparer.Ordinal)
+                .Count() > 1)
+            .Select(static group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var candidate in candidates)
+        {
+            var service = candidate.Service;
+            var operation = candidate.Operation;
+            var name = ambiguousNames.Contains(candidate.BaseName)
+                ? ConnectedServiceToolNaming.Build(
+                    service.Slug,
+                    $"{candidate.OperationName}_{service.ServiceId}")
+                : candidate.BaseName;
+            var identity = $"{service.ServiceId}:{service.Slug}:{operation.Method} {operation.PathTemplate}";
+
+            if (byName.TryGetValue(name, out var existing))
+            {
+                _logger.LogWarning(
+                    "NyxID connected-service tool name conflict on '{Name}': keeping {Existing}, dropping {Dropped}",
+                    name, existing, identity);
+                continue;
             }
+
+            byName[name] = identity;
+            tools.Add(new ConnectedServiceProxyTool(
+                _client,
+                name,
+                service.Slug,
+                service.ServiceId,
+                operation,
+                service.PreferOrgToken,
+                BuildPresentation(service, operation, name),
+                _logger));
         }
 
         _logger.LogInformation(
@@ -171,12 +186,6 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         string? orgToken,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(service.ServiceId))
-        {
-            _logger.LogDebug("NyxID service '{Slug}' has no service id; cannot fetch proxy-aware spec", service.Slug);
-            return [];
-        }
-
         var token = service.PreferOrgToken && !string.IsNullOrWhiteSpace(orgToken) ? orgToken! : userToken;
         var specJson = await _client.GetProxyServiceOpenApiAsync(token, service.ServiceId, ct);
         if (LooksLikeErrorEnvelope(specJson))
@@ -197,14 +206,18 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         var seenServiceIds = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var service in await DiscoverServicesForTokenAsync(userToken, preferOrgToken: false, ct))
+        {
             if (seenServiceIds.Add(service.ServiceId))
                 merged.Add(service);
+        }
 
         if (!string.IsNullOrWhiteSpace(orgToken) && orgToken != userToken)
         {
             foreach (var service in await DiscoverServicesForTokenAsync(orgToken, preferOrgToken: true, ct))
+            {
                 if (seenServiceIds.Add(service.ServiceId))
                     merged.Add(service);
+            }
         }
 
         return merged;
@@ -318,4 +331,10 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         string Description,
         string IconUrl,
         bool PreferOrgToken);
+
+    private sealed record ToolCandidate(
+        ConnectedServiceRef Service,
+        ConnectedServiceToolOperation Operation,
+        string OperationName,
+        string BaseName);
 }

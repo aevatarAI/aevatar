@@ -43,8 +43,8 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
     public string Description =>
         "Make HTTP requests to downstream services through NyxID's credential-injecting proxy. " +
         "NyxID automatically injects the user's stored credentials. " +
-        "Omit slug to discover all proxyable services. " +
-        "Provide slug + path to send a proxied request.";
+        "Omit slug and service_id to discover caller-visible service instances. " +
+        "Provide exact service_id + slug + path to send a proxied request.";
 
     /// <summary>
     /// No Aevatar-side approval needed. NyxID's proxy layer handles approval
@@ -80,7 +80,11 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
           "properties": {
             "slug": {
               "type": "string",
-              "description": "Service slug (e.g. 'llm-openai', 'api-github'). Omit to list all proxyable services."
+              "description": "Admitted service slug routing snapshot. Omit with service_id to list caller-visible service instances."
+            },
+            "service_id": {
+              "type": "string",
+              "description": "Exact NyxID UserService.id selected from typed capability discovery. Required with slug."
             },
             "path": {
               "type": "string",
@@ -98,7 +102,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             "headers": {
               "type": "object",
               "additionalProperties": { "type": "string" },
-              "description": "Additional HTTP headers"
+              "description": "Non-sensitive operation headers. Authorization, cookies, API keys, and tokens are forbidden; NyxID injects credentials."
             },
             "response_mode": {
               "type": "string",
@@ -135,6 +139,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         }
 
         var slug = args.Str("slug") ?? args.Str("service");
+        var serviceId = args.Str("service_id");
         var path = args.Str("path");
         var method = args.Str("method", "GET");
         var body = args.RawOrStr("body");
@@ -143,11 +148,20 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         // No slug → discover mode: merge services from both tokens
         if (string.IsNullOrWhiteSpace(slug))
         {
+            if (!string.IsNullOrWhiteSpace(serviceId))
+                return """{"error":"'slug' is required when 'service_id' is provided"}""";
             if (responseMode == FileArtifactResponseMode)
                 return FileArtifactError("file_artifact_requires_slug", "response_mode=file_artifact requires slug.");
 
             _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery");
             return await DiscoverMergedServicesAsync(token, orgToken, ct);
+        }
+
+        if (string.IsNullOrWhiteSpace(serviceId))
+        {
+            return responseMode == FileArtifactResponseMode
+                ? FileArtifactError("file_artifact_requires_service_id", "response_mode=file_artifact requires exact service_id.")
+                : """{"error":"'service_id' is required when 'slug' is provided"}""";
         }
 
         if (string.IsNullOrWhiteSpace(path))
@@ -159,12 +173,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             return """{"error":"'path' is required when 'slug' is provided"}""";
         }
 
+        var sensitiveHeader = headers?.Keys.FirstOrDefault(NyxIdProxyHeaderPolicy.IsSensitive);
+        if (sensitiveHeader != null)
+        {
+            return responseMode == FileArtifactResponseMode
+                ? FileArtifactError("sensitive_header_forbidden", $"nyxid_proxy sensitive header '{sensitiveHeader}' cannot be supplied.")
+                : $"{{\"error\":\"nyxid_proxy sensitive header '{JsonEncodedText.Encode(sensitiveHeader)}' cannot be supplied\"}}";
+        }
+
         if (responseMode == FileArtifactResponseMode)
         {
             return await ExecuteFileArtifactAsync(
                 token,
                 orgToken,
                 slug,
+                serviceId,
                 path,
                 method,
                 args,
@@ -174,11 +197,19 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         }
 
         // Resolve which token owns the target service: user token first, fallback to org token
-        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, slug, ct);
+        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, serviceId, ct);
 
         _logger.LogInformation("[nyxid_proxy] {Method} slug={Slug} tokenSource={Source}",
             method, slug, effectiveToken == token ? "user" : "org");
-        var result = await _client.ProxyRequestAsync(effectiveToken, slug, path, method, body, headers, ct);
+        var result = await _client.ProxyRequestAsync(
+            effectiveToken,
+            slug,
+            serviceId,
+            path,
+            method,
+            body,
+            headers,
+            ct);
 
         if (IsApprovalError(result, out var approvalCode, out var approvalRequestId))
         {
@@ -194,6 +225,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         string token,
         string? orgToken,
         string slug,
+        string serviceId,
         string path,
         string method,
         ToolArgs args,
@@ -217,7 +249,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         if (!workflowRuntime.HasManagedParent || callerScopeId == null || ownerRunId == null)
             return FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope.");
 
-        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, slug, ct);
+        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, serviceId, ct);
         _logger.LogInformation(
             "[nyxid_proxy] GET file_artifact slug={Slug} maxBytes={MaxBytes} tokenSource={Source}",
             slug,
@@ -227,6 +259,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         var response = await _client.ProxyGetBinaryResponseAsync(
             effectiveToken,
             slug,
+            serviceId,
             path,
             headers,
             _fileArtifactMaxBytes,
@@ -259,7 +292,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             ingressResult = await _fileArtifactIngress.IngestAsync(new FileArtifactIngressRequest(
                 response.Content,
                 FileArtifactSourceKind.ConnectedServiceResource,
-                SourceMessageId: $"nyxid_proxy:{slug}",
+                SourceMessageId: $"nyxid_proxy:{serviceId}",
                 SourceResourceKey: SanitizeResourcePath(path),
                 FileName: response.FileName,
                 MediaType: response.ContentType,
@@ -298,10 +331,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         string userToken, string? orgToken, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
-            return await _client.DiscoverProxyServicesAsync(userToken, ct);
+            return await _client.ListServicesAsync(userToken, ct);
 
-        var userServicesJson = await _client.DiscoverProxyServicesAsync(userToken, ct);
-        var orgServicesJson = await _client.DiscoverProxyServicesAsync(orgToken, ct);
+        var userServicesJson = await _client.ListServicesAsync(userToken, ct);
+        var orgServicesJson = await _client.ListServicesAsync(orgToken, ct);
 
         // PR #471 reviewer concern: when both tokens fail discovery, both responses are
         // NyxID error envelopes, neither has a `services` array, the merge below quietly
@@ -321,27 +354,17 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             using var userDoc = System.Text.Json.JsonDocument.Parse(userServicesJson);
             using var orgDoc = System.Text.Json.JsonDocument.Parse(orgServicesJson);
 
-            var userSlugs = ParseServiceSlugs(userDoc);
+            var userServiceIds = ParseServiceIds(userDoc);
             var merged = new List<System.Text.Json.JsonElement>();
 
-            if (userDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
-            {
-                foreach (var svc in userDoc.RootElement.EnumerateArray())
-                    merged.Add(svc);
-            }
+            foreach (var service in EnumerateServiceItems(userDoc.RootElement))
+                merged.Add(service);
 
-            // Add org services that don't collide with user services
-            if (orgDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            foreach (var service in EnumerateServiceItems(orgDoc.RootElement))
             {
-                foreach (var svc in orgDoc.RootElement.EnumerateArray())
-                {
-                    if (svc.TryGetProperty("slug", out var slugProp))
-                    {
-                        var s = slugProp.GetString() ?? string.Empty;
-                        if (!userSlugs.Contains(s))
-                            merged.Add(svc);
-                    }
-                }
+                var serviceId = ReadServiceId(service);
+                if (!string.IsNullOrWhiteSpace(serviceId) && userServiceIds.Add(serviceId))
+                    merged.Add(service);
             }
 
             return System.Text.Json.JsonSerializer.Serialize(merged);
@@ -354,22 +377,22 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
     }
 
     /// <summary>
-    /// Resolve which token to use for a given service slug.
+    /// Resolve which token to use for a given exact UserService id.
     /// Checks user token's service list first; falls back to org token.
     /// </summary>
     private async Task<string> ResolveTokenForServiceAsync(
-        string userToken, string? orgToken, string slug, CancellationToken ct)
+        string userToken, string? orgToken, string serviceId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(orgToken) || TokensEqual(orgToken, userToken))
             return userToken;
 
-        if (await ServiceExistsForTokenAsync(userToken, slug, ct))
+        if (await ServiceExistsForTokenAsync(userToken, serviceId, ct))
             return userToken;
 
-        if (await ServiceExistsForTokenAsync(orgToken, slug, ct))
+        if (await ServiceExistsForTokenAsync(orgToken, serviceId, ct))
         {
             _logger.LogInformation(
-                "[nyxid_proxy] Service {Slug} not found for user token, using org token", slug);
+                "[nyxid_proxy] Service instance {ServiceId} not found for user token, using org token", serviceId);
             return orgToken;
         }
 
@@ -378,21 +401,20 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
     }
 
     /// <summary>
-    /// Check whether a given token can access a service by slug.
-    /// Reads NyxID's live proxy-services surface for every route decision.
+    /// Check whether a given token can access an exact UserService id.
+    /// Reads NyxID's live keys surface for every route decision.
     /// </summary>
     private async Task<bool> ServiceExistsForTokenAsync(
-        string token, string slug, CancellationToken ct)
+        string token, string serviceId, CancellationToken ct)
     {
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
         //   New principle: NyxID 是唯一真实源; routing checks read the live NyxID proxy-services surface and never keep slug facts in a process-local cache.
         try
         {
-            var servicesJson = await _client.DiscoverProxyServicesAsync(token, ct);
+            var servicesJson = await _client.ListServicesAsync(token, ct);
             using var doc = System.Text.Json.JsonDocument.Parse(servicesJson);
-            var slugs = ParseServiceSlugs(doc);
-            return slugs.Contains(slug);
+            return ParseServiceIds(doc).Contains(serviceId);
         }
         catch
         {
@@ -421,6 +443,34 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         return slugs;
     }
 
+    internal static HashSet<string> ParseServiceIds(System.Text.Json.JsonDocument doc)
+    {
+        var serviceIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var service in EnumerateServiceItems(doc.RootElement))
+        {
+            var serviceId = ReadServiceId(service);
+            if (!string.IsNullOrWhiteSpace(serviceId))
+                serviceIds.Add(serviceId);
+        }
+
+        return serviceIds;
+    }
+
+    private static string? ReadServiceId(System.Text.Json.JsonElement service)
+    {
+        if (service.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return null;
+        if (service.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String)
+            return Normalize(id.GetString());
+        if (service.TryGetProperty("service_id", out var serviceId) &&
+            serviceId.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            return Normalize(serviceId.GetString());
+        }
+
+        return null;
+    }
+
     private static IEnumerable<System.Text.Json.JsonElement> EnumerateServiceItems(System.Text.Json.JsonElement root)
     {
         if (root.ValueKind == System.Text.Json.JsonValueKind.Array)
@@ -433,7 +483,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
             yield break;
 
-        foreach (var propertyName in new[] { "services", "custom_services", "data" })
+        foreach (var propertyName in new[] { "keys", "services", "custom_services", "items", "data" })
         {
             if (!root.TryGetProperty(propertyName, out var items) ||
                 items.ValueKind != System.Text.Json.JsonValueKind.Array)
