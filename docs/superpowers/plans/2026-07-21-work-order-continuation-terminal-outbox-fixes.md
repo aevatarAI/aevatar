@@ -586,6 +586,7 @@ git commit -m "Retry ServiceRun terminal delivery"
 - Modify: `src/Aevatar.AI.Core/RoleGAgent.cs`
 - Modify: `src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs`
 - Create: `test/Aevatar.AI.Tests/RoleGAgentCompletionNotificationTests.cs`
+- Modify: `test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs`
 - Modify: `test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs`
 
 **Interfaces:**
@@ -633,11 +634,13 @@ enum RoleChatCompletionNotificationDeliveryStatus {
   ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_EXPIRED = 4;
 }
 
-// RoleChatSessionState fields 1-18 remain unchanged.
-RoleChatCompletionNotificationDeliveryStatus completion_notification_delivery_status = 20;
-int32 completion_notification_attempt = 21;
-string completion_notification_retry_callback_id = 22;
-google.protobuf.Timestamp completion_notification_retry_at = 23;
+// RoleChatSessionState fields 1-18 and the committed wire fields below remain unchanged.
+int64 last_progress_sequence = 20;
+repeated ToolResultEvent tool_results = 21;
+RoleChatCompletionNotificationDeliveryStatus completion_notification_delivery_status = 22;
+int32 completion_notification_attempt = 23;
+string completion_notification_retry_callback_id = 24;
+google.protobuf.Timestamp completion_notification_retry_at = 25;
 ```
 
 Add module-specific retry-scheduled, retry-fired, dispatched, and expired events
@@ -663,10 +666,12 @@ Run Step 2 again, then:
 bash tools/ci/test_stability_guards.sh
 bash tools/ci/architecture_guards.sh
 git diff --check
-git add src/Aevatar.AI.Abstractions/ai_messages.proto \
+git add docs/superpowers/plans/2026-07-21-work-order-continuation-terminal-outbox-fixes.md \
+  src/Aevatar.AI.Abstractions/ai_messages.proto \
   src/Aevatar.AI.Core/RoleGAgent.cs \
   src/platform/Aevatar.GAgentService.Infrastructure/Dispatch/DefaultServiceInvocationDispatcher.cs \
   test/Aevatar.AI.Tests/RoleGAgentCompletionNotificationTests.cs \
+  test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs \
   test/Aevatar.GAgentService.Tests/Infrastructure/DefaultServiceInvocationDispatcherTests.cs
 git commit -m "Retry Role completion delivery"
 ```

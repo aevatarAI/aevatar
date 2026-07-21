@@ -18,6 +18,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.Foundation.Core;
@@ -37,6 +38,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 {
     private const string LlmFailureContentPrefix = "[[AEVATAR_LLM_ERROR]]";
     private const int MaxTrackedSessions = 128;
+    private const string CompletionNotificationRetryCallbackPrefix = "role-chat-completion-retry";
+    private const int CompletionNotificationRetryInitialDelayMs = 250;
+    private const int CompletionNotificationRetryMaxDelayMs = 30_000;
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
@@ -796,7 +800,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
             .On<RoleChatSessionProgressedEvent>(ApplyChatSessionProgressed)
             .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
+            .On<RoleChatCompletionNotificationRetryScheduledEvent>(ApplyCompletionNotificationRetryScheduled)
             .On<RoleChatCompletionNotificationDispatchedEvent>(ApplyCompletionNotificationDispatched)
+            .On<RoleChatCompletionNotificationExpiredEvent>(ApplyCompletionNotificationExpired)
             .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
             .On<RemoteToolApprovalSubmittedEvent>(ApplyRemoteApprovalSubmitted)
             .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
@@ -859,6 +865,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         {
             await HandleChatRequestCoreAsync(request);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             Logger.LogError(
@@ -884,6 +894,45 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 failureCode: "CHAT_HANDLER_FAILURE",
                 safeMessage: "The chat request failed. Please try again.");
         }
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public Task HandleCompletionNotificationRetryFiredAsync(
+        RoleChatCompletionNotificationRetryFiredEvent retry)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        if (string.IsNullOrWhiteSpace(retry.SessionId) ||
+            !State.Sessions.TryGetValue(retry.SessionId, out var session) ||
+            !string.Equals(
+                ResolveCompletionNotificationDeliveryId(retry.SessionId, session.RunContext),
+                retry.DeliveryId,
+                StringComparison.Ordinal))
+        {
+            return Task.CompletedTask;
+        }
+
+        var matchesScheduledAttempt =
+            session.CompletionNotificationDeliveryStatus ==
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled &&
+            retry.Attempt == session.CompletionNotificationAttempt;
+        var matchesScheduledNextAttemptRecovery =
+            session.CompletionNotificationDeliveryStatus ==
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled &&
+            retry.Attempt == session.CompletionNotificationAttempt + 1;
+        var matchesScheduleBeforeCommitRecovery =
+            session.CompletionNotificationDeliveryStatus ==
+            RoleChatCompletionNotificationDeliveryStatus.Prepared &&
+            retry.Attempt == session.CompletionNotificationAttempt + 1;
+
+        return matchesScheduledAttempt ||
+               matchesScheduledNextAttemptRecovery ||
+               matchesScheduleBeforeCommitRecovery
+            ? DeliverCompletionNotificationAsync(
+                retry.SessionId,
+                session.Clone(),
+                CancellationToken.None,
+                retry.Attempt)
+            : Task.CompletedTask;
     }
 
     private async Task HandleChatRequestCoreAsync(ChatRequestEvent request)
@@ -1681,7 +1730,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var pending = State.Sessions
             .Where(static entry =>
                 entry.Value.Completed &&
-                !entry.Value.CompletionNotificationDispatched &&
+                entry.Value.CompletionNotificationDeliveryStatus is not
+                    RoleChatCompletionNotificationDeliveryStatus.Dispatched and not
+                    RoleChatCompletionNotificationDeliveryStatus.Expired &&
                 !string.IsNullOrWhiteSpace(entry.Value.RunContext?.CompletionNotificationActorId))
             .OrderBy(static entry => entry.Value.Sequence)
             .Select(static entry => (entry.Key, State: entry.Value.Clone()))
@@ -1694,13 +1745,31 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private async Task DeliverCompletionNotificationAsync(
         string sessionId,
         RoleChatSessionState session,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? deliveryAttempt = null)
     {
         var runContext = session.RunContext?.Clone();
         if (!session.Completed ||
-            session.CompletionNotificationDispatched ||
+            session.CompletionNotificationDeliveryStatus is
+                RoleChatCompletionNotificationDeliveryStatus.Dispatched or
+                RoleChatCompletionNotificationDeliveryStatus.Expired ||
             string.IsNullOrWhiteSpace(runContext?.CompletionNotificationActorId))
         {
+            return;
+        }
+
+        var deliveryId = ResolveCompletionNotificationDeliveryId(sessionId, runContext);
+        var attempt = Math.Max(session.CompletionNotificationAttempt, deliveryAttempt ?? 0);
+        var now = _timeProvider.GetUtcNow();
+        if (HasElapsedCompletionNotificationDeadline(runContext, now))
+        {
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationExpiredEvent
+            {
+                SessionId = sessionId,
+                DeliveryId = deliveryId,
+                Attempt = attempt,
+                ExpiredAtUnixTimeMs = now.ToUnixTimeMilliseconds(),
+            }, ct);
             return;
         }
 
@@ -1725,24 +1794,124 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             TerminalTime = session.TerminalTime?.Clone(),
             RunContext = runContext,
         };
-        await SendToAsync(
-            runContext.CompletionNotificationActorId.Trim(),
-            completion,
-            ct,
-            new EventEnvelopePublishOptions
-            {
-                Delivery = new EventEnvelopeDeliveryOptions
+        try
+        {
+            await SendToAsync(
+                runContext.CompletionNotificationActorId.Trim(),
+                completion,
+                ct,
+                new EventEnvelopePublishOptions
                 {
-                    DeduplicationOperationId =
-                        $"role-chat-terminal:{runContext.RunId}:{runContext.CommandId}",
-                },
-            });
+                    Delivery = new EventEnvelopeDeliveryOptions
+                    {
+                        DeduplicationOperationId = $"role-chat-terminal:{deliveryId}",
+                    },
+                });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await ScheduleCompletionNotificationRetryAsync(
+                sessionId,
+                runContext,
+                deliveryId,
+                attempt,
+                ct);
+            return;
+        }
+
         await PersistDomainEventAsync(new RoleChatCompletionNotificationDispatchedEvent
         {
             SessionId = sessionId,
             RunContext = runContext,
-            DispatchedAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+            DispatchedAtUnixTimeMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
         }, ct);
+    }
+
+    private async Task ScheduleCompletionNotificationRetryAsync(
+        string sessionId,
+        RoleChatRunContext runContext,
+        string deliveryId,
+        int failedAttempt,
+        CancellationToken ct)
+    {
+        var now = _timeProvider.GetUtcNow();
+        if (HasElapsedCompletionNotificationDeadline(runContext, now))
+        {
+            await PersistDomainEventAsync(new RoleChatCompletionNotificationExpiredEvent
+            {
+                SessionId = sessionId,
+                DeliveryId = deliveryId,
+                Attempt = failedAttempt,
+                ExpiredAtUnixTimeMs = now.ToUnixTimeMilliseconds(),
+            }, ct);
+            return;
+        }
+
+        var currentAttempt = State.Sessions.TryGetValue(sessionId, out var current)
+            ? current.CompletionNotificationAttempt
+            : 0;
+        var attempt = Math.Max(currentAttempt, failedAttempt) + 1;
+        var retryDelayMs = CalculateCompletionNotificationRetryDelayMs(attempt);
+        var dueTime = TimeSpan.FromMilliseconds(
+            runContext.CompletionNotificationExpiresAtUnixMs > 0
+                ? Math.Min(
+                    retryDelayMs,
+                    runContext.CompletionNotificationExpiresAtUnixMs - now.ToUnixTimeMilliseconds())
+                : retryDelayMs);
+        var retryAt = now.Add(dueTime);
+        var callbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
+            CompletionNotificationRetryCallbackPrefix,
+            sessionId,
+            deliveryId);
+
+        await ScheduleSelfDurableTimeoutAsync(
+            callbackId,
+            dueTime,
+            new RoleChatCompletionNotificationRetryFiredEvent
+            {
+                SessionId = sessionId,
+                DeliveryId = deliveryId,
+                Attempt = attempt,
+            },
+            ct: ct);
+        await PersistDomainEventAsync(new RoleChatCompletionNotificationRetryScheduledEvent
+        {
+            SessionId = sessionId,
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAt = Timestamp.FromDateTimeOffset(retryAt),
+        }, ct);
+    }
+
+    private static long CalculateCompletionNotificationRetryDelayMs(int attempt)
+    {
+        var exponent = Math.Clamp(attempt - 1, 0, 7);
+        var delayMs = CompletionNotificationRetryInitialDelayMs * (1L << exponent);
+        return Math.Min(delayMs, CompletionNotificationRetryMaxDelayMs);
+    }
+
+    private static bool HasElapsedCompletionNotificationDeadline(
+        RoleChatRunContext runContext,
+        DateTimeOffset now) =>
+        runContext.CompletionNotificationExpiresAtUnixMs > 0 &&
+        runContext.CompletionNotificationExpiresAtUnixMs <= now.ToUnixTimeMilliseconds();
+
+    private static string ResolveCompletionNotificationDeliveryId(
+        string sessionId,
+        RoleChatRunContext? runContext)
+    {
+        if (!string.IsNullOrWhiteSpace(runContext?.CompletionNotificationDeliveryId))
+            return runContext.CompletionNotificationDeliveryId.Trim();
+        if (!string.IsNullOrWhiteSpace(runContext?.RunId) ||
+            !string.IsNullOrWhiteSpace(runContext?.CommandId))
+        {
+            return $"{runContext?.RunId}:{runContext?.CommandId}";
+        }
+
+        return sessionId;
     }
 
     private static bool IsDisplayableCompletionContent(string? content) =>
@@ -1912,9 +2081,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             session.Sequence = next.MessageCount;
         }
 
-        var completionNotificationDispatched =
-            session.CompletionNotificationDispatched &&
-            RoleChatRunContextsEqual(session.RunContext, evt.RunContext);
+        var runContextMatches = RoleChatRunContextsEqual(session.RunContext, evt.RunContext);
+        var completionNotificationDeliveryStatus = runContextMatches
+            ? session.CompletionNotificationDeliveryStatus
+            : RoleChatCompletionNotificationDeliveryStatus.Unspecified;
         session.Completed = true;
         session.Prompt = evt.Prompt ?? session.Prompt ?? string.Empty;
         session.FinalContent = evt.Content ?? string.Empty;
@@ -1936,7 +2106,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         session.SafeMessage = evt.SafeMessage ?? string.Empty;
         session.TerminalTime = evt.TerminalTime?.Clone();
         session.RunContext = evt.RunContext?.Clone();
-        session.CompletionNotificationDispatched = completionNotificationDispatched;
+        session.CompletionNotificationDeliveryStatus =
+            !string.IsNullOrWhiteSpace(session.RunContext?.CompletionNotificationActorId)
+                ? completionNotificationDeliveryStatus ==
+                  RoleChatCompletionNotificationDeliveryStatus.Unspecified
+                    ? RoleChatCompletionNotificationDeliveryStatus.Prepared
+                    : completionNotificationDeliveryStatus
+                : RoleChatCompletionNotificationDeliveryStatus.Unspecified;
+        if (!runContextMatches)
+        {
+            session.CompletionNotificationAttempt = 0;
+            session.CompletionNotificationRetryCallbackId = string.Empty;
+            session.CompletionNotificationRetryAt = null;
+        }
         foreach (var progress in evt.TerminalProgress)
         {
             if (string.Equals(progress.SessionId, evt.SessionId, StringComparison.Ordinal) &&
@@ -1977,15 +2159,88 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         RoleChatCompletionNotificationDispatchedEvent evt)
     {
         if (string.IsNullOrWhiteSpace(evt.SessionId) ||
-            !current.Sessions.TryGetValue(evt.SessionId, out var session) ||
-            !RoleChatRunContextsEqual(session.RunContext, evt.RunContext))
+            !current.Sessions.TryGetValue(evt.SessionId, out var session))
         {
             return current;
         }
 
+        var deliveryMatches = !string.IsNullOrWhiteSpace(evt.DeliveryId)
+            ? string.Equals(
+                ResolveCompletionNotificationDeliveryId(evt.SessionId, session.RunContext),
+                evt.DeliveryId,
+                StringComparison.Ordinal)
+            : RoleChatRunContextsEqual(session.RunContext, evt.RunContext);
+        if (!deliveryMatches)
+            return current;
+
         var next = current.Clone();
-        next.Sessions[evt.SessionId].CompletionNotificationDispatched = true;
+        var nextSession = next.Sessions[evt.SessionId];
+        nextSession.CompletionNotificationDeliveryStatus =
+            RoleChatCompletionNotificationDeliveryStatus.Dispatched;
+        nextSession.CompletionNotificationAttempt = Math.Max(
+            nextSession.CompletionNotificationAttempt,
+            evt.Attempt);
+        nextSession.CompletionNotificationRetryCallbackId = string.Empty;
+        nextSession.CompletionNotificationRetryAt = null;
+        TrimTrackedSessions(next);
         return next;
+    }
+
+    private static RoleGAgentState ApplyCompletionNotificationRetryScheduled(
+        RoleGAgentState current,
+        RoleChatCompletionNotificationRetryScheduledEvent evt)
+    {
+        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out _))
+            return current;
+
+        var next = current.Clone();
+        var session = next.Sessions[evt.SessionId];
+        session.CompletionNotificationDeliveryStatus =
+            RoleChatCompletionNotificationDeliveryStatus.RetryScheduled;
+        session.CompletionNotificationAttempt = evt.Attempt;
+        session.CompletionNotificationRetryCallbackId = evt.CallbackId ?? string.Empty;
+        session.CompletionNotificationRetryAt = evt.RetryAt?.Clone();
+        return next;
+    }
+
+    private static RoleGAgentState ApplyCompletionNotificationExpired(
+        RoleGAgentState current,
+        RoleChatCompletionNotificationExpiredEvent evt)
+    {
+        if (!TryResolveCompletionNotificationSession(current, evt.SessionId, evt.DeliveryId, out _))
+            return current;
+
+        var next = current.Clone();
+        var session = next.Sessions[evt.SessionId];
+        session.CompletionNotificationDeliveryStatus =
+            RoleChatCompletionNotificationDeliveryStatus.Expired;
+        session.CompletionNotificationAttempt = Math.Max(
+            session.CompletionNotificationAttempt,
+            evt.Attempt);
+        session.CompletionNotificationRetryCallbackId = string.Empty;
+        session.CompletionNotificationRetryAt = null;
+        TrimTrackedSessions(next);
+        return next;
+    }
+
+    private static bool TryResolveCompletionNotificationSession(
+        RoleGAgentState state,
+        string sessionId,
+        string deliveryId,
+        out RoleChatSessionState? session)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId) &&
+            state.Sessions.TryGetValue(sessionId, out session) &&
+            string.Equals(
+                ResolveCompletionNotificationDeliveryId(sessionId, session.RunContext),
+                deliveryId,
+                StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        session = null;
+        return false;
     }
 
     private IEnumerable<ToolCallEvent> ToToolCallEvents(
@@ -2140,6 +2395,9 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
             foreach (var session in state.Sessions)
             {
+                if (!CanTrimTrackedSession(session.Value))
+                    continue;
+
                 var sequence = session.Value.Sequence <= 0 ? long.MinValue : session.Value.Sequence;
                 if (sequence < oldestSequence)
                 {
@@ -2154,6 +2412,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             state.Sessions.Remove(oldestSessionId);
         }
     }
+
+    private static bool CanTrimTrackedSession(RoleChatSessionState session) =>
+        string.IsNullOrWhiteSpace(session.RunContext?.CompletionNotificationActorId) ||
+        session.CompletionNotificationDeliveryStatus is
+            RoleChatCompletionNotificationDeliveryStatus.Dispatched or
+            RoleChatCompletionNotificationDeliveryStatus.Expired;
 
     private static AIAgentConfigOverrides EnsureConfigOverrides(RoleGAgentState state)
     {

@@ -77,7 +77,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             registration.RunActorId,
             runId,
             commandId,
-            correlationId);
+            correlationId,
+            request.ServiceRunCompletionNotificationTarget?.ExpiresAtUnixMs ?? 0);
         var envelope = CreateEnvelope(target.Service.PrimaryActorId, payload, commandId, correlationId);
         await _dispatchPort.DispatchAsync(target.Service.PrimaryActorId, envelope, ct);
         return CreateReceipt(target, target.Service.PrimaryActorId, commandId, correlationId, runId);
@@ -551,7 +552,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         string serviceRunActorId,
         string runId,
         string commandId,
-        string correlationId)
+        string correlationId,
+        long completionNotificationExpiresAtUnixMs)
     {
         if (!payload.Is(ChatRequestEvent.Descriptor))
             return payload.Clone();
@@ -565,6 +567,8 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             CommandId = commandId,
             CorrelationId = correlationId,
             CompletionNotificationActorId = serviceRunActorId,
+            CompletionNotificationDeliveryId = $"service-run-source:{runId}:{commandId}",
+            CompletionNotificationExpiresAtUnixMs = completionNotificationExpiresAtUnixMs,
         };
         return Any.Pack(chatRequest);
     }

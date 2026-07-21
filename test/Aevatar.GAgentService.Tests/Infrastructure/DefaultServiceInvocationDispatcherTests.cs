@@ -90,6 +90,65 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
+    public async Task StaticDispatch_ShouldForwardInternalDeliveryIdAndWorkOrderExpiry()
+    {
+        var registry = new RecordingServiceRunRegistrationPort
+        {
+            RegistrationResult = new ServiceRunRegistrationResult("service-run:tenant:svc:run-static", "run-static"),
+        };
+        var dispatchPort = new RecordingDispatchPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            dispatchPort,
+            new RecordingScriptRuntimeCommandPort(),
+            new RecordingWorkflowRunActorPort(),
+            registry);
+        var target = CreateTarget(
+            ServiceImplementationKind.Static,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        const long workOrderExpiry = 1_775_000_000_000;
+
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-static",
+            CorrelationId = "corr-static",
+            RequestedRunId = "run-static",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+            ServiceRunCompletionNotificationTarget = new ServiceRunCompletionNotificationTarget
+            {
+                ActorId = "work-order:tenant:wo-1",
+                DeliveryId = "work-order-terminal-1",
+                ExpiresAtUnixMs = workOrderExpiry,
+            },
+        });
+
+        var withWorkOrder = dispatchPort.Calls.Should().ContainSingle().Subject.envelope.Payload!
+            .Unpack<ChatRequestEvent>();
+        withWorkOrder.RunContext.CompletionNotificationDeliveryId.Should()
+            .Be("service-run-source:run-static:cmd-static");
+        withWorkOrder.RunContext.CompletionNotificationExpiresAtUnixMs.Should().Be(workOrderExpiry);
+
+        dispatchPort.Calls.Clear();
+        await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            CommandId = "cmd-without-target",
+            CorrelationId = "corr-without-target",
+            RequestedRunId = "run-without-target",
+            Payload = Any.Pack(new ChatRequestEvent { Prompt = "hello" }),
+        });
+
+        var withoutWorkOrder = dispatchPort.Calls.Should().ContainSingle().Subject.envelope.Payload!
+            .Unpack<ChatRequestEvent>();
+        withoutWorkOrder.RunContext.CompletionNotificationDeliveryId.Should()
+            .Be("service-run-source:run-without-target:cmd-without-target");
+        withoutWorkOrder.RunContext.CompletionNotificationExpiresAtUnixMs.Should().Be(0);
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldDelegateScriptingRun()
     {
         var scriptPort = new RecordingScriptRuntimeCommandPort();

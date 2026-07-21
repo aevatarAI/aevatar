@@ -509,7 +509,8 @@ public class RoleGAgentReplayContractTests
             },
         };
         await first.HandleChatRequest(request);
-        first.State.Sessions["session-1"].CompletionNotificationDispatched.Should().BeFalse();
+        first.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Prepared);
         var committed = (await store.GetEventsAsync("role-terminal-replay"))
             .Single(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
             .EventData
@@ -537,7 +538,8 @@ public class RoleGAgentReplayContractTests
         notification.Should().BeEquivalentTo(expectedNotification);
         notification.TerminalProgress.Should().BeEmpty(
             "actor-to-actor completion notification carries final authority, not AGUI presentation tail");
-        recovered.State.Sessions["session-1"].CompletionNotificationDispatched.Should().BeTrue();
+        recovered.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
     }
 
     [Fact]
