@@ -350,6 +350,33 @@ public sealed class WorkflowRunActorPortBranchTests
         result.Error.Should().Contain("does_not_exist");
     }
 
+    [Theory]
+    [InlineData("{\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "service_id")]
+    [InlineData("{\"service_id\":\"us-home-alpha\",\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\",\"headers\":{\"Authorization\":\"forbidden\"}}", "sensitive header")]
+    public async Task ParseWorkflowYamlAsync_WhenNyxIdCapabilityIsNotExact_ShouldReturnInvalid(
+        string arguments,
+        string expectedError)
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+
+        var result = await port.ParseWorkflowYamlAsync(
+            $$"""
+            name: sample
+            roles: []
+            steps:
+              - id: proxy
+                type: tool_call
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{{arguments}}'
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Contain(expectedError);
+        result.AuthorizationDependencies.Should().BeNull();
+    }
+
     [Fact]
     public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsDefaultPrimary_ShouldReturnSuccess()
     {

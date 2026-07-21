@@ -289,12 +289,128 @@ enum WorkflowServiceGrantPolicy {
   WORKFLOW_SERVICE_GRANT_POLICY_NOT_REQUIRED_NO_EXTERNAL_SERVICE = 2;
 }
 
+enum ExternalCapabilityExecutionMode {
+  EXTERNAL_CAPABILITY_EXECUTION_MODE_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_EXECUTION_MODE_INTERACTIVE = 1;
+  EXTERNAL_CAPABILITY_EXECUTION_MODE_DURABLE = 2;
+}
+
+enum ExternalCapabilityReadinessStatus {
+  EXTERNAL_CAPABILITY_READINESS_STATUS_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SELECTION_REQUIRED = 1;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_CONNECTOR_NOT_FOUND = 2;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SERVICE_REGISTRATION_REQUIRED = 3;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_CREDENTIAL_CONNECTION_REQUIRED = 4;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SERVICE_ACCESS_DENIED = 5;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_NODE_BINDING_REQUIRED = 6;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_NODE_UNAVAILABLE = 7;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_ENDPOINT_CONTRACT_REQUIRED = 8;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_OPERATION_SELECTION_REQUIRED = 9;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_SOURCE_STALE = 10;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_DURABLE_AUTHORIZATION_UNAVAILABLE = 11;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_CONTRACT_DRIFT = 12;
+  EXTERNAL_CAPABILITY_READINESS_STATUS_READY = 13;
+}
+
+enum ExternalCapabilityRemediationActionKind {
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_SELECT_CAPABILITY = 1;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_CONFIGURE_CONNECTOR = 2;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_REGISTER_SERVICE = 3;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_CONNECT_CREDENTIAL = 4;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_REQUEST_ACCESS = 5;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_BIND_NODE = 6;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_RESTORE_NODE = 7;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_PUBLISH_ENDPOINT_CONTRACT = 8;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_SELECT_OPERATION = 9;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_REFRESH_SOURCE = 10;
+  EXTERNAL_CAPABILITY_REMEDIATION_ACTION_KIND_USE_INTERACTIVE_EXECUTION = 11;
+}
+
+enum ExternalCapabilitySourceKind {
+  EXTERNAL_CAPABILITY_SOURCE_KIND_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_CONNECTOR_CATALOG = 1;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_USER_SERVICES = 2;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_NYX_ID_OPEN_API = 3;
+  EXTERNAL_CAPABILITY_SOURCE_KIND_DURABLE_AUTHORIZATION_CATALOG = 4;
+}
+
+message HostConnectorCapabilityRef {
+  string connector_capability_ref = 1;
+  string operation_id = 2;
+  string contract_digest = 3;
+}
+
+message NyxIdUserServiceCapabilityRef {
+  string user_service_id = 1;
+  string service_slug_snapshot = 2;
+  string operation_id = 3;
+  string http_method = 4;
+  string path_template = 5;
+  string contract_digest = 6;
+}
+
+message ExternalWorkflowCapabilityRef {
+  oneof capability {
+    HostConnectorCapabilityRef host_connector = 1;
+    NyxIdUserServiceCapabilityRef nyx_id_user_service = 2;
+  }
+}
+
+message ExternalCapabilityBlocker {
+  ExternalCapabilityReadinessStatus status = 1;
+  string code = 2;
+  string safe_message = 3;
+}
+
+message ExternalCapabilityRemediation {
+  ExternalCapabilityRemediationActionKind action_kind = 1;
+  string label = 2;
+  string trusted_locator = 3;
+}
+
+message ExternalCapabilitySourceStamp {
+  ExternalCapabilitySourceKind source_kind = 1;
+  string source_id = 2;
+  int64 source_version = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  google.protobuf.Timestamp fresh_until = 5;
+  string content_digest = 6;
+}
+
+message ExternalWorkflowCapabilityDescriptor {
+  ExternalWorkflowCapabilityRef capability = 1;
+  string display_name = 2;
+  bool read_only = 3;
+  bool destructive = 4;
+  ExternalCapabilitySourceStamp source = 5;
+}
+
+message ExternalCapabilityReadiness {
+  ExternalCapabilityExecutionMode execution_mode = 1;
+  ExternalCapabilityReadinessStatus status = 2;
+  ExternalWorkflowCapabilityRef selected_capability = 3;
+  repeated ExternalCapabilityBlocker blockers = 4;
+  repeated ExternalCapabilityRemediation remediations = 5;
+  repeated ExternalCapabilitySourceStamp sources = 6;
+}
+
+message WorkflowCapabilityAdmissionPlan {
+  string schema_version = 1;
+  string definition_digest = 2;
+  ExternalCapabilityExecutionMode execution_mode = 3;
+  repeated ExternalWorkflowCapabilityRef external_capabilities = 4;
+  repeated ExternalCapabilitySourceStamp source_stamps = 5;
+  string admission_digest = 6;
+}
+
 message WorkflowAuthorizationDependencies {
   repeated string connector_capability_refs = 1;
   bool owner_llm_route_required = 2;
   repeated string nyx_id_service_ids = 3;
   repeated string nyx_id_service_slugs = 4;
   WorkflowServiceGrantPolicy service_grant_policy = 5;
+  repeated ExternalWorkflowCapabilityRef external_capabilities = 6;
 }
 message WorkflowRunExecutionStartedEvent
 {
