@@ -2,6 +2,25 @@ import { AGUIEventType } from "@aevatar-react-sdk/types";
 import { normalizeBackendSseFrame } from "./sseFrameNormalizer";
 
 describe("sseFrameNormalizer", () => {
+  it("preserves committed actor sequence from nested backend frames", () => {
+    expect(
+      normalizeBackendSseFrame({
+        sequence: 41,
+        textMessageContent: {
+          delta: "first chunk",
+          messageId: "turn-1",
+        },
+        timestamp: 1,
+      })
+    ).toEqual({
+      delta: "first chunk",
+      messageId: "turn-1",
+      sequence: 41,
+      timestamp: 1,
+      type: AGUIEventType.TEXT_MESSAGE_CONTENT,
+    });
+  });
+
   it("normalizes tool call frames emitted in backend oneof format", () => {
     expect(
       normalizeBackendSseFrame({

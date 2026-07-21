@@ -255,14 +255,50 @@ public class RoleGAgentReplayContractTests
             .Select(x => x.EventData.Unpack<RoleChatSessionCompletedEvent>())
             .ToArray();
         completions.Should()
-            .HaveCount(2)
-            .And.OnlyContain(x =>
+            .ContainSingle(x =>
                 x.SessionId == "session-1" &&
                 x.Prompt == "hello" &&
                 x.Content == "cached answer");
         completions[0].TerminalTime.Should().NotBeNull();
-        completions[1].TerminalTime.Should().Be(completions[0].TerminalTime);
+        var replay = replayedEvents
+            .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Should()
+            .ContainSingle(progress =>
+                progress.SessionId == "session-1" &&
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Replay)
+            .Which;
+        replay.Replay.Snapshot.TerminalTime.Should().Be(completions[0].TerminalTime);
+        replay.Replay.Snapshot.Content.Should().Be("cached answer");
         agent2.State.Sessions["session-1"].TerminalTime.Should().Be(completions[0].TerminalTime);
+    }
+
+    [Fact]
+    public async Task Completion_ShouldEmbedTerminalTailInOneCommittedFact()
+    {
+        var store = new RecordingBatchEventStore();
+        var services = BuildServices(store);
+        var provider = new CountingLlmProviderFactory("atomic answer");
+        var agent = CreateAgent(services, "role-atomic-terminal", provider);
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "turn-atomic-terminal",
+        });
+
+        var terminalBatch = store.Appends.Should().ContainSingle(batch =>
+            batch.Any(evt => evt.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))).Which;
+        var completion = terminalBatch.Should().ContainSingle().Which.EventData
+            .Unpack<RoleChatSessionCompletedEvent>();
+        var progress = completion.TerminalProgress.ToArray();
+        progress.Select(evt => evt.PayloadCase).Should().Equal(
+            RoleChatSessionProgressedEvent.PayloadOneofCase.Usage,
+            RoleChatSessionProgressedEvent.PayloadOneofCase.TextEnded,
+            RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal);
+        progress.Select(evt => evt.Sequence).Should().Equal(3, 4, 5);
+        agent.State.Sessions[completion.SessionId].LastProgressSequence.Should().Be(5);
     }
 
     [Fact]
@@ -324,12 +360,15 @@ public class RoleGAgentReplayContractTests
         {
             Prompt = "first prompt",
             SessionId = "turn-client-request-1",
+            CommandAttemptId = "cmd-attempt-original",
         });
+        var completedProgressSequence = agent.State.Sessions["turn-client-request-1"].LastProgressSequence;
 
         await agent.HandleChatRequest(new ChatRequestEvent
         {
             Prompt = "different prompt",
             SessionId = "turn-client-request-1",
+            CommandAttemptId = "cmd-attempt-rejected",
         });
 
         provider.StreamCallCount.Should().Be(1);
@@ -337,12 +376,22 @@ public class RoleGAgentReplayContractTests
         agent.State.Sessions["turn-client-request-1"].FinalContent.Should().Be("first answer");
         var persisted = await store.GetEventsAsync("role-session-conflict");
         var conflict = persisted
-            .Single(x => x.EventType.Contains(nameof(RoleChatSessionConflictEvent), StringComparison.Ordinal))
+            .Single(x => x.EventType.Contains(nameof(RoleChatCommandAttemptRejectedEvent), StringComparison.Ordinal))
             .EventData
-            .Unpack<RoleChatSessionConflictEvent>();
-        conflict.SessionId.Should().Be("turn-client-request-1");
-        conflict.Reason.Should().Be(RoleChatSessionConflictReason.PromptMismatch);
+            .Unpack<RoleChatCommandAttemptRejectedEvent>();
+        conflict.RequestedSessionId.Should().Be("turn-client-request-1");
+        conflict.CommandAttemptId.Should().Be("cmd-attempt-rejected");
+        conflict.Reason.Should().Be(RoleChatCommandAttemptRejectionReason.PromptMismatch);
         conflict.SafeMessage.Should().NotContain("first prompt").And.NotContain("different prompt");
+        persisted
+            .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Should()
+            .NotContain(progress =>
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal &&
+                progress.Terminal.FailureCode == "IDEMPOTENCY_CONFLICT");
+        agent.State.Sessions["turn-client-request-1"].LastProgressSequence
+            .Should().Be(completedProgressSequence);
     }
 
     [Fact]
@@ -482,8 +531,12 @@ public class RoleGAgentReplayContractTests
         sent.TargetActorId.Should().Be("service-run:tenant:svc:run-1");
         sent.Options!.Delivery!.DeduplicationOperationId.Should()
             .Be("role-chat-terminal:run-1:cmd-1");
-        sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>()
-            .Which.Should().BeEquivalentTo(committed);
+        var notification = sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>().Which;
+        var expectedNotification = committed.Clone();
+        expectedNotification.TerminalProgress.Clear();
+        notification.Should().BeEquivalentTo(expectedNotification);
+        notification.TerminalProgress.Should().BeEmpty(
+            "actor-to-actor completion notification carries final authority, not AGUI presentation tail");
         recovered.State.Sessions["session-1"].CompletionNotificationDispatched.Should().BeTrue();
     }
 
@@ -1074,7 +1127,15 @@ public class RoleGAgentReplayContractTests
                 x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor) &&
                 x.EventData.Unpack<RoleChatSessionCompletedEvent>().SessionId == "session-final-only")
             .Should()
-            .HaveCount(2);
+            .ContainSingle();
+        persisted
+            .Where(x => x.EventData.Is(RoleChatSessionProgressedEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<RoleChatSessionProgressedEvent>())
+            .Should()
+            .ContainSingle(progress =>
+                progress.SessionId == "session-final-only" &&
+                progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Replay &&
+                progress.Replay.Snapshot.Content == "final-only answer");
     }
 
     private static IServiceProvider BuildServices(
@@ -1142,6 +1203,7 @@ public class RoleGAgentReplayContractTests
             Array.Empty<ToolCall>(),
             Array.Empty<ContentPart>(),
             Array.Empty<AgentToolReceipt>(),
+            Array.Empty<ToolResultEvent>(),
             null, // Usage (added by #1700)
             null, // Model (added by #1700)
             contentEmitted,
@@ -1156,6 +1218,40 @@ public class RoleGAgentReplayContractTests
         var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
         var property = result.GetType().GetProperty("ContentEmitted")!;
         return (bool)property.GetValue(result)!;
+    }
+
+    private sealed class RecordingBatchEventStore : IEventStore
+    {
+        private readonly InMemoryEventStoreForTests _inner = new();
+
+        public List<IReadOnlyList<StateEvent>> Appends { get; } = [];
+
+        public async Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.Select(static evt => evt.Clone()).ToArray();
+            var result = await _inner.AppendAsync(agentId, batch, expectedVersion, ct);
+            Appends.Add(batch);
+            return result;
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 
     private sealed class RecordingEventPublisher(List<string>? operationLog = null) : IEventPublisher

@@ -10,6 +10,7 @@ import "Tools/tool_presentation.proto";
 
 message AGUIEvent {
   google.protobuf.Int64Value timestamp = 1;
+  int64 sequence = 17;
 
   oneof event {
     RunStartedEvent run_started = 2;

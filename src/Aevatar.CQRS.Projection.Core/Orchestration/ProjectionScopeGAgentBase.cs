@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
@@ -179,6 +180,10 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         CancellationToken ct)
     {
         var context = ResolveScopeContext();
+        var sourceActorId = ResolveSourceActorId(envelope);
+        if (IsAlreadyProjected(sourceActorId, envelope))
+            return ProjectionScopeDispatchResult.Skip(envelope.Payload?.TypeUrl ?? string.Empty);
+
         var result = await ProcessObservationCoreAsync(context, envelope, ct);
         if (!result.Handled)
             return result;
@@ -188,8 +193,33 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             LastObservedVersion = result.LastObservedVersion,
             LastSuccessfulVersion = result.LastObservedVersion,
             OccurredAtUtc = Timestamp.FromDateTime(DateTime.UtcNow),
+            SourceActorId = RuntimeMode == ProjectionRuntimeMode.SessionObservation
+                ? sourceActorId
+                : string.Empty,
         });
         return result;
+    }
+
+    private bool IsAlreadyProjected(string sourceActorId, EventEnvelope envelope)
+    {
+        if (RuntimeMode != ProjectionRuntimeMode.SessionObservation ||
+            string.IsNullOrWhiteSpace(sourceActorId) ||
+            !CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out _, out _, out var sourceVersion) ||
+            sourceVersion <= 0)
+        {
+            return false;
+        }
+
+        return State.LastSuccessfulVersionsByActor.TryGetValue(sourceActorId, out var lastSuccessfulVersion) &&
+               sourceVersion <= lastSuccessfulVersion;
+    }
+
+    private static string ResolveSourceActorId(EventEnvelope envelope)
+    {
+        var sourceActorId = CommittedStateEventEnvelope.GetOriginActorId(envelope);
+        return string.IsNullOrWhiteSpace(sourceActorId)
+            ? envelope.Route?.PublisherActorId ?? string.Empty
+            : sourceActorId;
     }
 
     private TContext ResolveScopeContext()

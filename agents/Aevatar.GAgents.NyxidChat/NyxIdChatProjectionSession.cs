@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.AGUI.Contracts;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -127,10 +128,58 @@ public sealed class NyxIdChatSessionProjectionPort
         if (lease == null)
             return null;
 
-        var liveSinkLease = await AttachLiveSinkAsync(lease, sink, ct).ConfigureAwait(false);
+        var liveSinkLease = await AttachLiveSinkAsync(
+            lease,
+            new SequencedAguiEventSink(sink),
+            ct).ConfigureAwait(false);
         return liveSinkLease == null
             ? null
             : new EventSinkProjectionAttachment<INyxIdChatSessionProjectionLease>(lease, liveSinkLease);
+    }
+
+    private sealed class SequencedAguiEventSink(IEventSink<AGUIEvent> inner) : IEventSink<AGUIEvent>
+    {
+        private readonly HashSet<ByteString> _deliveredAtLatestSequence = [];
+        private long _latestSequence;
+
+        public void Push(AGUIEvent evt)
+        {
+            if (ShouldDeliver(evt))
+                inner.Push(evt);
+        }
+
+        public ValueTask PushAsync(AGUIEvent evt, CancellationToken ct = default) =>
+            ShouldDeliver(evt)
+                ? inner.PushAsync(evt, ct)
+                : ValueTask.CompletedTask;
+
+        public void Complete()
+        {
+        }
+
+        public IAsyncEnumerable<AGUIEvent> ReadAllAsync(CancellationToken ct = default) =>
+            inner.ReadAllAsync(ct);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private bool ShouldDeliver(AGUIEvent evt)
+        {
+            ArgumentNullException.ThrowIfNull(evt);
+
+            if (evt.Sequence <= 0)
+                return true;
+
+            if (evt.Sequence < _latestSequence)
+                return false;
+
+            if (evt.Sequence > _latestSequence)
+            {
+                _latestSequence = evt.Sequence;
+                _deliveredAtLatestSequence.Clear();
+            }
+
+            return _deliveredAtLatestSequence.Add(evt.ToByteString());
+        }
     }
 }
 
@@ -191,59 +240,279 @@ public sealed class NyxIdChatSessionEventProjector
         if (string.IsNullOrWhiteSpace(context.RootActorId) || string.IsNullOrWhiteSpace(context.SessionId))
             return EmptyEntries;
 
-        if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(
+                envelope,
+                out var payload,
+                out _,
+                out var stateVersion) ||
             payload == null)
         {
             return EmptyEntries;
         }
 
-        if (payload.Is(PendingToolApprovalPersistedEvent.Descriptor))
+        if (payload.Is(RoleChatSessionProgressedEvent.Descriptor))
         {
-            var pending = payload.Unpack<PendingToolApprovalPersistedEvent>().Pending;
-            if (pending == null ||
-                !string.Equals(pending.SessionId, context.SessionId, StringComparison.Ordinal))
-            {
+            var progress = payload.Unpack<RoleChatSessionProgressedEvent>();
+            if (progress.Sequence <= 0 ||
+                !string.Equals(progress.SessionId, context.SessionId, StringComparison.Ordinal))
                 return EmptyEntries;
-            }
 
-            var frame = NyxIdChatCompletionAguiFrameBuilder.BuildPendingApprovalFrame(pending);
-            return frame == null ? EmptyEntries : [Entry(context, frame)];
+            return BuildProgressEntries(context, [progress]);
         }
 
         if (payload.Is(RoleChatSessionCompletedEvent.Descriptor))
         {
-            var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
-            if (!string.Equals(completed.SessionId, context.SessionId, StringComparison.Ordinal))
+            var completion = payload.Unpack<RoleChatSessionCompletedEvent>();
+            if (!string.Equals(completion.SessionId, context.SessionId, StringComparison.Ordinal))
                 return EmptyEntries;
 
-            return NyxIdChatCompletionAguiFrameBuilder.Build(context, completed)
-                .Select(frame => Entry(context, frame))
-                .ToArray();
+            return BuildProgressEntries(context, completion.TerminalProgress);
         }
 
-        if (payload.Is(RoleChatSessionConflictEvent.Descriptor))
+        if (payload.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
         {
-            var conflict = payload.Unpack<RoleChatSessionConflictEvent>();
-            if (!string.Equals(conflict.SessionId, context.SessionId, StringComparison.Ordinal))
+            var rejected = payload.Unpack<RoleChatCommandAttemptRejectedEvent>();
+            if (!string.Equals(rejected.RequestedSessionId, context.SessionId, StringComparison.Ordinal))
                 return EmptyEntries;
 
             return
             [
                 Entry(context, new AGUIEvent
                 {
+                    Sequence = stateVersion,
                     RunError = new RunErrorEvent
                     {
                         RunId = context.SessionId,
                         Code = "IDEMPOTENCY_CONFLICT",
-                        Message = string.IsNullOrWhiteSpace(conflict.SafeMessage)
+                        Message = string.IsNullOrWhiteSpace(rejected.SafeMessage)
                             ? "This client request id was already used for different input."
-                            : conflict.SafeMessage,
+                            : rejected.SafeMessage,
                     },
                 }),
             ];
         }
 
         return EmptyEntries;
+    }
+
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> BuildProgressEntries(
+        NyxIdChatSessionProjectionContext context,
+        IEnumerable<RoleChatSessionProgressedEvent> progressEvents)
+    {
+        var entries = new List<ProjectionSessionEventEntry<AGUIEvent>>();
+        foreach (var progress in progressEvents)
+        {
+            if (progress.Sequence <= 0 ||
+                !string.Equals(progress.SessionId, context.SessionId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var frame in BuildProgressFrames(context, progress))
+            {
+                frame.Sequence = progress.Sequence;
+                entries.Add(Entry(context, frame));
+            }
+        }
+
+        return entries;
+    }
+
+    private static IReadOnlyList<AGUIEvent> BuildProgressFrames(
+        NyxIdChatSessionProjectionContext context,
+        RoleChatSessionProgressedEvent progress)
+    {
+        switch (progress.PayloadCase)
+        {
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.TextStarted:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        TextMessageStart = new Aevatar.AGUI.Contracts.TextMessageStartEvent
+                        {
+                            MessageId = context.SessionId,
+                            Role = "assistant",
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.TextDelta:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        TextMessageContent = new Aevatar.AGUI.Contracts.TextMessageContentEvent
+                        {
+                            MessageId = context.SessionId,
+                            Delta = progress.TextDelta.Delta,
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ReasoningDelta:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        Custom = new CustomEvent
+                        {
+                            Name = "aevatar.llm.reasoning",
+                            Payload = Any.Pack(progress.ReasoningDelta),
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.Media:
+                if (progress.Media.Part == null)
+                    return Array.Empty<AGUIEvent>();
+                return
+                [
+                    new AGUIEvent
+                    {
+                        Custom = new CustomEvent
+                        {
+                            Name = "MEDIA_CONTENT",
+                            Payload = Any.Pack(new MediaContentEvent
+                            {
+                                SessionId = context.SessionId,
+                                AgentId = progress.Media.AgentId,
+                                Part = progress.Media.Part.Clone(),
+                            }),
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ToolStarted:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        ToolCallStart = new ToolCallStartEvent
+                        {
+                            ToolCallId = progress.ToolStarted.CallId,
+                            ToolName = progress.ToolStarted.ToolName,
+                            Presentation = Aevatar.AI.Abstractions.ToolProviders.ToolPresentationDescriptors.Snapshot(
+                                progress.ToolStarted.Presentation,
+                                progress.ToolStarted.ToolName),
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ToolCompleted:
+                if (progress.ToolCompleted.Result == null)
+                    return Array.Empty<AGUIEvent>();
+                return
+                [
+                    new AGUIEvent
+                    {
+                        ToolCallEnd = new ToolCallEndEvent
+                        {
+                            ToolCallId = progress.ToolCompleted.Result.CallId,
+                            Result = ResolveToolResult(progress.ToolCompleted.Result),
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.Usage:
+                if (progress.Usage.Usage == null)
+                    return Array.Empty<AGUIEvent>();
+                return
+                [
+                    new AGUIEvent
+                    {
+                        Usage = new UsageEvent
+                        {
+                            Available = true,
+                            PromptTokens = progress.Usage.Usage.PromptTokens,
+                            CompletionTokens = progress.Usage.Usage.CompletionTokens,
+                            TotalTokens = progress.Usage.Usage.TotalTokens,
+                            Model = string.IsNullOrWhiteSpace(progress.Usage.Model)
+                                ? null
+                                : progress.Usage.Model,
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.TextEnded:
+                return
+                [
+                    new AGUIEvent
+                    {
+                        TextMessageEnd = new Aevatar.AGUI.Contracts.TextMessageEndEvent
+                        {
+                            MessageId = string.IsNullOrWhiteSpace(progress.TextEnded.MessageId)
+                                ? context.SessionId
+                                : progress.TextEnded.MessageId,
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.AuthorizationRequired:
+                if (progress.AuthorizationRequired.AuthorizationRequired == null)
+                    return Array.Empty<AGUIEvent>();
+                return
+                [
+                    new AGUIEvent
+                    {
+                        Custom = new CustomEvent
+                        {
+                            Name = "nyxid.authorization.required",
+                            Payload = Any.Pack(progress.AuthorizationRequired.AuthorizationRequired),
+                        },
+                    },
+                ];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.ToolApprovalRequired:
+                if (progress.ToolApprovalRequired.Pending == null)
+                    return Array.Empty<AGUIEvent>();
+                var approvalFrame = NyxIdChatCompletionAguiFrameBuilder.BuildPendingApprovalFrame(
+                    progress.ToolApprovalRequired.Pending);
+                return approvalFrame == null ? Array.Empty<AGUIEvent>() : [approvalFrame];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal:
+                return [BuildTerminalFrame(context, progress.Terminal)];
+            case RoleChatSessionProgressedEvent.PayloadOneofCase.Replay:
+                return progress.Replay.Snapshot == null
+                    ? Array.Empty<AGUIEvent>()
+                    : NyxIdChatCompletionAguiFrameBuilder.Build(context, progress.Replay.Snapshot);
+            default:
+                return Array.Empty<AGUIEvent>();
+        }
+    }
+
+    private static AGUIEvent BuildTerminalFrame(
+        NyxIdChatSessionProjectionContext context,
+        RoleChatTerminalProgress terminal)
+    {
+        if (terminal.Outcome == RoleChatSessionOutcome.Failed)
+        {
+            return new AGUIEvent
+            {
+                RunError = new RunErrorEvent
+                {
+                    RunId = context.SessionId,
+                    Code = string.IsNullOrWhiteSpace(terminal.FailureCode)
+                        ? "CHAT_REQUEST_FAILED"
+                        : terminal.FailureCode,
+                    Message = string.IsNullOrWhiteSpace(terminal.SafeMessage)
+                        ? "The chat request failed. Please try again."
+                        : terminal.SafeMessage,
+                },
+            };
+        }
+
+        return new AGUIEvent
+        {
+            RunFinished = new RunFinishedEvent
+            {
+                ThreadId = context.RootActorId,
+                RunId = context.SessionId,
+                Result = Any.Pack(new StringValue { Value = terminal.FinalContent ?? string.Empty }),
+                Status = terminal.Outcome == RoleChatSessionOutcome.Blocked
+                    ? RunCompletionStatus.Blocked
+                    : RunCompletionStatus.Completed,
+            },
+        };
+    }
+
+    private static string ResolveToolResult(ToolResultEvent result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.ResultJson))
+            return result.ResultJson;
+        if (!string.IsNullOrWhiteSpace(result.Error))
+            return result.Error;
+        return result.Success ? "Tool completed." : "Tool failed.";
     }
 
     private static ProjectionSessionEventEntry<AGUIEvent> Entry(

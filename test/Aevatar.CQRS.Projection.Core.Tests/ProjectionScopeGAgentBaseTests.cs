@@ -1,5 +1,6 @@
 using System.Reflection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -131,6 +132,39 @@ public sealed class ProjectionScopeGAgentBaseTests
     }
 
     [Fact]
+    public async Task HandleObservedEnvelopeAsync_ShouldIgnoreDuplicateAndStaleVersionsFromSamePublisher()
+    {
+        var processed = 0;
+        var agent = BuildActivatedAgent(
+            scopeId: "projection-scope-source-watermark",
+            onProcess: envelope =>
+            {
+                processed++;
+                CommittedStateEventEnvelope.TryGetObservedPayload(
+                    envelope,
+                    out _,
+                    out _,
+                    out var version).Should().BeTrue();
+                return ProjectionScopeDispatchResult.Success(version, "event-type");
+            },
+            eventSourcing: new TrackingEventSourcing(),
+            runtimeMode: ProjectionRuntimeMode.SessionObservation);
+        var versionTwo = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-source-watermark",
+            version: 2);
+        var versionOne = BuildForwardedCommittedObservationEnvelope(
+            "projection-scope-source-watermark",
+            version: 1);
+
+        await agent.HandleObservedEnvelopeAsync(versionTwo);
+        await agent.HandleObservedEnvelopeAsync(versionTwo.Clone());
+        await agent.HandleObservedEnvelopeAsync(versionOne);
+
+        processed.Should().Be(1);
+        agent.State.LastSuccessfulVersionsByActor["publisher-actor"].Should().Be(2);
+    }
+
+    [Fact]
     public async Task HandleObservedEnvelopeAsync_ShouldSwallow_DeterministicProjectionFailure()
     {
         var agent = BuildActivatedAgent(
@@ -147,9 +181,10 @@ public sealed class ProjectionScopeGAgentBaseTests
     private static TestScopeAgent BuildActivatedAgent(
         string scopeId,
         Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
-        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null)
+        IEventSourcingBehavior<ProjectionScopeState>? eventSourcing = null,
+        ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
     {
-        var agent = new TestScopeAgent(onProcess);
+        var agent = new TestScopeAgent(onProcess, runtimeMode);
 
         typeof(GAgentBase)
             .GetProperty(nameof(GAgentBase.Id), BindingFlags.Instance | BindingFlags.Public)!
@@ -201,6 +236,7 @@ public sealed class ProjectionScopeGAgentBaseTests
                     EventId = "evt-duplicate",
                     Version = version,
                     EventData = Any.Pack(new StringValue { Value = "payload" }),
+                    AgentId = "publisher-actor",
                 },
                 StateRoot = Any.Pack(new StringValue { Value = "state" }),
             }),
@@ -216,14 +252,17 @@ public sealed class ProjectionScopeGAgentBaseTests
     private sealed class TestScopeAgent : ProjectionScopeGAgentBase<TestContext>
     {
         private readonly Func<EventEnvelope, ProjectionScopeDispatchResult> _onProcess;
+        private readonly ProjectionRuntimeMode _runtimeMode;
 
-        public TestScopeAgent(Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess)
+        public TestScopeAgent(
+            Func<EventEnvelope, ProjectionScopeDispatchResult> onProcess,
+            ProjectionRuntimeMode runtimeMode = ProjectionRuntimeMode.DurableMaterialization)
         {
             _onProcess = onProcess;
+            _runtimeMode = runtimeMode;
         }
 
-        protected override ProjectionRuntimeMode RuntimeMode =>
-            ProjectionRuntimeMode.DurableMaterialization;
+        protected override ProjectionRuntimeMode RuntimeMode => _runtimeMode;
 
         protected override ValueTask<ProjectionScopeDispatchResult> ProcessObservationCoreAsync(
             TestContext context,
