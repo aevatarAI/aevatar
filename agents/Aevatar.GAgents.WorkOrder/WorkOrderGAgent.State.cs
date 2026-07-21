@@ -14,6 +14,7 @@ public sealed partial class WorkOrderGAgent
             .On<WorkOrderReassignedEvent>(ApplyReassigned)
             .On<WorkOrderApprovalDecidedEvent>(ApplyApprovalDecided)
             .On<WorkOrderDispatchRequestedEvent>(ApplyDispatchRequested)
+            .On<WorkOrderExecutionRetryScheduledEvent>(ApplyExecutionRetryScheduled)
             .On<WorkOrderRunAcceptedEvent>(ApplyRunAccepted)
             .On<WorkOrderRunStartedEvent>(ApplyRunStarted)
             .On<WorkOrderDispatchFailedEvent>(ApplyDispatchFailed)
@@ -86,7 +87,10 @@ public sealed partial class WorkOrderGAgent
             ? WorkOrderLifecycleStatus.Ready
             : WorkOrderLifecycleStatus.Denied;
         if (next.LifecycleStatus == WorkOrderLifecycleStatus.Denied)
+        {
             next.TerminalReason = evt.Reason;
+            ClearExecutionRetry(next);
+        }
         Advance(next, current, evt.DecidedAtUtc);
         return next;
     }
@@ -97,8 +101,29 @@ public sealed partial class WorkOrderGAgent
         next.DispatchCommandId = evt.DispatchCommandId;
         next.RequestedRunId = evt.RequestedRunId;
         next.TerminalDeliveryId = evt.TerminalDeliveryId;
+        next.Execution ??= new WorkOrderExecutionProvenance();
         next.LifecycleStatus = WorkOrderLifecycleStatus.DispatchPending;
         Advance(next, current, evt.RequestedAtUtc);
+        return next;
+    }
+
+    private static WorkOrderState ApplyExecutionRetryScheduled(
+        WorkOrderState current,
+        WorkOrderExecutionRetryScheduledEvent evt)
+    {
+        if (current.LifecycleStatus != WorkOrderLifecycleStatus.DispatchPending ||
+            !string.Equals(current.WorkOrderId, evt.WorkOrderId, StringComparison.Ordinal) ||
+            !string.Equals(current.DispatchCommandId, evt.DispatchCommandId, StringComparison.Ordinal) ||
+            !string.Equals(current.RequestedRunId, evt.RequestedRunId, StringComparison.Ordinal) ||
+            evt.Attempt <= current.ExecutionRetryAttempt)
+        {
+            return current;
+        }
+
+        var next = current.Clone();
+        next.ExecutionRetryAttempt = evt.Attempt;
+        next.ExecutionRetryCallbackId = evt.CallbackId;
+        next.ExecutionRetryAtUtc = evt.RetryAtUtc?.Clone();
         return next;
     }
 
@@ -116,6 +141,7 @@ public sealed partial class WorkOrderGAgent
             DeploymentId = accepted.DeploymentId,
             AcceptedAtUtc = accepted.AcceptedAtUtc?.Clone(),
         };
+        ClearExecutionRetry(next);
         Advance(next, current, accepted.AcceptedAtUtc);
         return next;
     }
@@ -137,6 +163,7 @@ public sealed partial class WorkOrderGAgent
         next.Failure = evt.Failure?.Clone();
         next.TerminalReason = evt.Failure?.Message ?? string.Empty;
         next.LifecycleStatus = WorkOrderLifecycleStatus.Failed;
+        ClearExecutionRetry(next);
         Advance(next, current, evt.FailedAtUtc);
         return next;
     }
@@ -146,6 +173,7 @@ public sealed partial class WorkOrderGAgent
         var next = current.Clone();
         next.LifecycleStatus = WorkOrderLifecycleStatus.Cancelled;
         next.TerminalReason = evt.Reason;
+        ClearExecutionRetry(next);
         Advance(next, current, evt.CancelledAtUtc);
         return next;
     }
@@ -155,6 +183,7 @@ public sealed partial class WorkOrderGAgent
         var next = current.Clone();
         next.LifecycleStatus = WorkOrderLifecycleStatus.TimedOut;
         next.TerminalReason = evt.Reason;
+        ClearExecutionRetry(next);
         Advance(next, current, evt.TimedOutAtUtc);
         return next;
     }
@@ -166,6 +195,7 @@ public sealed partial class WorkOrderGAgent
         var next = current.Clone();
         next.LifecycleStatus = evt.LifecycleStatus;
         next.TerminalEvidence = evt.Evidence?.Clone();
+        ClearExecutionRetry(next);
         if (evt.LifecycleStatus == WorkOrderLifecycleStatus.Failed)
         {
             next.Failure = new WorkOrderFailureReference
@@ -186,6 +216,7 @@ public sealed partial class WorkOrderGAgent
     {
         var next = current.Clone();
         next.LateTerminalEvidence = evt.Evidence?.Clone();
+        ClearExecutionRetry(next);
         Advance(next, current, evt.Evidence?.TerminalAtUtc);
         return next;
     }
@@ -202,4 +233,11 @@ public sealed partial class WorkOrderGAgent
     private static bool IsAfter(Timestamp left, Timestamp right) =>
         left.Seconds > right.Seconds ||
         left.Seconds == right.Seconds && left.Nanos > right.Nanos;
+
+    private static void ClearExecutionRetry(WorkOrderState state)
+    {
+        state.ExecutionRetryAttempt = 0;
+        state.ExecutionRetryCallbackId = string.Empty;
+        state.ExecutionRetryAtUtc = null;
+    }
 }

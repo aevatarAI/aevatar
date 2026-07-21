@@ -14,13 +14,15 @@ namespace Aevatar.GAgents.WorkOrder;
 [GAgent("studio.work-order")]
 public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProjectedActor
 {
-    private readonly IWorkOrderExecutionPort? _executionPort;
+    private const int ExecutionRetryInitialDelayMilliseconds = 250;
+    private const int ExecutionRetryMaxDelayMilliseconds = 30_000;
+    private readonly IWorkOrderExecutionScheduler? _executionScheduler;
 
     public static string ProjectionKind => "work-order";
 
-    public WorkOrderGAgent(IWorkOrderExecutionPort? executionPort = null)
+    public WorkOrderGAgent(IWorkOrderExecutionScheduler? executionScheduler = null)
     {
-        _executionPort = executionPort;
+        _executionScheduler = executionScheduler;
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -33,8 +35,11 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (await EnsureTimeoutScheduledAsync(ct))
             return;
 
-        if (State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending)
-            await SendExecutionRequestAsync(ct);
+        if (State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending &&
+            string.IsNullOrWhiteSpace(State.Execution?.RunId))
+        {
+            await ScheduleExecutionAndWatchdogAsync(ct);
+        }
     }
 
     [EventHandler(EndpointName = "createWorkOrder")]
@@ -205,42 +210,64 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (State.Execution != null && !string.IsNullOrWhiteSpace(State.Execution.RunId))
             return;
 
-        if (_executionPort == null)
+        await ScheduleExecutionAndWatchdogAsync();
+    }
+
+    [EventHandler(EndpointName = "workOrderExecutionAccepted")]
+    public async Task HandleExecutionAcceptedAsync(WorkOrderExecutionAcceptedContinuation continuation)
+    {
+        if (!MatchesPendingExecution(
+                continuation.WorkOrderId,
+                continuation.DispatchCommandId,
+                continuation.RequestedRunId))
+            return;
+
+        ValidateAcceptedExecution(continuation.Accepted);
+        await PersistDomainEventAsync(new WorkOrderRunAcceptedEvent
         {
-            await PersistDispatchFailureAsync(
-                "WORK_ORDER_EXECUTION_PORT_UNAVAILABLE",
-                "WorkOrder execution port is not registered.",
-                "work-order");
+            Accepted = continuation.Accepted.Clone(),
+        });
+    }
+
+    [EventHandler(EndpointName = "workOrderExecutionFailed")]
+    public async Task HandleExecutionFailedAsync(WorkOrderExecutionFailedContinuation continuation)
+    {
+        if (!MatchesPendingExecution(
+                continuation.WorkOrderId,
+                continuation.DispatchCommandId,
+                continuation.RequestedRunId))
+            return;
+
+        await PersistDomainEventAsync(new WorkOrderDispatchFailedEvent
+        {
+            Failure = continuation.Failed?.Failure?.Clone() ?? new WorkOrderFailureReference
+            {
+                Code = "WORK_ORDER_DISPATCH_FAILED",
+                Message = "WorkOrder execution failed without a typed failure.",
+                Source = "work-order-execution-worker",
+                ReferenceId = continuation.DispatchCommandId,
+            },
+            FailedAtUtc = continuation.Failed?.FailedAtUtc?.Clone()
+                ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+    }
+
+    [EventHandler(EndpointName = "retryWorkOrderExecution", AllowSelfHandling = true)]
+    public async Task HandleExecutionRetryFiredAsync(WorkOrderExecutionRetryFired evt)
+    {
+        ArgumentNullException.ThrowIfNull(evt);
+        if (!MatchesPendingExecution(
+                evt.WorkOrderId,
+                evt.DispatchCommandId,
+                evt.RequestedRunId) ||
+            evt.Attempt <= 0 ||
+            evt.Attempt != State.ExecutionRetryAttempt ||
+            !string.IsNullOrWhiteSpace(State.Execution?.RunId))
+        {
             return;
         }
 
-        var result = await _executionPort.ExecuteAsync(BuildExecutionRequest());
-        switch (result.ResultCase)
-        {
-            case WorkOrderExecutionResult.ResultOneofCase.Accepted:
-                ValidateAcceptedExecution(result.Accepted);
-                await PersistDomainEventAsync(new WorkOrderRunAcceptedEvent
-                {
-                    Accepted = result.Accepted.Clone(),
-                });
-                break;
-            case WorkOrderExecutionResult.ResultOneofCase.Failed:
-                await PersistDomainEventAsync(new WorkOrderDispatchFailedEvent
-                {
-                    Failure = result.Failed.Failure?.Clone() ?? new WorkOrderFailureReference
-                    {
-                        Code = "WORK_ORDER_DISPATCH_FAILED",
-                        Message = "WorkOrder execution failed without a failure reference.",
-                        Source = "work-order-execution-port",
-                    },
-                    FailedAtUtc = result.Failed.FailedAtUtc
-                        ?? Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                });
-                break;
-            default:
-                throw new InvalidOperationException(
-                    "WorkOrder execution port returned neither accepted Run evidence nor a typed failure.");
-        }
+        await ScheduleExecutionAndWatchdogAsync();
     }
 
     [EventHandler(EndpointName = "cancelWorkOrder")]
@@ -504,7 +531,91 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             DispatchCommandId = State.DispatchCommandId,
             RequestedRunId = State.RequestedRunId,
             TerminalDeliveryId = State.TerminalDeliveryId,
+            DeadlineAtUtc = State.TimeoutAtUtc?.Clone(),
         };
+
+    private async Task ScheduleExecutionAndWatchdogAsync(CancellationToken ct = default)
+    {
+        if (_executionScheduler == null)
+        {
+            await ScheduleExecutionRetryAsync(ct);
+            return;
+        }
+
+        try
+        {
+            var admission = _executionScheduler.ScheduleAsync(BuildExecutionRequest().Clone(), ct);
+            if (!admission.IsCompleted)
+            {
+                throw new InvalidOperationException(
+                    "WorkOrder execution scheduler admission must complete without blocking the actor turn.");
+            }
+
+            await admission;
+        }
+        catch (WorkOrderExecutionQueueFullException)
+        {
+            await ScheduleExecutionRetryAsync(ct);
+            return;
+        }
+
+        await ScheduleExecutionRetryAsync(ct);
+    }
+
+    private async Task ScheduleExecutionRetryAsync(CancellationToken ct)
+    {
+        if (State.LifecycleStatus != WorkOrderLifecycleStatus.DispatchPending ||
+            State.TimeoutAtUtc == null ||
+            !string.IsNullOrWhiteSpace(State.Execution?.RunId))
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var remaining = State.TimeoutAtUtc.ToDateTimeOffset() - now;
+        if (remaining <= TimeSpan.Zero)
+        {
+            await SendToAsync(
+                Id,
+                new WorkOrderTimeoutFired
+                {
+                    WorkOrderId = State.WorkOrderId,
+                    TimeoutAtUtc = State.TimeoutAtUtc.Clone(),
+                },
+                ct);
+            return;
+        }
+
+        var attempt = checked(State.ExecutionRetryAttempt + 1);
+        var exponent = Math.Min(attempt - 1, 30);
+        var exponentialDelay = ExecutionRetryInitialDelayMilliseconds * Math.Pow(2, exponent);
+        var delayMilliseconds = Math.Min(ExecutionRetryMaxDelayMilliseconds, exponentialDelay);
+        var backoff = TimeSpan.FromMilliseconds(delayMilliseconds);
+        var due = remaining < backoff ? remaining : backoff;
+        var retryAt = Timestamp.FromDateTimeOffset(now.Add(due));
+        var callbackId = BuildExecutionRetryCallbackId(
+            State.WorkOrderId,
+            State.DispatchCommandId,
+            attempt);
+        var fired = new WorkOrderExecutionRetryFired
+        {
+            WorkOrderId = State.WorkOrderId,
+            DispatchCommandId = State.DispatchCommandId,
+            RequestedRunId = State.RequestedRunId,
+            Attempt = attempt,
+        };
+
+        await ScheduleSelfDurableTimeoutAsync(callbackId, due, fired, ct: ct);
+        await PersistDomainEventAsync(new WorkOrderExecutionRetryScheduledEvent
+        {
+            WorkOrderId = fired.WorkOrderId,
+            DispatchCommandId = fired.DispatchCommandId,
+            RequestedRunId = fired.RequestedRunId,
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAtUtc = retryAt,
+        }, ct);
+    }
 
     private Task SendExecutionRequestAsync(CancellationToken ct = default) =>
         SendToAsync(
@@ -542,19 +653,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         return false;
     }
 
-    private Task PersistDispatchFailureAsync(string code, string message, string source) =>
-        PersistDomainEventAsync(new WorkOrderDispatchFailedEvent
-        {
-            Failure = new WorkOrderFailureReference
-            {
-                Code = code,
-                Message = message,
-                Source = source,
-                ReferenceId = State.DispatchCommandId,
-            },
-            FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        });
-
     private void ValidateAcceptedExecution(WorkOrderExecutionAccepted accepted)
     {
         ArgumentNullException.ThrowIfNull(accepted);
@@ -567,6 +665,12 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 "WorkOrder execution receipt does not match the authorized Run or command identity.");
         }
     }
+
+    private bool MatchesPendingExecution(string workOrderId, string dispatchCommandId, string requestedRunId) =>
+        State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending &&
+        string.Equals(State.WorkOrderId, workOrderId, StringComparison.Ordinal) &&
+        string.Equals(State.DispatchCommandId, dispatchCommandId, StringComparison.Ordinal) &&
+        string.Equals(State.RequestedRunId, requestedRunId, StringComparison.Ordinal);
 
     private void EnsureAcceptedRunIdentity(
         string deliveryId,
@@ -663,6 +767,15 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         EnsureRequired(command.Requester?.PrincipalKind, "requester.principal_kind");
         if (command.Input?.Chat == null)
             throw new InvalidOperationException("work order chat input is required.");
+        if (command.TimeoutAtUtc == null)
+            throw new InvalidOperationException("timeout_at_utc is required.");
+
+        var requestedAt = command.RequestedAtUtc?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        if (command.TimeoutAtUtc.ToDateTimeOffset() <= requestedAt)
+        {
+            throw new InvalidOperationException(
+                "timeout_at_utc must be later than requested_at_utc.");
+        }
 
         var canonicalWorkOrderId = WorkOrderConventions.BuildWorkOrderId(command.ScopeId, command.DedupKey);
         if (!string.Equals(command.WorkOrderId.Trim(), canonicalWorkOrderId, StringComparison.Ordinal))
@@ -743,6 +856,12 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
 
     private static string BuildTimeoutCallbackId(string workOrderId, Timestamp timeoutAt) =>
         $"work-order-timeout-{workOrderId}-{timeoutAt.Seconds}-{timeoutAt.Nanos}";
+
+    private static string BuildExecutionRetryCallbackId(
+        string workOrderId,
+        string dispatchCommandId,
+        int attempt) =>
+        $"work-order-execution-retry-{workOrderId}-{dispatchCommandId}-{attempt}";
 
     private static void EnsureRequired(string? value, string fieldName)
     {

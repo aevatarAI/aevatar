@@ -202,25 +202,53 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
+    public async Task CreateWorkOrder_WithoutDeadline_ShouldRejectBeforePersisting()
+    {
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        var command = BuildCreate();
+        command.TimeoutAtUtc = null;
+
+        var create = () => agent.HandleCreateAsync(command);
+
+        await create.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*timeout_at_utc*required*");
+        agent.State.WorkOrderId.Should().BeEmpty();
+        (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateWorkOrder_WhenDeadlineIsNotAfterRequestedAt_ShouldRejectBeforePersisting()
+    {
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateAgentAsync(eventStore: eventStore);
+        var command = BuildCreate();
+        command.TimeoutAtUtc = command.RequestedAtUtc.Clone();
+
+        var create = () => agent.HandleCreateAsync(command);
+
+        await create.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*timeout_at_utc*later than*requested_at_utc*");
+        agent.State.WorkOrderId.Should().BeEmpty();
+        (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DispatchAndTerminalEvidence_ShouldLinkRunAndDeclaredArtifacts()
     {
-        var executionPort = new RecordingExecutionPort();
-        var agent = await CreateAgentAsync(executionPort: executionPort);
-        await agent.HandleCreateAsync(BuildCreate());
-        var dispatch = BuildDispatch(expectedVersion: 2);
-
-        await agent.HandleDispatchAsync(dispatch);
-        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
         await agent.HandleExecuteAsync(new ExecuteWorkOrder
         {
             WorkOrderId = WorkOrderId,
             DispatchCommandId = DispatchCommandId,
         });
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
         agent.State.Execution.RunId.Should().Be(RequestedRunId);
         agent.State.Execution.CommandId.Should().Be(DispatchCommandId);
-        executionPort.Requests.Should().ContainSingle();
+        scheduler.Requests.Should().ContainSingle();
 
         await agent.HandleWorkflowStartedAsync(BuildWorkflowStarted());
 
@@ -247,17 +275,11 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public async Task AcceptedExecution_ShouldRemainDispatchPendingUntilCommittedRunStart()
+    public async Task AcceptedContinuation_ShouldRemainDispatchPendingUntilCommittedRunStart()
     {
-        var agent = await CreateAgentAsync(executionPort: new RecordingExecutionPort());
-        await agent.HandleCreateAsync(BuildCreate());
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
 
-        await agent.HandleExecuteAsync(new ExecuteWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
-        });
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
         agent.State.Execution.RunId.Should().Be(RequestedRunId);
         agent.State.Execution.StartedAtUtc.Should().BeNull();
@@ -265,16 +287,132 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public async Task WorkflowStarted_ShouldBeIdempotentAndRejectMismatchedCorrelation()
+    public async Task ExecuteWorkOrder_ShouldOnlyScheduleAndRemainDispatchPending()
     {
-        var agent = await CreateAgentAsync(executionPort: new RecordingExecutionPort());
-        await agent.HandleCreateAsync(BuildCreate());
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
+
         await agent.HandleExecuteAsync(new ExecuteWorkOrder
         {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
         });
+
+        scheduler.Requests.Should().ContainSingle();
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.Execution.RunId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AcceptedContinuation_AfterTimeout_ShouldBeIgnored()
+    {
+        var agent = await CreateTimedOutDispatchAgentAsync();
+        var version = agent.State.LifecycleVersion;
+
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
+
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.TimedOut);
+        agent.State.LifecycleVersion.Should().Be(version);
+    }
+
+    [Fact]
+    public async Task ExecutionRetryFired_WhenAttemptIsStale_ShouldNotSchedule()
+    {
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
+
+        await agent.HandleExecutionRetryFiredAsync(new WorkOrderExecutionRetryFired
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+            RequestedRunId = agent.State.RequestedRunId,
+            Attempt = 99,
+        });
+
+        scheduler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ExecuteWorkOrder_WhenQueueFull_ShouldScheduleDurableRetryWithoutFailing()
+    {
+        var scheduler = new RecordingExecutionScheduler(queueFull: true);
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler, callbackScheduler);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.ExecutionRetryAttempt.Should().Be(1);
+        agent.State.ExecutionRetryCallbackId.Should().NotBeEmpty();
+        var retry = callbackScheduler.Timeouts.Should().ContainSingle().Subject;
+        retry.CallbackId.Should().Be(agent.State.ExecutionRetryCallbackId);
+        retry.TriggerEnvelope.Payload.Unpack<WorkOrderExecutionRetryFired>().Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExecutionWatchdog_WhenStillPending_ShouldReenqueueCanonicalRequest()
+    {
+        var scheduler = new RecordingExecutionScheduler();
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler, callbackScheduler);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+        var watchdog = callbackScheduler.Timeouts.Should().ContainSingle().Subject
+            .TriggerEnvelope.Payload.Unpack<WorkOrderExecutionRetryFired>();
+
+        await agent.HandleExecutionRetryFiredAsync(watchdog);
+
+        scheduler.Requests.Should().HaveCount(2);
+        scheduler.Requests[1].Should().BeEquivalentTo(scheduler.Requests[0]);
+        agent.State.ExecutionRetryAttempt.Should().Be(2);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+    }
+
+    [Fact]
+    public async Task FailedContinuation_WhenCorrelationMismatches_ShouldBeIgnored()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        var lifecycleVersion = agent.State.LifecycleVersion;
+        var continuation = new WorkOrderExecutionFailedContinuation
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+            RequestedRunId = "run-unrelated",
+            Failed = new WorkOrderExecutionFailed
+            {
+                Failure = new WorkOrderFailureReference
+                {
+                    Code = "WORK_ORDER_DISPATCH_FAILED",
+                    Message = "unrelated failure",
+                    Source = "test-worker",
+                    ReferenceId = "delivery-unrelated",
+                },
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        await agent.HandleExecutionFailedAsync(continuation);
+
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.Failure.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task WorkflowStarted_ShouldBeIdempotentAndRejectMismatchedCorrelation()
+    {
+        var agent = await CreateAcceptedDispatchAgentAsync();
 
         var mismatched = BuildWorkflowStarted();
         mismatched.WorkflowCorrelationId = "different-correlation";
@@ -297,14 +435,7 @@ public sealed class WorkOrderGAgentTests
     [Fact]
     public async Task TerminalEvidenceBeforeStarted_ShouldConvergeWithoutInventingStartTime()
     {
-        var agent = await CreateAgentAsync(executionPort: new RecordingExecutionPort());
-        await agent.HandleCreateAsync(BuildCreate());
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
-        await agent.HandleExecuteAsync(new ExecuteWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
-        });
+        var agent = await CreateAcceptedDispatchAgentAsync();
 
         await agent.HandleWorkflowTerminalAsync(new WorkflowRunTerminalNotification
         {
@@ -333,14 +464,7 @@ public sealed class WorkOrderGAgentTests
     [Fact]
     public async Task WorkflowTerminal_ShouldRejectEnvelopeFromDifferentPublisher()
     {
-        var agent = await CreateAgentAsync(executionPort: new RecordingExecutionPort());
-        await agent.HandleCreateAsync(BuildCreate());
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
-        await agent.HandleExecuteAsync(new ExecuteWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
-        });
+        var agent = await CreateAcceptedDispatchAgentAsync();
 
         var terminal = new WorkflowRunTerminalNotification
         {
@@ -364,14 +488,7 @@ public sealed class WorkOrderGAgentTests
     [Fact]
     public async Task WorkflowStarted_ShouldRejectEnvelopeFromDifferentPublisher()
     {
-        var agent = await CreateAgentAsync(executionPort: new RecordingExecutionPort());
-        await agent.HandleCreateAsync(BuildCreate());
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
-        await agent.HandleExecuteAsync(new ExecuteWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
-        });
+        var agent = await CreateAcceptedDispatchAgentAsync();
 
         var act = () => agent.HandleEventAsync(
             BuildInboundEnvelope(BuildWorkflowStarted(), "forged-workflow-actor"));
@@ -385,17 +502,10 @@ public sealed class WorkOrderGAgentTests
     [Fact]
     public async Task ServiceRunTerminal_ShouldRejectEnvelopeFromNonCanonicalServiceRunPublisher()
     {
-        var agent = await CreateAgentAsync(executionPort: new RecordingExecutionPort());
         var create = BuildCreate();
         create.ImplementationKind = "script";
         create.WorkflowId = string.Empty;
-        await agent.HandleCreateAsync(create);
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
-        await agent.HandleExecuteAsync(new ExecuteWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
-        });
+        var agent = await CreateAcceptedDispatchAgentAsync(create);
         var terminal = new ServiceRunTerminalNotification
         {
             DeliveryId = TerminalDeliveryId,
@@ -419,14 +529,7 @@ public sealed class WorkOrderGAgentTests
     [Fact]
     public async Task TerminalEvidence_ShouldRejectMismatchedRunActorIdentity()
     {
-        var agent = await CreateAgentAsync(executionPort: new RecordingExecutionPort());
-        await agent.HandleCreateAsync(BuildCreate());
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
-        await agent.HandleExecuteAsync(new ExecuteWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
-        });
+        var agent = await CreateAcceptedDispatchAgentAsync();
         await agent.HandleWorkflowStartedAsync(BuildWorkflowStarted());
 
         var record = () => agent.HandleWorkflowTerminalAsync(new WorkflowRunTerminalNotification
@@ -449,22 +552,21 @@ public sealed class WorkOrderGAgentTests
     [Fact]
     public async Task DuplicateDispatchAndExecute_ShouldNotCreateAnotherRun()
     {
-        var executionPort = new RecordingExecutionPort();
-        var agent = await CreateAgentAsync(executionPort: executionPort);
-        await agent.HandleCreateAsync(BuildCreate());
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
         var dispatch = BuildDispatch(expectedVersion: 2);
-        await agent.HandleDispatchAsync(dispatch);
         var execute = new ExecuteWorkOrder
         {
             WorkOrderId = WorkOrderId,
             DispatchCommandId = DispatchCommandId,
         };
         await agent.HandleExecuteAsync(execute);
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
         await agent.HandleDispatchAsync(dispatch.Clone());
         await agent.HandleExecuteAsync(execute.Clone());
 
-        executionPort.Requests.Should().ContainSingle();
+        scheduler.Requests.Should().ContainSingle();
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
         agent.State.Execution.RunId.Should().Be(RequestedRunId);
     }
@@ -529,18 +631,13 @@ public sealed class WorkOrderGAgentTests
     [Fact]
     public async Task TimeoutThenTerminalEvidence_ShouldKeepTimedOutAndRecordLateEvidence()
     {
+        var requestedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-2));
         var past = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-1));
-        var executionPort = new RecordingExecutionPort();
-        var agent = await CreateAgentAsync(executionPort: executionPort);
         var create = BuildCreate();
+        create.RequestedAtUtc = requestedAt;
         create.TimeoutAtUtc = past;
-        await agent.HandleCreateAsync(create);
-        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
-        await agent.HandleExecuteAsync(new ExecuteWorkOrder
-        {
-            WorkOrderId = WorkOrderId,
-            DispatchCommandId = DispatchCommandId,
-        });
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler(), create: create);
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
         await agent.HandleTimeoutAsync(new WorkOrderTimeoutFired
         {
@@ -565,26 +662,29 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public async Task ActivateAsync_ShouldRedrivePersistedDispatchPendingWithSameIdentity()
+    public async Task ActivateAsync_WhenDispatchPending_ShouldReenqueueAndRestoreWatchdog()
     {
         var eventStore = new InMemoryEventStore();
-        var original = await CreateAgentAsync(eventStore: eventStore);
-        await original.HandleCreateAsync(BuildCreate());
-        await original.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
+        await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            eventStore: eventStore);
 
-        var publisher = new RecordingEventPublisher();
+        var scheduler = new RecordingExecutionScheduler();
+        var callbackScheduler = new RecordingCallbackScheduler();
         var recovered = await CreateAgentAsync(
             eventStore: eventStore,
-            publisher: publisher,
+            executionScheduler: scheduler,
+            callbackScheduler: callbackScheduler,
             activate: false);
         await recovered.ActivateAsync();
 
         recovered.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        publisher.Sends.Should().ContainSingle();
-        publisher.Sends[0].TargetActorId.Should().Be(ActorId);
-        var execute = publisher.Sends[0].Message.Should().BeOfType<ExecuteWorkOrder>().Subject;
-        execute.WorkOrderId.Should().Be(WorkOrderId);
-        execute.DispatchCommandId.Should().Be(DispatchCommandId);
+        var request = scheduler.Requests.Should().ContainSingle().Subject;
+        request.WorkOrderId.Should().Be(WorkOrderId);
+        request.DispatchCommandId.Should().Be(DispatchCommandId);
+        request.RequestedRunId.Should().Be(RequestedRunId);
+        callbackScheduler.Timeouts.Should().Contain(request =>
+            request.TriggerEnvelope.Payload.Is(WorkOrderExecutionRetryFired.Descriptor));
     }
 
     [Fact]
@@ -601,6 +701,10 @@ public sealed class WorkOrderGAgentTests
             PublishedServiceId = "service-1",
             Approval = new WorkOrderApprovalState { ApprovalId = "approval-1" },
             Execution = new WorkOrderExecutionProvenance { RunId = "run-1" },
+            ExecutionRetryAttempt = 3,
+            ExecutionRetryCallbackId = "retry-3",
+            ExecutionRetryAtUtc = Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2099-01-01T00:00:03Z")),
             TerminalEvidence = new WorkOrderTerminalEvidence
             {
                 DeliveryId = "delivery-1",
@@ -618,25 +722,78 @@ public sealed class WorkOrderGAgentTests
         restored.PublishedServiceId.Should().Be("service-1");
         restored.Approval.ApprovalId.Should().Be("approval-1");
         restored.Execution.RunId.Should().Be("run-1");
+        restored.ExecutionRetryAttempt.Should().Be(3);
+        restored.ExecutionRetryCallbackId.Should().Be("retry-3");
         restored.TerminalEvidence.DeliveryId.Should().Be("delivery-1");
         restored.TerminalEvidence.CorrelationId.Should().Be("correlation-1");
+    }
+
+    private static async Task<WorkOrderGAgent> CreateDispatchPendingAgentAsync(
+        RecordingExecutionScheduler scheduler,
+        RecordingCallbackScheduler? callbackScheduler = null,
+        InMemoryEventStore? eventStore = null,
+        CreateWorkOrder? create = null)
+    {
+        var callbacks = callbackScheduler ?? new RecordingCallbackScheduler();
+        var agent = await CreateAgentAsync(
+            eventStore: eventStore,
+            executionScheduler: scheduler,
+            callbackScheduler: callbacks);
+        await agent.HandleCreateAsync(create ?? BuildCreate());
+        await agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
+        callbacks.Timeouts.Clear();
+        return agent;
+    }
+
+    private static async Task<WorkOrderGAgent> CreateAcceptedDispatchAgentAsync(
+        CreateWorkOrder? create = null)
+    {
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            create: create);
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
+        return agent;
+    }
+
+    private static async Task<WorkOrderGAgent> CreateTimedOutDispatchAgentAsync()
+    {
+        var create = BuildCreate();
+        create.RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-2));
+        create.TimeoutAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(-1));
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            create: create);
+        await agent.HandleTimeoutAsync(new WorkOrderTimeoutFired
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            TimeoutAtUtc = agent.State.TimeoutAtUtc.Clone(),
+        });
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.TimedOut);
+        return agent;
     }
 
     private static async Task<WorkOrderGAgent> CreateAgentAsync(
         string? actorId = null,
         InMemoryEventStore? eventStore = null,
-        IWorkOrderExecutionPort? executionPort = null,
+        IWorkOrderExecutionScheduler? executionScheduler = null,
+        RecordingCallbackScheduler? callbackScheduler = null,
         IEventPublisher? publisher = null,
         bool activate = true)
     {
-        var agent = new WorkOrderGAgent(executionPort)
+        var agent = new WorkOrderGAgent(executionScheduler)
         {
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<WorkOrderState>(
                 eventStore ?? new InMemoryEventStore()),
             EventPublisher = publisher ?? new RecordingEventPublisher(),
             Services = new ServiceCollection()
                 .AddSingleton<IEnumerable<IGAgentExecutionHook>>([])
-                .AddSingleton<IActorRuntimeCallbackScheduler, NoopCallbackScheduler>()
+                .AddSingleton<IActorRuntimeCallbackScheduler>(
+                    callbackScheduler ?? new RecordingCallbackScheduler())
                 .BuildServiceProvider(),
         };
         SetIdMethod.Invoke(agent, [actorId ?? ActorId]);
@@ -647,6 +804,7 @@ public sealed class WorkOrderGAgentTests
 
     private static CreateWorkOrder BuildCreate(bool requiresApproval = false)
     {
+        var requestedAt = DateTimeOffset.UtcNow;
         var command = new CreateWorkOrder
         {
             WorkOrderId = WorkOrderId,
@@ -667,6 +825,8 @@ public sealed class WorkOrderGAgentTests
             },
             PermissionPlan = new WorkOrderPermissionPlan(),
             ApprovalId = WorkOrderConventions.BuildApprovalId(WorkOrderId),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
+            TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddHours(1)),
             ExpectedLifecycleVersion = 0,
         };
         command.Input.DeclaredResultArtifacts.Add(new WorkOrderArtifactReference
@@ -730,6 +890,25 @@ public sealed class WorkOrderGAgentTests
             StartedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-17T09:59:00Z")),
         };
 
+    private static WorkOrderExecutionAcceptedContinuation BuildAcceptedContinuation(
+        WorkOrderState state) =>
+        new()
+        {
+            WorkOrderId = state.WorkOrderId,
+            DispatchCommandId = state.DispatchCommandId,
+            RequestedRunId = state.RequestedRunId,
+            Accepted = new WorkOrderExecutionAccepted
+            {
+                RunId = state.RequestedRunId,
+                RunActorId = "workflow-run-actor-1",
+                CommandId = state.DispatchCommandId,
+                CorrelationId = state.DispatchCommandId,
+                RevisionId = state.ServiceRevisionId,
+                DeploymentId = "deployment-1",
+                AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
     private static EventEnvelope BuildInboundEnvelope(IMessage payload, string publisherActorId) =>
         new()
         {
@@ -746,41 +925,40 @@ public sealed class WorkOrderGAgentTests
             PrincipalKind = "user",
         };
 
-    private sealed class RecordingExecutionPort : IWorkOrderExecutionPort
+    private sealed class RecordingExecutionScheduler(bool queueFull = false)
+        : IWorkOrderExecutionScheduler
     {
         public List<WorkOrderExecutionRequest> Requests { get; } = [];
 
-        public Task<WorkOrderExecutionResult> ExecuteAsync(
+        public ValueTask ScheduleAsync(
             WorkOrderExecutionRequest request,
             CancellationToken ct = default)
         {
+            ct.ThrowIfCancellationRequested();
+            if (queueFull)
+                throw new WorkOrderExecutionQueueFullException("WorkOrder execution queue is full.");
+
             Requests.Add(request.Clone());
-            return Task.FromResult(new WorkOrderExecutionResult
-            {
-                Accepted = new WorkOrderExecutionAccepted
-                {
-                    RunId = request.RequestedRunId,
-                    RunActorId = "workflow-run-actor-1",
-                    CommandId = request.DispatchCommandId,
-                    CorrelationId = request.DispatchCommandId,
-                    RevisionId = request.ServiceRevisionId,
-                    DeploymentId = "deployment-1",
-                    AcceptedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                },
-            });
+            return ValueTask.CompletedTask;
         }
     }
 
-    private sealed class NoopCallbackScheduler : IActorRuntimeCallbackScheduler
+    private sealed class RecordingCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
+
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
-            CancellationToken ct = default) =>
-            Task.FromResult(new RuntimeCallbackLease(
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Timeouts.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
                 request.CallbackId,
-                1,
+                Timeouts.Count,
                 RuntimeCallbackBackend.InMemory));
+        }
 
         public Task<RuntimeCallbackLease> ScheduleTimerAsync(
             RuntimeCallbackTimerRequest request,

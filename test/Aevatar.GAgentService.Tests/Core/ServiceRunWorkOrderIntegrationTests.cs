@@ -34,13 +34,15 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         var requestedRunId = WorkOrderConventions.BuildRequestedRunId(workOrderId);
         var terminalDeliveryId = WorkOrderConventions.BuildTerminalDeliveryId(workOrderId);
         var serviceRunActorId = $"service-run:{scopeId}:{serviceId}:{requestedRunId}";
+        var requestedAt = DateTimeOffset.UtcNow;
 
         var router = new RoutingEventPublisher();
+        var executionScheduler = new RecordingExecutionScheduler();
         var workOrderStore = new InMemoryEventStore();
         var workOrder = GAgentServiceTestKit.CreateStatefulAgent<WorkOrderGAgent, WorkOrderState>(
             workOrderStore,
             workOrderActorId,
-            () => new WorkOrderGAgent(new AcceptedExecutionPort(scriptActorId)));
+            () => new WorkOrderGAgent(executionScheduler));
         workOrder.EventPublisher = router;
 
         var serviceRunStore = new InMemoryEventStore();
@@ -67,6 +69,13 @@ public sealed class ServiceRunWorkOrderIntegrationTests
                 message is ExecuteWorkOrder execute)
             {
                 await workOrder.HandleExecuteAsync(execute);
+                return;
+            }
+
+            if (string.Equals(targetActorId, workOrder.Id, StringComparison.Ordinal) &&
+                message is WorkOrderExecutionAcceptedContinuation accepted)
+            {
+                await workOrder.HandleExecutionAcceptedAsync(accepted);
                 return;
             }
 
@@ -115,8 +124,8 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             },
             PermissionPlan = new WorkOrderPermissionPlan(),
             ExpectedLifecycleVersion = 0,
-            RequestedAtUtc = Timestamp.FromDateTimeOffset(
-                DateTimeOffset.Parse("2026-07-20T00:00:00Z")),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
+            TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddHours(1)),
         });
         await workOrder.HandleDispatchAsync(new DispatchWorkOrder
         {
@@ -126,6 +135,24 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             DispatchCommandId = dispatchCommandId,
             RequestedRunId = requestedRunId,
             TerminalDeliveryId = terminalDeliveryId,
+        });
+
+        var executionRequest = executionScheduler.Requests.Should().ContainSingle().Subject;
+        await router.SendToAsync(workOrder.Id, new WorkOrderExecutionAcceptedContinuation
+        {
+            WorkOrderId = executionRequest.WorkOrderId,
+            DispatchCommandId = executionRequest.DispatchCommandId,
+            RequestedRunId = executionRequest.RequestedRunId,
+            Accepted = new WorkOrderExecutionAccepted
+            {
+                RunId = executionRequest.RequestedRunId,
+                RunActorId = scriptActorId,
+                CommandId = executionRequest.DispatchCommandId,
+                CorrelationId = executionRequest.DispatchCommandId,
+                RevisionId = executionRequest.ServiceRevisionId,
+                DeploymentId = "deployment-1",
+                AcceptedAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddSeconds(1)),
+            },
         });
 
         workOrder.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
@@ -235,27 +262,17 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             Propagation = new EnvelopePropagation { CorrelationId = correlationId },
         };
 
-    private sealed class AcceptedExecutionPort(string runActorId) : IWorkOrderExecutionPort
+    private sealed class RecordingExecutionScheduler : IWorkOrderExecutionScheduler
     {
-        public Task<WorkOrderExecutionResult> ExecuteAsync(
+        public List<WorkOrderExecutionRequest> Requests { get; } = [];
+
+        public ValueTask ScheduleAsync(
             WorkOrderExecutionRequest request,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new WorkOrderExecutionResult
-            {
-                Accepted = new WorkOrderExecutionAccepted
-                {
-                    RunId = request.RequestedRunId,
-                    RunActorId = runActorId,
-                    CommandId = request.DispatchCommandId,
-                    CorrelationId = request.DispatchCommandId,
-                    RevisionId = request.ServiceRevisionId,
-                    DeploymentId = "deployment-1",
-                    AcceptedAtUtc = Timestamp.FromDateTimeOffset(
-                        DateTimeOffset.Parse("2026-07-20T00:00:01Z")),
-                },
-            });
+            Requests.Add(request.Clone());
+            return ValueTask.CompletedTask;
         }
     }
 
