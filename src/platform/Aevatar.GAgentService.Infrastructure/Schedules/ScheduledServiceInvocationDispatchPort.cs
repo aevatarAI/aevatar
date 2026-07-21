@@ -86,10 +86,12 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     private void ValidateAuthorizationFact(ScheduledServiceInvocationDispatchRequest dispatch)
     {
         var fact = dispatch.AuthorizationFact;
-        if (fact == null)
+        if (fact == null &&
+            dispatch.Auth?.Source is not ScheduledInvocationAgentKeyCredentialReference)
             return;
 
-        if (IsCoreAuthorizationFactInvalid(fact, _timeProvider.GetUtcNow()) ||
+        if (fact == null ||
+            IsCoreAuthorizationFactInvalid(fact, _timeProvider.GetUtcNow()) ||
             IsCatalogAuthorityInvalid(fact.Authority) ||
             AreServiceGrantsInvalid(fact) ||
             IsDisclosureInvalid(fact.Disclosure))
