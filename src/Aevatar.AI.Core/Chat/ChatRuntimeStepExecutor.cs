@@ -149,7 +149,7 @@ public sealed class ChatRuntimeStepExecutor
             : baseRequest.ToolContext;
         // Refactor (issue1574): Old pattern: core tool step accepted Metadata as a fallback control source.
         // New principle: metadata is retained for outer legacy planning only; core tool execution uses typed context.
-        return await runtime.ExecuteSingleToolStepAsync(toolCalls, executionToolContext, ct)
+        return await runtime.ExecuteSingleToolStepAsync(toolCalls, baseRequest.Tools, executionToolContext, ct)
             .ConfigureAwait(false);
     }
 

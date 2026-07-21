@@ -1,6 +1,5 @@
 path	line	message
-agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.ConnectedServices.cs	109	empty broad catch block
-agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs	376	empty broad catch block
+agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs	375	empty broad catch block
 src/Aevatar.AI.Core/Routing/EventRoute.cs	68	empty broad catch block
 src/Aevatar.AI.Core/Tools/StreamingToolExecutor.cs	318	empty broad catch block
 src/Aevatar.AI.Core/Tools/StreamingToolExecutor.cs	400	empty broad catch block

@@ -1,13 +1,12 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Http;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.AI.Tests;
 
@@ -21,11 +20,11 @@ public sealed class ToolProviderHttpClientRegistrationTests
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
         services.ShouldContainTypedHttpClient<NyxIdApiClient>();
-        services.ShouldContainNamedHttpClient(ConnectedServiceSpecCache.HttpClientName);
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<IHttpClientFactory>().Should().NotBeNull();
         provider.GetRequiredService<NyxIdApiClient>().Should().NotBeNull();
+        provider.GetRequiredService<NyxIdServiceInstanceClient>().Should().NotBeNull();
         provider.GetRequiredService<INyxIdApiClientFactory>()
             .CreateClient()
             .Should()
@@ -160,24 +159,6 @@ file static class HttpClientRegistrationAssertions
                implementationName is "NyxIdSpecCatalog" or "InMemoryServiceDiscoveryCache";
     }
 
-    public static void ShouldContainNamedHttpClient(
-        this IServiceCollection services,
-        string name)
-    {
-        services.ShouldContainHttpClientOptions(name);
-    }
-
-    private static void ShouldContainHttpClientOptions(
-        this IServiceCollection services,
-        string name)
-    {
-        services.Any(descriptor =>
-            descriptor.ServiceType == typeof(IConfigureOptions<HttpClientFactoryOptions>) &&
-            descriptor.ImplementationInstance is ConfigureNamedOptions<HttpClientFactoryOptions> options &&
-            options.Name == name)
-            .Should()
-            .BeTrue("AddHttpClient should register HttpClientFactoryOptions for '{0}'", name);
-    }
 }
 
 file sealed class StubWorkflowFileIngressPort : IFileArtifactIngressPort

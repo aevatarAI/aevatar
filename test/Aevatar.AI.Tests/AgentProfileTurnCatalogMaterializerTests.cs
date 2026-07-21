@@ -39,6 +39,63 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_RouteOnlyTool_ShouldFreezeExactObject()
+    {
+        var routeTool = new TestTool("task");
+        var registry = RegistryWithRoute([routeTool]);
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("task");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+
+        var catalog = await NewMaterializer(
+                registry,
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                [],
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("task");
+        catalog.RouteOwnedTools.Should().ContainSingle();
+        catalog.RouteOwnedTools["task"].Should().BeSameAs(routeTool);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_RouteAndRegisteredSameNameDifferentReference_ShouldFailClosed()
+    {
+        var routeTool = new TestTool("task");
+        var registeredTool = new TestTool("task");
+        var registry = RegistryWithRoute([routeTool]);
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("task");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+
+        var catalog = await NewMaterializer(
+                registry,
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                [registeredTool],
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.RouteOwnedTools.Should().BeEmpty();
+        catalog.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolNameCollision &&
+            diagnostic.Detail == "task");
+    }
+
+    [Fact]
     public async Task MaterializeAsync_PolicyToolSetRefs_ShouldOnlyAttenuateFinalAuthority()
     {
         var routeTools = NewTools(
@@ -46,12 +103,9 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "task-from-set",
             "route-only",
             "visibility-blocked");
-        var registeredTools = NewTools(
-            "recovery-from-set",
-            "task-from-set",
-            "route-only",
-            "visibility-blocked",
-            "registered-only");
+        var registeredTools = routeTools
+            .Concat(NewTools("registered-only"))
+            .ToArray();
         var registry = new RecordingToolSetRegistry();
         registry.Add("profile.route", new StaticToolSource(routeTools));
         registry.Add("maximum.policy", new StaticToolSource(NewTools(

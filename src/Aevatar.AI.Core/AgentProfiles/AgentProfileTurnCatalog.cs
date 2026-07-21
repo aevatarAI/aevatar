@@ -36,7 +36,8 @@ public sealed class AgentProfileTurnCatalog
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
         string? selectedIntentId,
         string? candidateIntentId,
-        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null)
+        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null,
+        IEnumerable<IAgentTool>? routeOwnedTools = null)
     {
         ArgumentNullException.ThrowIfNull(finalAllowedToolNames);
 
@@ -45,6 +46,7 @@ public sealed class AgentProfileTurnCatalog
             .Select(static name => name.Trim())
             .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
         ToolVisibility = new AgentToolVisibilityScope(FinalAllowedToolNames);
+        RouteOwnedTools = FreezeTools(routeOwnedTools);
         ProfilePromptLayer = profilePromptLayer;
         SelectedSkillPromptLayer = selectedSkillPromptLayer;
         SelectedIntentId = Normalize(selectedIntentId);
@@ -55,6 +57,8 @@ public sealed class AgentProfileTurnCatalog
     public IReadOnlySet<string> FinalAllowedToolNames { get; }
 
     public AgentToolVisibilityScope ToolVisibility { get; }
+
+    public IReadOnlyDictionary<string, IAgentTool> RouteOwnedTools { get; }
 
     public ProfileRoutingPromptLayer? ProfilePromptLayer { get; }
 
@@ -80,6 +84,33 @@ public sealed class AgentProfileTurnCatalog
             })
             .ToList();
         return bounded.AsReadOnly();
+    }
+
+    private static IReadOnlyDictionary<string, IAgentTool> FreezeTools(IEnumerable<IAgentTool>? tools)
+    {
+        if (tools is null)
+            return FrozenDictionary<string, IAgentTool>.Empty;
+
+        var exactTools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tool in tools.Where(static tool => !string.IsNullOrWhiteSpace(tool.Name)))
+        {
+            var name = tool.Name.Trim();
+            if (collisions.Contains(name))
+                continue;
+            if (!exactTools.TryGetValue(name, out var existing))
+            {
+                exactTools.Add(name, tool);
+                continue;
+            }
+            if (ReferenceEquals(existing, tool))
+                continue;
+
+            exactTools.Remove(name);
+            collisions.Add(name);
+        }
+
+        return exactTools.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
     }
 
     private static string? Normalize(string? value) =>

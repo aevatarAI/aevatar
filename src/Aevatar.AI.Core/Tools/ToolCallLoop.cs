@@ -59,7 +59,13 @@ public sealed class ToolCallLoop
         //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
         var toolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
         using var _ = AgentToolContextScope.Push(toolContext);
-        return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
+        return await ExecuteCoreAsync(
+            provider,
+            messages,
+            baseRequest,
+            CreateRequestToolManager(baseRequest.Tools),
+            maxRounds,
+            ct);
     }
 
     /// <summary>Max recovery attempts when the LLM response is truncated by output token limit.</summary>
@@ -72,7 +78,7 @@ public sealed class ToolCallLoop
 
     private async Task<string?> ExecuteCoreAsync(
         ILLMProvider provider, List<ChatMessage> messages,
-        LLMRequest baseRequest, int maxRounds, CancellationToken ct)
+        LLMRequest baseRequest, ToolManager requestTools, int maxRounds, CancellationToken ct)
     {
         var lengthRecoveryCount = 0;
         StringBuilder? accumulatedContent = null;
@@ -156,7 +162,7 @@ public sealed class ToolCallLoop
                             parsed.CleanedContent,
                             response.ReasoningContent,
                             parsed.ToolCalls));
-                        await ExecuteToolCallsCoreAsync(parsed.ToolCalls, messages, ct);
+                        await ExecuteToolCallsCoreAsync(requestTools, parsed.ToolCalls, messages, ct);
                         accumulatedContent = null;
                         continue;
                     }
@@ -205,7 +211,7 @@ public sealed class ToolCallLoop
                 ReasoningContent = response.ReasoningContent,
                 ToolCalls = response.ToolCalls,
             });
-            await ExecuteToolCallsCoreAsync(response.ToolCalls!, messages, ct);
+            await ExecuteToolCallsCoreAsync(requestTools, response.ToolCalls!, messages, ct);
         }
 
         // maxRounds exhausted — tool results from the last round are already in messages.
@@ -239,7 +245,11 @@ public sealed class ToolCallLoop
                     finalParsed.CleanedContent,
                     finalResponse?.ReasoningContent,
                     finalParsed.ToolCalls));
-                await ExecuteToolCallsCoreAsync(finalParsed.ToolCalls, messages, ct);
+                await ExecuteToolCallsCoreAsync(
+                    CreateRequestToolManager(finalRequest.Tools),
+                    finalParsed.ToolCalls,
+                    messages,
+                    ct);
 
                 // One more LLM call to summarize
                 var summaryRequest = new LLMRequest
@@ -282,7 +292,7 @@ public sealed class ToolCallLoop
         {
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         });
-        await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
+        await ExecuteToolCallsCoreAsync(_tools, toolCalls, messages, ct);
     }
 
     private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
@@ -562,7 +572,16 @@ public sealed class ToolCallLoop
             Task.FromResult("{}");
     }
 
+    internal static ToolManager CreateRequestToolManager(IReadOnlyList<IAgentTool>? tools)
+    {
+        var manager = new ToolManager();
+        if (tools is { Count: > 0 })
+            manager.Register(tools);
+        return manager;
+    }
+
     private async Task ExecuteToolCallsCoreAsync(
+        ToolManager tools,
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
         CancellationToken ct)
@@ -570,7 +589,7 @@ public sealed class ToolCallLoop
         // Refactor (iter35/cluster-040-streaming-tool-executor):
         //   Old pattern: StreamingToolExecutor owns process-local channel coordinator + TaskCompletionSource waiters + List<TrackedTool>/List<TaskCompletionSource> as object fields for tool execution ordering.
         //   New principle: Tool execution state kept in owning chat/actor turn,或 narrow runtime-neutral tool scheduling abstraction(no process-local progress storage)。Streaming tool progress advanced by owning execution flow;process-local channels 仅作 transport mechanics,不作 business progress 来源。
-        var executor = new StreamingToolExecutor(_tools, _hooks, _toolMiddlewares);
+        var executor = new StreamingToolExecutor(tools, _hooks, _toolMiddlewares);
         using var executionState = executor.CreateExecutionState();
 
         foreach (var call in toolCalls)

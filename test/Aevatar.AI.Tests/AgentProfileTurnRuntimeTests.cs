@@ -38,6 +38,31 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
+    public void Catalog_ShouldFreezeExactRouteOwnedTools()
+    {
+        var exact = new CountingTool("route-only");
+        var mutable = new List<IAgentTool> { exact };
+
+        var catalog = NewCatalog(["route-only"], routeOwnedTools: mutable);
+        mutable.Clear();
+
+        catalog.RouteOwnedTools.Should().ContainSingle();
+        catalog.RouteOwnedTools["ROUTE-ONLY"].Should().BeSameAs(exact);
+    }
+
+    [Fact]
+    public void BaseRequest_ShouldIncludeRouteOnlyExactTool()
+    {
+        var routeOnly = new CountingTool("route-only");
+        var runtime = NewRuntime(new RecordingProvider(), new ToolManager());
+
+        var request = runtime.CreateStepExecutor(NewCatalog(["route-only"], routeOwnedTools: [routeOnly]))
+            .BuildBaseRequest(null, null, null, null);
+
+        request.Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnly);
+    }
+
+    [Fact]
     public async Task MainTurn_ShouldHideAndRejectToolsOutsideCatalog()
     {
         var visible = new CountingTool("visible");
@@ -127,6 +152,25 @@ public sealed class AgentProfileTurnRuntimeTests
         request.Tools.Should().ContainSingle(tool => tool.Name == "visible");
         request.ToolContext!.ToolVisibility.Allows("visible").Should().BeTrue();
         request.ToolContext.ToolVisibility.Allows("hidden").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MainTurn_LlmMiddlewareSameNameReplacement_ShouldFailClosed()
+    {
+        var exact = new CountingTool("visible");
+        var replacement = new CountingTool("visible");
+        var tools = NewToolManager(exact);
+        var provider = new ForgedToolProvider("visible");
+        var runtime = NewRuntime(
+            provider,
+            tools,
+            [new ReplacingRequestMiddleware(replacement)]);
+
+        await DrainAsync(runtime.ChatStreamAsync("run", NewCatalog(["visible"])));
+
+        provider.Requests[0].Tools.Should().BeNull();
+        exact.ExecuteCount.Should().Be(0);
+        replacement.ExecuteCount.Should().Be(0);
     }
 
     [Fact]
@@ -287,8 +331,9 @@ public sealed class AgentProfileTurnRuntimeTests
 
     private static AgentProfileTurnCatalog NewCatalog(
         IEnumerable<string> names,
-        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null) =>
-        new(names, null, null, null, null, diagnostics);
+        IReadOnlyList<AgentProfileTurnDiagnostic>? diagnostics = null,
+        IEnumerable<IAgentTool>? routeOwnedTools = null) =>
+        new(names, null, null, null, null, diagnostics, routeOwnedTools);
 
     private static ToolManager NewToolManager(params IAgentTool[] tools)
     {
@@ -386,6 +431,20 @@ public sealed class AgentProfileTurnRuntimeTests
                     ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames([visibleTool.Name]),
                 },
                 Tools = [visibleTool],
+            };
+            await next();
+        }
+    }
+
+    private sealed class ReplacingRequestMiddleware(IAgentTool replacement) : ILLMCallMiddleware
+    {
+        public async Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            context.Request = new LLMRequest
+            {
+                Messages = context.Request.Messages,
+                ToolContext = context.Request.ToolContext,
+                Tools = [replacement],
             };
             await next();
         }

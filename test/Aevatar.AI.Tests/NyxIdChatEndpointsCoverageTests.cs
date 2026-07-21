@@ -2576,18 +2576,6 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public void ComputeTokenHash_ShouldBeDeterministicShortLowercaseHex()
-    {
-        var method = EndpointsType.GetMethod("ComputeTokenHash", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var first = method.Invoke(null, ["abc"])!.Should().NotBeNull().And.BeOfType<string>().Subject;
-        var second = method.Invoke(null, ["abc"])!.Should().NotBeNull().And.BeOfType<string>().Subject;
-
-        first.Should().Be(second);
-        first.Length.Should().Be(16);
-        first.Should().MatchRegex("^[a-f0-9]{16}$");
-    }
-
-    [Fact]
     public void ResolveReplyTokenExpiresAtUnixMs_ShouldUseJwtExpiryAndFallbackTtl()
     {
         var relay = CreateRelayInvocationDependencies();
@@ -2620,45 +2608,6 @@ public class NyxIdChatEndpointsCoverageTests
         DateTimeOffset.FromUnixTimeMilliseconds(malformedFallback)
             .Should().BeOnOrAfter(before.AddSeconds(6))
             .And.BeOnOrBefore(after.AddSeconds(9));
-    }
-
-    [Fact]
-    public async Task BuildConnectedServicesContext_ShouldRenderServiceHintsAndFallbackMessage()
-    {
-        var arrayPayload = """
-            [
-              {"slug":"calendar","label":"Calendar","base_url":"https://api.example.com"}
-            ]
-            """;
-        var arrayContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            arrayPayload, null, "", CancellationToken.None);
-        arrayContext.Should().Contain("calendar");
-        arrayContext.Should().Contain("Use nyxid_proxy");
-
-        var emptyContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            """{"services":[]}""", null, "", CancellationToken.None);
-        emptyContext.Should().Contain("No services connected yet");
-    }
-
-    [Fact]
-    public async Task BuildConnectedServicesContext_ShouldHandleDataShape_AndInvalidJson()
-    {
-        var dataPayload = """
-            {
-              "data":[
-                {"slug":"github","name":"GitHub","endpoint_url":"https://api.github.com"}
-              ]
-            }
-            """;
-        var dataContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            dataPayload, null, "", CancellationToken.None);
-        dataContext.Should().Contain("GitHub");
-        dataContext.Should().Contain("https://api.github.com");
-
-        var invalidContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            "{ invalid", null, "", CancellationToken.None);
-        invalidContext.Should().Contain("No services connected yet");
-        invalidContext.Should().Contain("Use nyxid_proxy");
     }
 
     [Fact]

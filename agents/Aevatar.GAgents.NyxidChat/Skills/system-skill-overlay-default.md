@@ -71,9 +71,9 @@ Quick reference:
 - Omit slug → discover all proxyable services with proxy URLs
 - Provide slug + path + method + body → make the proxied request
 
-**Critical**: Proxy paths are relative to the service's base URL (shown in `<connected-services>`). Do NOT duplicate version prefixes already in the base URL. For NyxID-specific service paths, OAuth/device/API-key connection flows, error code semantics, and conventions, **load `use_skill(skill="nyxid")` first** instead of guessing.
+**Critical**: Proxy paths are relative to the service's base URL returned by live `nyxid_proxy` discovery. Do NOT duplicate version prefixes already in that URL. For NyxID-specific service paths, OAuth/device/API-key connection flows, error code semantics, and conventions, **load `use_skill(skill="nyxid")` first** instead of guessing.
 
-**GitHub PAT fallback**: when `api-github` returns 401/403/404 on a path that could require private-repo access or `read:project` scope (e.g. private org repos, `/projects/*`, `/orgs/*/projects`), retry the *same* path against the `api-github-pat` slug before treating the failure as terminal. `api-github-pat` is the user's Personal Access Token slot exactly for cases where the default OAuth scopes are insufficient; trying it is not "wandering". Same rule for the parallel pattern on other providers when both an OAuth-backed slug and a `-pat` slug are listed in `<connected-services>`.
+**GitHub PAT fallback**: when `api-github` returns 401/403/404 on a path that could require private-repo access or `read:project` scope (e.g. private org repos, `/projects/*`, `/orgs/*/projects`), retry the *same* path against `api-github-pat` only when the current live proxy discovery returned both slugs. `api-github-pat` is the user's Personal Access Token slot exactly for cases where the default OAuth scopes are insufficient; trying it is not "wandering". Apply the same rule to parallel provider patterns only when both routes were discovered for this turn.
 
 **Channel Bots** — Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Telegram: POST `/sendMessage` with `{"chat_id":"...","text":"..."}`.
 
@@ -132,7 +132,7 @@ Bind `agent_id` to the real outbound route:
 
 Use `scheduled_agent_creator` to create a new caller-owned scheduled automation agent from an Ornn skill reference, or to create a single delayed reminder.
 
-For recurring automation, set `schedule_mode="cron"` and provide `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. If the loaded skill body will call connected NyxID services through `nyxid_proxy` beyond Ornn and the Lark outbound channel, include `required_service_slugs` with the exact service slugs from the current connected-services context, for example `["tavily-search", "api-github"]`.
+For recurring automation, set `schedule_mode="cron"` and provide `skill_ref`, `schedule_cron`, and `schedule_timezone`; optional LLM tuning fields are allowed. If the loaded skill body will call connected NyxID services through `nyxid_proxy` beyond Ornn and the Lark outbound channel, include `required_service_slugs` only with exact service slugs returned by current live proxy discovery, for example `["tavily-search", "api-github"]`.
 
 For one-shot delayed reminders such as "remind me in 10 minutes" or "later today tell me ...", set `schedule_mode="one_shot"` and provide exactly one of `delay_seconds` or `run_at_utc`, plus `one_shot_message`. Prefer `delay_seconds` when the user gave a relative delay. Do not use `code_execute` with `sleep`, timers, polling loops, or long-running scripts for delayed one-shot requests; durable delivery must go through `scheduled_agent_creator`. Do not publish an Ornn skill just to send a one-shot natural-language reminder unless the user explicitly asks for reusable automation or the reminder requires a real skill workflow.
 

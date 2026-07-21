@@ -1678,6 +1678,7 @@ public class LarkToolsTests
         var request = new LLMRequest
         {
             Messages = [],
+            Tools = tools.GetAll(),
             RequestId = "session-lark-approval",
             Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {

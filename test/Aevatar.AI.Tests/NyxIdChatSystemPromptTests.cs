@@ -69,6 +69,19 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void ComposedPrompt_ShouldUseFinalToolSchemasAsConnectedServiceAuthority()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("final request's tool schemas are the only capability authority");
+        prompt.Should().Contain("nyxid_service_inventory");
+        prompt.Should().Contain("nyxid_service_operation__");
+        prompt.Should().Contain("unprofiled turn");
+        prompt.Should().NotContain("<connected-services>");
+        prompt.Should().NotContain("<api-hints>");
+    }
+
+    [Fact]
     public void DecorateSystemPrompt_ShouldUseCatalogSlotsWithoutShadowCandidateBody()
     {
         var agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider());

@@ -537,7 +537,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldIncludeToolResultInSummaryRequest()
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldRejectToolAbsentFromFinalRequest()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -582,9 +582,13 @@ public sealed class ChatRuntimeStreamingBufferTests
 
         output.ToString().Should().Contain("summary-ready");
         provider.StreamRequests.Should().HaveCount(3);
-        provider.StreamRequests[2].Messages.Any(m =>
+        provider.StreamRequests[2].Messages.Should().Contain(m =>
             m.Role == "tool" &&
-            m.Content == "RESULT:{\"q\":\"final\"}").Should().BeTrue();
+            m.Content != null &&
+            m.Content.Contains("not found", StringComparison.OrdinalIgnoreCase));
+        provider.StreamRequests[2].Messages.Should().NotContain(m =>
+            m.Role == "tool" &&
+            m.Content == "RESULT:{\"q\":\"final\"}");
         var assistantToolCallMessage = provider.StreamRequests[2].Messages.Single(m =>
             m.Role == "assistant" &&
             m.ToolCalls is { Count: 1 } &&
@@ -641,7 +645,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalTextToolHasMutatingSuccess_ShouldNotInjectSummaryConstraint()
+    public async Task ChatStreamAsync_WhenFinalTextToolIsAbsentFromFinalRequest_ShouldInjectSummaryConstraint()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -685,7 +689,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.StreamRequests[2].Messages
             .Where(message => message.Role == "system" &&
                               message.Content?.Contains("no successful mutating tool execution") == true)
-            .Should().BeEmpty();
+            .Should().ContainSingle();
     }
 
     [Fact]
@@ -772,7 +776,7 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
-    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldExposeTypedToolContext()
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldUseOnlyFinalRequestCapabilities()
     {
         var provider = new QueuedStreamingProvider(
         [
@@ -816,6 +820,7 @@ public sealed class ChatRuntimeStreamingBufferTests
             requestBuilder: _ => new LLMRequest
             {
                 Messages = [],
+                Tools = tools.GetAll(),
                 ToolContext = AgentToolExecutionContext.Empty with
                 {
                     Credentials = new AgentToolCredentials("typed-access", null, null),
@@ -838,8 +843,14 @@ public sealed class ChatRuntimeStreamingBufferTests
         provider.StreamRequests[2].Messages.Should().Contain(m =>
             m.Role == "tool" &&
             m.Content != null &&
-            m.Content.StartsWith("typed-access|typed-scope|text-tc-", StringComparison.Ordinal) &&
+            m.Content.StartsWith("typed-access|typed-scope|tc-initial", StringComparison.Ordinal) &&
             m.Content.EndsWith("|typed-message", StringComparison.Ordinal));
+        provider.StreamRequests[2].Messages.Should().Contain(m =>
+            m.Role == "tool" &&
+            m.ToolCallId != null &&
+            m.ToolCallId.StartsWith("text-tc-", StringComparison.Ordinal) &&
+            m.Content != null &&
+            m.Content.Contains("not found", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -1247,14 +1258,19 @@ public sealed class ChatRuntimeStreamingBufferTests
         Func<AgentProfileTurnCatalog?, LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
-        var toolLoop = new ToolCallLoop(tools ?? new ToolManager());
+        var effectiveTools = tools ?? new ToolManager();
+        var toolLoop = new ToolCallLoop(effectiveTools);
 
         return new ChatRuntime(
             providerFactory: () => provider,
             history: history,
             toolLoop: toolLoop,
             hooks: null,
-            requestBuilder: requestBuilder ?? (_ => new LLMRequest { Messages = [] }),
+            requestBuilder: requestBuilder ?? (_ => new LLMRequest
+            {
+                Messages = [],
+                Tools = effectiveTools.GetAll(),
+            }),
             agentMiddlewares: agentMiddlewares,
             llmMiddlewares: llmMiddlewares);
     }

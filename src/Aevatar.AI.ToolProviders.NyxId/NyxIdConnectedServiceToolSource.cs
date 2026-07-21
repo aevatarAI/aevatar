@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Microsoft.Extensions.Logging;
@@ -6,27 +5,15 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
-/// <summary>
-/// Discovers the caller's NyxID connected services at request time and registers any
-/// operation that is explicitly marked <c>x-aevatar-tool</c> as an individual
-/// <see cref="IAgentTool"/>. NyxID stays the single source of truth: services and specs are
-/// read live from NyxID's proxy/spec surfaces on every discovery, nothing is cached as a
-/// process-local catalog, and execution always goes back through the NyxID proxy.
-/// </summary>
-/// <remarks>
-/// The per-request NyxID access token is read from <see cref="AgentToolRequestContext"/>,
-/// which the tool-set boundary populates before discovery. Without a configured NyxID base
-/// URL or an access token, no dynamic tools are exposed.
-/// </remarks>
 public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
 {
     private readonly NyxIdToolOptions _options;
-    private readonly NyxIdApiClient _client;
+    private readonly NyxIdServiceInstanceClient _client;
     private readonly ILogger _logger;
 
     public NyxIdConnectedServiceToolSource(
         NyxIdToolOptions options,
-        NyxIdApiClient client,
+        NyxIdServiceInstanceClient client,
         ILogger<NyxIdConnectedServiceToolSource>? logger = null)
     {
         _options = options;
@@ -38,28 +25,84 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
     {
         if (string.IsNullOrWhiteSpace(_options.BaseUrl))
             return [];
-
         var userToken = AgentToolRequestContext.NyxIdAccessToken;
         if (string.IsNullOrWhiteSpace(userToken))
-        {
-            _logger.LogDebug("NyxID connected-service tools skipped: no access token in request context");
             return [];
-        }
-
-        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
 
         try
         {
-            var services = await DiscoverServicesAsync(userToken, orgToken, ct);
-            if (services.Count == 0)
+            var discovered = await _client.DiscoverAsync(
+                userToken,
+                AgentToolRequestContext.NyxIdOrgToken,
+                ct);
+            var bindings = discovered
+                .Where(static binding =>
+                    binding.Instance.IsActive &&
+                    binding.Instance.CredentialAllowed &&
+                    !string.IsNullOrWhiteSpace(binding.Instance.ProxySpecServiceId))
+                .ToArray();
+            if (bindings.Length == 0)
                 return [];
 
-            var specs = await Task.WhenAll(services.Select(service =>
-                FetchOperationsAsync(service, userToken, orgToken, ct)));
+            var tools = new List<IAgentTool>(NyxIdServiceTools.Create(_client, bindings));
+            var candidates = new List<OperationCandidate>();
+            foreach (var binding in bindings)
+            {
+                IReadOnlyList<ConnectedServiceToolOperation> operations;
+                try
+                {
+                    var spec = await _client.GetSpecAsync(binding, ct);
+                    operations = OpenApiToolSpecParser.Parse(spec).AdmittedOperations().ToArray();
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "NyxID connected-service spec discovery failed for instance {UserServiceId}",
+                        binding.Instance.UserServiceId);
+                    continue;
+                }
 
-            return MaterializeTools(services, specs);
+                candidates.AddRange(operations.Select(operation => new OperationCandidate(
+                    ConnectedServiceToolNaming.Build(operation.Marker?.Name ?? operation.OperationId),
+                    operation,
+                    binding)));
+            }
+
+            foreach (var group in candidates.GroupBy(static candidate => candidate.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                var first = group.First();
+                var contract = first.Operation.CanonicalContract();
+                if (group.Any(candidate =>
+                        !string.Equals(contract, candidate.Operation.CanonicalContract(), StringComparison.Ordinal)))
+                {
+                    _logger.LogWarning("NyxID operation contract collision on tool {ToolName}", group.Key);
+                    continue;
+                }
+                if (group.Any(candidate =>
+                        !Equals(first.Binding.Instance.RouteConstraint, candidate.Binding.Instance.RouteConstraint)))
+                {
+                    _logger.LogWarning("NyxID operation route collision on tool {ToolName}", group.Key);
+                    continue;
+                }
+
+                var groupedBindings = ResolveBindings(group);
+                if (groupedBindings.Count == 0)
+                    continue;
+                tools.Add(new ConnectedServiceOperationTool(
+                    _client,
+                    group.Key,
+                    first.Operation,
+                    groupedBindings));
+            }
+
+            return RemoveNameCollisions(tools);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
@@ -70,180 +113,53 @@ public sealed class NyxIdConnectedServiceToolSource : IAgentToolSource
         }
     }
 
-    private IReadOnlyList<IAgentTool> MaterializeTools(
-        IReadOnlyList<ConnectedServiceRef> services,
-        IReadOnlyList<ConnectedServiceToolOperation>[] specs)
+    private static IReadOnlyList<NyxIdServiceInstanceBinding> ResolveBindings(IEnumerable<OperationCandidate> candidates)
     {
-        var tools = new List<IAgentTool>();
-        var byName = new Dictionary<string, string>(StringComparer.Ordinal);
-
-        for (var i = 0; i < services.Count; i++)
+        var bindings = new Dictionary<string, NyxIdServiceInstanceBinding>(StringComparer.Ordinal);
+        var conflicts = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var candidate in candidates)
         {
-            var service = services[i];
-            var operations = specs[i]
-                .OrderBy(op => op.PathTemplate, StringComparer.Ordinal)
-                .ThenBy(op => op.Method, StringComparer.Ordinal);
-
-            foreach (var operation in operations)
+            var id = candidate.Binding.Instance.UserServiceId;
+            if (conflicts.Contains(id))
+                continue;
+            if (!bindings.TryGetValue(id, out var existing))
             {
-                var name = ConnectedServiceToolNaming.Build(
-                    service.Slug,
-                    operation.Marker?.Name ?? operation.OperationId);
-                var identity = $"{service.Slug}:{operation.Method} {operation.PathTemplate}";
-
-                if (byName.TryGetValue(name, out var existing))
-                {
-                    // Observable failure: two operations collapse to the same tool name. Keep the
-                    // first (deterministic order) and drop the rest so the LLM never sees an
-                    // ambiguous duplicate.
-                    _logger.LogWarning(
-                        "NyxID connected-service tool name conflict on '{Name}': keeping {Existing}, dropping {Dropped}",
-                        name, existing, identity);
-                    continue;
-                }
-
-                byName[name] = identity;
-                tools.Add(new ConnectedServiceProxyTool(
-                    _client,
-                    name,
-                    service.Slug,
-                    operation,
-                    service.PreferOrgToken,
-                    _logger));
+                bindings.Add(id, candidate.Binding);
+                continue;
             }
-        }
-
-        _logger.LogInformation(
-            "NyxID connected-service tools registered ({Count} tools across {Services} services)",
-            tools.Count, services.Count);
-
-        return tools;
-    }
-
-    private async Task<IReadOnlyList<ConnectedServiceToolOperation>> FetchOperationsAsync(
-        ConnectedServiceRef service,
-        string userToken,
-        string? orgToken,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(service.ServiceId))
-        {
-            _logger.LogDebug("NyxID service '{Slug}' has no service id; cannot fetch proxy-aware spec", service.Slug);
-            return [];
-        }
-
-        var token = service.PreferOrgToken && !string.IsNullOrWhiteSpace(orgToken) ? orgToken! : userToken;
-        var specJson = await _client.GetProxyServiceOpenApiAsync(token, service.ServiceId, ct);
-        if (LooksLikeErrorEnvelope(specJson))
-        {
-            _logger.LogDebug("NyxID spec fetch for '{Slug}' returned an error envelope", service.Slug);
-            return [];
-        }
-
-        return OpenApiToolSpecParser.Parse(specJson).AdmittedOperations().ToArray();
-    }
-
-    private async Task<IReadOnlyList<ConnectedServiceRef>> DiscoverServicesAsync(
-        string userToken,
-        string? orgToken,
-        CancellationToken ct)
-    {
-        var merged = new List<ConnectedServiceRef>();
-        var seenSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var service in ParseServices(await _client.DiscoverProxyServicesAsync(userToken, ct), preferOrgToken: false))
-        {
-            if (seenSlugs.Add(service.Slug))
-                merged.Add(service);
-        }
-
-        if (!string.IsNullOrWhiteSpace(orgToken) && orgToken != userToken)
-        {
-            foreach (var service in ParseServices(await _client.DiscoverProxyServicesAsync(orgToken, ct), preferOrgToken: true))
-            {
-                if (seenSlugs.Add(service.Slug))
-                    merged.Add(service);
-            }
-        }
-
-        return merged;
-    }
-
-    internal static IReadOnlyList<ConnectedServiceRef> ParseServices(string? json, bool preferOrgToken)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-            return [];
-
-        var results = new List<ConnectedServiceRef>();
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            foreach (var item in EnumerateServiceItems(doc.RootElement))
-            {
-                if (item.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                var slug = ReadString(item, "slug");
-                if (string.IsNullOrWhiteSpace(slug))
-                    continue;
-
-                var serviceId = ReadString(item, "id") ?? ReadString(item, "service_id");
-                results.Add(new ConnectedServiceRef(slug!, serviceId, preferOrgToken));
-            }
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-
-        return results;
-    }
-
-    private static IEnumerable<JsonElement> EnumerateServiceItems(JsonElement root)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in root.EnumerateArray())
-                yield return item;
-            yield break;
-        }
-
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        foreach (var propertyName in new[] { "services", "custom_services", "data" })
-        {
-            if (!root.TryGetProperty(propertyName, out var items) || items.ValueKind != JsonValueKind.Array)
+            if (ReferenceEquals(existing, candidate.Binding))
                 continue;
 
-            foreach (var item in items.EnumerateArray())
-                yield return item;
+            bindings.Remove(id);
+            conflicts.Add(id);
         }
+        return bindings.Values.OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal).ToArray();
     }
 
-    private static string? ReadString(JsonElement owner, string name) =>
-        owner.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    private static bool LooksLikeErrorEnvelope(string? response)
+    private static IReadOnlyList<IAgentTool> RemoveNameCollisions(IEnumerable<IAgentTool> tools)
     {
-        if (string.IsNullOrWhiteSpace(response))
-            return true;
+        var exact = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tool in tools)
+        {
+            if (collisions.Contains(tool.Name))
+                continue;
+            if (!exact.TryGetValue(tool.Name, out var existing))
+            {
+                exact.Add(tool.Name, tool);
+                continue;
+            }
+            if (ReferenceEquals(existing, tool))
+                continue;
 
-        try
-        {
-            using var doc = JsonDocument.Parse(response);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                return false;
-            return doc.RootElement.TryGetProperty("error", out var error) &&
-                   error.ValueKind is not (JsonValueKind.False or JsonValueKind.Null);
+            exact.Remove(tool.Name);
+            collisions.Add(tool.Name);
         }
-        catch (JsonException)
-        {
-            return false;
-        }
+        return exact.Values.ToArray();
     }
 
-    internal sealed record ConnectedServiceRef(string Slug, string? ServiceId, bool PreferOrgToken);
+    private sealed record OperationCandidate(
+        string Name,
+        ConnectedServiceToolOperation Operation,
+        NyxIdServiceInstanceBinding Binding);
 }
