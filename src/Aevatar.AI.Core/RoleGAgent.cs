@@ -1629,7 +1629,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var sessionId = incoming.ReconciliationKey.SessionId;
         if (string.IsNullOrWhiteSpace(sessionId) || incoming.ReconciliationKey.Attempt <= 0 ||
             !current.Sessions.TryGetValue(sessionId, out var session) || session.Completed ||
-            AuthorityRank(incoming.AuthorityKind) < 0)
+            AuthorityRank(incoming.AuthorityKind) < 0 ||
+            !HasConsistentAuthorityKindAndCeiling(incoming))
         {
             return false;
         }
@@ -1776,6 +1777,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         authority.AuthorityCeilingToolNames.Count == 0 &&
         authority.DegradationReasons.Count == 1 &&
         authority.DegradationReasons[0] == AgentProfileTurnDegradationReason.LegacyAuthorityMissing;
+
+    private static bool HasConsistentAuthorityKindAndCeiling(AgentProfileTurnAuthorityState authority) =>
+        authority.AuthorityKind switch
+        {
+            AgentProfileTurnAuthorityKind.RestrictedEmpty => authority.AuthorityCeilingToolNames.Count == 0,
+            AgentProfileTurnAuthorityKind.Recovery => authority.AuthorityCeilingToolNames.Count > 0,
+            AgentProfileTurnAuthorityKind.Selected => true,
+            _ => false,
+        };
 
     private static int AuthorityRank(AgentProfileTurnAuthorityKind kind) => kind switch
     {

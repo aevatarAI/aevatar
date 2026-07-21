@@ -602,6 +602,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         IEnumerable<string> ceilingToolNames,
         IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
     {
+        var canonicalCeilingToolNames = CanonicalToolNames(ceilingToolNames);
         var authority = new AgentProfileTurnAuthorityState
         {
             ReconciliationKey = new AgentProfileTurnReconciliationKey
@@ -611,9 +612,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
             },
             CandidateRoute = candidate?.Clone(),
             SelectedExactSkillRef = selectedExactSkillRef?.Clone(),
-            AuthorityKind = authorityKind,
+            AuthorityKind = ResolveAuthorityKindForCeiling(authorityKind, canonicalCeilingToolNames),
         };
-        authority.AuthorityCeilingToolNames.Add(CanonicalToolNames(ceilingToolNames));
+        authority.AuthorityCeilingToolNames.Add(canonicalCeilingToolNames);
         authority.DegradationReasons.Add(
             diagnostics
                 .Select(static diagnostic => ToDegradationReason(diagnostic))
@@ -632,10 +633,11 @@ public sealed class AgentProfileTurnCatalogMaterializer
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
         IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
     {
+        var canonicalCeilingToolNames = CanonicalToolNames(ceilingToolNames);
         var proposal = committedAuthority.Clone();
-        proposal.AuthorityKind = authorityKind;
+        proposal.AuthorityKind = ResolveAuthorityKindForCeiling(authorityKind, canonicalCeilingToolNames);
         proposal.AuthorityCeilingToolNames.Clear();
-        proposal.AuthorityCeilingToolNames.Add(CanonicalToolNames(ceilingToolNames));
+        proposal.AuthorityCeilingToolNames.Add(canonicalCeilingToolNames);
         proposal.DegradationReasons.Clear();
         proposal.DegradationReasons.Add(
             committedAuthority.DegradationReasons
@@ -660,6 +662,13 @@ public sealed class AgentProfileTurnCatalogMaterializer
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(static name => name, StringComparer.Ordinal)
             .ToArray();
+
+    private static AgentProfileTurnAuthorityKind ResolveAuthorityKindForCeiling(
+        AgentProfileTurnAuthorityKind authorityKind,
+        IReadOnlyCollection<string> canonicalCeilingToolNames) =>
+        authorityKind == AgentProfileTurnAuthorityKind.Recovery && canonicalCeilingToolNames.Count == 0
+            ? AgentProfileTurnAuthorityKind.RestrictedEmpty
+            : authorityKind;
 
     private static bool MatchesCommittedProfile(
         AgentProfileSnapshot profile,

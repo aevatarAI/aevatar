@@ -143,7 +143,7 @@ public class RoleGAgentReplayContractTests
             services,
             actorId,
             providerFactory: provider,
-            widenReconcileProposal: true);
+            reconcileProposalMutation: ReconcileProposalMutation.WidenCeiling);
         agent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
         await agent.ActivateAsync();
 
@@ -166,6 +166,53 @@ public class RoleGAgentReplayContractTests
         var replayed = CreateProfiledAgent(services, actorId);
         await replayed.ActivateAsync();
         replayed.State.AgentProfileTurnAuthority.Should().BeEquivalentTo(authorityEvents[0].Authority);
+    }
+
+    [Theory]
+    [InlineData(ReconcileProposalMutation.RecoveryWithEmptyCeiling)]
+    [InlineData(ReconcileProposalMutation.RestrictedEmptyWithNonEmptyCeiling)]
+    public async Task ContradictoryAuthorityKindAndCeiling_ShouldFailCommandPrevalidationAndReplay(
+        ReconcileProposalMutation reconcileProposalMutation)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var provider = new CountingLlmProviderFactory("must not run");
+        const string actorId = "role-profiled-contradictory-authority";
+        var agent = CreateProfiledAgent(
+            services,
+            actorId,
+            providerFactory: provider,
+            reconcileProposalMutation: reconcileProposalMutation);
+        agent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        provider.StreamCallCount.Should().Be(0);
+        var authorityEvents = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .ToArray();
+        var initial = authorityEvents.Should().ContainSingle().Which;
+        initial.CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.Initial);
+
+        var replayState = new RoleGAgentState
+        {
+            AgentProfileTurnAuthority = initial.Authority.Clone(),
+            Sessions = { ["session-a"] = new RoleChatSessionState { Sequence = 1 } },
+        };
+        var malformed = MutateReconcileProposal(initial.Authority, reconcileProposalMutation);
+        ApplyTurnAuthority(replayState, new AgentProfileTurnAuthorityCommittedEvent
+            {
+                CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+                Authority = malformed,
+            })
+            .Should()
+            .BeSameAs(replayState);
     }
 
     [Fact]
@@ -1268,20 +1315,46 @@ public class RoleGAgentReplayContractTests
         string exactSkillGuid = "skill-a",
         List<string>? operationLog = null,
         ILLMProviderFactory? providerFactory = null,
-        bool widenReconcileProposal = false)
+        ReconcileProposalMutation reconcileProposalMutation = ReconcileProposalMutation.None)
     {
         var agent = new ProfiledRoleGAgent(
             providerFactory ?? new CountingLlmProviderFactory("done"),
             intentId,
             exactSkillGuid,
             operationLog,
-            widenReconcileProposal)
+            reconcileProposalMutation)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
         AssignActorId(agent, actorId);
         return agent;
+    }
+
+    private static AgentProfileTurnAuthorityState MutateReconcileProposal(
+        AgentProfileTurnAuthorityState authority,
+        ReconcileProposalMutation mutation)
+    {
+        var proposal = authority.Clone();
+        switch (mutation)
+        {
+            case ReconcileProposalMutation.None:
+                break;
+            case ReconcileProposalMutation.WidenCeiling:
+                proposal.AuthorityCeilingToolNames.Add("outside-frozen-ceiling");
+                break;
+            case ReconcileProposalMutation.RecoveryWithEmptyCeiling:
+                proposal.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+                proposal.AuthorityCeilingToolNames.Clear();
+                break;
+            case ReconcileProposalMutation.RestrictedEmptyWithNonEmptyCeiling:
+                proposal.AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+        }
+
+        return proposal;
     }
 
     private static AgentProfileTurnAuthorityState TurnAuthority(
@@ -1493,7 +1566,7 @@ public class RoleGAgentReplayContractTests
         string intentId,
         string exactSkillGuid,
         List<string>? operationLog,
-        bool widenReconcileProposal)
+        ReconcileProposalMutation reconcileProposalMutation)
         : RoleGAgent(providerFactory)
     {
         public int PrepareCallCount { get; private set; }
@@ -1522,18 +1595,24 @@ public class RoleGAgentReplayContractTests
             operationLog?.Add($"materialize:{committedAuthority.ReconciliationKey.Attempt}");
             MaterializeCallCount++;
             MaterializedAuthorities.Add(committedAuthority.Clone());
+            var reconcileProposal = MutateReconcileProposal(committedAuthority, reconcileProposalMutation);
             var catalog = new AgentProfileTurnCatalog(
-                committedAuthority.AuthorityCeilingToolNames,
+                reconcileProposal.AuthorityCeilingToolNames,
                 profilePromptLayer: null,
                 selectedSkillPromptLayer: null,
                 selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
                 candidateIntentId: committedAuthority.CandidateRoute?.IntentId);
-            var reconcileProposal = committedAuthority.Clone();
-            if (widenReconcileProposal)
-                reconcileProposal.AuthorityCeilingToolNames.Add("outside-frozen-ceiling");
             return Task.FromResult<AgentProfileTurnCatalogMaterialization?>(
                 AgentProfileTurnCatalogMaterialization.Create(catalog, reconcileProposal));
         }
+    }
+
+    public enum ReconcileProposalMutation
+    {
+        None,
+        WidenCeiling,
+        RecoveryWithEmptyCeiling,
+        RestrictedEmptyWithNonEmptyCeiling,
     }
 
     private sealed class CountingEventModuleFactory : IEventModuleFactory<IEventHandlerContext>
