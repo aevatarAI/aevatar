@@ -668,6 +668,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
 
     private bool MatchesPendingExecution(string workOrderId, string dispatchCommandId, string requestedRunId) =>
         State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending &&
+        string.IsNullOrWhiteSpace(State.Execution?.RunId) &&
         string.Equals(State.WorkOrderId, workOrderId, StringComparison.Ordinal) &&
         string.Equals(State.DispatchCommandId, dispatchCommandId, StringComparison.Ordinal) &&
         string.Equals(State.RequestedRunId, requestedRunId, StringComparison.Ordinal);

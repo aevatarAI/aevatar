@@ -28,6 +28,9 @@ public sealed class WorkOrderGAgentTests
     private static readonly MethodInfo SetIdMethod = typeof(GAgentBase)
         .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("GAgentBase.SetId was not found.");
+    private static readonly MethodInfo TransitionStateMethod = typeof(WorkOrderGAgent)
+        .GetMethod("TransitionState", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("WorkOrderGAgent.TransitionState was not found.");
 
     [Fact]
     public async Task CreateAndApprove_ShouldPreserveSeparateIdentitiesAndAdvanceVersion()
@@ -316,6 +319,48 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
+    public async Task DuplicateAcceptedContinuation_ShouldPersistNothingAndNotChangeLifecycleVersion()
+    {
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            eventStore: eventStore);
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+        var continuation = BuildAcceptedContinuation(agent.State);
+        await agent.HandleExecutionAcceptedAsync(continuation);
+        var acceptedState = agent.State.Clone();
+        var eventCount = (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Count;
+
+        await agent.HandleExecutionAcceptedAsync(continuation.Clone());
+
+        agent.State.Should().Be(acceptedState);
+        agent.State.LifecycleVersion.Should().Be(acceptedState.LifecycleVersion);
+        (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().HaveCount(eventCount);
+    }
+
+    [Fact]
+    public async Task FailedContinuation_AfterAccepted_ShouldBeIgnoredWithoutChangingState()
+    {
+        var eventStore = new InMemoryEventStore();
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            eventStore: eventStore);
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
+        var acceptedState = agent.State.Clone();
+        var eventCount = (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Count;
+
+        await agent.HandleExecutionFailedAsync(BuildFailedContinuation(agent.State));
+
+        agent.State.Should().Be(acceptedState);
+        agent.State.LifecycleVersion.Should().Be(acceptedState.LifecycleVersion);
+        (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().HaveCount(eventCount);
+    }
+
+    [Fact]
     public async Task ExecutionRetryFired_WhenAttemptIsStale_ShouldNotSchedule()
     {
         var scheduler = new RecordingExecutionScheduler();
@@ -356,6 +401,125 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
+    public async Task ExecuteWorkOrder_WhenSchedulerIsMissing_ShouldRemainPendingAndScheduleRetry()
+    {
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(null, callbackScheduler);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.ExecutionRetryAttempt.Should().Be(1);
+        callbackScheduler.Timeouts.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecutionRetry_ShouldStartAtTwoHundredFiftyMilliseconds()
+    {
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            callbackScheduler);
+
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+
+        callbackScheduler.Timeouts.Should().ContainSingle()
+            .Which.DueTime.Should().Be(TimeSpan.FromMilliseconds(250));
+    }
+
+    [Fact]
+    public async Task ExecutionRetry_ShouldCapExponentialDelayAtThirtySeconds()
+    {
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            callbackScheduler);
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+
+        while (agent.State.ExecutionRetryAttempt < 8)
+        {
+            var fired = callbackScheduler.Timeouts[^1].TriggerEnvelope.Payload
+                .Unpack<WorkOrderExecutionRetryFired>();
+            await agent.HandleExecutionRetryFiredAsync(fired);
+        }
+
+        agent.State.ExecutionRetryAttempt.Should().Be(8);
+        callbackScheduler.Timeouts[^1].DueTime.Should().Be(TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task ExecutionRetry_ShouldCapDelayAtRemainingDeadline()
+    {
+        var requestedAt = DateTimeOffset.UtcNow;
+        var create = BuildCreate();
+        create.RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt);
+        create.TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddSeconds(5));
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            callbackScheduler,
+            create: create);
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+
+        while (agent.State.ExecutionRetryAttempt < 6)
+        {
+            var fired = callbackScheduler.Timeouts[^1].TriggerEnvelope.Payload
+                .Unpack<WorkOrderExecutionRetryFired>();
+            await agent.HandleExecutionRetryFiredAsync(fired);
+        }
+
+        callbackScheduler.Timeouts[^1].DueTime.Should().BeLessThan(TimeSpan.FromSeconds(8));
+        callbackScheduler.Timeouts[^1].DueTime.Should().BeGreaterThan(TimeSpan.Zero);
+        agent.State.ExecutionRetryAtUtc.Should().Be(agent.State.TimeoutAtUtc);
+    }
+
+    [Fact]
+    public async Task ExecutionRetry_WhenCallbackSchedulingFails_ShouldNotPersistRetryStateOrEvent()
+    {
+        var eventStore = new InMemoryEventStore();
+        var callbackScheduler = new RecordingCallbackScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(
+            new RecordingExecutionScheduler(),
+            callbackScheduler,
+            eventStore);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+        var eventCount = (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Count;
+        callbackScheduler.ScheduleException = new InvalidOperationException("callback unavailable");
+
+        var schedule = () => agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+
+        await schedule.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("callback unavailable");
+        agent.State.ExecutionRetryAttempt.Should().Be(0);
+        agent.State.ExecutionRetryCallbackId.Should().BeEmpty();
+        agent.State.ExecutionRetryAtUtc.Should().BeNull();
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        (await eventStore.GetEventsAsync(ActorId, ct: CancellationToken.None)).Should().HaveCount(eventCount);
+    }
+
+    [Fact]
     public async Task ExecutionWatchdog_WhenStillPending_ShouldReenqueueCanonicalRequest()
     {
         var scheduler = new RecordingExecutionScheduler();
@@ -377,6 +541,115 @@ public sealed class WorkOrderGAgentTests
         scheduler.Requests[1].Should().BeEquivalentTo(scheduler.Requests[0]);
         agent.State.ExecutionRetryAttempt.Should().Be(2);
         agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+    }
+
+    [Fact]
+    public void ExecutionRetryScheduled_WhenCorrelationMismatches_ShouldBeIgnoredWithoutAdvancingLifecycle()
+    {
+        var current = BuildRetryState(attempt: 2);
+        var mismatched = new WorkOrderExecutionRetryScheduledEvent
+        {
+            WorkOrderId = current.WorkOrderId,
+            DispatchCommandId = "cmd-unrelated",
+            RequestedRunId = current.RequestedRunId,
+            Attempt = 3,
+            CallbackId = "retry-unrelated",
+            RetryAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        var next = ApplyStateTransition(current, mismatched);
+
+        next.Should().BeSameAs(current);
+        next.LifecycleVersion.Should().Be(current.LifecycleVersion);
+        next.ExecutionRetryAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public void ExecutionRetryScheduled_WhenAttemptIsNonIncreasing_ShouldBeIgnoredWithoutAdvancingLifecycle()
+    {
+        var current = BuildRetryState(attempt: 2);
+        var nonIncreasing = new WorkOrderExecutionRetryScheduledEvent
+        {
+            WorkOrderId = current.WorkOrderId,
+            DispatchCommandId = current.DispatchCommandId,
+            RequestedRunId = current.RequestedRunId,
+            Attempt = 2,
+            CallbackId = "retry-repeated",
+            RetryAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        var next = ApplyStateTransition(current, nonIncreasing);
+
+        next.Should().BeSameAs(current);
+        next.LifecycleVersion.Should().Be(current.LifecycleVersion);
+        next.ExecutionRetryCallbackId.Should().Be(current.ExecutionRetryCallbackId);
+    }
+
+    [Fact]
+    public async Task AcceptedContinuation_ShouldClearExecutionRetryFields()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+        agent.State.ExecutionRetryAttempt.Should().Be(1);
+
+        await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
+
+        AssertExecutionRetryCleared(agent.State);
+    }
+
+    [Fact]
+    public async Task FailedContinuation_ShouldClearExecutionRetryFields()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+        agent.State.ExecutionRetryAttempt.Should().Be(1);
+
+        await agent.HandleExecutionFailedAsync(BuildFailedContinuation(agent.State));
+
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Failed);
+        AssertExecutionRetryCleared(agent.State);
+    }
+
+    [Fact]
+    public void TerminalOutcome_ShouldClearExecutionRetryFields()
+    {
+        var current = BuildRetryState(attempt: 4);
+        current.LifecycleStatus = WorkOrderLifecycleStatus.Running;
+        current.Execution = new WorkOrderExecutionProvenance
+        {
+            RunId = RequestedRunId,
+            RunActorId = "workflow-run-actor-1",
+            CommandId = DispatchCommandId,
+            CorrelationId = DispatchCommandId,
+        };
+        var terminal = new WorkOrderTerminalEvidenceRecordedEvent
+        {
+            LifecycleStatus = WorkOrderLifecycleStatus.Completed,
+            Evidence = new WorkOrderTerminalEvidence
+            {
+                DeliveryId = TerminalDeliveryId,
+                RunId = RequestedRunId,
+                RunActorId = "workflow-run-actor-1",
+                CommandId = DispatchCommandId,
+                CorrelationId = DispatchCommandId,
+                Outcome = WorkOrderTerminalOutcome.Succeeded,
+                TerminalAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        var next = ApplyStateTransition(current, terminal);
+
+        next.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Completed);
+        next.LifecycleVersion.Should().Be(current.LifecycleVersion + 1);
+        AssertExecutionRetryCleared(next);
     }
 
     [Fact]
@@ -729,7 +1002,7 @@ public sealed class WorkOrderGAgentTests
     }
 
     private static async Task<WorkOrderGAgent> CreateDispatchPendingAgentAsync(
-        RecordingExecutionScheduler scheduler,
+        IWorkOrderExecutionScheduler? scheduler,
         RecordingCallbackScheduler? callbackScheduler = null,
         InMemoryEventStore? eventStore = null,
         CreateWorkOrder? create = null)
@@ -909,6 +1182,51 @@ public sealed class WorkOrderGAgentTests
             },
         };
 
+    private static WorkOrderExecutionFailedContinuation BuildFailedContinuation(
+        WorkOrderState state) =>
+        new()
+        {
+            WorkOrderId = state.WorkOrderId,
+            DispatchCommandId = state.DispatchCommandId,
+            RequestedRunId = state.RequestedRunId,
+            Failed = new WorkOrderExecutionFailed
+            {
+                Failure = new WorkOrderFailureReference
+                {
+                    Code = "WORK_ORDER_DISPATCH_FAILED",
+                    Message = "execution failed",
+                    Source = "test-worker",
+                    ReferenceId = state.DispatchCommandId,
+                },
+                FailedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+    private static WorkOrderState BuildRetryState(int attempt) =>
+        new()
+        {
+            WorkOrderId = WorkOrderId,
+            DispatchCommandId = DispatchCommandId,
+            RequestedRunId = RequestedRunId,
+            LifecycleStatus = WorkOrderLifecycleStatus.DispatchPending,
+            LifecycleVersion = 7,
+            Execution = new WorkOrderExecutionProvenance(),
+            ExecutionRetryAttempt = attempt,
+            ExecutionRetryCallbackId = $"retry-{attempt}",
+            ExecutionRetryAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+    private static WorkOrderState ApplyStateTransition(WorkOrderState state, IMessage evt) =>
+        (WorkOrderState)(TransitionStateMethod.Invoke(new WorkOrderGAgent(), [state, evt])
+            ?? throw new InvalidOperationException("WorkOrder state transition returned null."));
+
+    private static void AssertExecutionRetryCleared(WorkOrderState state)
+    {
+        state.ExecutionRetryAttempt.Should().Be(0);
+        state.ExecutionRetryCallbackId.Should().BeEmpty();
+        state.ExecutionRetryAtUtc.Should().BeNull();
+    }
+
     private static EventEnvelope BuildInboundEnvelope(IMessage payload, string publisherActorId) =>
         new()
         {
@@ -947,11 +1265,16 @@ public sealed class WorkOrderGAgentTests
     {
         public List<RuntimeCallbackTimeoutRequest> Timeouts { get; } = [];
 
+        public Exception? ScheduleException { get; set; }
+
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (ScheduleException != null)
+                throw ScheduleException;
+
             Timeouts.Add(request);
             return Task.FromResult(new RuntimeCallbackLease(
                 request.ActorId,
