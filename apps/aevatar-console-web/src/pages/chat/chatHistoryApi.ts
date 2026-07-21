@@ -156,7 +156,13 @@ function decodeStoredChatMessage(
     timestamp: readNumber(record, "timestamp", path),
   } as StoredChatMessage & Record<string, unknown>;
 
-  for (const key of ["error", "thinking", "authorId", "authorName"] as const) {
+  for (const key of [
+    "error",
+    "thinking",
+    "authorId",
+    "authorName",
+    "turnId",
+  ] as const) {
     withOptionalField(
       message,
       key,

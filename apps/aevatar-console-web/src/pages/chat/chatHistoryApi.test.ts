@@ -77,6 +77,7 @@ describe("chatHistoryApi", () => {
           status: "queued",
           thinking: null,
           timestamp: 1784255700000,
+          turnId: "turn-a",
         },
       ])
     );
@@ -94,6 +95,7 @@ describe("chatHistoryApi", () => {
         status: "queued",
         thinking: null,
         timestamp: 1784255700000,
+        turnId: "turn-a",
       },
     ]);
     expect(authFetch).toHaveBeenCalledWith(

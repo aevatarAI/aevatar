@@ -77,10 +77,21 @@ type ConversationState = {
 };
 
 const EMPTY_CONVERSATION_IDS: ReadonlySet<string> = new Set();
-const EMPTY_PENDING_CONVERSATIONS: ReadonlyMap<string, ConversationState> =
+
+type HistoryReconciliationState =
+  | { status: "pending" }
+  | { message: string; status: "failed" };
+
+type PendingConversation = {
+  conversation: ConversationState;
+  reconciliation: HistoryReconciliationState;
+};
+
+const EMPTY_PENDING_CONVERSATIONS: ReadonlyMap<string, PendingConversation> =
   new Map();
 
 type ConversationListItem = ConversationMeta & {
+  historyReconciliation?: HistoryReconciliationState;
   liveStatus?: LocalChatStatus;
 };
 
@@ -524,7 +535,7 @@ const ChatPage: React.FC = () => {
     ReadonlySet<string>
   >(() => new Set());
   const [pendingConversations, setPendingConversations] = useState<
-    ReadonlyMap<string, ConversationState>
+    ReadonlyMap<string, PendingConversation>
   >(() => new Map());
   const [detailLoadState, setDetailLoadState] = useState<DetailLoadState>({
     status: "idle",
@@ -601,11 +612,13 @@ const ChatPage: React.FC = () => {
       ...(activeConversationId && activeConversation
         ? [activeConversation]
         : []),
-      ...[...scopedPendingConversations.values()].filter(
-        (conversation) =>
-          conversation.conversationId !== activeConversationId &&
-          !scopedDeletedConversationIds.has(conversation.conversationId ?? "")
-      ),
+      ...[...scopedPendingConversations.values()]
+        .map((pending) => pending.conversation)
+        .filter(
+          (conversation) =>
+            conversation.conversationId !== activeConversationId &&
+            !scopedDeletedConversationIds.has(conversation.conversationId ?? "")
+        ),
     ];
     const liveById = new Map(
       liveConversations.flatMap((conversation) =>
@@ -615,12 +628,16 @@ const ChatPage: React.FC = () => {
       )
     );
     const serverIds = new Set(conversations.map((conversation) => conversation.id));
-    const serverItems = conversations.map((conversation) => ({
-      ...conversation,
-      ...(liveById.has(conversation.id)
-        ? { liveStatus: liveById.get(conversation.id)?.status }
-        : {}),
-    }));
+    const serverItems = conversations.map((conversation) => {
+      const pending = scopedPendingConversations.get(conversation.id);
+      return {
+        ...conversation,
+        ...(pending ? { historyReconciliation: pending.reconciliation } : {}),
+        ...(liveById.has(conversation.id)
+          ? { liveStatus: liveById.get(conversation.id)?.status }
+          : {}),
+      };
+    });
     const overlayItems = liveConversations.flatMap<ConversationListItem>(
       (conversation) => {
         const conversationId = conversation.conversationId;
@@ -632,6 +649,13 @@ const ChatPage: React.FC = () => {
         return [
           {
             createdAt: new Date(timestamps[0] ?? Date.now()).toISOString(),
+            ...(scopedPendingConversations.has(conversationId)
+              ? {
+                  historyReconciliation:
+                    scopedPendingConversations.get(conversationId)
+                      ?.reconciliation,
+                }
+              : {}),
             id: conversationId,
             liveStatus: conversation.status,
             messageCount: conversation.expectedTurnCount,
@@ -652,6 +676,16 @@ const ChatPage: React.FC = () => {
     scopedDeletedConversationIds,
     scopedPendingConversations,
   ]);
+  const activeHistoryReconciliation = activeConversation?.conversationId
+    ? scopedPendingConversations.get(activeConversation.conversationId)
+        ?.reconciliation
+    : undefined;
+  const hasFailedHistoryReconciliation = [
+    ...scopedPendingConversations.values(),
+  ].some((pending) => pending.reconciliation.status === "failed");
+  const hasPendingHistoryReconciliation = [
+    ...scopedPendingConversations.values(),
+  ].some((pending) => pending.reconciliation.status === "pending");
 
   useLayoutEffect(() => {
     abortControllerRef.current?.abort();
@@ -689,7 +723,8 @@ const ChatPage: React.FC = () => {
         );
         if (
           serverMeta &&
-          serverMeta.messageCount >= pendingConversation.expectedTurnCount
+          serverMeta.messageCount >=
+            pendingConversation.conversation.expectedTurnCount
         ) {
           next.delete(conversationId);
           changed = true;
@@ -739,8 +774,8 @@ const ChatPage: React.FC = () => {
       const pendingConversation = pendingConversations.get(conversationId);
       if (pendingConversation) {
         detailRequestRef.current = createClientId();
-        activeConversationRef.current = pendingConversation;
-        setActiveConversation(pendingConversation);
+        activeConversationRef.current = pendingConversation.conversation;
+        setActiveConversation(pendingConversation.conversation);
         setDetailLoadState({ status: "idle" });
         setPrompt("");
         setSession(createIdleSession(scopeId));
@@ -895,17 +930,24 @@ const ChatPage: React.FC = () => {
       reconciliationControllersRef.current.get(conversationId)?.abort();
       const controller = new AbortController();
       reconciliationControllersRef.current.set(conversationId, controller);
+      setPendingConversations((current) => {
+        const next = new Map(current);
+        next.set(conversationId, {
+          conversation,
+          reconciliation: { status: "pending" },
+        });
+        return next;
+      });
       const reconciliationScopeEpoch = scopeEpochRef.current;
       const delaysMs = [0, 300, 900, 1_800];
 
       void (async () => {
+        let lastError: unknown;
         for (const delayMs of delaysMs) {
           try {
             await abortableDelay(delayMs, controller.signal);
-            const [nextConversations, storedMessages] = await Promise.all([
-              chatHistoryApi.listConversationMetas(scopeId),
-              chatHistoryApi.loadConversation(scopeId, conversationId),
-            ]);
+            const nextConversations =
+              await chatHistoryApi.listConversationMetas(scopeId);
             if (
               controller.signal.aborted ||
               scopeEpochRef.current !== reconciliationScopeEpoch
@@ -920,17 +962,31 @@ const ChatPage: React.FC = () => {
             const serverMeta = nextConversations.find(
               (item) => item.id === conversationId
             );
-            const observedExpectedTurn =
-              Boolean(
-                serverMeta &&
-                  serverMeta.messageCount >= conversation.expectedTurnCount
-              ) ||
-              (conversation.latestTurnId
-                ? storedMessages.some(
-                  (message) =>
-                    message.id === `${conversation.latestTurnId}:assistant`
-                )
-                : false);
+            let observedExpectedTurn = Boolean(
+              serverMeta &&
+                serverMeta.messageCount >= conversation.expectedTurnCount
+            );
+            if (
+              !observedExpectedTurn &&
+              serverMeta &&
+              conversation.latestTurnId
+            ) {
+              const storedMessages = await chatHistoryApi.loadConversation(
+                scopeId,
+                conversationId
+              );
+              if (
+                controller.signal.aborted ||
+                scopeEpochRef.current !== reconciliationScopeEpoch
+              ) {
+                return;
+              }
+              observedExpectedTurn = storedMessages.some(
+                (message) =>
+                  message.role === "assistant" &&
+                  message.turnId === conversation.latestTurnId
+              );
+            }
             if (!serverMeta || !observedExpectedTurn) {
               continue;
             }
@@ -947,22 +1003,49 @@ const ChatPage: React.FC = () => {
 
               const next = {
                 ...current,
-                expectedTurnCount: serverMeta.messageCount,
+                expectedTurnCount: Math.max(
+                  serverMeta.messageCount,
+                  conversation.expectedTurnCount
+                ),
                 title: serverMeta.title || current.title,
               };
               activeConversationRef.current = next;
               return next;
             });
             return;
-          } catch {
+          } catch (error) {
             if (
               controller.signal.aborted ||
               scopeEpochRef.current !== reconciliationScopeEpoch
             ) {
               return;
             }
+            lastError = error;
           }
         }
+
+        const failureMessage = lastError
+          ? errorMessage(lastError)
+          : t(
+              "pages.chat.index.historySaveNotObserved",
+              "History save was not observed by the server."
+            );
+        setPendingConversations((current) => {
+          const pending = current.get(conversationId);
+          if (pending?.conversation.clientId !== conversation.clientId) {
+            return current;
+          }
+
+          const next = new Map(current);
+          next.set(conversationId, {
+            conversation: pending.conversation,
+            reconciliation: {
+              message: failureMessage,
+              status: "failed",
+            },
+          });
+          return next;
+        });
       })().finally(() => {
         if (
           reconciliationControllersRef.current.get(conversationId) === controller
@@ -972,6 +1055,18 @@ const ChatPage: React.FC = () => {
       });
     },
     [queryClient, scopeId]
+  );
+
+  const handleRetryReconciliation = useCallback(
+    (conversationId: string) => {
+      const pending = pendingConversations.get(conversationId);
+      if (!pending) {
+        return;
+      }
+
+      reconcileConversation(pending.conversation);
+    },
+    [pendingConversations, reconcileConversation]
   );
 
   const runChat = useCallback(
@@ -1016,6 +1111,9 @@ const ChatPage: React.FC = () => {
       const rawFrames: unknown[] = [];
       const accumulator = createRuntimeEventAccumulator();
       let receivedChatHistoryContext = false;
+      let acceptedChatHistoryContext: ReturnType<
+        typeof extractChatHistoryContext
+      > = null;
       let streamingConversation = startedConversation;
 
       abortControllerRef.current?.abort();
@@ -1058,7 +1156,6 @@ const ChatPage: React.FC = () => {
           rawFrames.push(frame.raw);
           const chatHistoryContext = extractChatHistoryContext(frame.raw);
           if (chatHistoryContext) {
-            receivedChatHistoryContext = true;
             if (chatHistoryContext.scopeId !== scopeId) {
               throw new Error("Chat History context does not match the active scope.");
             }
@@ -1068,19 +1165,32 @@ const ChatPage: React.FC = () => {
             ) {
               throw new Error("Chat History returned a different conversation identity.");
             }
-
-            streamingConversation = {
-              ...streamingConversation,
-              conversationId: chatHistoryContext.conversationId,
-              expectedTurnCount: conversation.expectedTurnCount + 1,
-              latestTurnId: chatHistoryContext.turnId,
-            };
-            activeConversationRef.current = streamingConversation;
-            setActiveConversation((current) =>
-              current?.clientId === conversation.clientId
-                ? streamingConversation
-                : current
-            );
+            if (
+              acceptedChatHistoryContext &&
+              (chatHistoryContext.scopeId !==
+                acceptedChatHistoryContext.scopeId ||
+                chatHistoryContext.conversationId !==
+                  acceptedChatHistoryContext.conversationId ||
+                chatHistoryContext.turnId !== acceptedChatHistoryContext.turnId)
+            ) {
+              throw new Error("Chat History context changed during the stream.");
+            }
+            if (!acceptedChatHistoryContext) {
+              acceptedChatHistoryContext = chatHistoryContext;
+              receivedChatHistoryContext = true;
+              streamingConversation = {
+                ...streamingConversation,
+                conversationId: chatHistoryContext.conversationId,
+                expectedTurnCount: conversation.expectedTurnCount + 1,
+                latestTurnId: chatHistoryContext.turnId,
+              };
+              activeConversationRef.current = streamingConversation;
+              setActiveConversation((current) =>
+                current?.clientId === conversation.clientId
+                  ? streamingConversation
+                  : current
+              );
+            }
           }
           if (!frame.event) {
             continue;
@@ -1167,13 +1277,6 @@ const ChatPage: React.FC = () => {
           target: finalTarget,
           usage: finalUsage,
         };
-        if (finalConversation.conversationId) {
-          setPendingConversations((current) => {
-            const next = new Map(current);
-            next.set(finalConversation.conversationId as string, finalConversation);
-            return next;
-          });
-        }
         activeConversationRef.current = finalConversation;
         setActiveConversation((current) =>
           current?.clientId === conversation.clientId ? finalConversation : current
@@ -1209,13 +1312,6 @@ const ChatPage: React.FC = () => {
           ),
           status: "error",
         };
-        if (receivedChatHistoryContext && failedConversation.conversationId) {
-          setPendingConversations((current) => {
-            const next = new Map(current);
-            next.set(failedConversation.conversationId as string, failedConversation);
-            return next;
-          });
-        }
         activeConversationRef.current = failedConversation;
         setActiveConversation((current) =>
           current?.clientId === conversation.clientId ? failedConversation : current
@@ -1285,10 +1381,20 @@ const ChatPage: React.FC = () => {
           {t("pages.chat.index.newChatAction", "New Chat")}
         </Button>
         <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12 }}>
-          {t(
-            "pages.chat.index.historyStoredInWorkspace",
-            "History is saved to this workspace."
-          )}
+          {hasFailedHistoryReconciliation
+            ? t(
+                "pages.chat.index.historySaveNeedsAttention",
+                "Some history changes are not confirmed."
+              )
+            : hasPendingHistoryReconciliation
+              ? t(
+                  "pages.chat.index.historySavePending",
+                  "Saving recent history..."
+                )
+              : t(
+                  "pages.chat.index.historyStoredInWorkspace",
+                  "History is saved to this workspace."
+                )}
         </Typography.Text>
       </div>
 
@@ -1424,8 +1530,20 @@ const ChatPage: React.FC = () => {
                         }}
                       >
                         <span>
-                          {conversation.liveStatus === "streaming" ||
-                          conversation.liveStatus === "creating"
+                          {conversation.historyReconciliation?.status ===
+                          "failed"
+                            ? t(
+                                "pages.chat.index.historySaveFailed",
+                                "Save not confirmed"
+                              )
+                            : conversation.historyReconciliation?.status ===
+                              "pending"
+                            ? t(
+                                "pages.chat.index.historySavePendingShort",
+                                "Saving history"
+                              )
+                            : conversation.liveStatus === "streaming" ||
+                              conversation.liveStatus === "creating"
                             ? formatStatusLabel(conversation.liveStatus)
                             : formatTurnCount(conversation.messageCount)}
                         </span>
@@ -1433,6 +1551,30 @@ const ChatPage: React.FC = () => {
                       </span>
                     </span>
                   </button>
+                  {conversation.historyReconciliation?.status === "failed" ? (
+                    <Tooltip
+                      title={t(
+                        "pages.chat.index.retryHistorySave",
+                        "Retry saving {title}",
+                        { title: conversation.title }
+                      )}
+                    >
+                      <Button
+                        aria-label={t(
+                          "pages.chat.index.retryHistorySave",
+                          "Retry saving {title}",
+                          { title: conversation.title }
+                        )}
+                        disabled={isStreaming}
+                        icon={<ReloadOutlined />}
+                        onClick={() =>
+                          handleRetryReconciliation(conversation.id)
+                        }
+                        style={{ minHeight: 40, minWidth: 40 }}
+                        type="text"
+                      />
+                    </Tooltip>
+                  ) : null}
                   <Tooltip
                     title={t("pages.chat.index.deleteChat", "Delete {title}", {
                       title: conversation.title,
@@ -1601,6 +1743,41 @@ const ChatPage: React.FC = () => {
               message={t(
                 "pages.chat.index.noScope",
                 "No usable scope was resolved for this account. Refresh and try again."
+              )}
+              type="warning"
+            />
+          ) : null}
+
+          {activeHistoryReconciliation?.status === "pending" ? (
+            <Alert
+              banner
+              message={t(
+                "pages.chat.index.historySavePending",
+                "Saving recent history..."
+              )}
+              type="info"
+            />
+          ) : activeHistoryReconciliation?.status === "failed" &&
+            activeConversation?.conversationId ? (
+            <Alert
+              action={
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={() =>
+                    handleRetryReconciliation(
+                      activeConversation.conversationId as string
+                    )
+                  }
+                  size="small"
+                >
+                  {t("pages.chat.index.retry", "Retry")}
+                </Button>
+              }
+              banner
+              description={activeHistoryReconciliation.message}
+              message={t(
+                "pages.chat.index.historySaveFailedLong",
+                "History save was not confirmed"
               )}
               type="warning"
             />

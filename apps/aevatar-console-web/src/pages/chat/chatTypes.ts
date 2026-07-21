@@ -131,6 +131,7 @@ export type ConversationSessionMeta = ConversationMeta & {
 
 export type StoredChatMessage = {
   id: string;
+  turnId?: string | null;
   role: ChatMessageRole;
   content: string;
   timestamp: number;
