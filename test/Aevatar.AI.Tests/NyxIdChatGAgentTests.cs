@@ -2,22 +2,30 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Net;
 using System.Text;
+using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
+using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using AGUIEvent = Aevatar.AGUI.Contracts.AGUIEvent;
 
 namespace Aevatar.AI.Tests;
 
@@ -173,6 +181,153 @@ public class NyxIdChatGAgentTests
         var middle = endEvent.Content[round1Text.Length..^round2Text.Length];
         middle.Should().MatchRegex(@"^\s*$",
             "only whitespace separators allowed between round-1 and round-2 text");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CommittedProjectionPipeline_ShouldFlushLiveTextAndSnapshotEveryToolProtocol(
+        bool emitTextToolCall)
+    {
+        const string actorId = "nyxid-chat-live-progress";
+        const string sessionId = "turn-live-progress";
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var services = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        var provider = new ControlledProgressProviderFactory(emitTextToolCall);
+        var tool = new ControlledProgressTool();
+        var agent = CreateAgent(
+            services,
+            actorId,
+            provider,
+            [new StaticToolSource([tool])]);
+
+        var streams = new InMemoryStreamProvider();
+        var actorPublisher = new LocalActorPublisher(actorId, static () => null, static () => 0, streams);
+        agent.EventPublisher = actorPublisher;
+        typeof(Aevatar.Foundation.Core.GAgentBase)
+            .GetProperty("CommittedStateEventPublisher", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(agent, actorPublisher);
+
+        await using var responseBody = new FlushedSseFrameStream();
+        var httpContext = new DefaultHttpContext();
+        httpContext.Response.Body = responseBody;
+        var sseWriter = new NyxIdChatSseWriter(httpContext.Response);
+        var aguiHub = new ProjectionSessionEventHub<AGUIEvent>(
+            streams,
+            new NyxIdChatSessionEventCodec());
+        var projectionContext = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = actorId,
+            SessionId = sessionId,
+            ProjectionKind = "nyxid-chat-session",
+        };
+        var projector = new NyxIdChatSessionEventProjector(aguiHub);
+        var committedPayloads = new List<Any>();
+
+        await using var aguiSubscription = await aguiHub.SubscribeAsync(
+            actorId,
+            sessionId,
+            async evt =>
+            {
+                _ = await NyxIdChatAguiSseEventWriter.WriteAsync(
+                    evt,
+                    sessionId,
+                    sseWriter,
+                    timeout.Token);
+            },
+            timeout.Token);
+        await using var committedSubscription = await streams.GetStream(actorId).SubscribeAsync<EventEnvelope>(
+            async envelope =>
+            {
+                if (CommittedStateEventEnvelope.TryGetObservedPayload(
+                        envelope,
+                        out var payload,
+                        out _,
+                        out _) && payload != null)
+                {
+                    committedPayloads.Add(payload.Clone());
+                }
+
+                await projector.ProjectAsync(projectionContext, envelope, timeout.Token);
+            },
+            timeout.Token);
+
+        await agent.ActivateAsync(timeout.Token);
+        var turnTask = agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "Use the controlled tool and answer.",
+            SessionId = sessionId,
+        });
+
+        await provider.WaitingForFirstRoundRelease.Task.WaitAsync(timeout.Token);
+        var observedFrames = new List<JsonObject>();
+        var firstContent = await ReadUntilFrameAsync(
+            responseBody.Frames,
+            observedFrames,
+            "TEXT_MESSAGE_CONTENT",
+            timeout.Token);
+
+        firstContent["textMessageContent"]!["delta"]!.GetValue<string>().Should().Be("first chunk");
+        firstContent["sequence"]!.GetValue<long>().Should().BeGreaterThan(0);
+        provider.FirstRoundReleased.Should().BeFalse();
+        turnTask.IsCompleted.Should().BeFalse();
+
+        provider.ReleaseFirstRound();
+        var toolStart = await ReadUntilFrameAsync(
+            responseBody.Frames,
+            observedFrames,
+            "TOOL_CALL_START",
+            timeout.Token);
+        await tool.Started.Task.WaitAsync(timeout.Token);
+
+        toolStart["toolCallStart"]!["toolName"]!.GetValue<string>().Should().Be(tool.Name);
+        toolStart["toolCallStart"]!["presentation"]!["displayName"]!
+            .GetValue<string>().Should().Be("Controlled lookup");
+        tool.Released.Should().BeFalse();
+        turnTask.IsCompleted.Should().BeFalse();
+
+        tool.Release("{\"ok\":true}");
+        await turnTask.WaitAsync(timeout.Token);
+        await ReadUntilFrameAsync(
+            responseBody.Frames,
+            observedFrames,
+            "RUN_FINISHED",
+            timeout.Token);
+
+        var frameTypes = observedFrames.Select(FrameType).ToArray();
+        frameTypes.Should().ContainInOrder(
+            "TEXT_MESSAGE_START",
+            "TEXT_MESSAGE_CONTENT",
+            "TOOL_CALL_START",
+            "TOOL_CALL_END",
+            "TEXT_MESSAGE_CONTENT",
+            "USAGE",
+            "TEXT_MESSAGE_END",
+            "RUN_FINISHED");
+        frameTypes.Should().ContainSingle(type => type == "RUN_FINISHED");
+        frameTypes.Should().NotContain("RUN_ERROR");
+
+        var sequences = observedFrames
+            .Select(frame => frame["sequence"]!.GetValue<long>())
+            .ToArray();
+        sequences.Should().BeInAscendingOrder();
+        sequences.Should().OnlyHaveUniqueItems();
+        sequences.Should().Equal(Enumerable.Range(1, sequences.Length).Select(static value => (long)value));
+
+        var completionIndex = committedPayloads.FindIndex(payload =>
+            payload.Is(RoleChatSessionCompletedEvent.Descriptor));
+        completionIndex.Should().BeGreaterThanOrEqualTo(0);
+        var completion = committedPayloads[completionIndex].Unpack<RoleChatSessionCompletedEvent>();
+        completion.TerminalProgress.Should().ContainSingle(progress =>
+            progress.PayloadCase == RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal);
+        committedPayloads.Should().NotContain(payload =>
+            payload.Is(RoleChatSessionProgressedEvent.Descriptor) &&
+            payload.Unpack<RoleChatSessionProgressedEvent>().PayloadCase ==
+            RoleChatSessionProgressedEvent.PayloadOneofCase.Terminal);
+        completion.ToolCalls.Should().ContainSingle();
+        completion.ToolCalls[0].ToolName.Should().Be(tool.Name);
+        completion.ToolCalls[0].Presentation.DisplayName.Should().Be("Controlled lookup");
+        completion.ToolCalls[0].Presentation.BuiltIn.ToolId.Should().Be(tool.Name);
     }
 
     [Fact]
@@ -998,6 +1153,165 @@ public class NyxIdChatGAgentTests
             yield return new LLMStreamChunk();
             await Task.Yield();
             throw exception;
+        }
+    }
+
+    private static async Task<JsonObject> ReadUntilFrameAsync(
+        ChannelReader<JsonObject> reader,
+        ICollection<JsonObject> observed,
+        string expectedType,
+        CancellationToken ct)
+    {
+        while (true)
+        {
+            var frame = await reader.ReadAsync(ct);
+            observed.Add(frame);
+            if (string.Equals(FrameType(frame), expectedType, StringComparison.Ordinal))
+                return frame;
+        }
+    }
+
+    private static string FrameType(JsonObject frame) =>
+        frame["type"]?.GetValue<string>() ?? string.Empty;
+
+    private sealed class ControlledProgressProviderFactory(bool emitTextToolCall)
+        : ILLMProviderFactory, ILLMProvider
+    {
+        private readonly TaskCompletionSource _firstRoundRelease =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _round;
+
+        public TaskCompletionSource WaitingForFirstRoundRelease { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool FirstRoundReleased { get; private set; }
+        public string Name => NyxIdChatServiceDefaults.ProviderName;
+        public ILLMProvider GetProvider(string name) => this;
+        public ILLMProvider GetDefault() => this;
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            if (_round++ == 0)
+            {
+                yield return new LLMStreamChunk { DeltaContent = "first chunk" };
+                WaitingForFirstRoundRelease.TrySetResult();
+                await _firstRoundRelease.Task.WaitAsync(ct);
+                yield return emitTextToolCall
+                    ? new LLMStreamChunk
+                    {
+                        DeltaContent = """
+                            <function_calls>
+                            <invoke name="controlled_lookup">
+                            <parameter name="input">controlled</parameter>
+                            </invoke>
+                            </function_calls>
+                            """,
+                    }
+                    : new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "controlled-call-1",
+                        Name = "controlled_lookup",
+                        ArgumentsJson = "{}",
+                    },
+                };
+            }
+            else
+            {
+                yield return new LLMStreamChunk
+                {
+                    DeltaContent = "final answer",
+                    Usage = new TokenUsage(3, 2, 5),
+                };
+            }
+
+            yield return new LLMStreamChunk { IsLast = true };
+        }
+
+        public void ReleaseFirstRound()
+        {
+            FirstRoundReleased = true;
+            _firstRoundRelease.TrySetResult();
+        }
+    }
+
+    private sealed class ControlledProgressTool : IAgentTool
+    {
+        private readonly TaskCompletionSource<string> _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool Released { get; private set; }
+        private string _displayName = "Controlled lookup";
+        public string Name => "controlled_lookup";
+        public string Description => "Looks up controlled test data.";
+        public string ParametersSchema => "{}";
+        public bool IsReadOnly => true;
+        public Aevatar.Foundation.Abstractions.Tools.ToolPresentationDescriptor Presentation =>
+            ToolPresentationDescriptors.BuiltIn(Name, _displayName, Description);
+
+        public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            _ = argumentsJson;
+            _displayName = "Renamed after invocation start";
+            Started.TrySetResult();
+            return await _release.Task.WaitAsync(ct);
+        }
+
+        public void Release(string result)
+        {
+            Released = true;
+            _release.TrySetResult(result);
+        }
+    }
+
+    private sealed class FlushedSseFrameStream : MemoryStream
+    {
+        private readonly Channel<JsonObject> _frames =
+            Channel.CreateUnbounded<JsonObject>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = true,
+            });
+        private readonly Queue<JsonObject> _pending = [];
+
+        public ChannelReader<JsonObject> Frames => _frames.Reader;
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var write = base.WriteAsync(buffer, cancellationToken);
+            var raw = Encoding.UTF8.GetString(buffer.Span).Trim();
+            if (raw.StartsWith("data: ", StringComparison.Ordinal) &&
+                JsonNode.Parse(raw[6..]) is JsonObject frame)
+            {
+                _pending.Enqueue(frame);
+            }
+
+            return write;
+        }
+
+        public override async Task FlushAsync(CancellationToken cancellationToken)
+        {
+            await base.FlushAsync(cancellationToken);
+            while (_pending.TryDequeue(out var frame))
+                await _frames.Writer.WriteAsync(frame, cancellationToken);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                _frames.Writer.TryComplete();
+            base.Dispose(disposing);
         }
     }
 

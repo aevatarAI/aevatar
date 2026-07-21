@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AGUI.Contracts;
+using Aevatar.Foundation.Abstractions.Tools;
 using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -39,8 +41,17 @@ internal sealed class NyxIdChatSseWriter
 
     public async ValueTask WriteFrameAsync(object frame, CancellationToken ct = default)
     {
+        await WriteFrameAsync(frame, sequence: 0, ct);
+    }
+
+    public async ValueTask WriteFrameAsync(object frame, long sequence, CancellationToken ct = default)
+    {
         await StartAsync(ct);
-        var json = JsonSerializer.Serialize(frame, JsonOptions);
+        var node = JsonSerializer.SerializeToNode(frame, JsonOptions) as JsonObject
+                   ?? throw new InvalidOperationException("SSE frame must serialize to a JSON object.");
+        if (sequence > 0)
+            node["sequence"] = sequence;
+        var json = node.ToJsonString(JsonOptions);
         var bytes = Encoding.UTF8.GetBytes($"data: {json}\n\n");
         await _response.Body.WriteAsync(bytes, ct);
         await _response.Body.FlushAsync(ct);
@@ -71,18 +82,19 @@ internal sealed class NyxIdChatSseWriter
             },
         }, ct);
 
-    public ValueTask WriteTextDeltaAsync(string delta, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "TEXT_MESSAGE_CONTENT", textMessageContent = new { delta } }, ct);
+    public ValueTask WriteTextDeltaAsync(string delta, long sequence, CancellationToken ct) =>
+        WriteFrameAsync(new { type = "TEXT_MESSAGE_CONTENT", textMessageContent = new { delta } }, sequence, ct);
 
-    public ValueTask WriteTextStartAsync(string messageId, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "TEXT_MESSAGE_START", textMessageStart = new { messageId, role = "assistant" } }, ct);
+    public ValueTask WriteTextStartAsync(string messageId, long sequence, CancellationToken ct) =>
+        WriteFrameAsync(new { type = "TEXT_MESSAGE_START", textMessageStart = new { messageId, role = "assistant" } }, sequence, ct);
 
-    public ValueTask WriteTextEndAsync(string messageId, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "TEXT_MESSAGE_END", textMessageEnd = new { messageId } }, ct);
+    public ValueTask WriteTextEndAsync(string messageId, long sequence, CancellationToken ct) =>
+        WriteFrameAsync(new { type = "TEXT_MESSAGE_END", textMessageEnd = new { messageId } }, sequence, ct);
 
     public ValueTask WriteRunFinishedAsync(
         string turnId,
         RunCompletionStatus status,
+        long sequence,
         CancellationToken ct) =>
         WriteFrameAsync(new
         {
@@ -93,10 +105,11 @@ internal sealed class NyxIdChatSseWriter
                 runId = turnId,
                 status = status == RunCompletionStatus.Blocked ? "blocked" : "completed",
             },
-        }, ct);
+        }, sequence, ct);
 
     public ValueTask WriteAuthorizationRequiredAsync(
         NyxIdAuthorizationRequiredEvent blocker,
+        long sequence,
         CancellationToken ct) =>
         WriteFrameAsync(new
         {
@@ -113,7 +126,7 @@ internal sealed class NyxIdChatSseWriter
                     safeMessage = blocker.SafeMessage,
                 },
             },
-        }, ct);
+        }, sequence, ct);
 
     public ValueTask WriteUsageAsync(
         bool available,
@@ -121,6 +134,7 @@ internal sealed class NyxIdChatSseWriter
         int completionTokens,
         int totalTokens,
         string? model,
+        long sequence,
         CancellationToken ct) =>
         WriteFrameAsync(new
         {
@@ -133,23 +147,40 @@ internal sealed class NyxIdChatSseWriter
                 totalTokens,
                 model = string.IsNullOrWhiteSpace(model) ? null : model,
             },
-        }, ct);
+        }, sequence, ct);
 
-    public ValueTask WriteToolCallStartAsync(string toolName, string callId, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "TOOL_CALL_START", toolCallStart = new { toolName, toolCallId = callId } }, ct);
+    public ValueTask WriteToolCallStartAsync(
+        string toolName,
+        string callId,
+        ToolPresentationDescriptor? presentation,
+        long sequence,
+        CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "TOOL_CALL_START",
+            toolCallStart = new
+            {
+                toolName,
+                toolCallId = callId,
+                presentation = BuildPresentationPayload(presentation, toolName),
+            },
+        }, sequence, ct);
 
-    public ValueTask WriteToolCallEndAsync(string callId, string result, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "TOOL_CALL_END", toolCallEnd = new { toolCallId = callId, result } }, ct);
+    public ValueTask WriteToolCallEndAsync(string callId, string result, long sequence, CancellationToken ct) =>
+        WriteFrameAsync(new { type = "TOOL_CALL_END", toolCallEnd = new { toolCallId = callId, result } }, sequence, ct);
 
-    public ValueTask WriteRunErrorAsync(string turnId, string code, string message, CancellationToken ct) =>
+    public ValueTask WriteRunErrorAsync(string turnId, string code, string message, long sequence, CancellationToken ct) =>
         WriteFrameAsync(new
         {
             type = "RUN_ERROR",
             turnId,
             runError = new { runId = turnId, code, message },
-        }, ct);
+        }, sequence, ct);
 
-    public ValueTask WriteMediaContentAsync(Aevatar.AI.Abstractions.MediaContentEvent evt, CancellationToken ct)
+    public ValueTask WriteMediaContentAsync(
+        Aevatar.AI.Abstractions.MediaContentEvent evt,
+        long sequence,
+        CancellationToken ct)
     {
         if (evt.Part == null) return ValueTask.CompletedTask;
         return WriteFrameAsync(new
@@ -171,12 +202,24 @@ internal sealed class NyxIdChatSseWriter
                 name = string.IsNullOrEmpty(evt.Part?.Name) ? null : evt.Part.Name,
                 text = string.IsNullOrEmpty(evt.Part?.Text) ? null : evt.Part.Text,
             }
-        }, ct);
+        }, sequence, ct);
     }
+
+    public ValueTask WriteReasoningAsync(string delta, long sequence, CancellationToken ct) =>
+        WriteFrameAsync(new
+        {
+            type = "CUSTOM",
+            custom = new
+            {
+                name = "aevatar.llm.reasoning",
+                payload = new { delta },
+            },
+        }, sequence, ct);
 
     public ValueTask WriteToolApprovalRequestAsync(
         string requestId, string toolName, string toolCallId,
         string argumentsJson, bool isDestructive, int timeoutSeconds,
+        long sequence,
         CancellationToken ct) =>
         WriteFrameAsync(new
         {
@@ -190,5 +233,80 @@ internal sealed class NyxIdChatSseWriter
                 isDestructive,
                 timeoutSeconds,
             }
-        }, ct);
+        }, sequence, ct);
+
+    private static object BuildPresentationPayload(
+        ToolPresentationDescriptor? presentation,
+        string invocationName)
+    {
+        var descriptor = Aevatar.AI.Abstractions.ToolProviders.ToolPresentationDescriptors.Snapshot(
+            presentation,
+            invocationName);
+        return new
+        {
+            invocationName = descriptor.InvocationName,
+            displayName = descriptor.DisplayName,
+            description = descriptor.Description,
+            kind = descriptor.Kind switch
+            {
+                ToolPresentationKind.BuiltIn => "builtIn",
+                ToolPresentationKind.NyxIdOperation => "nyxIdOperation",
+                ToolPresentationKind.Mcp => "mcp",
+                ToolPresentationKind.Skill => "skill",
+                _ => "generic",
+            },
+            availability = descriptor.Availability == ToolAvailability.Unavailable
+                ? "unavailable"
+                : "available",
+            unavailableReason = string.IsNullOrWhiteSpace(descriptor.UnavailableReason)
+                ? null
+                : descriptor.UnavailableReason,
+            iconUrl = string.IsNullOrWhiteSpace(descriptor.IconUrl) ? null : descriptor.IconUrl,
+            sourceRef = BuildSourceRefPayload(descriptor),
+        };
+    }
+
+    private static object? BuildSourceRefPayload(ToolPresentationDescriptor descriptor) =>
+        descriptor.SourceRefCase switch
+        {
+            ToolPresentationDescriptor.SourceRefOneofCase.BuiltIn => new
+            {
+                type = "builtIn",
+                builtIn = new { toolId = descriptor.BuiltIn.ToolId },
+            },
+            ToolPresentationDescriptor.SourceRefOneofCase.NyxIdOperation => new
+            {
+                type = "nyxIdOperation",
+                nyxIdOperation = new
+                {
+                    connectedServiceId = descriptor.NyxIdOperation.ConnectedServiceId,
+                    serviceSlug = descriptor.NyxIdOperation.ServiceSlug,
+                    catalogServiceSlug = descriptor.NyxIdOperation.CatalogServiceSlug,
+                    connectionLabel = descriptor.NyxIdOperation.ConnectionLabel,
+                    connectorDisplayName = descriptor.NyxIdOperation.ConnectorDisplayName,
+                    operationId = descriptor.NyxIdOperation.OperationId,
+                    httpMethod = descriptor.NyxIdOperation.HttpMethod,
+                    pathTemplate = descriptor.NyxIdOperation.PathTemplate,
+                },
+            },
+            ToolPresentationDescriptor.SourceRefOneofCase.Mcp => new
+            {
+                type = "mcp",
+                mcp = new
+                {
+                    serverName = descriptor.Mcp.ServerName,
+                    toolName = descriptor.Mcp.ToolName,
+                },
+            },
+            ToolPresentationDescriptor.SourceRefOneofCase.Skill => new
+            {
+                type = "skill",
+                skill = new
+                {
+                    skillName = descriptor.Skill.SkillName,
+                    source = descriptor.Skill.Source,
+                },
+            },
+            _ => null,
+        };
 }

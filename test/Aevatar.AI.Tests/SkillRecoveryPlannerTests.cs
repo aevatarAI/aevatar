@@ -32,14 +32,18 @@ public sealed class SkillRecoveryPlannerTests
         var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
         var pending = new List<ChatMessage> { messages[0] };
 
-        var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: null,
-            messages,
-            pending,
-            callIdPrefix: "req-orchestrator",
-            CancellationToken.None);
+        var progress = new List<SkillRecoveryToolProgress>();
+        await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           callIdPrefix: "req-orchestrator",
+                           CancellationToken.None))
+        {
+            progress.Add(item);
+        }
 
-        applied.Should().BeTrue();
+        progress.Should().HaveCount(4);
         var searchMessage = messages.Single(message =>
             message.Role == "tool" &&
             message.ToolCallId == "req-orchestrator:skill-recovery:ornn-search-skills:recovery:1");
@@ -75,14 +79,18 @@ public sealed class SkillRecoveryPlannerTests
         var pending = new List<ChatMessage> { messages[0] };
         var longPrefix = "req-" + new string('a', 50);
 
-        var applied = await orchestrator.ApplyInitialDirectivesAsync(
-            toolContext: null,
-            messages,
-            pending,
-            longPrefix,
-            CancellationToken.None);
+        var progress = new List<SkillRecoveryToolProgress>();
+        await foreach (var item in orchestrator.ApplyInitialDirectivesAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           longPrefix,
+                           CancellationToken.None))
+        {
+            progress.Add(item);
+        }
 
-        applied.Should().BeTrue();
+        progress.Should().HaveCount(4);
         var toolCallIds = messages
             .Where(message => message.Role == "tool")
             .Select(message => message.ToolCallId)
@@ -123,15 +131,20 @@ public sealed class SkillRecoveryPlannerTests
         };
         var pending = new List<ChatMessage>(messages);
 
-        var recovered = await orchestrator.TryRecoverFinalAnswerAsync(
-            toolContext: null,
-            messages,
-            pending,
-            finalContent: "cannot complete",
-            callIdPrefix: "req-nudge",
-            CancellationToken.None);
+        orchestrator.ShouldRecoverFinalAnswer(pending, "cannot complete", "req-nudge").Should().BeTrue();
+        var progress = new List<SkillRecoveryToolProgress>();
+        await foreach (var item in orchestrator.RecoverFinalAnswerAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           finalContent: "cannot complete",
+                           callIdPrefix: "req-nudge",
+                           CancellationToken.None))
+        {
+            progress.Add(item);
+        }
 
-        recovered.Should().BeTrue();
+        progress.Should().HaveCount(2);
         messages.Last().Role.Should().Be("tool");
         messages.Last().ToolResultView!.SkillLoad!.Loaded.Should().BeTrue();
     }

@@ -45,7 +45,29 @@ Idempotency-Key: client-request-42
 
 The legacy JSON field `sessionId` is deprecated and ignored. It must not be used for retry idempotency and never controls the internal turn identity.
 
-## SSE terminal contract
+## Committed live-progress and terminal contract
+
+The accepted command receipt is unchanged: it promises dispatch admission and stable command identity, not provider completion or read-model visibility. After acceptance, every actor-authored live frame follows one path:
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    P["Provider ChatStreamAsync"] --> R["RoleGAgent"]
+    R --> C["Committed EventEnvelope\nRoleChatSessionProgressedEvent"]
+    C --> J["NyxIdChatSessionEventProjector"]
+    J --> A["AGUIEvent"]
+    A --> F["Attachment sequence fence"]
+    F --> S["SSE WriteAsync + FlushAsync"]
+    S --> U["Client"]
+```
+
+`RoleChatSessionProgressedEvent` carries `session_id = turnId`, an actor-owned monotonic `sequence`, and exactly one typed payload: text start/delta/end, reasoning delta, media, tool start/result, tool approval required, usage, authorization required, terminal, or explicit replay. Projection ignores transient `TextMessage*` and usage publications. It never reads directly from `ChatRuntime` or `RoleGAgent`, and the Host never writes actor progress around the Projection Pipeline.
+
+Normal live execution commits one `RoleChatSessionCompletedEvent` containing its remaining typed terminal tail. The projector expands only that tail and never synthesizes live frames from the completion snapshot, so text and tools already delivered as progress are not repeated. Final authority and terminal presentation therefore cannot be separated by a partial committed-event publication. Only an explicit replay commits `RoleChatReplayProgress(snapshot)` and allows the committed snapshot to expand into tool, reasoning, media, text, usage, and terminal display frames in stable order.
+
+A different-input retry is committed as `RoleChatCommandAttemptRejectedEvent(requested_session_id, command_attempt_id, reason)`. Its `RUN_ERROR` sequence is the committed actor state version; it does not append progress to, or change the final authority of, the already completed session.
+
+Every projected actor frame carries its source `sequence`; `RUN_STARTED`, keepalive, and endpoint-local pre-dispatch errors are transport context and do not invent an actor sequence. Projection scope state keeps a per-origin-actor committed-version watermark before fan-out. Each explicit sink attachment then keeps only its latest actor sequence and protobuf fingerprints at that sequence, dropping post-fan-out duplicate/stale delivery while preserving distinct multi-frame replay output at one sequence. This lease-scoped fence is not shared session state. `TOOL_CALL_START` is committed and flushed before the runtime advances into tool execution, so it is observable before the matching result and before `RUN_FINISHED`; provider-native calls, text-parsed calls, and initial skill recovery use this same lifecycle.
 
 The first stream frame exposes both identities:
 
@@ -61,6 +83,18 @@ The first stream frame exposes both identities:
 }
 ```
 
+The `RUN_STARTED` frame above is transport context. A committed text delta is sequenced, for example:
+
+```json
+{
+  "type": "TEXT_MESSAGE_CONTENT",
+  "sequence": 2,
+  "textMessageContent": {
+    "delta": "first chunk"
+  }
+}
+```
+
 Every started stream ends with exactly one typed terminal frame:
 
 - success: `RUN_FINISHED` with `runFinished.runId = turnId` and `status = completed`;
@@ -70,6 +104,8 @@ Every started stream ends with exactly one typed terminal frame:
 Heartbeat output stops before a terminal frame is written and remains stopped after failure, completion, or cancellation. Client-facing frames never include raw internal exceptions, upstream error bodies, access tokens, credentials, or URI query/fragment secrets.
 Heartbeat payloads expose `actorId` and `turnId`; they do not expose the deprecated `sessionId` field.
 If the projection never produces a terminal fact, the server closes the stream with a safe `RUN_ERROR` after its bounded terminal deadline instead of leaving a keepalive-only connection open indefinitely.
+
+`TOOL_CALL_START.toolCallStart.toolName` remains the invocation protocol ID. The same frame snapshots the provider-owned typed `presentation` descriptor, including display text, availability, kind, and a typed source reference. That invocation-start clone is also copied into the committed completion snapshot; completion and replay never rediscover the provider descriptor. Historical cards therefore do not change when a provider renames a connector or connection during or after execution. See [NyxID Connected-Service LLM Tools](nyxid-connected-service-tools.md).
 
 ## Authorization required
 
@@ -121,7 +157,7 @@ Content-Type: application/json
 
 All turns sent to the same `actorId` share the actor's conversation history, including after actor passivation and reactivation. The runtime transcript is rebuilt from committed per-turn session facts rather than process memory. Each archived user and assistant message carries its typed `turnId`, and its message ID is derived from that turn. A blocked turn is archived with terminal status `blocked` and a safe blocker summary. It remains part of the conversation transcript and does not prevent the next turn.
 
-RoleGAgent assigns the terminal timestamp once when it commits the authoritative completion and persists that typed value with the session state. A completed-session replay republishes the same timestamp, so a retry with the same `actorId + clientRequestId` still receives terminal SSE output while the history actor sees an identical duplicate append. The provider and tools are not re-executed, message counts do not change, and no history conflict is committed. A new `clientRequestId` creates a normal continuation turn over the existing conversation history.
+RoleGAgent assigns the terminal timestamp once when it commits the authoritative completion and persists that typed value with the session state. A completed-session retry commits an explicit replay progress payload containing that snapshot; it does not commit another completion. The retry still receives terminal SSE output while the history actor sees the same terminal timestamp. The provider and tools are not re-executed, message counts do not change, and no history conflict is committed. A new `clientRequestId` creates a normal continuation turn over the existing conversation history.
 
 ## Caller migration
 
