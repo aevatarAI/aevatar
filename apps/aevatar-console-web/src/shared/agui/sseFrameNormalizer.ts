@@ -33,6 +33,21 @@ function asRecord(value: unknown): JsonRecord | undefined {
   return value as JsonRecord;
 }
 
+function cloneJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(cloneJsonValue);
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => [key, cloneJsonValue(entry)])
+  );
+}
+
 function readString(record: JsonRecord | undefined, ...keys: string[]): string {
   if (!record) {
     return "";
@@ -197,6 +212,7 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
         });
       case AGUIEventType.TOOL_CALL_START:
         return createTypedEvent(eventType, timestamp, {
+          presentation: cloneJsonValue(nested?.presentation),
           toolCallId: readString(nested, "toolCallId"),
           toolName: readString(nested, "toolName"),
         });

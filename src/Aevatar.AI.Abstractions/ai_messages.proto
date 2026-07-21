@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.AI.Abstractions";
 
 import "Credentials/credential_secret_references.proto";
 import "Protos/voice_presence.proto";
+import "Tools/tool_presentation.proto";
 import "google/protobuf/timestamp.proto";
 
 enum ChatContentPartKind {
@@ -254,7 +255,12 @@ message TextMessageReasoningEvent { string delta = 1; string session_id = 2; }
 message MediaContentEvent { string session_id = 1; string agent_id = 2; ChatContentPart part = 3; }
 message TextMessageEndEvent     { string content = 1; string session_id = 2; }
 
-message ToolCallEvent   { string tool_name = 1; string arguments_json = 2; string call_id = 3; }
+message ToolCallEvent {
+  string tool_name = 1;
+  string arguments_json = 2;
+  string call_id = 3;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 4;
+}
 
 enum AgentToolReceiptStatus {
   AGENT_TOOL_RECEIPT_STATUS_UNSPECIFIED = 0;

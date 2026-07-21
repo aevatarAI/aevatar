@@ -11,7 +11,7 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 /// operator-owned managed OpenSandbox adapter. Target-specific infrastructure stays behind
 /// <see cref="ICodexExecutionPort"/>.
 /// </summary>
-public sealed class NyxIdCodexExecTool : IAgentTool
+public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
 {
     private const int MaxPromptUtf8Bytes = 6_000;
     private const int DefaultPrivateSshTimeoutSeconds = 30;

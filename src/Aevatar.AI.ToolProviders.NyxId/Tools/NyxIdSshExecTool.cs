@@ -9,7 +9,7 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 /// (<see cref="NyxIdProxyTool"/>) cannot reach SSH endpoints; those services
 /// are registered as <c>ssh://host:port</c> and require this dedicated tool.
 /// </summary>
-public sealed class NyxIdSshExecTool : IAgentTool
+public sealed class NyxIdSshExecTool : INyxIdBuiltInTool
 {
     private readonly INyxIdSshCommandExecutor _executor;
     private readonly NyxIdToolOptions _options;

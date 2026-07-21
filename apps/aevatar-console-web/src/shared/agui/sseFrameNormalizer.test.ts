@@ -7,11 +7,33 @@ describe("sseFrameNormalizer", () => {
       normalizeBackendSseFrame({
         timestamp: 1,
         toolCallStart: {
+          presentation: {
+            availability: "available",
+            description: "Searches the knowledge base.",
+            displayName: "Knowledge search",
+            invocationName: "knowledge.search",
+            kind: "builtIn",
+            sourceRef: {
+              builtIn: { toolId: "knowledge.search" },
+              type: "builtIn",
+            },
+          },
           toolCallId: "tool-1",
           toolName: "knowledge.search",
         },
       })
     ).toEqual({
+      presentation: {
+        availability: "available",
+        description: "Searches the knowledge base.",
+        displayName: "Knowledge search",
+        invocationName: "knowledge.search",
+        kind: "builtIn",
+        sourceRef: {
+          builtIn: { toolId: "knowledge.search" },
+          type: "builtIn",
+        },
+      },
       timestamp: 1,
       toolCallId: "tool-1",
       toolName: "knowledge.search",
