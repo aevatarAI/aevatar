@@ -161,8 +161,35 @@ public class ConnectedServiceProxyToolDestructiveDefaultTests
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
 
-            if (path == "/api/v1/proxy/services")
-                return Task.FromResult(Json($$"""[{ "slug": "{{ServiceSlug}}", "id": "{{ServiceId}}" }]"""));
+            if (path == "/api/v1/keys")
+            {
+                return Task.FromResult(Json($$"""
+                    {
+                      "keys": [
+                        {
+                          "id": "{{ServiceId}}",
+                          "slug": "{{ServiceSlug}}",
+                          "label": "Shop connection",
+                          "catalog_service_slug": "shop",
+                          "connected": true,
+                          "is_active": true,
+                          "status": "active"
+                        }
+                      ]
+                    }
+                    """));
+            }
+
+            if (path == "/api/v1/catalog")
+            {
+                return Task.FromResult(Json("""
+                    {
+                      "entries": [
+                        { "slug": "shop", "name": "Shop" }
+                      ]
+                    }
+                    """));
+            }
 
             if (path.StartsWith("/api/v1/proxy/services/", StringComparison.Ordinal) &&
                 path.EndsWith("/openapi.json", StringComparison.Ordinal))

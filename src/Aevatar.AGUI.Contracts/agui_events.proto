@@ -6,6 +6,7 @@ option csharp_namespace = "Aevatar.AGUI.Contracts";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/wrappers.proto";
+import "Tools/tool_presentation.proto";
 
 message AGUIEvent {
   google.protobuf.Int64Value timestamp = 1;
@@ -87,6 +88,7 @@ message StateSnapshotEvent {
 message ToolCallStartEvent {
   string tool_call_id = 1;
   string tool_name = 2;
+  aevatar.foundation.tools.ToolPresentationDescriptor presentation = 3;
 }
 
 message ToolCallEndEvent {

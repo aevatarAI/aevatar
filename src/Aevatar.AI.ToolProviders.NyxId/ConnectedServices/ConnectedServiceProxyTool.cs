@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.Foundation.Abstractions.Tools;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -27,6 +28,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         string serviceSlug,
         ConnectedServiceToolOperation operation,
         bool preferOrgToken,
+        ToolPresentationDescriptor presentation,
         ILogger? logger = null)
     {
         _client = client;
@@ -34,6 +36,7 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
         _serviceSlug = serviceSlug;
         _operation = operation;
         _preferOrgToken = preferOrgToken;
+        Presentation = presentation?.Clone() ?? throw new ArgumentNullException(nameof(presentation));
         _logger = logger ?? NullLogger.Instance;
 
         ParametersSchema = operation.BuildParametersSchema();
@@ -55,6 +58,8 @@ public sealed class ConnectedServiceProxyTool : IAgentTool
     public string Description { get; }
 
     public string ParametersSchema { get; }
+
+    public ToolPresentationDescriptor Presentation { get; }
 
     public ToolApprovalMode ApprovalMode { get; }
 
