@@ -163,6 +163,37 @@ describe('proxy config', () => {
     });
   });
 
+  it('routes scoped chat history endpoints to the Studio host', () => {
+    process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
+    process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';
+
+    const proxyModule = require('../../../config/proxy');
+    const devProxy = proxyModule.default.dev as Record<string, ProxyEntry>;
+
+    expect(
+      resolveProxyEntry(devProxy, '/api/scopes/scope-1/chat-history'),
+    ).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(
+      resolveProxyEntry(
+        devProxy,
+        '/api/scopes/scope-1/chat-history/conversations/conversation-1',
+      ),
+    ).toEqual({
+      target: 'http://127.0.0.1:5180',
+      changeOrigin: true,
+      ws: true,
+    });
+    expect(resolveProxyEntry(devProxy, '/api/chat')).toEqual({
+      target: 'http://127.0.0.1:5080',
+      changeOrigin: true,
+      ws: true,
+    });
+  });
+
   it('routes scope team endpoints to the Studio host without stealing runtime member routes', () => {
     process.env.AEVATAR_API_TARGET = 'http://127.0.0.1:5080';
     process.env.AEVATAR_STUDIO_API_TARGET = 'http://127.0.0.1:5180';

@@ -167,7 +167,8 @@ public static class WorkflowCapabilityEndpoints
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
-        IFileArtifactIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -202,7 +203,8 @@ public static class WorkflowCapabilityEndpoints
                 defaultMetadata,
                 trustedCallerCredential: callerCredential.Credential,
                 cancellationToken: ct,
-                trustedScopeId: trustedScopeId);
+                trustedScopeId: trustedScopeId,
+                allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);

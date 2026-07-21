@@ -250,6 +250,7 @@ type TeamMemberWorkflowStudioState = {
   readonly yamlEditHasBlockingFindings: boolean;
   readonly yamlEditHasConflict: boolean;
   readonly yamlEditHasUnappliedChanges: boolean;
+  readonly yamlEditOpening: boolean;
   readonly yamlEditPending: boolean;
   readonly yamlPanelOpen: boolean;
 };
@@ -1100,6 +1101,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     StudioValidationFinding[]
   >([]);
   const [yamlEditError, setYamlEditError] = React.useState("");
+  const [yamlEditOpening, setYamlEditOpening] = React.useState(false);
   const [yamlEditPending, setYamlEditPending] = React.useState(false);
   const [yamlEditApplying, setYamlEditApplying] = React.useState(false);
   const yamlEditApplyingRef = React.useRef(false);
@@ -1149,7 +1151,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return false;
     }
 
+    yamlEditRequestIdRef.current += 1;
+    yamlEditValidationRequestIdRef.current += 1;
     setYamlPanelOpen(false);
+    setYamlEditOpening(false);
+    setYamlEditPending(false);
     setYamlEditError("");
     return true;
   }, [yamlEditHasUnappliedChanges]);
@@ -1419,7 +1425,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setSelectedEdgeId("");
     setSelectedNodeId("");
     closeDraftRunPanel();
+    yamlEditRequestIdRef.current += 1;
+    yamlEditValidationRequestIdRef.current += 1;
     setYamlPanelOpen(false);
+    setYamlEditOpening(false);
+    setYamlEditPending(false);
     setYamlEditBufferState("");
     setYamlEditSnapshot("");
     setYamlEditDiagnostics([]);
@@ -1916,7 +1926,20 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditRequestIdRef.current = requestId;
     const baseRevision = draftRevisionRef.current;
     const baseSourceKey = appliedSourceKeyRef.current;
-    setYamlEditPending(true);
+    const shouldResetEditor = !yamlPanelOpen;
+    yamlEditValidationRequestIdRef.current += 1;
+    setYamlEditOpening(true);
+    setYamlEditPending(false);
+    if (shouldResetEditor) {
+      setYamlEditBufferState("");
+      setYamlEditSnapshot("");
+      setYamlEditDiagnostics([]);
+      setYamlEditParsedDocument(null);
+      setYamlEditValidatedBuffer("");
+    }
+    setYamlEditBaseRevision(baseRevision);
+    setYamlEditBaseSourceKey(baseSourceKey);
+    setYamlPanelOpen(true);
 
     try {
       const serialized = await studioApi.serializeYaml({
@@ -1943,7 +1966,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setYamlEditBaseRevision(baseRevision);
       setYamlEditBaseSourceKey(baseSourceKey);
       setYamlEditError("");
-      setYamlPanelOpen(true);
     } catch (error) {
       if (yamlEditRequestIdRef.current === requestId) {
         setYamlEditError(
@@ -1955,19 +1977,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
     } finally {
       if (yamlEditRequestIdRef.current === requestId) {
-        setYamlEditPending(false);
+        setYamlEditOpening(false);
       }
     }
   }, [
     closeDraftRunPanel,
     editableDocument,
     routeFallbackTitle,
+    yamlPanelOpen,
     workflowTitle,
   ]);
   React.useEffect(() => {
     if (
       !yamlPanelOpen ||
       yamlEditHasUnappliedChanges ||
+      yamlEditOpening ||
       yamlEditPending ||
       yamlEditApplying ||
       yamlEditBaseIsCurrent ||
@@ -1984,6 +2008,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditBaseIsCurrent,
     yamlEditBaseSourceKey,
     yamlEditHasUnappliedChanges,
+    yamlEditOpening,
     yamlEditPending,
     yamlPanelOpen,
   ]);
@@ -2091,7 +2116,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditValidatedBuffer,
   ]);
   React.useEffect(() => {
-    if (!yamlPanelOpen) {
+    if (!yamlPanelOpen || yamlEditOpening) {
       return;
     }
 
@@ -2174,7 +2199,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [yamlEditBuffer, yamlPanelOpen]);
+  }, [yamlEditBuffer, yamlEditOpening, yamlPanelOpen]);
   const currentDraftRunMutation = useMutation({
     mutationFn: async ({
       document,
@@ -3290,6 +3315,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     yamlEditHasBlockingFindings,
     yamlEditHasConflict,
     yamlEditHasUnappliedChanges,
+    yamlEditOpening,
     yamlEditPending,
     yamlPanelOpen,
   };
