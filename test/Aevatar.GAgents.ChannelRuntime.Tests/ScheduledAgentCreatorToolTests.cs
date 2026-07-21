@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -13,6 +14,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Xunit;
@@ -61,6 +63,33 @@ public sealed class ScheduledAgentCreatorToolTests
             .Should().BeEquivalentTo("webhook", "channel_inbound");
         schema.RootElement.GetProperty("required").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ContinuationCapability_ShouldMatchOnlyTheScheduledAgentCreatorContract()
+    {
+        var tool = CreateHarness().Tool;
+
+        var capability = tool.CaptureContinuationCapability();
+        var contract = capability.Unpack<FixedAgentToolContinuationCapability>();
+
+        contract.ContractId.Should().Be("scheduled_agent_creator");
+        contract.ContractVersion.Should().Be(1);
+        tool.MatchesContinuationCapability(capability).Should().BeTrue();
+        tool.MatchesContinuationCapability(Any.Pack(new FixedAgentToolContinuationCapability
+        {
+            ContractId = "different_contract",
+            ContractVersion = 1,
+        })).Should().BeFalse();
+        tool.MatchesContinuationCapability(Any.Pack(new FixedAgentToolContinuationCapability
+        {
+            ContractId = "scheduled_agent_creator",
+            ContractVersion = 2,
+        })).Should().BeFalse();
+        tool.MatchesContinuationCapability(Any.Pack(new StringValue
+        {
+            Value = "scheduled_agent_creator",
+        })).Should().BeFalse();
     }
 
     [Fact]
