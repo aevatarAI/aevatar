@@ -38,7 +38,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     {
         ArgumentNullException.ThrowIfNull(access);
         var snapshot = await ReadServicesAsync(access, cancellationToken);
-        if (snapshot.AccessDenied || snapshot.SourceUnavailable)
+        if (snapshot.Services.Count == 0 && (snapshot.AccessDenied || snapshot.SourceUnavailable))
             return [];
 
         var descriptors = new List<ExternalWorkflowCapabilityDescriptor>();
@@ -84,32 +84,6 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         }
 
         var snapshot = await ReadServicesAsync(access, cancellationToken);
-        if (snapshot.AccessDenied)
-        {
-            return Failure(
-                capability,
-                executionMode,
-                ExternalCapabilityReadinessStatus.ServiceAccessDenied,
-                "NYXID_CALLER_ACCESS_REQUIRED",
-                "The current caller cannot read NyxID service capabilities.",
-                ExternalCapabilityRemediationActionKind.RequestAccess,
-                "Open NyxID",
-                snapshot.Sources);
-        }
-
-        if (snapshot.SourceUnavailable)
-        {
-            return Failure(
-                capability,
-                executionMode,
-                ExternalCapabilityReadinessStatus.SourceStale,
-                "NYXID_SOURCE_UNAVAILABLE",
-                "NyxID service capability facts are currently unavailable.",
-                ExternalCapabilityRemediationActionKind.RefreshSource,
-                "Refresh NyxID capabilities",
-                snapshot.Sources);
-        }
-
         var selected = capability.NyxIdUserService;
         if (string.IsNullOrWhiteSpace(selected.UserServiceId))
         {
@@ -120,6 +94,10 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                     StringComparison.OrdinalIgnoreCase));
             if (matches == 0)
             {
+                var sourceFailure = BuildSnapshotFailure(capability, executionMode, snapshot);
+                if (sourceFailure is not null)
+                    return sourceFailure;
+
                 return Failure(
                     capability,
                     executionMode,
@@ -146,6 +124,10 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             string.Equals(item.UserServiceId, selected.UserServiceId, StringComparison.Ordinal));
         if (service is null)
         {
+            var sourceFailure = BuildSnapshotFailure(capability, executionMode, snapshot);
+            if (sourceFailure is not null)
+                return sourceFailure;
+
             return Failure(
                 capability,
                 executionMode,
@@ -270,6 +252,37 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         return ready;
     }
 
+    private ExternalCapabilityReadiness? BuildSnapshotFailure(
+        ExternalWorkflowCapabilityRef capability,
+        ExternalCapabilityExecutionMode executionMode,
+        NyxIdServicesSnapshot snapshot)
+    {
+        if (snapshot.AccessDenied)
+        {
+            return Failure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.ServiceAccessDenied,
+                "NYXID_CALLER_ACCESS_REQUIRED",
+                "The current caller cannot read all NyxID service capability sources.",
+                ExternalCapabilityRemediationActionKind.RequestAccess,
+                "Open NyxID",
+                snapshot.Sources);
+        }
+
+        return snapshot.SourceUnavailable
+            ? Failure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.SourceStale,
+                "NYXID_SOURCE_UNAVAILABLE",
+                "NyxID service capability facts are currently unavailable.",
+                ExternalCapabilityRemediationActionKind.RefreshSource,
+                "Refresh NyxID capabilities",
+                snapshot.Sources)
+            : null;
+    }
+
     private ExternalCapabilityReadiness? EvaluateServiceReadiness(
         ExternalWorkflowCapabilityRef capability,
         ExternalCapabilityExecutionMode executionMode,
@@ -288,7 +301,33 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source]);
         }
 
-        if (service.IsActive == false || IsUnavailableState(service.Status))
+        if (!HasCompletePublishedReadinessFacts(service))
+        {
+            return Failure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.SourceStale,
+                "NYXID_SERVICE_FACTS_INCOMPLETE",
+                "NyxID did not publish all facts required to admit the selected UserService.",
+                ExternalCapabilityRemediationActionKind.RefreshSource,
+                "Refresh NyxID capabilities",
+                [service.Source]);
+        }
+
+        if (!IsKnownServiceStatus(service.Status))
+        {
+            return Failure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.SourceStale,
+                "NYXID_SERVICE_STATUS_UNKNOWN",
+                "NyxID published an unrecognized status for the selected UserService.",
+                ExternalCapabilityRemediationActionKind.RefreshSource,
+                "Refresh NyxID capabilities",
+                [service.Source]);
+        }
+
+        if (service.IsActive != true || !IsActiveServiceStatus(service.Status))
         {
             return Failure(
                 capability,
@@ -301,12 +340,20 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source]);
         }
 
-        if (IsUnavailableState(service.CredentialStatus) ||
-            IsUnavailableState(service.ConnectionStatus) ||
-            (service.RequiresConnection == true &&
-             service.Connected != true &&
-             !IsReadyState(service.CredentialStatus) &&
-             !IsReadyState(service.ConnectionStatus)))
+        if (service.Connected == false && service.RequiresConnection == false)
+        {
+            return Failure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.SourceStale,
+                "NYXID_SERVICE_FACTS_INCONSISTENT",
+                "NyxID published contradictory connection facts for the selected UserService.",
+                ExternalCapabilityRemediationActionKind.RefreshSource,
+                "Refresh NyxID capabilities",
+                [service.Source]);
+        }
+
+        if (service.RequiresConnection == true && service.Connected != true)
         {
             return Failure(
                 capability,
@@ -319,7 +366,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source]);
         }
 
-        if (service.RequiresNode == true && string.IsNullOrWhiteSpace(service.NodeId))
+        if (service.RequiresNode == true &&
+            (service.HasNodeBinding != true || string.IsNullOrWhiteSpace(service.NodeId)))
         {
             return Failure(
                 capability,
@@ -332,7 +380,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source]);
         }
 
-        if (!string.IsNullOrWhiteSpace(service.NodeId) && IsUnavailableState(service.NodeStatus))
+        if (!string.IsNullOrWhiteSpace(service.NodeId) && !IsOnlineNodeStatus(service.NodeStatus))
         {
             return Failure(
                 capability,
@@ -390,8 +438,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         return new NyxIdServicesSnapshot(
             services.Values.ToArray(),
             sources,
-            accessDenied && services.Count == 0,
-            sourceUnavailable && services.Count == 0);
+            accessDenied,
+            sourceUnavailable);
     }
 
     private ParsedServicesResponse ParseServicesResponse(
@@ -414,11 +462,18 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                     SourceUnavailable: status is not (401 or 403));
             }
 
-            var services = EnumerateServiceEntries(root)
-                .Select(entry => ParseService(entry, bearerToken, source))
-                .Where(static service => service is not null)
-                .Select(static service => service!)
-                .ToArray();
+            if (!HasServiceCollection(root))
+                return new ParsedServicesResponse([], source, false, true);
+
+            var services = new List<NyxIdUserServiceSnapshot>();
+            foreach (var entry in EnumerateServiceEntries(root))
+            {
+                var service = ParseService(entry, bearerToken, source);
+                if (service is null)
+                    return new ParsedServicesResponse([], source, false, true);
+                services.Add(service);
+            }
+
             return new ParsedServicesResponse(services, source, false, false);
         }
         catch (JsonException)
@@ -515,12 +570,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                           ?? slug,
             Status = ReadString(element, "status") ?? string.Empty,
             IsActive = ReadBool(element, "is_active", "isActive"),
+            CredentialSourceType = ReadString(credential, "type") ?? string.Empty,
             Allowed = ReadBool(element, "allowed") ?? ReadBool(credential, "allowed"),
-            CredentialStatus = ReadString(credential, "status", "connection_status", "connectionStatus") ?? string.Empty,
             RequiresConnection = ReadBool(element, "requires_connection", "requiresConnection"),
             Connected = ReadBool(element, "connected") ?? ReadBool(credential, "connected"),
-            ConnectionStatus = ReadString(element, "connection_status", "connectionStatus") ?? string.Empty,
             RequiresNode = ReadBool(element, "requires_node", "requiresNode"),
+            HasNodeBinding = ReadBool(element, "has_node_binding", "hasNodeBinding"),
             NodeId = ReadString(element, "node_id", "nodeId") ?? ReadString(node, "id", "node_id", "nodeId") ?? string.Empty,
             NodeStatus = ReadString(element, "node_status", "nodeStatus") ?? ReadString(node, "status") ?? string.Empty,
             BearerToken = bearerToken,
@@ -629,14 +684,35 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         method.Equals("HEAD", StringComparison.OrdinalIgnoreCase) ||
         method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsUnavailableState(string? value) =>
+    private static bool IsKnownServiceStatus(string? value) =>
         value?.Trim().ToLowerInvariant() is
-            "pending" or "inactive" or "disabled" or "disconnected" or "offline" or
-            "unavailable" or "missing" or "expired" or "revoked" or "failed" or "error";
+            "active" or "pending_auth" or "expired" or "revoked" or "failed" or "refresh_failed";
 
-    private static bool IsReadyState(string? value) =>
-        value?.Trim().ToLowerInvariant() is
-            "active" or "ready" or "connected" or "online" or "available" or "direct";
+    private static bool IsActiveServiceStatus(string? value) =>
+        value?.Trim().Equals("active", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsOnlineNodeStatus(string? value) =>
+        value?.Trim().Equals("online", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool HasCompletePublishedReadinessFacts(NyxIdUserServiceSnapshot service)
+    {
+        var sourceType = service.CredentialSourceType.Trim().ToLowerInvariant();
+        if (sourceType is not ("personal" or "org") ||
+            (sourceType == "org" && service.Allowed is null) ||
+            string.IsNullOrWhiteSpace(service.Status) ||
+            service.IsActive is null ||
+            service.Connected is null ||
+            service.RequiresConnection is null ||
+            service.HasNodeBinding is null)
+        {
+            return false;
+        }
+
+        var hasNodeId = !string.IsNullOrWhiteSpace(service.NodeId);
+        if (service.HasNodeBinding != hasNodeId)
+            return false;
+        return !hasNodeId || !string.IsNullOrWhiteSpace(service.NodeStatus);
+    }
 
     private static bool IsErrorEnvelope(JsonElement root, out int status)
     {
@@ -672,6 +748,17 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             foreach (var item in array.EnumerateArray())
                 yield return item;
         }
+    }
+
+    private static bool HasServiceCollection(JsonElement root)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+            return true;
+        if (root.ValueKind != JsonValueKind.Object)
+            return false;
+
+        return new[] { "keys", "services", "items", "data" }
+            .Any(name => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array);
     }
 
     private static JsonElement ReadObject(JsonElement owner, params string[] names)
@@ -759,12 +846,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         public required string DisplayName { get; init; }
         public required string Status { get; init; }
         public bool? IsActive { get; init; }
+        public required string CredentialSourceType { get; init; }
         public bool? Allowed { get; init; }
-        public required string CredentialStatus { get; init; }
         public bool? RequiresConnection { get; init; }
         public bool? Connected { get; init; }
-        public required string ConnectionStatus { get; init; }
         public bool? RequiresNode { get; init; }
+        public bool? HasNodeBinding { get; init; }
         public required string NodeId { get; init; }
         public required string NodeStatus { get; init; }
         public required string BearerToken { get; init; }

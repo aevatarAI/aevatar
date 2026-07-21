@@ -128,13 +128,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
     }
 
     [Theory]
-    [InlineData("api_key", "ready", false, "", "")]
-    [InlineData("oauth", "connected", false, "", "")]
-    [InlineData("direct", "ready", false, "", "")]
-    [InlineData("node", "ready", true, "node-home-alpha", "online")]
+    [InlineData("api_key", false, "", "")]
+    [InlineData("oauth", false, "", "")]
+    [InlineData("direct", false, "", "")]
+    [InlineData("node", true, "node-home-alpha", "online")]
     public async Task InspectAsync_ShouldBeReadyForSupportedInteractiveCapabilityKinds(
         string credentialKind,
-        string credentialStatus,
         bool requiresNode,
         string nodeId,
         string nodeStatus)
@@ -146,11 +145,15 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
                   "id": "us-home-alpha",
                   "slug": "home-assistant",
                   "status": "active",
-                  "allowed": true,
+                  "is_active": true,
+                  "connected": true,
+                  "requires_connection": false,
                   "requires_node": {{requiresNode.ToString().ToLowerInvariant()}},
+                  "has_node_binding": {{(!string.IsNullOrWhiteSpace(nodeId)).ToString().ToLowerInvariant()}},
                   "node_id": "{{nodeId}}",
                   "node_status": "{{nodeStatus}}",
-                  "credential_source": { "kind": "{{credentialKind}}", "status": "{{credentialStatus}}", "allowed": true }
+                  "credential_type": "{{credentialKind}}",
+                  "credential_source": { "type": "personal" }
                 }] }
                 """,
             Specs = { ["us-home-alpha"] = AdmittedSpec },
@@ -167,6 +170,242 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
         result.Blockers.Should().BeEmpty();
         result.Sources.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldBeReadyForPublishedPersonalServiceShape()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson = PublishedPersonalReadyKeys,
+            Specs = { ["us-home-alpha"] = AdmittedSpec },
+        };
+        var source = CreateSource(handler);
+        var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
+
+        var result = await source.InspectAsync(
+            Access(),
+            descriptor.Capability,
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailClosed_WhenPublishedReadinessFactsAreIncomplete()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson =
+                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "credential_source": { "type": "personal" } }] }""",
+            Specs = { ["us-home-alpha"] = AdmittedSpec },
+        };
+        var source = CreateSource(handler);
+        var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
+
+        var result = await source.InspectAsync(
+            Access(),
+            descriptor.Capability,
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SERVICE_FACTS_INCOMPLETE");
+    }
+
+    [Theory]
+    [InlineData("""{ "unexpected": [] }""")]
+    [InlineData("""{ "keys": [{ "slug": "home-assistant" }] }""")]
+    public async Task InspectAsync_ShouldReportSourceUnavailable_WhenKeysPayloadIsMalformed(string keysJson)
+    {
+        var source = CreateSource(new ReadinessHandler { KeysJson = keysJson });
+
+        var result = await source.InspectAsync(
+            Access(),
+            NyxIdRef(
+                "us-home-alpha",
+                "home-assistant",
+                "get-state",
+                "GET",
+                "/states/{entity_id}",
+                "candidate-contract-digest"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SOURCE_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldReportNodeUnavailable_WhenPublishedNodeStatusIsUnknown()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson = """
+                { "keys": [{
+                  "id": "us-home-alpha",
+                  "slug": "home-assistant",
+                  "status": "active",
+                  "is_active": true,
+                  "connected": true,
+                  "requires_connection": false,
+                  "has_node_binding": true,
+                  "node_id": "node-home-alpha",
+                  "node_status": "unknown",
+                  "credential_source": { "type": "personal" }
+                }] }
+                """,
+            Specs = { ["us-home-alpha"] = AdmittedSpec },
+        };
+        var source = CreateSource(handler);
+        var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
+
+        var result = await source.InspectAsync(
+            Access(),
+            descriptor.Capability,
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.NodeUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NODE_UNAVAILABLE");
+    }
+
+    [Theory]
+    [InlineData("pending_auth")]
+    [InlineData("refresh_failed")]
+    public async Task InspectAsync_ShouldReportNotActive_ForPublishedNonActiveServiceStatus(string status)
+    {
+        var result = await InspectPublishedServiceAsync($$"""
+            { "keys": [{
+              "id": "us-home-alpha",
+              "slug": "home-assistant",
+              "status": "{{status}}",
+              "is_active": true,
+              "connected": true,
+              "requires_connection": false,
+              "has_node_binding": false,
+              "credential_source": { "type": "personal" }
+            }] }
+            """);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.CredentialConnectionRequired);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("USER_SERVICE_NOT_ACTIVE");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailClosed_WhenPublishedServiceStatusIsUnknown()
+    {
+        var result = await InspectPublishedServiceAsync("""
+            { "keys": [{
+              "id": "us-home-alpha",
+              "slug": "home-assistant",
+              "status": "warming_up",
+              "is_active": true,
+              "connected": true,
+              "requires_connection": false,
+              "has_node_binding": false,
+              "credential_source": { "type": "personal" }
+            }] }
+            """);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SERVICE_STATUS_UNKNOWN");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailClosed_WhenConnectionFactsContradictEachOther()
+    {
+        var result = await InspectPublishedServiceAsync("""
+            { "keys": [{
+              "id": "us-home-alpha",
+              "slug": "home-assistant",
+              "status": "active",
+              "is_active": true,
+              "connected": false,
+              "requires_connection": false,
+              "has_node_binding": false,
+              "credential_source": { "type": "personal" }
+            }] }
+            """);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SERVICE_FACTS_INCONSISTENT");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldReportNodeUnavailable_WhenPublishedNodeStatusIsNotOnline()
+    {
+        var result = await InspectPublishedServiceAsync("""
+            { "keys": [{
+              "id": "us-home-alpha",
+              "slug": "home-assistant",
+              "status": "active",
+              "is_active": true,
+              "connected": true,
+              "requires_connection": false,
+              "has_node_binding": true,
+              "node_id": "node-home-alpha",
+              "node_status": "degraded",
+              "credential_source": { "type": "personal" }
+            }] }
+            """);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.NodeUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NODE_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldUseExactServiceFromHealthySource_WhenOrganizationSourceFails()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysByBearerToken =
+            {
+                ["runtime-caller-credential"] = PublishedPersonalReadyKeys,
+                ["runtime-organization-credential"] = "not-json",
+            },
+            Specs = { ["us-home-alpha"] = AdmittedSpec },
+        };
+        var source = CreateSource(handler);
+        var descriptor = (await source.ListAsync(AccessWithOrganization(), CancellationToken.None)).Single();
+
+        var result = await source.InspectAsync(
+            AccessWithOrganization(),
+            descriptor.Capability,
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldReportSourceUnavailable_WhenMissingServiceCouldBeInFailedSource()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysByBearerToken =
+            {
+                ["runtime-caller-credential"] = PublishedOtherPersonalReadyKeys,
+                ["runtime-organization-credential"] = "not-json",
+            },
+        };
+        var source = CreateSource(handler);
+
+        var result = await source.InspectAsync(
+            AccessWithOrganization(),
+            NyxIdRef(
+                "us-home-alpha",
+                "home-assistant",
+                "get-state",
+                "GET",
+                "/states/{entity_id}",
+                "candidate-contract-digest"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SourceStale);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_SOURCE_UNAVAILABLE");
     }
 
     [Fact]
@@ -202,25 +441,25 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
                 "USER_SERVICE_NOT_VISIBLE"
             },
             {
-                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "pending", "allowed": true }] }""",
+                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "pending_auth", "is_active": false, "connected": false, "requires_connection": true, "has_node_binding": false, "credential_source": { "type": "personal" } }] }""",
                 AdmittedSpec,
                 ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
                 "USER_SERVICE_NOT_ACTIVE"
             },
             {
-                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "allowed": false }] }""",
+                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "is_active": true, "connected": true, "requires_connection": false, "has_node_binding": false, "credential_source": { "type": "org", "allowed": false } }] }""",
                 AdmittedSpec,
                 ExternalCapabilityReadinessStatus.ServiceAccessDenied,
                 "USER_SERVICE_ACCESS_DENIED"
             },
             {
-                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "allowed": true, "requires_node": true }] }""",
+                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "is_active": true, "connected": true, "requires_connection": false, "requires_node": true, "has_node_binding": false, "credential_source": { "type": "personal" } }] }""",
                 AdmittedSpec,
                 ExternalCapabilityReadinessStatus.NodeBindingRequired,
                 "NODE_BINDING_REQUIRED"
             },
             {
-                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "allowed": true, "requires_node": true, "node_id": "node-home-alpha", "node_status": "offline" }] }""",
+                """{ "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "is_active": true, "connected": true, "requires_connection": false, "requires_node": true, "has_node_binding": true, "node_id": "node-home-alpha", "node_status": "offline", "credential_source": { "type": "personal" } }] }""",
                 AdmittedSpec,
                 ExternalCapabilityReadinessStatus.NodeUnavailable,
                 "NODE_UNAVAILABLE"
@@ -238,7 +477,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
                 "OPERATION_NOT_ALLOWLISTED"
             },
             {
-                """{ "fresh_until": "2026-07-21T09:59:00Z", "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "allowed": true }] }""",
+                """{ "fresh_until": "2026-07-21T09:59:00Z", "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "is_active": true, "connected": true, "requires_connection": false, "has_node_binding": false, "credential_source": { "type": "personal" } }] }""",
                 AdmittedSpec,
                 ExternalCapabilityReadinessStatus.SourceStale,
                 "NYXID_SOURCE_STALE"
@@ -250,8 +489,38 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
           "id": "us-home-alpha",
           "slug": "home-assistant",
           "status": "active",
-          "allowed": true,
-          "credential_source": { "kind": "oauth", "status": "connected", "allowed": true }
+          "is_active": true,
+          "connected": true,
+          "requires_connection": false,
+          "has_node_binding": false,
+          "credential_type": "oauth",
+          "credential_source": { "type": "personal" }
+        }] }
+        """;
+
+    private const string PublishedPersonalReadyKeys = """
+        { "keys": [{
+          "id": "us-home-alpha",
+          "slug": "home-assistant",
+          "status": "active",
+          "is_active": true,
+          "connected": true,
+          "requires_connection": false,
+          "has_node_binding": false,
+          "credential_source": { "type": "personal" }
+        }] }
+        """;
+
+    private const string PublishedOtherPersonalReadyKeys = """
+        { "keys": [{
+          "id": "us-calendar-beta",
+          "slug": "calendar",
+          "status": "active",
+          "is_active": true,
+          "connected": true,
+          "requires_connection": false,
+          "has_node_binding": false,
+          "credential_source": { "type": "personal" }
         }] }
         """;
 
@@ -265,6 +534,29 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
     private static ExternalWorkflowCapabilityAccessContext Access() =>
         new("scope-alpha", "caller-alpha", "runtime-caller-credential");
+
+    private static ExternalWorkflowCapabilityAccessContext AccessWithOrganization() =>
+        new(
+            "scope-alpha",
+            "caller-alpha",
+            "runtime-caller-credential",
+            "runtime-organization-credential");
+
+    private static async Task<ExternalCapabilityReadiness> InspectPublishedServiceAsync(string keysJson)
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson = keysJson,
+            Specs = { ["us-home-alpha"] = AdmittedSpec },
+        };
+        var source = CreateSource(handler);
+        var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
+        return await source.InspectAsync(
+            Access(),
+            descriptor.Capability,
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+    }
 
     private static ExternalWorkflowCapabilityRef NyxIdRef(
         string serviceId,
@@ -290,6 +582,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
     {
         public string KeysJson { get; init; } = """{ "keys": [] }""";
 
+        public Dictionary<string, string> KeysByBearerToken { get; init; } = new(StringComparer.Ordinal);
+
         public Dictionary<string, string> Specs { get; init; } = new(StringComparer.Ordinal);
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -298,7 +592,13 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         {
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
             if (path == "/api/v1/keys")
-                return Task.FromResult(Json(HttpStatusCode.OK, KeysJson));
+            {
+                var bearerToken = request.Headers.Authorization?.Parameter ?? string.Empty;
+                var response = KeysByBearerToken.TryGetValue(bearerToken, out var keysJson)
+                    ? keysJson
+                    : KeysJson;
+                return Task.FromResult(Json(HttpStatusCode.OK, response));
+            }
 
             const string prefix = "/api/v1/proxy/services/";
             const string suffix = "/openapi.json";
