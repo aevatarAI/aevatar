@@ -178,6 +178,11 @@ continuation is delivered, the actor-owned watchdog/activation path retries.
 application adapter derives both workflow and service-run completion target
 `expires_at_unix_ms` from it. The current `long.MaxValue` values are removed.
 
+`timeout_at_utc` is required for new WorkOrders and must be later than
+`requested_at_utc`. The command boundary rejects a missing/elapsed deadline
+before dispatch, and `WorkOrderGAgent` enforces the same invariant so alternate
+command transports cannot create an unbounded WorkOrder.
+
 Static and script dispatch also forward a stable internal terminal delivery ID
 and the same expiry into their typed run contexts. A source terminal producer
 therefore never outlives the WorkOrder that requested it.
