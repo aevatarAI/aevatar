@@ -55,7 +55,7 @@ internal static class StudioMemberAutomationEndpoints
         {
             var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
             return Results.Ok(await schedules.PreflightAsync(
-                BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, bearerToken: null),
+                BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, ResolveBearerToken(http)),
                 ct));
         }
         catch (Exception ex) when (TryMapError(ex, scopeId, teamId, memberId, out var error))

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -913,6 +914,35 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenTypedNyxIdAuthorityPresent_ShouldUseItAsAuthorizationOwner()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-typed", "typed-user"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        var owner = schedulePort.LastRequest!.AuthenticatedOwner;
+        owner.Owner.OwnerSubject.Should().Be("typed-user");
+        owner.SubjectPlatform.Should().Be("nyxid");
+        owner.SubjectTenant.Should().Be("tenant-typed");
+        owner.SubjectExternalUserId.Should().Be("typed-user");
+        owner.VerifiedBindingId.Should().Be("nyxid:typed-user");
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenUncertainCallIsRetried_ShouldReuseStableOperationIdentity()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
@@ -1506,7 +1536,8 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? requestId = "request-1",
         string? callId = "call-1",
         string? idempotencyKey = null,
-        string? ownerScopeId = null)
+        string? ownerScopeId = null,
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
@@ -1517,7 +1548,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
             AgentSkillRecoveryContext.Empty,
-            new Dictionary<string, string>(StringComparer.Ordinal)));
+            new Dictionary<string, string>(StringComparer.Ordinal))
+        {
+            NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
+        });
     }
 
     private static string? ErrorCode(string output)
