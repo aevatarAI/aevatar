@@ -475,12 +475,30 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         ArgumentNullException.ThrowIfNull(path);
         var baseUrl = GetBaseUrl();
         var normalizedPath = path.TrimStart('/');
-        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug.Trim())}/{normalizedPath}";
-        if (string.IsNullOrWhiteSpace(userServiceId))
-            return url;
+        var fragmentIndex = normalizedPath.IndexOf('#', StringComparison.Ordinal);
+        if (fragmentIndex >= 0)
+            normalizedPath = normalizedPath[..fragmentIndex];
 
-        var separator = normalizedPath.Contains('?', StringComparison.Ordinal) ? '&' : '?';
-        return $"{url}{separator}_nyxid_via={Uri.EscapeDataString(userServiceId.Trim())}";
+        var queryIndex = normalizedPath.IndexOf('?', StringComparison.Ordinal);
+        var resourcePath = queryIndex >= 0 ? normalizedPath[..queryIndex] : normalizedPath;
+        var query = queryIndex >= 0 ? normalizedPath[(queryIndex + 1)..] : string.Empty;
+        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug.Trim())}/{resourcePath}";
+        if (string.IsNullOrWhiteSpace(userServiceId))
+            return query.Length == 0 ? url : $"{url}?{query}";
+
+        // _nyxid_via is a NyxID-reserved routing fact. The exact server-selected
+        // identity must be the only value sent, because NyxID resolves the first one.
+        var businessQuery = string.Join(
+            '&',
+            query.Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Where(static part => !string.Equals(
+                    part.Split('=', 2)[0],
+                    "_nyxid_via",
+                    StringComparison.Ordinal)));
+        var exactRoute = $"_nyxid_via={Uri.EscapeDataString(userServiceId.Trim())}";
+        return businessQuery.Length == 0
+            ? $"{url}?{exactRoute}"
+            : $"{url}?{exactRoute}&{businessQuery}";
     }
 
     // ─── SSH ───
