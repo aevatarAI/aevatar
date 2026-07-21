@@ -71,50 +71,6 @@ public class RoleGAgentReplayContractTests
         publisher.Published.OfType<CommittedStateEventPublished>().Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData("wrong-key")]
-    [InlineData("widening-ceiling")]
-    public async Task InvalidReconcileProposal_ShouldBeRejectedBeforeAppendAndPublication(string mutation)
-    {
-        var store = new InMemoryEventStoreForTests();
-        var services = BuildServices(store);
-        const string actorId = "role-profiled-invalid-reconcile";
-        var agent = CreateProfiledAgent(
-            services,
-            actorId,
-            reconcileProposalFactory: committedAuthority =>
-            {
-                var proposal = committedAuthority.Clone();
-                if (mutation == "wrong-key")
-                    proposal.ReconciliationKey.SessionId = "session-other";
-                else
-                    proposal.AuthorityCeilingToolNames.Add("hidden");
-                return proposal;
-            });
-        agent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
-        var publisher = new RecordingEventPublisher();
-        agent.EventPublisher = publisher;
-        await agent.ActivateAsync();
-
-        await agent.HandleChatRequest(new ChatRequestEvent
-        {
-            SessionId = "session-a",
-            Prompt = "hello",
-        });
-
-        var authorityEvents = (await store.GetEventsAsync(actorId))
-            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
-            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
-            .ToArray();
-        authorityEvents.Should().ContainSingle();
-        authorityEvents[0].CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.Initial);
-        agent.State.AgentProfileTurnAuthority.Should().BeEquivalentTo(authorityEvents[0].Authority);
-        publisher.Published.OfType<CommittedStateEventPublished>().Should().NotContain(publication =>
-            publication.StateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
-            publication.StateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind ==
-            AgentProfileTurnAuthorityCommitKind.Reconcile);
-    }
-
     [Fact]
     public async Task StartedAuthorityReplay_ShouldRespectFrozenExactRefRetryBoundaryWithoutReclassification()
     {
@@ -275,55 +231,6 @@ public class RoleGAgentReplayContractTests
         legacyEvents[0].Authority.CandidateRoute.Should().BeNull();
         legacyEvents[0].Authority.SelectedExactSkillRef.Should().BeNull();
         legacyEvents[0].Authority.DegradationReasons.Should().Equal(
-            AgentProfileTurnDegradationReason.LegacyAuthorityMissing);
-    }
-
-    [Fact]
-    public async Task OlderLegacySession_WhenAnotherSessionOwnsAuthority_ShouldCommitRestrictedEmptyOnce()
-    {
-        var store = new InMemoryEventStoreForTests();
-        const string actorId = "role-profiled-legacy-with-active-authority";
-        await store.AppendAsync(
-            actorId,
-            [
-                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
-                {
-                    SessionId = "session-legacy",
-                    Prompt = "legacy",
-                }),
-                StateEventFor(actorId, 2, new RoleChatSessionStartedEvent
-                {
-                    SessionId = "session-newer",
-                    Prompt = "newer",
-                }),
-                StateEventFor(actorId, 3, new AgentProfileTurnAuthorityCommittedEvent
-                {
-                    CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
-                    Authority = TurnAuthority("session-newer", 1, "intent-newer", "skill-newer"),
-                }),
-            ],
-            expectedVersion: 0);
-        var services = BuildServices(store);
-        var agent = CreateProfiledAgent(services, actorId);
-        await agent.ActivateAsync();
-        agent.State.AgentProfile = new AgentProfileSnapshot { ProfileId = "profile-a" };
-        var request = new ChatRequestEvent { SessionId = "session-legacy", Prompt = "legacy" };
-
-        await agent.HandleChatRequest(request);
-        await agent.HandleChatRequest(request.Clone());
-
-        agent.PrepareCallCount.Should().Be(0);
-        var legacyInitialEvents = (await store.GetEventsAsync(actorId))
-            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
-            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
-            .Where(authorityEvent =>
-                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.Initial &&
-                authorityEvent.Authority.ReconciliationKey.SessionId == "session-legacy")
-            .ToArray();
-        legacyInitialEvents.Should().ContainSingle();
-        legacyInitialEvents[0].Authority.AuthorityKind.Should()
-            .Be(AgentProfileTurnAuthorityKind.RestrictedEmpty);
-        legacyInitialEvents[0].Authority.DegradationReasons.Should().Equal(
             AgentProfileTurnDegradationReason.LegacyAuthorityMissing);
     }
 
@@ -1205,14 +1112,12 @@ public class RoleGAgentReplayContractTests
         IServiceProvider services,
         string actorId,
         string intentId = "intent-a",
-        string exactSkillGuid = "skill-a",
-        Func<AgentProfileTurnAuthorityState, AgentProfileTurnAuthorityState>? reconcileProposalFactory = null)
+        string exactSkillGuid = "skill-a")
     {
         var agent = new ProfiledRoleGAgent(
             new CountingLlmProviderFactory("done"),
             intentId,
-            exactSkillGuid,
-            reconcileProposalFactory)
+            exactSkillGuid)
         {
             Services = services,
             EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -1388,8 +1293,7 @@ public class RoleGAgentReplayContractTests
     private sealed class ProfiledRoleGAgent(
         ILLMProviderFactory providerFactory,
         string intentId,
-        string exactSkillGuid,
-        Func<AgentProfileTurnAuthorityState, AgentProfileTurnAuthorityState>? reconcileProposalFactory)
+        string exactSkillGuid)
         : RoleGAgent(providerFactory)
     {
         public int PrepareCallCount { get; private set; }
@@ -1423,9 +1327,8 @@ public class RoleGAgentReplayContractTests
                 selectedSkillPromptLayer: null,
                 selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
                 candidateIntentId: committedAuthority.CandidateRoute?.IntentId);
-            var reconcileProposal = reconcileProposalFactory?.Invoke(committedAuthority.Clone()) ?? committedAuthority;
             return Task.FromResult<AgentProfileTurnCatalogMaterialization?>(
-                AgentProfileTurnCatalogMaterialization.Create(catalog, reconcileProposal));
+                AgentProfileTurnCatalogMaterialization.Create(catalog, committedAuthority));
         }
     }
 
