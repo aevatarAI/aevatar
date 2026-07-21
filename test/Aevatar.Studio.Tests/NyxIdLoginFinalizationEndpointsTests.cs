@@ -9,6 +9,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -19,10 +20,14 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class NyxIdLoginFinalizationEndpointsTests
 {
+    private static readonly DateTimeOffset CatalogNow = DateTimeOffset.Parse("2026-07-21T00:05:00Z");
+
     [Fact]
     public async Task AuthorizationCatalogRefresh_ShouldReturnReadyOnlyAfterReplicaObservation()
     {
-        var lifecycle = new RecordingCatalogRefreshLifecycle();
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(23));
         var http = NewHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity(
             [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
@@ -31,13 +36,145 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
             http,
-            lifecycle);
+            lifecycle,
+            Visibility(catalog));
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
-        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(true, "observed", string.Empty));
+        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
+            true,
+            RefreshStatus: "observed",
+            RefreshFailureCode: string.Empty,
+            VisibilityStatus: "ready",
+            VisibilityFailureCode: string.Empty,
+            RequiredStateVersion: 23,
+            VisibleStateVersion: 23));
         lifecycle.Requests.Should().ContainSingle().Which.Should().Be(("nyx-owner-alpha", "bearer-secret"));
+        catalog.QueryCount.Should().Be(1);
         JsonSerializer.Serialize(payload).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task AuthorizationCatalogRefresh_WhenCommittedVersionIsNotVisible_ShouldReturnAcceptedPending()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(22));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle,
+            Visibility(catalog));
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status202Accepted);
+        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
+            false,
+            RefreshStatus: "observed",
+            RefreshFailureCode: string.Empty,
+            VisibilityStatus: "projection_pending",
+            VisibilityFailureCode: "nyxid_catalog_projection_pending",
+            RequiredStateVersion: 23,
+            VisibleStateVersion: 22));
+        catalog.QueryCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AuthorizationCatalogRefresh_WhenNewerInvalidationIsVisible_ShouldNotReportProjectionPending()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(24, invalidated: true));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle,
+            Visibility(catalog));
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
+            false,
+            RefreshStatus: "observed",
+            RefreshFailureCode: string.Empty,
+            VisibilityStatus: "invalidated",
+            VisibilityFailureCode: "nyxid_catalog_snapshot_invalidated",
+            RequiredStateVersion: 23,
+            VisibleStateVersion: 24));
+    }
+
+    [Fact]
+    public async Task AuthorizationCatalogRefresh_WhenVisibleSnapshotIsStale_ShouldReturnNotReady()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(
+            23,
+            freshUntilUtc: CatalogNow));
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle,
+            Visibility(catalog));
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
+            false,
+            RefreshStatus: "observed",
+            RefreshFailureCode: string.Empty,
+            VisibilityStatus: "stale",
+            VisibilityFailureCode: "nyxid_catalog_snapshot_stale",
+            RequiredStateVersion: 23,
+            VisibleStateVersion: 23));
+    }
+
+    [Fact]
+    public async Task AuthorizationCatalogRefresh_WhenVisibilityQueryFails_ShouldReturnSanitizedUnavailable()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(null)
+        {
+            Exception = new InvalidOperationException("private-store-detail"),
+        };
+        var http = NewHttpContext();
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha")],
+            "test"));
+        http.Request.Headers.Authorization = "Bearer bearer-secret";
+
+        var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
+            http,
+            lifecycle,
+            Visibility(catalog));
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
+            false,
+            RefreshStatus: "observed",
+            RefreshFailureCode: string.Empty,
+            VisibilityStatus: "unavailable",
+            VisibilityFailureCode: "nyxid_catalog_visibility_unavailable",
+            RequiredStateVersion: 23,
+            VisibleStateVersion: 0));
+        JsonSerializer.Serialize(payload).Should().NotContain("private-store-detail");
     }
 
     [Fact]
@@ -54,14 +191,17 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
             http,
-            lifecycle);
+            lifecycle,
+            Visibility(new RecordingCatalogQueryPort(null)));
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status403Forbidden);
         payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
             false,
-            "access_denied",
-            "nyxid_catalog_access_denied"));
+            RefreshStatus: "access_denied",
+            RefreshFailureCode: "nyxid_catalog_access_denied",
+            VisibilityStatus: "not_evaluated",
+            VisibilityFailureCode: string.Empty));
     }
 
     [Fact]
@@ -78,14 +218,17 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
             http,
-            lifecycle);
+            lifecycle,
+            Visibility(new RecordingCatalogQueryPort(null)));
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
             false,
-            "catalog_unstable",
-            "nyxid_scope_plan_catalog_mismatch"));
+            RefreshStatus: "catalog_unstable",
+            RefreshFailureCode: "nyxid_scope_plan_catalog_mismatch",
+            VisibilityStatus: "not_evaluated",
+            VisibilityFailureCode: string.Empty));
         JsonSerializer.Serialize(payload).Should().NotContain("bearer-secret");
     }
 
@@ -103,20 +246,25 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         var result = await NyxIdLoginFinalizationEndpoints.HandleAuthorizationCatalogRefreshAsync(
             http,
-            lifecycle);
+            lifecycle,
+            Visibility(new RecordingCatalogQueryPort(null)));
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdAuthorizationCatalogRefreshResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
         payload.Should().Be(new NyxIdAuthorizationCatalogRefreshResponse(
             false,
-            "superseded",
-            "nyxid_catalog_refresh_superseded"));
+            RefreshStatus: "superseded",
+            RefreshFailureCode: "nyxid_catalog_refresh_superseded",
+            VisibilityStatus: "not_evaluated",
+            VisibilityFailureCode: string.Empty));
     }
 
     [Fact]
     public async Task Finalize_ShouldRefreshCatalogForVerifiedNyxIdOwner()
     {
-        var lifecycle = new RecordingCatalogRefreshLifecycle();
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(23));
         var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
             new NyxIdLoginFinalizationRequest
             {
@@ -133,15 +281,59 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             new RecordingBindingDispatch(),
             new RecordingBindingReplaceDispatch(),
             NullLoggerFactory.Instance,
-            catalogRefreshLifecycle: lifecycle);
+            catalogRefreshLifecycle: lifecycle,
+            catalogVisibilityPort: Visibility(catalog));
 
         var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         payload!.AuthorizationCatalogReady.Should().BeTrue();
-        payload.AuthorizationCatalogStatus.Should().Be("observed");
-        payload.AuthorizationCatalogFailureCode.Should().BeEmpty();
+        payload.AuthorizationCatalogRefreshStatus.Should().Be("observed");
+        payload.AuthorizationCatalogRefreshFailureCode.Should().BeEmpty();
+        payload.AuthorizationCatalogVisibilityStatus.Should().Be("ready");
+        payload.AuthorizationCatalogVisibilityFailureCode.Should().BeEmpty();
+        payload.AuthorizationCatalogRequiredStateVersion.Should().Be(23);
+        payload.AuthorizationCatalogVisibleStateVersion.Should().Be(23);
         lifecycle.Requests.Should().ContainSingle().Which.Should().Be(("nyx-owner-alpha", "bearer-alpha"));
+        catalog.QueryCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Finalize_WhenCommittedCatalogVersionIsNotVisible_ShouldExposeProjectionPending()
+    {
+        var lifecycle = new RecordingCatalogRefreshLifecycle(
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23));
+        var catalog = new RecordingCatalogQueryPort(CatalogSnapshot(22));
+        var result = await NyxIdLoginFinalizationEndpoints.HandleFinalizeAsync(
+            new NyxIdLoginFinalizationRequest
+            {
+                Code = "auth-code",
+                CodeVerifier = "pkce-verifier",
+                RedirectUri = "http://localhost/auth/callback",
+            },
+            new RecordingBrokerCallback(new BrokerAuthorizationCodeResult(
+                "binding-alpha",
+                CreateIdToken(new { uid = "nyx-owner-alpha" }),
+                "bearer-alpha")),
+            new UsableCapabilityBroker(),
+            new FakeExternalIdentityBindingQueryPort(),
+            new RecordingBindingDispatch(),
+            new RecordingBindingReplaceDispatch(),
+            NullLoggerFactory.Instance,
+            catalogRefreshLifecycle: lifecycle,
+            catalogVisibilityPort: Visibility(catalog));
+
+        var (statusCode, payload) = await ExecuteJsonAsync<NyxIdLoginFinalizationResponse>(result);
+
+        statusCode.Should().Be(StatusCodes.Status200OK);
+        payload!.AuthorizationCatalogReady.Should().BeFalse();
+        payload.AuthorizationCatalogRefreshStatus.Should().Be("observed");
+        payload.AuthorizationCatalogRefreshFailureCode.Should().BeEmpty();
+        payload.AuthorizationCatalogVisibilityStatus.Should().Be("projection_pending");
+        payload.AuthorizationCatalogVisibilityFailureCode.Should().Be("nyxid_catalog_projection_pending");
+        payload.AuthorizationCatalogRequiredStateVersion.Should().Be(23);
+        payload.AuthorizationCatalogVisibleStateVersion.Should().Be(22);
+        catalog.QueryCount.Should().Be(1);
     }
 
     [Fact]
@@ -172,8 +364,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
 
         statusCode.Should().Be(StatusCodes.Status200OK);
         payload!.AuthorizationCatalogReady.Should().BeFalse();
-        payload.AuthorizationCatalogStatus.Should().Be("observation_timed_out");
-        payload.AuthorizationCatalogFailureCode.Should().Be("nyxid_catalog_observation_timeout");
+        payload.AuthorizationCatalogRefreshStatus.Should().Be("observation_timed_out");
+        payload.AuthorizationCatalogRefreshFailureCode.Should().Be("nyxid_catalog_observation_timeout");
+        payload.AuthorizationCatalogVisibilityStatus.Should().Be("not_evaluated");
+        payload.AuthorizationCatalogVisibilityFailureCode.Should().BeEmpty();
     }
 
     [Fact]
@@ -205,8 +399,10 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
         payload!.Tokens.AccessToken.Should().Be("bearer-alpha");
         payload.BindingDispatchAccepted.Should().BeTrue();
         payload.AuthorizationCatalogReady.Should().BeFalse();
-        payload.AuthorizationCatalogStatus.Should().Be("failed");
-        payload.AuthorizationCatalogFailureCode.Should().Be("nyxid_catalog_refresh_failed");
+        payload.AuthorizationCatalogRefreshStatus.Should().Be("failed");
+        payload.AuthorizationCatalogRefreshFailureCode.Should().Be("nyxid_catalog_refresh_failed");
+        payload.AuthorizationCatalogVisibilityStatus.Should().Be("not_evaluated");
+        payload.AuthorizationCatalogVisibilityFailureCode.Should().BeEmpty();
         JsonSerializer.Serialize(payload).Should().NotContain("refresh-private-detail");
     }
 
@@ -233,8 +429,8 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             new RecordingBindingDispatch(),
             new RecordingBindingReplaceDispatch(),
             NullLoggerFactory.Instance,
-            lifecycle,
-            cts.Token);
+            catalogRefreshLifecycle: lifecycle,
+            ct: cts.Token);
 
         await action.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -756,7 +952,7 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             CancellationToken ct = default)
         {
             Requests.Add((verifiedOwnerSubject, bearerToken));
-            return Task.FromResult(result ?? NyxIdAuthorizationCatalogRefreshResult.Observed);
+            return Task.FromResult(result ?? NyxIdAuthorizationCatalogRefreshResult.ObservedAt(1));
         }
 
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
@@ -764,6 +960,56 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             string bearerToken,
             CancellationToken ct = default) => throw new NotSupportedException();
     }
+
+    private sealed class RecordingCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
+        : INyxIdAuthorizationCatalogQueryPort
+    {
+        public Exception? Exception { get; init; }
+        public int QueryCount { get; private set; }
+
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default)
+        {
+            QueryCount++;
+            return Exception == null
+                ? Task.FromResult(snapshot)
+                : Task.FromException<NyxIdAuthorizationCatalogSnapshot?>(Exception);
+        }
+    }
+
+    private static INyxIdAuthorizationCatalogVisibilityPort Visibility(
+        INyxIdAuthorizationCatalogQueryPort queryPort) =>
+        new NyxIdAuthorizationCatalogVisibilityService(
+            queryPort,
+            new FixedTimeProvider(CatalogNow),
+            NullLogger<NyxIdAuthorizationCatalogVisibilityService>.Instance);
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private static NyxIdAuthorizationCatalogSnapshot CatalogSnapshot(
+        long stateVersion,
+        bool invalidated = false,
+        DateTimeOffset? freshUntilUtc = null) => new(
+        new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "nyx-owner-alpha",
+        },
+        stateVersion,
+        CatalogNow.AddMinutes(-1),
+        freshUntilUtc ?? CatalogNow.AddMinutes(10),
+        "scope-plan-contract/v1",
+        "scope-plan-policy/v1",
+        CatalogNow.AddMinutes(-1),
+        "catalog-digest-alpha",
+        [],
+        Invalidated: invalidated,
+        Activated: true);
 
     private sealed class ThrowingCatalogRefreshLifecycle(Exception exception) : INyxIdAuthorizationCatalogRefreshPort
     {

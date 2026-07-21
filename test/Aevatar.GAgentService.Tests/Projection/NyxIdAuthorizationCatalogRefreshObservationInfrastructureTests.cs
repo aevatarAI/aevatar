@@ -127,6 +127,27 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTes
     }
 
     [Fact]
+    public async Task PreparationPort_ShouldReleaseDeterministicScopeWhenActivationFailsAfterPartialSideEffect()
+    {
+        var activation = new PartiallyFailingActivationService();
+        var release = new RecordingProjectionReleaseService<
+            NyxIdAuthorizationCatalogRefreshObservationRuntimeLease>();
+        var port = new NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort(
+            activation,
+            release);
+
+        var preparation = await port.PrepareAsync(
+            "nyxid-authorization-catalog:owner-alpha",
+            "refresh-alpha");
+
+        preparation.Should().BeNull();
+        activation.PartiallyCreatedScopes.Should().ContainSingle();
+        release.Released.Should().ContainSingle();
+        release.Released[0].ActorId.Should().Be("nyxid-authorization-catalog:owner-alpha");
+        release.Released[0].RefreshId.Should().Be("refresh-alpha");
+    }
+
+    [Fact]
     public async Task PreparationPort_ShouldPropagateCallerCancellation()
     {
         var activation = new RecordingActivationService();
@@ -268,6 +289,21 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTes
                     ProjectionKind = request.ProjectionKind,
                     SessionId = request.SessionId,
                 }));
+        }
+    }
+
+    private sealed class PartiallyFailingActivationService
+        : IProjectionScopeActivationService<NyxIdAuthorizationCatalogRefreshObservationRuntimeLease>
+    {
+        public List<ProjectionScopeStartRequest> PartiallyCreatedScopes { get; } = [];
+
+        public Task<NyxIdAuthorizationCatalogRefreshObservationRuntimeLease> EnsureAsync(
+            ProjectionScopeStartRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            PartiallyCreatedScopes.Add(request);
+            throw new InvalidOperationException("relay readiness failed after scope creation");
         }
     }
 

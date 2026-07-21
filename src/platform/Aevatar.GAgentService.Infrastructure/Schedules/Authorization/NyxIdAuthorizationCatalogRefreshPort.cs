@@ -16,6 +16,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
     private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
 
     private readonly INyxIdAuthorizationCatalogCommandPort _commandPort;
+    private readonly INyxIdAuthorizationCatalogQueryPort _catalogQueryPort;
     private readonly INyxIdApiClientFactory _nyxClientFactory;
     private readonly INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort
         _observationPreparation;
@@ -26,6 +27,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
 
     public NyxIdAuthorizationCatalogRefreshPort(
         INyxIdAuthorizationCatalogCommandPort commandPort,
+        INyxIdAuthorizationCatalogQueryPort catalogQueryPort,
         INyxIdApiClientFactory nyxClientFactory,
         INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort observationPreparation,
         INyxIdAuthorizationCatalogRefreshObservationProjectionPort observationProjection,
@@ -33,6 +35,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
     {
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
+        _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
         _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
         _observationPreparation = observationPreparation ??
                                   throw new ArgumentNullException(nameof(observationPreparation));
@@ -85,6 +88,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         var refreshId = Guid.NewGuid().ToString("N");
         var startedAt = _timeProvider.GetUtcNow();
         var actorId = NyxIdAuthorizationCatalogActorIds.Build(normalizedOwner);
+        var catalog = await _catalogQueryPort.GetAsync(normalizedOwner, ct).ConfigureAwait(false);
+        var expectedLifecycleFence = catalog?.LifecycleFence ?? 0;
         NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation? preparation = null;
         EventSinkProjectionAttachment<INyxIdAuthorizationCatalogRefreshObservationProjectionLease>?
             attachment = null;
@@ -105,8 +110,12 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             if (attachment == null)
                 throw new InvalidOperationException("nyxid_catalog_refresh_observation_unavailable");
 
-            await _commandPort.ActivateAsync(normalizedOwner, startedAt, ct).ConfigureAwait(false);
-            await _commandPort.BeginRefreshAsync(normalizedOwner, refreshId, startedAt, ct)
+            await _commandPort.BeginRefreshAsync(
+                    normalizedOwner,
+                    refreshId,
+                    startedAt,
+                    expectedLifecycleFence,
+                    ct)
                 .ConfigureAwait(false);
 
             var began = await AwaitOutcomeAsync(
@@ -122,7 +131,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             if (began.Status == NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded)
                 return ToRefreshResult(began);
 
-            return await RefreshProviderAndObserveAsync(
+            return await RunProviderWhileObservingAsync(
                     normalizedOwner,
                     bearerToken,
                     refreshId,
@@ -163,14 +172,68 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         }
     }
 
-    private async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshProviderAndObserveAsync(
+    private async Task<NyxIdAuthorizationCatalogRefreshResult> RunProviderWhileObservingAsync(
         AuthorizationOwnerIdentity normalizedOwner,
         string bearerToken,
         string refreshId,
         EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
         CancellationToken ct)
     {
+        using var providerCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var terminalCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var terminalTask = AwaitTerminalResultAsync(sink, refreshId, terminalCancellation.Token);
+        var providerTask = RefreshProviderAsync(
+            normalizedOwner,
+            bearerToken,
+            refreshId,
+            providerCancellation.Token);
+        var completed = await Task.WhenAny(terminalTask, providerTask).ConfigureAwait(false);
+        if (ReferenceEquals(completed, terminalTask))
+        {
+            NyxIdAuthorizationCatalogRefreshResult terminal;
+            try
+            {
+                terminal = await terminalTask.ConfigureAwait(false);
+            }
+            catch
+            {
+                providerCancellation.Cancel();
+                await ObserveAfterCancellationAsync(providerTask).ConfigureAwait(false);
+                throw;
+            }
 
+            if (terminal.Status is NyxIdAuthorizationCatalogRefreshStatus.Superseded or
+                NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)
+            {
+                providerCancellation.Cancel();
+                await ObserveAfterCancellationAsync(providerTask).ConfigureAwait(false);
+                return terminal;
+            }
+
+            await providerTask.ConfigureAwait(false);
+            return terminal;
+        }
+
+        try
+        {
+            await providerTask.ConfigureAwait(false);
+        }
+        catch
+        {
+            terminalCancellation.Cancel();
+            await ObserveAfterCancellationAsync(terminalTask).ConfigureAwait(false);
+            throw;
+        }
+
+        return await terminalTask.ConfigureAwait(false);
+    }
+
+    private async Task RefreshProviderAsync(
+        AuthorizationOwnerIdentity normalizedOwner,
+        string bearerToken,
+        string refreshId,
+        CancellationToken ct)
+    {
         var client = _nyxClientFactory.CreateClient();
         string inventoryResponse;
         try
@@ -179,18 +242,18 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return await HandleProviderTimeoutAsync(normalizedOwner, refreshId, sink, ct)
-                .ConfigureAwait(false);
+            await RecordProviderTimeoutAsync(normalizedOwner, refreshId, ct).ConfigureAwait(false);
+            return;
         }
         var inventoryResult = NyxIdApiAccessResponseParser.ParseUserServices(inventoryResponse);
         if (!inventoryResult.Succeeded)
         {
-            return await HandleFailureAsync(
+            await HandleFailureAsync(
                 normalizedOwner,
                 refreshId,
                 inventoryResult.Failure,
-                sink,
-                ct);
+                ct).ConfigureAwait(false);
+            return;
         }
 
         var eligibleServices = inventoryResult.Value!.Services
@@ -209,29 +272,29 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return await HandleProviderTimeoutAsync(normalizedOwner, refreshId, sink, ct)
-                .ConfigureAwait(false);
+            await RecordProviderTimeoutAsync(normalizedOwner, refreshId, ct).ConfigureAwait(false);
+            return;
         }
         var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
         if (!scopePlanResult.Succeeded)
         {
-            return await HandleFailureAsync(
+            await HandleFailureAsync(
                 normalizedOwner,
                 refreshId,
                 scopePlanResult.Failure,
-                sink,
-                ct);
+                ct).ConfigureAwait(false);
+            return;
         }
 
         var scopePlan = scopePlanResult.Value!;
         if (!MatchesPersonalCatalog(scopePlan, normalizedOwner, selectedServiceIds))
         {
-            return await InvalidateUnstableAsync(
+            await InvalidateUnstableAsync(
                 normalizedOwner,
                 refreshId,
                 CatalogMismatchFailureCode,
-                sink,
-                ct);
+                ct).ConfigureAwait(false);
+            return;
         }
 
         var inventoryById = eligibleServices.ToDictionary(static service => service.Id, StringComparer.Ordinal);
@@ -251,13 +314,11 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             contentDigest,
             services), ct);
 
-        return await AwaitTerminalResultAsync(sink, refreshId, ct).ConfigureAwait(false);
     }
 
-    private async Task<NyxIdAuthorizationCatalogRefreshResult> HandleProviderTimeoutAsync(
+    private async Task RecordProviderTimeoutAsync(
         AuthorizationOwnerIdentity owner,
         string refreshId,
-        EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
         CancellationToken ct)
     {
         await _commandPort.RecordRefreshFailureAsync(
@@ -270,14 +331,12 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             "NyxID authorization catalog provider request timed out. ownerKind={OwnerKind} failureCode={FailureCode}",
             owner.OwnerKind,
             ProviderTimedOutFailureCode);
-        return await AwaitTerminalResultAsync(sink, refreshId, ct).ConfigureAwait(false);
     }
 
-    private async Task<NyxIdAuthorizationCatalogRefreshResult> HandleFailureAsync(
+    private async Task HandleFailureAsync(
         AuthorizationOwnerIdentity owner,
         string refreshId,
         NyxIdApiAccessFailure? failure,
-        EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
         CancellationToken ct)
     {
         var code = string.IsNullOrWhiteSpace(failure?.Code)
@@ -297,7 +356,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                 "NyxID authorization catalog access was denied. ownerKind={OwnerKind} failureCode={FailureCode}",
                 owner.OwnerKind,
                 code);
-            return await AwaitTerminalResultAsync(sink, refreshId, ct).ConfigureAwait(false);
+            return;
         }
 
         if (failure?.Kind is NyxIdApiAccessFailureKind.RateLimited or
@@ -309,17 +368,16 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                 "NyxID authorization catalog refresh failed transiently. ownerKind={OwnerKind} failureCode={FailureCode}",
                 owner.OwnerKind,
                 code);
-            return await AwaitTerminalResultAsync(sink, refreshId, ct).ConfigureAwait(false);
+            return;
         }
 
-        return await InvalidateUnstableAsync(owner, refreshId, code, sink, ct);
+        await InvalidateUnstableAsync(owner, refreshId, code, ct).ConfigureAwait(false);
     }
 
-    private async Task<NyxIdAuthorizationCatalogRefreshResult> InvalidateUnstableAsync(
+    private async Task InvalidateUnstableAsync(
         AuthorizationOwnerIdentity owner,
         string refreshId,
         string code,
-        EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
         CancellationToken ct)
     {
         await _commandPort.InvalidateRefreshAsync(
@@ -333,7 +391,24 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             "NyxID authorization catalog response was unstable. ownerKind={OwnerKind} failureCode={FailureCode}",
             owner.OwnerKind,
             code);
-        return await AwaitTerminalResultAsync(sink, refreshId, ct).ConfigureAwait(false);
+    }
+
+    private async Task ObserveAfterCancellationAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Canceled the losing NyxID catalog refresh task after terminal observation.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "The losing NyxID catalog refresh task failed after terminal observation.");
+        }
     }
 
     private async Task<NyxIdAuthorizationCatalogRefreshResult> AwaitTerminalResultAsync(
@@ -382,23 +457,27 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         NyxIdAuthorizationCatalogRefreshCommittedOutcome outcome) => outcome.Status switch
     {
         NyxIdAuthorizationCatalogRefreshOutcomeStatus.Observed =>
-            NyxIdAuthorizationCatalogRefreshResult.Observed,
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(outcome.StateVersion),
         NyxIdAuthorizationCatalogRefreshOutcomeStatus.Failed =>
             new NyxIdAuthorizationCatalogRefreshResult(
                 NyxIdAuthorizationCatalogRefreshStatus.Failed,
-                outcome.FailureCode),
+                outcome.FailureCode,
+                outcome.StateVersion),
         NyxIdAuthorizationCatalogRefreshOutcomeStatus.AccessDenied =>
             new NyxIdAuthorizationCatalogRefreshResult(
                 NyxIdAuthorizationCatalogRefreshStatus.AccessDenied,
-                outcome.FailureCode),
+                outcome.FailureCode,
+                outcome.StateVersion),
         NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable =>
             new NyxIdAuthorizationCatalogRefreshResult(
                 NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable,
-                outcome.FailureCode),
+                outcome.FailureCode,
+                outcome.StateVersion),
         NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded =>
             new NyxIdAuthorizationCatalogRefreshResult(
                 NyxIdAuthorizationCatalogRefreshStatus.Superseded,
-                outcome.FailureCode),
+                outcome.FailureCode,
+                outcome.StateVersion),
         _ => throw new InvalidOperationException("nyxid_catalog_refresh_observation_status_invalid"),
     };
 

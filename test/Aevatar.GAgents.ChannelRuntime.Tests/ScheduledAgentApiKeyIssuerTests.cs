@@ -79,6 +79,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
         var plan = ValidPlan();
         plan.Owner.OwnerKind = AuthorizationOwnerKind.Organization;
         plan.Owner.OwnerSubject = "org-alpha";
+        plan.AuthenticatedActor = Owner(AuthorizationOwnerKind.Personal, "admin-alpha");
         plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
 
         var result = await issuer.IssueAsync(
@@ -95,6 +96,30 @@ public sealed class ScheduledAgentApiKeyIssuerTests
         createRequest.RootElement.GetProperty("target_org_id").GetString().Should().Be("org-alpha");
         createRequest.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
         createRequest.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IssueAsync_ForOrganizationOwner_WhenAuthenticatedActorDiffers_ShouldFailBeforeCreate()
+    {
+        var handler = new RoutingJsonHandler(OrganizationScopePlanJson().Replace(
+            "\"authenticated_actor\": { \"id\": \"admin-alpha\", \"type\": \"personal\" }",
+            "\"authenticated_actor\": { \"id\": \"admin-other\", \"type\": \"personal\" }",
+            StringComparison.Ordinal));
+        var issuer = CreateIssuer(handler);
+        var plan = ValidPlan();
+        plan.Owner = Owner(AuthorizationOwnerKind.Organization, "org-alpha");
+        plan.AuthenticatedActor = Owner(AuthorizationOwnerKind.Personal, "admin-alpha");
+        plan.PermissionDigest = ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(plan);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(plan),
+            "scheduled-org-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("authorization_plan_changed");
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
     [Fact]
@@ -206,6 +231,40 @@ public sealed class ScheduledAgentApiKeyIssuerTests
         result.Error.Should().Be("nyxid_scope_plan_failed");
         result.HttpStatus.Should().Be(503);
         result.ToErrorJson().Should().NotContain("bearer-secret").And.NotContain("secret/token");
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
+    }
+
+    [Fact]
+    public async Task IssueAsync_WhenScopePlanProviderTimesOut_ReturnsSanitizedFailureBeforeCreate()
+    {
+        var handler = new CancelingHandler();
+        var issuer = CreateIssuer(handler);
+
+        var result = await issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("nyxid_scope_plan_provider_timed_out");
+        handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
+    }
+
+    [Fact]
+    public async Task IssueAsync_WhenCallerCancelsScopePlanRequest_PropagatesCancellationBeforeCreate()
+    {
+        using var callerCancellation = new CancellationTokenSource();
+        var handler = new CancelingHandler(callerCancellation);
+        var issuer = CreateIssuer(handler);
+
+        var act = () => issuer.IssueAsync(
+            "session-token",
+            new ValidatedScheduledInvocationAuthorizationPlan(ValidPlan()),
+            "scheduled-key",
+            callerCancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
         handler.Requests.Should().ContainSingle().Which.Should().Be("/api/v1/api-keys/scope-plan");
     }
 
@@ -396,6 +455,10 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             InvalidPlan(static plan => plan.Owner.OwnerSubject = " "),
             InvalidPlan(static plan => plan.Owner.OwnerSubject = " owner-alpha "),
             InvalidPlan(static plan => plan.Owner.OwnerKind = AuthorizationOwnerKind.Unspecified),
+            InvalidPlan(static plan => plan.AuthenticatedActor = null),
+            InvalidPlan(static plan => plan.AuthenticatedActor.OwnerKind = AuthorizationOwnerKind.Organization),
+            InvalidPlan(static plan => plan.AuthenticatedActor.Authority = "authority-other"),
+            InvalidPlan(static plan => plan.AuthenticatedActor.OwnerSubject = " owner-alpha "),
             InvalidPlan(static plan =>
                 plan.CredentialPolicy.ServiceGrantRequirement = AuthorizationGrantRequirement.Unspecified),
             InvalidPlan(static plan =>
@@ -474,7 +537,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
         handler.Requests.Should().BeEmpty();
     }
 
-    private static ScheduledAgentApiKeyIssuer CreateIssuer(RoutingJsonHandler handler)
+    private static ScheduledAgentApiKeyIssuer CreateIssuer(HttpMessageHandler handler)
     {
         var client = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
@@ -489,6 +552,12 @@ public sealed class ScheduledAgentApiKeyIssuerTests
         var plan = new ScheduledInvocationAuthorizationPlan
         {
             Owner = new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "owner-alpha",
+            },
+            AuthenticatedActor = new AuthorizationOwnerIdentity
             {
                 Authority = NyxIdAuthorizationAuthorities.NyxId,
                 OwnerKind = AuthorizationOwnerKind.Personal,
@@ -589,7 +658,7 @@ public sealed class ScheduledAgentApiKeyIssuerTests
     private static string OrganizationScopePlanJson() => PersonalScopePlanJson()
         .Replace(
             "\"authenticated_actor\": { \"id\": \"owner-alpha\", \"type\": \"personal\" }",
-            "\"authenticated_actor\": { \"id\": \"organization-admin\", \"type\": \"personal\" }",
+            "\"authenticated_actor\": { \"id\": \"admin-alpha\", \"type\": \"personal\" }",
             StringComparison.Ordinal)
         .Replace(
             "\"intended_key_owner\": { \"id\": \"owner-alpha\", \"type\": \"personal\" }",
@@ -645,6 +714,20 @@ public sealed class ScheduledAgentApiKeyIssuerTests
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
             };
+        }
+    }
+
+    private sealed class CancelingHandler(CancellationTokenSource? callerCancellation = null) : HttpMessageHandler
+    {
+        public List<string> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request.RequestUri?.PathAndQuery ?? string.Empty);
+            callerCancellation?.Cancel();
+            throw new TaskCanceledException("Simulated NyxID scope-plan timeout.", null, cancellationToken);
         }
     }
 }

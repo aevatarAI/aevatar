@@ -154,6 +154,19 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 $"nyxid_catalog_refresh_failed:{ex.GetType().Name}");
         }
 
+        if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
+        {
+            if (refresh.StateVersion > 0 &&
+                first.ObservedCatalogStateVersion < refresh.StateVersion)
+            {
+                return ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
+                    refresh.StateVersion,
+                    first.ObservedCatalogStateVersion);
+            }
+
+            throw new StudioMemberAutomationCatalogRefreshSupersededException();
+        }
+
         if (!refresh.Success)
         {
             var failureCode = string.IsNullOrWhiteSpace(refresh.FailureCode)
@@ -171,12 +184,16 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
         };
         var second = await _authorizationRevalidator.RevalidateAsync(retryRequest, confirmation, ct);
-        if (second.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(second.Detail))
+        if (second.Success ||
+            !IsRecoverableNyxIdCatalogSnapshotFailure(second.Detail) ||
+            second.ObservedCatalogStateVersion >= refresh.StateVersion)
+        {
             return second;
+        }
 
-        return ScheduledInvocationAuthorizationValidationResult.Failed(
-            second.FailureCode,
-            $"nyxid_catalog_refresh_observed_but_snapshot_unavailable:{second.Detail}");
+        return ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
+            refresh.StateVersion,
+            second.ObservedCatalogStateVersion);
     }
 
     public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
@@ -426,6 +443,13 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             ct);
         if (!validation.Success)
         {
+            if (validation.FailureCode ==
+                ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending)
+            {
+                throw new StudioMemberAutomationProjectionPendingException(
+                    validation.RequiredStateVersion);
+            }
+
             throw new StudioMemberAutomationPlanConflictException(
                 validation.FailureCode == ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged
                     ? "authorization_plan_changed"

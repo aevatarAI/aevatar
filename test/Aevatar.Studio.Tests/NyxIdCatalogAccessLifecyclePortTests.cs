@@ -73,15 +73,11 @@ public sealed class NyxIdCatalogAccessLifecyclePortTests
     {
         public List<(AuthorizationOwnerIdentity Owner, DateTimeOffset InvalidatedAt, string Reason)> Invalidations { get; } = [];
 
-        public Task ActivateAsync(
-            AuthorizationOwnerIdentity owner,
-            DateTimeOffset activatedAtUtc,
-            CancellationToken ct = default) => throw new NotSupportedException();
-
         public Task BeginRefreshAsync(
             AuthorizationOwnerIdentity owner,
             string refreshId,
             DateTimeOffset startedAtUtc,
+            long expectedLifecycleFence,
             CancellationToken ct = default) => throw new NotSupportedException();
 
         public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default) =>

@@ -169,6 +169,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             !string.Equals(owner.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) ||
             !IsNormalized(owner.OwnerSubject) ||
             !TryResolveOwnerScope(owner, out var ownerKind, out var ownerSubject) ||
+            !IsValidAuthenticatedActor(plan.AuthenticatedActor) ||
             !TryResolveFutureExpiry(policy.ExpiresAt, _timeProvider.GetUtcNow(), out var expiresAt))
         {
             return ScheduledAgentApiKeyIssueResult.Failed("authorization_plan_policy_invalid");
@@ -200,11 +201,19 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             ? ownerSubject
             : null;
         var client = _nyxClientFactory.CreateClient();
-        var scopePlanResponse = await client.PlanApiKeyScopeAsync(
-            token,
-            serviceIds,
-            targetOrganizationId,
-            ct);
+        string scopePlanResponse;
+        try
+        {
+            scopePlanResponse = await client.PlanApiKeyScopeAsync(
+                token,
+                serviceIds,
+                targetOrganizationId,
+                ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return ScheduledAgentApiKeyIssueResult.Failed("nyxid_scope_plan_provider_timed_out");
+        }
         var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
         if (!scopePlanResult.Succeeded)
         {
@@ -443,9 +452,7 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
             !string.Equals(scopePlan.ContractVersion, plan.CatalogAuthority.ContractVersion, StringComparison.Ordinal) ||
             !string.Equals(scopePlan.PolicyVersion, plan.CatalogAuthority.PolicyVersion, StringComparison.Ordinal) ||
             !MatchesPrincipal(scopePlan.IntendedKeyOwner, ownerKind, ownerSubject) ||
-            scopePlan.AuthenticatedActor.Kind != NyxIdScopePlanPrincipalKind.Personal ||
-            ownerKind == AuthorizationOwnerKind.Personal &&
-            !MatchesPrincipal(scopePlan.AuthenticatedActor, ownerKind, ownerSubject) ||
+            !MatchesPrincipal(scopePlan.AuthenticatedActor, plan.AuthenticatedActor) ||
             scopePlan.Freshness.Mode != NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot ||
             !string.Equals(scopePlan.Freshness.PreconditionField, "scope_plan_digest", StringComparison.Ordinal) ||
             scopePlan.Freshness.PostCreationDrift != NyxIdScopePlanPostCreationDrift.FailClosed ||
@@ -517,6 +524,15 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         (grant.NodeGrantRequirement == AuthorizationGrantRequirement.Required
             ? grant.NodeIds.Count > 0
             : grant.NodeIds.Count == 0);
+
+    private static bool IsValidAuthenticatedActor(AuthorizationOwnerIdentity? authenticatedActor) =>
+        authenticatedActor != null &&
+        string.Equals(
+            authenticatedActor.Authority,
+            NyxIdAuthorizationAuthorities.NyxId,
+            StringComparison.Ordinal) &&
+        authenticatedActor.OwnerKind == AuthorizationOwnerKind.Personal &&
+        IsNormalized(authenticatedActor.OwnerSubject);
 
     private static bool IsCanonicalIdSequence(IReadOnlyList<string> ids)
     {

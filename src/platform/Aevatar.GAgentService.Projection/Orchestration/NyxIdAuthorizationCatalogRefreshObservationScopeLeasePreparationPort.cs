@@ -36,11 +36,17 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationScopeLeasePrepara
         if (string.IsNullOrWhiteSpace(actorId) || string.IsNullOrWhiteSpace(refreshId))
             return null;
 
-        NyxIdAuthorizationCatalogRefreshObservationRuntimeLease? lease = null;
+        var normalizedActorId = actorId.Trim();
+        var normalizedRefreshId = refreshId.Trim();
+        var lease = new NyxIdAuthorizationCatalogRefreshObservationRuntimeLease(
+            new NyxIdAuthorizationCatalogRefreshObservationProjectionContext
+            {
+                RootActorId = normalizedActorId,
+                ProjectionKind = ServiceProjectionKinds.NyxIdAuthorizationCatalogRefreshObservation,
+                SessionId = normalizedRefreshId,
+            });
         try
         {
-            var normalizedActorId = actorId.Trim();
-            var normalizedRefreshId = refreshId.Trim();
             lease = await _activationService.EnsureAsync(
                 new ProjectionScopeStartRequest
                 {
@@ -57,8 +63,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationScopeLeasePrepara
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            if (lease != null)
-                await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
+            await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
 
             throw;
         }
@@ -69,8 +74,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationScopeLeasePrepara
                 "Failed to prepare a NyxID catalog refresh observation scope for actor {ActorId} and refresh {RefreshId}.",
                 actorId,
                 refreshId);
-            if (lease != null)
-                await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
+            await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
 
             return null;
         }

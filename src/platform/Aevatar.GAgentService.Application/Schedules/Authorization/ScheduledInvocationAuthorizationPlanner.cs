@@ -36,6 +36,12 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         var requestFailure = ValidateRequest(request);
         if (requestFailure != null)
             return requestFailure;
+        if (!TryResolveAuthenticatedActor(request.OwnerContext, out var authenticatedActor))
+        {
+            return Failed(
+                ScheduledInvocationAuthorizationFailureCode.OwnerInvalid,
+                "nyxid_authenticated_actor_invalid");
+        }
 
         var evidence = await ResolveTargetEvidenceAsync(request, ct);
         if (evidence.Failure != null)
@@ -45,18 +51,28 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         if (snapshot == null)
             return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "nyxid_catalog_snapshot_not_found");
         if (!OwnerEquals(request.Owner, snapshot.Owner))
-            return Failed(ScheduledInvocationAuthorizationFailureCode.OwnerMismatch, "nyxid_catalog_owner_mismatch");
+            return Failed(
+                ScheduledInvocationAuthorizationFailureCode.OwnerMismatch,
+                "nyxid_catalog_owner_mismatch",
+                snapshot.StateVersion);
         if (snapshot.Invalidated)
-            return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound, "nyxid_catalog_snapshot_invalidated");
+            return Failed(
+                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                "nyxid_catalog_snapshot_invalidated",
+                snapshot.StateVersion);
         if (snapshot.ObservedAtUtc > request.EvaluatedAtUtc || snapshot.FreshUntilUtc <= request.EvaluatedAtUtc)
-            return Failed(ScheduledInvocationAuthorizationFailureCode.SnapshotStale, "nyxid_catalog_snapshot_stale");
+            return Failed(
+                ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+                "nyxid_catalog_snapshot_stale",
+                snapshot.StateVersion);
         if (string.IsNullOrWhiteSpace(snapshot.ContractVersion) ||
             string.IsNullOrWhiteSpace(snapshot.PolicyVersion) ||
             snapshot.EvaluatedAtUtc == default)
         {
             return Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
-                "nyxid_catalog_contract_evidence_invalid");
+                "nyxid_catalog_contract_evidence_invalid",
+                snapshot.StateVersion);
         }
 
         var grants = ResolveGrants(
@@ -65,13 +81,14 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             evidence.ServiceGrantRequirement,
             snapshot.Services);
         if (grants.Failure != null)
-            return grants.Failure;
+            return grants.Failure with { ObservedCatalogStateVersion = snapshot.StateVersion };
 
         var plan = new ScheduledInvocationAuthorizationPlan
         {
             SchemaVersion = SchemaVersion,
             InvocationTarget = request.InvocationTarget.Clone(),
             Owner = request.Owner.Clone(),
+            AuthenticatedActor = authenticatedActor,
             CredentialPolicy = new ScheduledInvocationCredentialPolicy
             {
                 AllowAllServices = false,
@@ -459,6 +476,12 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         {
             return Failed(ScheduledInvocationAuthorizationFailureCode.OwnerInvalid, "authenticated_owner_context_incomplete");
         }
+        if (!TryResolveAuthenticatedActor(request.OwnerContext, out _))
+        {
+            return Failed(
+                ScheduledInvocationAuthorizationFailureCode.OwnerInvalid,
+                "nyxid_authenticated_actor_invalid");
+        }
         if (request.ServiceGrantRequirement == AuthorizationGrantRequirement.Unspecified ||
             !Enum.IsDefined(request.ServiceGrantRequirement))
         {
@@ -536,6 +559,49 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         !string.IsNullOrWhiteSpace(owner.OwnerSubject) &&
         string.Equals(owner.OwnerSubject, owner.OwnerSubject.Trim(), StringComparison.Ordinal);
 
+    private static bool TryResolveAuthenticatedActor(
+        AuthenticatedAuthorizationOwnerContext context,
+        out AuthorizationOwnerIdentity authenticatedActor)
+    {
+        authenticatedActor = null!;
+        var owner = context.Owner;
+        if (!IsNormalizedNyxIdIdentity(owner))
+            return false;
+
+        var candidate = context.AuthenticatedActor;
+        if (owner.OwnerKind == AuthorizationOwnerKind.Personal)
+        {
+            candidate ??= owner;
+            if (!IdentityEquals(candidate, owner))
+                return false;
+        }
+        else if (owner.OwnerKind != AuthorizationOwnerKind.Organization || candidate == null)
+        {
+            return false;
+        }
+
+        if (!IsNormalizedNyxIdIdentity(candidate) ||
+            candidate.OwnerKind != AuthorizationOwnerKind.Personal)
+        {
+            return false;
+        }
+
+        authenticatedActor = candidate.Clone();
+        return true;
+    }
+
+    private static bool IsNormalizedNyxIdIdentity(AuthorizationOwnerIdentity? identity) =>
+        identity != null &&
+        string.Equals(identity.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) &&
+        identity.OwnerKind is AuthorizationOwnerKind.Personal or AuthorizationOwnerKind.Organization &&
+        !string.IsNullOrWhiteSpace(identity.OwnerSubject) &&
+        string.Equals(identity.OwnerSubject, identity.OwnerSubject.Trim(), StringComparison.Ordinal);
+
+    private static bool IdentityEquals(AuthorizationOwnerIdentity left, AuthorizationOwnerIdentity right) =>
+        string.Equals(left.Authority, right.Authority, StringComparison.Ordinal) &&
+        left.OwnerKind == right.OwnerKind &&
+        string.Equals(left.OwnerSubject, right.OwnerSubject, StringComparison.Ordinal);
+
     private static bool OwnerEquals(AuthorizationOwnerIdentity left, AuthorizationOwnerIdentity right) =>
         string.Equals(left.Authority.Trim(), right.Authority.Trim(), StringComparison.Ordinal) &&
         left.OwnerKind == right.OwnerKind &&
@@ -543,7 +609,9 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
     private static ScheduledInvocationAuthorizationPlanResult Failed(
         ScheduledInvocationAuthorizationFailureCode code,
-        string detail) => ScheduledInvocationAuthorizationPlanResult.Failed(code, detail);
+        string detail,
+        long observedCatalogStateVersion = 0) =>
+        ScheduledInvocationAuthorizationPlanResult.Failed(code, detail, observedCatalogStateVersion);
 
     private sealed record TargetEvidenceResolution(
         IReadOnlyList<string> RequiredServiceIds,

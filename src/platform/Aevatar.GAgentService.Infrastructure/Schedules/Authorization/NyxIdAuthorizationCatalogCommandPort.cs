@@ -17,26 +17,18 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
-    public Task ActivateAsync(
-        AuthorizationOwnerIdentity owner,
-        DateTimeOffset activatedAtUtc,
-        CancellationToken ct = default) =>
-        DispatchAsync(owner, new ActivateNyxIdAuthorizationCatalogCommand
-        {
-            Owner = owner.Clone(),
-            ActivatedAt = Timestamp.FromDateTimeOffset(activatedAtUtc),
-        }, ct);
-
     public Task BeginRefreshAsync(
         AuthorizationOwnerIdentity owner,
         string refreshId,
         DateTimeOffset startedAtUtc,
+        long expectedLifecycleFence,
         CancellationToken ct = default) =>
         DispatchAsync(owner, new BeginNyxIdAuthorizationCatalogRefreshCommand
         {
             Owner = owner.Clone(),
             RefreshId = refreshId ?? string.Empty,
             StartedAt = Timestamp.FromDateTimeOffset(startedAtUtc),
+            ExpectedLifecycleFence = expectedLifecycleFence,
         }, ct);
 
     public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default)

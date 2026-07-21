@@ -1,8 +1,7 @@
 using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
-using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.DependencyInjection;
@@ -65,9 +64,7 @@ internal static class StudioHostingServiceCollectionExtensions
                     ? LlmDefaults.NyxIdRoute
                     : configuredRoute.Trim();
             });
-        services.AddNyxIdApiAccess(configuration);
-        services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
-        services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
+        services.AddNyxIdAuthorizationCatalogHosting(configuration);
         services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(
             sp.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>(),
             configuration,

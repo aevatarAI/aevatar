@@ -35,11 +35,6 @@ message NyxIdAuthorizationCatalogState {
   google.protobuf.Timestamp newest_refresh_started_at = 24;
 }
 
-message ActivateNyxIdAuthorizationCatalogCommand {
-  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
-  google.protobuf.Timestamp activated_at = 2;
-}
-
 message ObserveNyxIdAuthorizationCatalogCommand {
   reserved 5, 7;
   reserved "external_revision", "expected_lifecycle_fence";
@@ -59,6 +54,7 @@ message BeginNyxIdAuthorizationCatalogRefreshCommand {
   aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
   string refresh_id = 2;
   google.protobuf.Timestamp started_at = 3;
+  int64 expected_lifecycle_fence = 4;
 }
 
 message RecordNyxIdAuthorizationCatalogRefreshFailureCommand {

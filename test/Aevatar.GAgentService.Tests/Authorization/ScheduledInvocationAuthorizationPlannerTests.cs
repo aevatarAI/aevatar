@@ -42,6 +42,92 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_ForPersonalOwner_ShouldBindAuthenticatedActorToOwner()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
+
+        var result = await planner.PlanAsync(Request(["svc-a"]));
+
+        result.Success.Should().BeTrue();
+        result.Plan!.AuthenticatedActor.Should().BeEquivalentTo(Owner());
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForPersonalOwnerWithDifferentAuthenticatedActor_ShouldFail()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
+        var request = Request(["svc-a"]);
+        request = request with
+        {
+            OwnerContext = request.OwnerContext with
+            {
+                AuthenticatedActor = Identity(AuthorizationOwnerKind.Personal, "user-other"),
+            },
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.OwnerInvalid);
+        result.Detail.Should().Be("nyxid_authenticated_actor_invalid");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForOrganizationOwnerWithoutAuthenticatedAdministrator_ShouldFail()
+    {
+        var organization = Identity(AuthorizationOwnerKind.Organization, "org-alpha");
+        var planner = NewPlanner(new MutableCatalogQueryPort(
+            Snapshot(Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)) with
+            {
+                Owner = organization.Clone(),
+            }));
+        var request = Request(["svc-a"]);
+        request = request with
+        {
+            OwnerContext = request.OwnerContext with
+            {
+                Owner = organization,
+                AuthenticatedActor = null,
+            },
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.OwnerInvalid);
+        result.Detail.Should().Be("nyxid_authenticated_actor_invalid");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForOrganizationOwner_ShouldBindExplicitPersonalAdministrator()
+    {
+        var organization = Identity(AuthorizationOwnerKind.Organization, "org-alpha");
+        var administrator = Identity(AuthorizationOwnerKind.Personal, "admin-alpha");
+        var planner = NewPlanner(new MutableCatalogQueryPort(
+            Snapshot(Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)) with
+            {
+                Owner = organization.Clone(),
+            }));
+        var request = Request(["svc-a"]);
+        request = request with
+        {
+            OwnerContext = request.OwnerContext with
+            {
+                Owner = organization,
+                AuthenticatedActor = administrator,
+            },
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeTrue();
+        result.Plan!.Owner.Should().BeEquivalentTo(organization);
+        result.Plan.AuthenticatedActor.Should().BeEquivalentTo(administrator);
+    }
+
+    [Fact]
     public async Task PlanAsync_ShouldProduceSameDigestForEquivalentPermissionSets()
     {
         var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
@@ -90,6 +176,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         [
             static plan => plan.InvocationTarget.ScheduledAgent.ExecutionScopeId = "scope-other",
             static plan => plan.Owner.OwnerSubject = "owner-other",
+            static plan => plan.AuthenticatedActor.OwnerSubject = "admin-other",
             static plan => plan.SourceStamps[0].StateVersion = 17,
             static plan => plan.CatalogAuthority.ActorStateVersion++,
             static plan => plan.CatalogAuthority.ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
@@ -192,6 +279,38 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Success.Should().BeFalse();
         result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged);
         result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+    }
+
+    [Theory]
+    [InlineData(true, "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(false, "nyxid_catalog_snapshot_stale")]
+    public async Task RevalidateAsync_ShouldReportObservedCatalogVersionForUnavailableCurrentEvidence(
+        bool invalidated,
+        string expectedDetail)
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)));
+        var planner = NewPlanner(catalog);
+        var request = Request(["svc-a"]);
+        var original = await planner.PlanAsync(request);
+        catalog.Snapshot = catalog.Snapshot! with
+        {
+            StateVersion = 24,
+            Invalidated = invalidated,
+            FreshUntilUtc = invalidated ? catalog.Snapshot.FreshUntilUtc : Now,
+        };
+        var revalidator = new ScheduledInvocationAuthorizationRevalidator(
+            planner,
+            new FakeTimeProvider(Now));
+
+        var result = await revalidator.RevalidateAsync(
+            request,
+            ScheduledInvocationAuthorizationConfirmations.FromPlan(original.Plan!));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged);
+        result.Detail.Should().Be(expectedDetail);
+        result.ObservedCatalogStateVersion.Should().Be(24);
     }
 
     [Fact]
@@ -403,6 +522,15 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         OwnerKind = AuthorizationOwnerKind.Personal,
         OwnerSubject = "user-alpha",
     };
+
+    private static AuthorizationOwnerIdentity Identity(
+        AuthorizationOwnerKind ownerKind,
+        string ownerSubject) => new()
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = ownerKind,
+            OwnerSubject = ownerSubject,
+        };
 
     private static AuthorizationOwnerIdentity ResourceOwner() => new()
     {

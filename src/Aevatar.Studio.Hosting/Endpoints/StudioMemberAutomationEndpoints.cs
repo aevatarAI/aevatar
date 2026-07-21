@@ -457,6 +457,23 @@ internal static class StudioMemberAutomationEndpoints
             StudioMemberAutomationNotFoundException => AutomationNotFound(),
             StudioMemberNotFoundException => AutomationNotFound(),
             ScheduledDispatchNotFoundException => AutomationNotFound(),
+            StudioMemberAutomationProjectionPendingException pending => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
+                    message = "The refreshed authorization catalog is still being projected. Retry this request.",
+                    retryable = true,
+                    requiredStateVersion = pending.RequiredStateVersion,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRefreshSupersededException => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED",
+                    message = "A newer authorization catalog refresh superseded this request. Retry this request.",
+                    retryable = true,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
             StudioMemberAutomationPlanConflictException conflict => Results.Json(
                 new
                 {

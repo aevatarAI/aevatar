@@ -158,3 +158,25 @@ public sealed class StudioMemberAutomationPlanConflictException : Exception
 
     public string Code { get; }
 }
+
+public sealed class StudioMemberAutomationProjectionPendingException : Exception
+{
+    public StudioMemberAutomationProjectionPendingException(long requiredStateVersion)
+        : base("The authorization catalog projection has not reached the committed state version.")
+    {
+        if (requiredStateVersion <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requiredStateVersion));
+
+        RequiredStateVersion = requiredStateVersion;
+    }
+
+    public long RequiredStateVersion { get; }
+}
+
+public sealed class StudioMemberAutomationCatalogRefreshSupersededException : Exception
+{
+    public StudioMemberAutomationCatalogRefreshSupersededException()
+        : base("The authorization catalog refresh was superseded by a newer refresh.")
+    {
+    }
+}
