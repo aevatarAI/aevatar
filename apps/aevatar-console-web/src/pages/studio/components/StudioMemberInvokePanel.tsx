@@ -725,6 +725,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
   const isChatEndpoint = Boolean(
     selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
+  const canStartWithoutInput = runtimeTarget === 'member' && isChatEndpoint;
   const preferredServiceId = useMemo(
     () => getPreferredScopeConsoleServiceId(services),
     [services],
@@ -1335,6 +1336,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
 
     if (
       isChatServiceEndpoint(selectedEndpoint) &&
+      !canStartWithoutInput &&
       !trimmedPrompt &&
       runFiles.length === 0
     ) {
@@ -1788,6 +1790,7 @@ const StudioMemberInvokePanel: React.FC<StudioMemberInvokePanelProps> = ({
     prompt,
     attachedFiles,
     canAttachFiles,
+    canStartWithoutInput,
     invokeRouteTarget,
     scopeId,
     selectedEndpoint,

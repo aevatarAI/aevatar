@@ -215,7 +215,7 @@ internal static class ChatRunRequestNormalizer
             return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
 
         var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
-        if (rawPrompt.Length == 0)
+        if (rawPrompt.Length == 0 && !CanStartWithoutInput(sourceResult.Source!))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
         var callerCredentialResult = NormalizeCallerCredential(trustedCallerCredential);
@@ -848,6 +848,9 @@ internal static class ChatRunRequestNormalizer
 
     private static string? NormalizeSessionId(string? sessionId) =>
         string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();
+
+    private static bool CanStartWithoutInput(WorkflowChatSource source) =>
+        source.Kind == WorkflowChatSourceKind.DefinitionActor;
 
     private static string ResolvePrompt(string? prompt, IReadOnlyList<WorkflowChatInputPart>? inputParts)
     {

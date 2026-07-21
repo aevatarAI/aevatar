@@ -485,6 +485,56 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_ShouldAcceptEmptyPromptForResolvedDefinitionActorSource()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var http = CreateHttpContext();
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (command, _, onAcceptedAsync, ct) =>
+            {
+                capturedCommand = command;
+                var receipt = new WorkflowChatRunAcceptedReceipt(
+                    "actor-bound-member",
+                    "status-report",
+                    "cmd-empty",
+                    "corr-empty");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "   ",
+                Source = new WorkflowChatSourceInput
+                {
+                    Kind = "definition_actor",
+                    DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                    {
+                        ActorId = "actor-bound-member",
+                        WorkflowName = "status-report",
+                    },
+                },
+            },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("aevatar.run.context");
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.Prompt.Should().BeEmpty();
+        capturedCommand.Source.Kind.Should().Be(WorkflowChatSourceKind.DefinitionActor);
+        capturedCommand.Source.DefinitionActorSource.Should()
+            .Be(new WorkflowChatDefinitionActorSource("actor-bound-member", "status-report"));
+    }
+
+    [Fact]
     public async Task HandleChat_ShouldRejectUnsupportedOnlyInputParts()
     {
         var http = CreateHttpContext();
