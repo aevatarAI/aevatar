@@ -483,7 +483,7 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
-    public async Task HandleChatRequest_BoundTurn_ShouldMaterializeCatalogOnce()
+    public async Task HandleChatRequest_BoundTurn_ShouldPrepareAndMaterializeCatalogOnceEach()
     {
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
         var llm = new StreamingToolLoopProviderFactory(
@@ -506,26 +506,25 @@ public class NyxIdChatGAgentTests
             SessionId = "catalog-bound-session",
         });
 
-        registry.ResolveCount.Should().Be(1);
+        registry.ResolveCount.Should().Be(2);
         llm.StreamRequests.Should().ContainSingle();
         llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeTrue();
     }
 
     [Fact]
-    public async Task HandleChatRequest_BoundTurnCatalogTimeout_ShouldCommitFailureAndPublishTerminalFrame()
+    public async Task HandleChatRequest_CancellationBeforeAuthorityBatch_ShouldPersistNeitherFact()
     {
         const int timeoutMs = 1_000;
-        const string actorId = "nyxid-chat-catalog-timeout";
-        const string sessionId = "catalog-timeout-session";
+        const string actorId = "nyxid-chat-authority-pre-batch-cancel";
+        const string sessionId = "authority-pre-batch-cancel-session";
         var timeProvider = new ManualDeadlineTimeProvider();
         var blockingSource = new ReleasableBlockingToolSource();
         var registry = new BlockingProfileToolSetRegistry("profile.route", blockingSource);
-        var materializer = new AgentProfileTurnCatalogMaterializer(registry, new NoMatchClassifier());
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            registry,
+            new NoMatchClassifier(),
+            timeProvider: timeProvider);
         using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
-        var llm = new StreamingToolLoopProviderFactory(
-        [
-            [new LLMStreamChunk { DeltaContent = "must not run" }],
-        ]);
         await AppendCommittedEventsAsync(
             provider,
             actorId,
@@ -533,16 +532,15 @@ public class NyxIdChatGAgentTests
         var agent = CreateAgent(
             provider,
             actorId,
-            llm,
+            new StreamingToolLoopProviderFactory([[new LLMStreamChunk { DeltaContent = "must not run" }]]),
             timeProvider: timeProvider,
             turnCatalogMaterializer: materializer);
-        var eventPublisher = new RecordingEventPublisher();
-        agent.EventPublisher = eventPublisher;
-
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
         await agent.ActivateAsync();
         var handling = agent.HandleChatRequest(new ChatRequestEvent
         {
-            Prompt = "wait for catalog",
+            Prompt = "wait before authority batch",
             SessionId = sessionId,
             TimeoutMs = timeoutMs,
         });
@@ -550,26 +548,95 @@ public class NyxIdChatGAgentTests
 
         try
         {
-            timeProvider.PendingTimerCount.Should().Be(1);
             timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
-            await handling;
+            await FluentActions.Awaiting(() => handling).Should().ThrowAsync<OperationCanceledException>();
         }
         finally
         {
             blockingSource.Release();
-            await handling;
         }
 
-        blockingSource.CancellationObserved.Should().BeTrue();
+        var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+        events.Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionStartedEvent.Descriptor) ||
+            stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor));
+        publisher.Published.OfType<TextMessageStartEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_CancellationAfterAuthorityBatch_ShouldKeepCommittedFenceWithoutFailureReconcile()
+    {
+        const int timeoutMs = 1_000;
+        const string actorId = "nyxid-chat-authority-post-batch-cancel";
+        const string sessionId = "authority-post-batch-cancel-session";
+        var timeProvider = new ManualDeadlineTimeProvider();
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "done"),
+            new DelegateTool("hidden", _ => "hidden"),
+        };
+        var fetcher = new CancellationBlockingExactFetcher();
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new StaticProfileToolSetRegistry("profile.route", tools),
+            new NoMatchClassifier(),
+            fetcher,
+            timeProvider: timeProvider);
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedEnforcedProfile() });
+        var llm = new StreamingToolLoopProviderFactory(
+            [[new LLMStreamChunk { DeltaContent = "must not run" }]]);
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            [new StaticToolSource(tools)],
+            timeProvider: timeProvider,
+            turnCatalogMaterializer: materializer);
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        var handling = agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "/alpha run",
+            SessionId = sessionId,
+            TimeoutMs = timeoutMs,
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload { NyxIdAccessToken = "turn-token" },
+            },
+        });
+        await fetcher.Started;
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(timeoutMs));
+        await handling;
+
+        fetcher.CancellationObserved.Should().BeTrue();
         llm.StreamRequests.Should().BeEmpty();
-        var completion = (await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId))
+        var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+        var authorityEvents = events
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .ToArray();
+        authorityEvents.Should().ContainSingle();
+        authorityEvents[0].CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.Initial);
+        authorityEvents[0].Authority.ReconciliationKey.Should().BeEquivalentTo(
+            new AgentProfileTurnReconciliationKey { SessionId = sessionId, Attempt = 1 });
+        authorityEvents[0].Authority.DegradationReasons.Should().NotContain(
+            AgentProfileTurnDegradationReason.MaterializationFailed);
+        var completion = events
             .Where(stateEvent => stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
-            .Should().ContainSingle().Subject.EventData.Unpack<RoleChatSessionCompletedEvent>();
-        completion.SessionId.Should().Be(sessionId);
+            .Select(stateEvent => stateEvent.EventData.Unpack<RoleChatSessionCompletedEvent>())
+            .Where(completed => completed.SessionId == sessionId)
+            .Should().ContainSingle().Which;
         completion.Content.Should().Contain($"LLM request timed out after {timeoutMs}ms");
-        eventPublisher.Published.OfType<TextMessageStartEvent>()
+        completion.ContentEmitted.Should().BeFalse();
+        publisher.Published.OfType<TextMessageStartEvent>()
             .Should().ContainSingle(start => start.SessionId == sessionId);
-        eventPublisher.Published.OfType<TextMessageEndEvent>()
+        publisher.Published.OfType<TextMessageEndEvent>()
             .Should().ContainSingle(end => end.SessionId == sessionId && end.Content == completion.Content);
     }
 
@@ -637,7 +704,7 @@ public class NyxIdChatGAgentTests
             },
         });
 
-        registry.ResolveCount.Should().Be(1);
+        registry.ResolveCount.Should().Be(2);
         fetcher.CallCount.Should().Be(1);
         fetcher.AccessToken.Should().Be(turnToken);
         fetcher.SkillRef.Should().BeEquivalentTo(new ExactRemoteSkillRef
@@ -728,7 +795,7 @@ public class NyxIdChatGAgentTests
         await agent.HandleChatRequest(request);
         await agent.HandleChatRequest(request.Clone());
 
-        registry.ResolveCount.Should().Be(1);
+        registry.ResolveCount.Should().Be(2);
         llm.StreamRequests.Should().ContainSingle();
     }
 
@@ -1469,6 +1536,37 @@ public class NyxIdChatGAgentTests
             AccessToken = accessToken;
             SkillRef = skillRef.Clone();
             return Task.FromResult(result);
+        }
+    }
+
+    private sealed class CancellationBlockingExactFetcher : IExactRemoteSkillFetcher
+    {
+        private readonly TaskCompletionSource _started =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+        public bool CancellationObserved { get; private set; }
+
+        public async Task<ExactRemoteSkillFetchResult> FetchAsync(
+            string accessToken,
+            ExactRemoteSkillRef skillRef,
+            CancellationToken ct = default)
+        {
+            _started.TrySetResult();
+            var canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(
+                static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
+                canceled);
+            try
+            {
+                await canceled.Task;
+                throw new InvalidOperationException("The exact fetch should have been canceled.");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                CancellationObserved = true;
+                throw;
+            }
         }
     }
 

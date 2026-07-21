@@ -350,7 +350,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         return result.Prompt;
     }
 
-    protected override async Task<AgentProfileTurnCatalog?> MaterializeAgentProfileTurnCatalogAsync(
+    protected override async Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
         ChatRequestEvent request,
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
@@ -359,23 +359,54 @@ public sealed class NyxIdChatGAgent : RoleGAgent
             return null;
 
         if (_turnCatalogMaterializer is null)
+            return CreateFailClosedPreparation(
+                request.SessionId,
+                AgentProfileTurnDegradationReason.MaterializerUnavailable);
+
+        try
         {
-            return new AgentProfileTurnCatalog(
-                [],
-                profilePromptLayer: null,
-                selectedSkillPromptLayer: null,
-                selectedIntentId: null,
-                candidateIntentId: null,
-                [new AgentProfileTurnDiagnostic(
-                    AgentProfileTurnDiagnosticCode.ProfileInvalid,
-                    "materializer_unavailable")]);
+            return await _turnCatalogMaterializer.PrepareAsync(
+                State.AgentProfile,
+                request.SessionId,
+                request.Prompt ?? string.Empty,
+                Tools.GetAll(),
+                toolContext,
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Agent profile turn authority preparation failed closed.");
+            return CreateFailClosedPreparation(
+                request.SessionId,
+                AgentProfileTurnDegradationReason.MaterializationFailed);
+        }
+    }
+
+    protected override async Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext toolContext,
+        AgentProfileTurnAuthorityState committedAuthority,
+        CancellationToken ct)
+    {
+        if (State.AgentProfile is null)
+            return null;
+
+        if (_turnCatalogMaterializer is null)
+        {
+            return CreateFailClosedMaterialization(
+                committedAuthority,
+                AgentProfileTurnDegradationReason.MaterializerUnavailable);
         }
 
         try
         {
-            return await _turnCatalogMaterializer.MaterializeAsync(
+            return await _turnCatalogMaterializer.MaterializeCommittedAsync(
                 State.AgentProfile,
-                request.Prompt ?? string.Empty,
+                committedAuthority,
                 toolContext.Credentials.NyxIdAccessToken,
                 Tools.GetAll(),
                 toolContext,
@@ -387,17 +418,49 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "Agent profile turn materialization failed closed.");
-            return new AgentProfileTurnCatalog(
+            Logger.LogWarning(ex, "Committed agent profile turn materialization failed closed.");
+            return CreateFailClosedMaterialization(
+                committedAuthority,
+                AgentProfileTurnDegradationReason.MaterializationFailed);
+        }
+    }
+
+    private static AgentProfileTurnAuthorityPreparation CreateFailClosedPreparation(
+        string sessionId,
+        AgentProfileTurnDegradationReason reason) =>
+        AgentProfileTurnAuthorityPreparation.Create(new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = sessionId,
+                Attempt = 1,
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty,
+            DegradationReasons = { reason },
+        });
+
+    private static AgentProfileTurnCatalogMaterialization CreateFailClosedMaterialization(
+        AgentProfileTurnAuthorityState committedAuthority,
+        AgentProfileTurnDegradationReason reason)
+    {
+        var proposal = committedAuthority.Clone();
+        proposal.AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty;
+        proposal.AuthorityCeilingToolNames.Clear();
+        proposal.DegradationReasons.Clear();
+        proposal.DegradationReasons.Add(
+            committedAuthority.DegradationReasons
+                .Append(reason)
+                .Where(static degradation => degradation != AgentProfileTurnDegradationReason.Unspecified)
+                .Distinct()
+                .OrderBy(static degradation => (int)degradation));
+        return AgentProfileTurnCatalogMaterialization.Create(
+            new AgentProfileTurnCatalog(
                 [],
                 profilePromptLayer: null,
                 selectedSkillPromptLayer: null,
                 selectedIntentId: null,
-                candidateIntentId: null,
-                [new AgentProfileTurnDiagnostic(
-                    AgentProfileTurnDiagnosticCode.ProfileInvalid,
-                    "materialization_exception")]);
-        }
+                candidateIntentId: committedAuthority.CandidateRoute?.IntentId),
+            proposal);
     }
 
     public override async Task HandleChatRequest(ChatRequestEvent request)

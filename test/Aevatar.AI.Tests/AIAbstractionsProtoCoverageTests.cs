@@ -36,7 +36,6 @@ public sealed class AIAbstractionsProtoCoverageTests
                 UserMemoryPrompt = "base-memory",
             },
         };
-
         var toolContext = control.ToToolContext(baseToolContext);
         var routingContext = control.ToRoutingContext(new LLMRequestRoutingContext(
             "base-model",
@@ -45,7 +44,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             "base-memory"));
         var payload = control.ToPayload();
         var roundTripped = LLMControlContextMapper.FromPayload(payload);
-
         toolContext.Credentials.NyxIdAccessToken.Should().Be("token-1");
         toolContext.Credentials.NyxIdOrgToken.Should().Be("org-1");
         toolContext.Credentials.SenderNyxIdAccessToken.Should().Be("sender-1");
@@ -57,7 +55,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         roundTripped.Should().Be(new LLMControlContext("token-1", "org-1", "sender-1", "model-a", "route-a", 7, "remember"));
         payload.HasMaxToolRoundsOverride.Should().BeTrue();
     }
-
     [Fact]
     public void LLMControlContext_ShouldKeepBaseValues_WhenControlValuesAreBlank()
     {
@@ -77,13 +74,11 @@ public sealed class AIAbstractionsProtoCoverageTests
                 UserMemoryPrompt = "base-memory",
             },
         };
-
         control.ToToolContext(baseToolContext).Should().Be(baseToolContext);
         control.ToRoutingContext(baseToolContext.Routing).Should().Be(baseToolContext.Routing);
         LLMControlContextMapper.FromPayload(null).Should().Be(LLMControlContext.Empty);
         control.ToPayload().HasMaxToolRoundsOverride.Should().BeFalse();
     }
-
     [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {
@@ -116,7 +111,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         receiptRoundTrip.SubjectId.Should().Be("skill-1");
         receiptRoundTrip.SubjectHash.Should().Be("hash-1");
         receiptRoundTrip.ManagedWorkflowHandoff.InvocationId.Should().Be("invoke-1");
-
         var request = RoundTrip(new ChatRequestEvent
         {
             Prompt = "hello",
@@ -155,42 +149,36 @@ public sealed class AIAbstractionsProtoCoverageTests
         request.LlmControl.MaxToolRoundsOverride.Should().Be(7);
         request.InputParts.Should().ContainSingle();
         request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Image);
-
         var response = RoundTrip(new ChatResponseEvent
         {
             Content = "world",
             SessionId = "session-1",
         }, ChatResponseEvent.Parser);
         response.Content.Should().Be("world");
-
         var textStart = RoundTrip(new TextMessageStartEvent
         {
             SessionId = "session-1",
             AgentId = "agent-1",
         }, TextMessageStartEvent.Parser);
         textStart.AgentId.Should().Be("agent-1");
-
         var textContent = RoundTrip(new TextMessageContentEvent
         {
             SessionId = "session-1",
             Delta = "delta",
         }, TextMessageContentEvent.Parser);
         textContent.Delta.Should().Be("delta");
-
         var textReasoning = RoundTrip(new TextMessageReasoningEvent
         {
             SessionId = "session-1",
             Delta = "reasoning-delta",
         }, TextMessageReasoningEvent.Parser);
         textReasoning.Delta.Should().Be("reasoning-delta");
-
         var textEnd = RoundTrip(new TextMessageEndEvent
         {
             SessionId = "session-1",
             Content = "done",
         }, TextMessageEndEvent.Parser);
         textEnd.Content.Should().Be("done");
-
         var toolCall = RoundTrip(new ToolCallEvent
         {
             ToolName = "search",
@@ -198,7 +186,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             CallId = "call-1",
         }, ToolCallEvent.Parser);
         toolCall.ToolName.Should().Be("search");
-
         var toolResult = RoundTrip(new ToolResultEvent
         {
             CallId = "call-1",
@@ -209,7 +196,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, ToolResultEvent.Parser);
         toolResult.Success.Should().BeTrue();
         toolResult.Receipt.SubjectId.Should().Be("skill-1");
-
         var tokenUsage = RoundTrip(new TokenUsagePayload
         {
             PromptTokens = 2,
@@ -217,7 +203,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             TotalTokens = 5,
         }, TokenUsagePayload.Parser);
         tokenUsage.TotalTokens.Should().Be(5);
-
         var tokenUsageEvent = RoundTrip(new ChatTokenUsageEvent
         {
             SessionId = "session-1",
@@ -232,7 +217,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         tokenUsageEvent.SessionId.Should().Be("session-1");
         tokenUsageEvent.Usage.TotalTokens.Should().Be(24);
         tokenUsageEvent.Model.Should().Be("nyxid-model");
-
         var sessionStarted = RoundTrip(new RoleChatSessionStartedEvent
         {
             SessionId = "session-1",
@@ -248,7 +232,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         }, RoleChatSessionStartedEvent.Parser);
         sessionStarted.Prompt.Should().Be("hello");
         sessionStarted.InputParts.Should().ContainSingle();
-
         var sessionCompleted = RoundTrip(new RoleChatSessionCompletedEvent
         {
             SessionId = "session-1",
@@ -291,7 +274,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         sessionCompleted.ToolCalls.Should().ContainSingle();
         sessionCompleted.ToolReceipts.Should().ContainSingle(x => x.SubjectHash == "hash-1");
         sessionCompleted.OutputParts.Should().ContainSingle();
-
         var initialize = RoundTrip(new InitializeRoleAgentEvent
         {
             RoleName = "assistant",
@@ -321,7 +303,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         initialize.RoleName.Should().Be("assistant");
         initialize.HasTemperature.Should().BeTrue();
         initialize.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("verse");
-
         var overrides = RoundTrip(new AIAgentConfigOverrides
         {
             ProviderName = "mock",
@@ -333,7 +314,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             MaxHistoryMessages = 16,
         }, AIAgentConfigOverrides.Parser);
         overrides.ProviderName.Should().Be("mock");
-
         var state = RoundTrip(new RoleGAgentState
         {
             RoleName = "assistant",
@@ -468,7 +448,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.VoicePresence["voice_presence"].ActiveSessionConfig.TurnDetectionMode.Should().Be(VoiceTurnDetectionMode.Disabled);
         state.VoiceSessionDefaults["voice_presence"].Voice.Should().Be("marin");
     }
-
     [Fact]
     public void AgentToolReceipt_ShouldUseCanonicalWireContract()
     {
@@ -477,7 +456,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         ((int)AgentToolReceiptStatus.ApprovalRequired).Should().Be(2);
         ((int)AgentToolReceiptStatus.Denied).Should().Be(3);
         ((int)AgentToolReceiptStatus.Error).Should().Be(4);
-
         ((int)AgentToolReceiptApprovalMode.Unspecified).Should().Be(0);
         ((int)AgentToolReceiptApprovalMode.NeverRequire).Should().Be(1);
         ((int)AgentToolReceiptApprovalMode.AlwaysRequire).Should().Be(2);
@@ -502,12 +480,10 @@ public sealed class AIAbstractionsProtoCoverageTests
                 (14, "result_json"),
                 (15, "managed_workflow_handoff"),
                 (16, "workflow_run_delivery"));
-
         AgentToolReceipt.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => field.Name)
             .Should()
             .NotContain(["observed_at_unix_ms", "subject_name", "is_read_only"]);
-
         ToolResultEvent.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
@@ -517,7 +493,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             .Select(field => field.Name)
             .Should()
             .NotContain("tool_name");
-
         RoleChatSessionCompletedEvent.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
@@ -527,7 +502,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             .Should()
             .Contain((12, "tool_receipts"));
     }
-
     [Fact]
     public void PendingToolApprovalState_ShouldRoundTripTypedToolContextAndRemoteBinding()
     {
@@ -556,7 +530,6 @@ public sealed class AIAbstractionsProtoCoverageTests
                 },
             }).ToPayload(),
         }, PendingToolApprovalState.Parser);
-
         pending.ToolContext.Should().NotBeNull();
         pending.ToolContext.Request.RequestId.Should().Be("req-typed");
         pending.ToolContext.Caller.ScopeId.Should().Be("scope-typed");
@@ -570,7 +543,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         pending.RemoteStatusCheckAttempt.Should().Be(2);
         pending.RemoteApprovalExpiresAtUnixMs.Should().Be(123_456);
     }
-
     [Fact]
     public void ProtoMessages_ShouldSupportMergeAndDescriptors()
     {
@@ -581,14 +553,11 @@ public sealed class AIAbstractionsProtoCoverageTests
             SessionId = "s1",
             Headers = { ["k1"] = "v1" },
         });
-
         target.Prompt.Should().Be("p1");
         target.SessionId.Should().Be("s1");
         target.Headers["k1"].Should().Be("v1");
-
         target.Clone().Should().BeEquivalentTo(target);
         target.ToString().Should().Contain("prompt");
-
         AiMessagesReflection.Descriptor.Should().NotBeNull();
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ChatRequestEvent));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(ChatResponseEvent));
@@ -605,7 +574,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleChatSessionState));
         AiMessagesReflection.Descriptor.MessageTypes.Should().Contain(x => x.Name == nameof(RoleGAgentState));
     }
-
     [Fact]
     public void ProtoMessages_ShouldValidateNullAssignments()
     {
@@ -617,7 +585,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         var sessionStarted = new RoleChatSessionStartedEvent();
         var initialize = new InitializeRoleAgentEvent();
         var state = new RoleGAgentState();
-
         Action setRequestPrompt = () => request.Prompt = null!;
         Action setResponseContent = () => response.Content = null!;
         Action setTextStartSession = () => textStart.SessionId = null!;
@@ -626,7 +593,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         Action setSessionStartedId = () => sessionStarted.SessionId = null!;
         Action setInitRoleName = () => initialize.RoleName = null!;
         Action setStateRoleName = () => state.RoleName = null!;
-
         setRequestPrompt.Should().Throw<ArgumentNullException>();
         setResponseContent.Should().Throw<ArgumentNullException>();
         setTextStartSession.Should().Throw<ArgumentNullException>();
@@ -636,7 +602,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         setInitRoleName.Should().Throw<ArgumentNullException>();
         setStateRoleName.Should().Throw<ArgumentNullException>();
     }
-
     [Fact]
     public void ProtoMessages_ShouldCoverGeneratedBranchesAndUnknownFields()
     {
@@ -650,7 +615,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         };
         initialize.MergeFrom((InitializeRoleAgentEvent)null!);
         initialize.Equals((object?)null).Should().BeFalse();
-
         var overrides = new AIAgentConfigOverrides
         {
             ProviderName = "mock",
@@ -660,7 +624,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         };
         overrides.MergeFrom((AIAgentConfigOverrides)null!);
         overrides.Equals((object?)null).Should().BeFalse();
-
         var state = new RoleGAgentState
         {
             RoleName = "assistant",
@@ -692,7 +655,6 @@ public sealed class AIAbstractionsProtoCoverageTests
         };
         state.MergeFrom((RoleGAgentState)null!);
         state.Equals((object?)null).Should().BeFalse();
-
         var submitted = RoundTrip(new RemoteToolApprovalSubmittedEvent
         {
             RequestId = "req-1",
@@ -701,7 +663,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             ExpiresAtUnixMs = 123456,
         }, RemoteToolApprovalSubmittedEvent.Parser);
         submitted.RemoteApprovalId.Should().Be("remote-1");
-
         var statusCheck = RoundTrip(new ToolApprovalRemoteStatusCheckFiredEvent
         {
             RequestId = "req-1",
@@ -710,7 +671,6 @@ public sealed class AIAbstractionsProtoCoverageTests
             Attempt = 1,
         }, ToolApprovalRemoteStatusCheckFiredEvent.Parser);
         statusCheck.RemoteApprovalId.Should().Be("remote-1");
-
         var parsedResponse = ChatResponseEvent.Parser.ParseFrom(new byte[]
         {
             10, 1, (byte)'x',
@@ -721,18 +681,54 @@ public sealed class AIAbstractionsProtoCoverageTests
         parsedResponse.SessionId.Should().Be("s");
         parsedResponse.ToByteArray().Length.Should().BeGreaterThan(4);
     }
-
+    [Fact]
+    public void AgentProfileTurnAuthorityContracts_ShouldRoundTripTypedStateEventWithoutSensitiveFields()
+    {
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey { SessionId = "session-authority", Attempt = 2 },
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+                { ProfileId = "profile-a", ProfileVersion = "v3", PolicyRevision = "policy-7", IntentId = "intent-a" },
+            SelectedExactSkillRef = new ExactRemoteSkillRef { Guid = "skill-guid", LiteralVersion = "1.2.3" },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            DegradationReasons = { AgentProfileTurnDegradationReason.ToolNameCollision },
+            AuthorityCeilingToolNames = { "search", "task" },
+        };
+        var committed = RoundTrip(new AgentProfileTurnAuthorityCommittedEvent
+        {
+            CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+            Authority = authority,
+        }, AgentProfileTurnAuthorityCommittedEvent.Parser);
+        var state = RoundTrip(
+            new RoleGAgentState { AgentProfileTurnAuthority = authority },
+            RoleGAgentState.Parser);
+        state.AgentProfileTurnAuthority.Should().BeEquivalentTo(authority);
+        committed.Authority.Should().BeEquivalentTo(authority);
+        new[] { (int)AgentProfileTurnAuthorityKind.RestrictedEmpty, (int)AgentProfileTurnAuthorityKind.Recovery, (int)AgentProfileTurnAuthorityKind.Selected }.Should().Equal(1, 2, 3);
+        new[] { (int)AgentProfileTurnAuthorityCommitKind.Initial, (int)AgentProfileTurnAuthorityCommitKind.RetryStarted, (int)AgentProfileTurnAuthorityCommitKind.Reconcile }.Should().Equal(1, 2, 3);
+        ((int)AgentProfileTurnDegradationReason.MaterializationFailed).Should().Be(15);
+        RoleGAgentState.Descriptor.Fields.InFieldNumberOrder().Select(field => (field.FieldNumber, field.Name))
+            .Should().Contain((13, "agent_profile_turn_authority"));
+        AgentProfileTurnAuthorityCommittedEvent.Descriptor.Fields.InFieldNumberOrder().Select(field => (field.FieldNumber, field.Name))
+            .Should().Equal((1, "commit_kind"), (2, "authority"));
+        AgentProfileTurnAuthorityState.Descriptor.Fields.InFieldNumberOrder().Select(field => (field.FieldNumber, field.Name))
+            .Should().Equal((1, "reconciliation_key"), (2, "candidate_route"), (3, "selected_exact_skill_ref"),
+                (4, "authority_kind"), (5, "degradation_reasons"), (6, "authority_ceiling_tool_names"));
+        var forbiddenFragments = new[] { "body", "prompt", "tool_object", "token", "credential", "header", "model_argument", "diagnostic", "metadata", "adapter", "runtime_instance" };
+        new[] { AgentProfileTurnAuthorityState.Descriptor, AgentProfileTurnAuthorityCommittedEvent.Descriptor }
+            .SelectMany(descriptor => descriptor.Fields.InDeclarationOrder()).Select(field => field.Name)
+            .Should().NotContain(name => forbiddenFragments.Any(fragment =>
+                name.Contains(fragment, StringComparison.OrdinalIgnoreCase)));
+    }
     private static T RoundTrip<T>(T message, MessageParser<T> parser)
         where T : class, IMessage<T>, new()
     {
         var bytes = message.ToByteArray();
         var parsed = parser.ParseFrom(bytes);
         parsed.Should().Be(message);
-
         var merged = new T();
         merged.MergeFrom(message);
         merged.Should().Be(message);
-
         return parsed;
     }
 }
