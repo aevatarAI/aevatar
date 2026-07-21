@@ -108,77 +108,9 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ArgumentNullException.ThrowIfNull(request);
 
         var resolved = await ResolveAuthorizationRequestAsync(request, ct);
-        var result = await PlanWithCatalogRefreshRetryAsync(
-            resolved.AuthorizationRequest,
-            request.ProvisioningBearerToken,
-            ct);
+        var result = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
         return new StudioMemberWorkflowAuthorizationResult(
             result.Success, result.Plan, result.FailureCode, result.Detail);
-    }
-
-    private async Task<ScheduledInvocationAuthorizationPlanResult> PlanWithCatalogRefreshRetryAsync(
-        ScheduledInvocationAuthorizationRequest authorizationRequest,
-        string? provisioningBearerToken,
-        CancellationToken ct)
-    {
-        var first = await _authorizationPlanner.PlanAsync(authorizationRequest, ct);
-        if (first.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(first))
-            return first;
-
-        var bearerToken = NormalizeOptional(provisioningBearerToken);
-        if (bearerToken is null)
-        {
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_requires_bearer_token:{first.Detail}");
-        }
-
-        if (_catalogRefreshPort is null)
-        {
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_unavailable:{first.Detail}");
-        }
-
-        NyxIdAuthorizationCatalogRefreshResult refresh;
-        try
-        {
-            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
-                authorizationRequest.Owner.OwnerKind);
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_failed:{ex.GetType().Name}");
-        }
-
-        if (!refresh.Success)
-        {
-            var failureCode = string.IsNullOrWhiteSpace(refresh.FailureCode)
-                ? refresh.Status.ToString()
-                : refresh.FailureCode.Trim();
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_failed:{failureCode}");
-        }
-
-        var retryEvaluatedAtUtc = _timeProvider.GetUtcNow();
-        var retryRequest = authorizationRequest with
-        {
-            EvaluatedAtUtc = retryEvaluatedAtUtc,
-            ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
-        };
-        var second = await _authorizationPlanner.PlanAsync(retryRequest, ct);
-        if (second.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(second))
-            return second;
-
-        return ScheduledInvocationAuthorizationPlanResult.Failed(
-            second.FailureCode,
-            $"nyxid_catalog_refresh_observed_but_snapshot_unavailable:{second.Detail}");
     }
 
     private async Task<ScheduledInvocationAuthorizationValidationResult> RevalidateWithCatalogRefreshRetryAsync(
@@ -1416,18 +1348,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private static bool IsStableErrorCode(string value) =>
         value.Length <= 128 && value.All(static c =>
             char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
-
-    private static bool IsRecoverableNyxIdCatalogSnapshotFailure(
-        ScheduledInvocationAuthorizationPlanResult result)
-    {
-        if (result.FailureCode is not (ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound or
-            ScheduledInvocationAuthorizationFailureCode.SnapshotStale))
-        {
-            return false;
-        }
-
-        return IsRecoverableNyxIdCatalogSnapshotFailure(result.Detail);
-    }
 
     private static bool IsRecoverableNyxIdCatalogSnapshotFailure(string? detail)
     {

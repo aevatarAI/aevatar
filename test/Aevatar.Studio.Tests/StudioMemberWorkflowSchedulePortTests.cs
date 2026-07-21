@@ -133,85 +133,31 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             new StudioMemberWorkflowSchedulePolicy().ResolveCredentialExpiresAtUtc(TestNow));
     }
 
-    [Fact]
-    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndBearerAvailable_ShouldRefreshSameOwnerAndRetryOnce()
-    {
-        var planner = new RecordingAuthorizationPlanner();
-        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
-            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
-            "nyxid_catalog_snapshot_not_found"));
-        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
-        var refresh = new RecordingCatalogRefreshPort();
-        var request = Request("scope-1", "member-1");
-        var retryNow = TestNow.AddSeconds(3);
-        var port = NewPort(
-            new RecordingScheduleService(),
-            planner: planner,
-            catalogRefresh: refresh,
-            timeProvider: new SequenceTimeProvider(TestNow, retryNow));
-
-        var result = await port.PreflightAsync(request);
-
-        result.Success.Should().BeTrue();
-        result.Plan!.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
-        planner.Requests.Should().HaveCount(2);
-        planner.Requests[0].EvaluatedAtUtc.Should().Be(TestNow);
-        planner.Requests[1].EvaluatedAtUtc.Should().Be(retryNow);
-        planner.Requests[1].ExpiresAtUtc.Should().Be(
-            new StudioMemberWorkflowSchedulePolicy().ResolveCredentialExpiresAtUtc(retryNow));
-        refresh.RefreshCallCount.Should().Be(1);
-        refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
-        refresh.LastBearerToken.Should().Be("bearer-alpha");
-    }
-
-    [Fact]
-    public async Task PreflightAsync_WhenCatalogSnapshotStaleWithoutBearer_ShouldReturnActionableFailureAndNotRefresh()
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+        "nyxid_catalog_snapshot_stale")]
+    public async Task PreflightAsync_WhenCatalogSnapshotUnavailable_ShouldReturnPlannerFailureWithoutRefreshing(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        string detail)
     {
         var planner = new RecordingAuthorizationPlanner
         {
-            Result = ScheduledInvocationAuthorizationPlanResult.Failed(
-                ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
-                "nyxid_catalog_snapshot_stale"),
+            Result = ScheduledInvocationAuthorizationPlanResult.Failed(failureCode, detail),
         };
         var refresh = new RecordingCatalogRefreshPort();
-        var port = NewPort(new RecordingScheduleService(), planner: planner, catalogRefresh: refresh);
-
-        var result = await port.PreflightAsync(Request("scope-1", "member-1") with
-        {
-            ProvisioningBearerToken = null,
-        });
-
-        result.Success.Should().BeFalse();
-        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
-        result.Detail.Should().Be("nyxid_catalog_refresh_requires_bearer_token:nyxid_catalog_snapshot_stale");
-        refresh.RefreshCallCount.Should().Be(0);
-        planner.Requests.Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task PreflightAsync_WhenCatalogRefreshDoesNotObserveSnapshot_ShouldReturnRefreshFailureDetail()
-    {
-        var planner = new RecordingAuthorizationPlanner
-        {
-            Result = ScheduledInvocationAuthorizationPlanResult.Failed(
-                ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
-                "nyxid_catalog_snapshot_invalidated"),
-        };
-        var refresh = new RecordingCatalogRefreshPort
-        {
-            Result = new NyxIdAuthorizationCatalogRefreshResult(
-                NyxIdAuthorizationCatalogRefreshStatus.PublishedContractMissing,
-                "nyxid_catalog_published_contract_missing"),
-        };
         var port = NewPort(new RecordingScheduleService(), planner: planner, catalogRefresh: refresh);
 
         var result = await port.PreflightAsync(Request("scope-1", "member-1"));
 
         result.Success.Should().BeFalse();
-        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
-        result.Detail.Should().Be("nyxid_catalog_refresh_failed:nyxid_catalog_published_contract_missing");
-        refresh.RefreshCallCount.Should().Be(1);
+        result.FailureCode.Should().Be(failureCode);
+        result.Detail.Should().Be(detail);
         planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
     }
 
     [Fact]
@@ -906,7 +852,6 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public const string Digest = "permission-digest-alpha";
         public const string PolicyVersion = "scheduled-invocation-auth/v1";
         public List<ScheduledInvocationAuthorizationRequest> Requests { get; } = [];
-        public Queue<ScheduledInvocationAuthorizationPlanResult> Results { get; } = [];
         public ScheduledInvocationAuthorizationPlanResult Result { get; init; } =
             SuccessResult();
 
@@ -979,7 +924,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             Requests.Add(request);
-            return Task.FromResult(Results.Count > 0 ? Results.Dequeue() : Result);
+            return Task.FromResult(Result);
         }
     }
 
