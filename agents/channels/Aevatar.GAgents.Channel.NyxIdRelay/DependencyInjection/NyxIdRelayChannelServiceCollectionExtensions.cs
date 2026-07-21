@@ -65,6 +65,9 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<
             IChannelWorkflowResultDeliveryRepairNyxPort,
             ChannelWorkflowResultDeliveryRepairNyxPort>();
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairService,
+            ChannelWorkflowResultDeliveryRepairService>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.TryAddSingleton<INyxTelegramProvisioningService, NyxTelegramProvisioningService>();
         services.TryAddSingleton<INyxChannelBotDeprovisioningService, NyxChannelBotDeprovisioningService>();
