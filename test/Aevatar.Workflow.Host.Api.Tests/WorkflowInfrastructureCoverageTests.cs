@@ -111,6 +111,33 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
+    public async Task AddWorkflowInfrastructure_ShouldResolveDefinitionParserWithoutRuntimeOrReadModelDependencies()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAevatarWorkflow();
+        services.AddWorkflowInfrastructure();
+        using var provider = services.BuildServiceProvider();
+
+        var parser = provider.GetRequiredService<IWorkflowDefinitionParser>();
+        var result = await parser.ParseWorkflowYamlAsync(
+            """
+            name: deterministic
+            steps:
+              - id: complete
+                type: assign
+                parameters:
+                  target: result
+                  value: done
+            """,
+            CancellationToken.None);
+
+        parser.Should().NotBeOfType<WorkflowRunActorPort>();
+        result.Succeeded.Should().BeTrue();
+        result.WorkflowName.Should().Be("deterministic");
+    }
+
+    [Fact]
     public void AddWorkflowDefinitionFileSource_ShouldRegisterLoaderAndHostedService()
     {
         var services = new ServiceCollection();
@@ -992,6 +1019,7 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         registry.GetYaml("direct").Should().NotBeNull();
         registry.GetYaml("demo_template").Should().BeNull();
+        registry.GetYaml("host-callback-budget-branch").Should().BeNull();
     }
 
     [Fact]

@@ -427,6 +427,30 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task ParseWorkflowYamlAsync_WhenDefaultRoleImplementationIsNotLocallyRegistered_ShouldReturnSuccess()
+    {
+        var port = CreatePort(
+            new RecordingActorRuntime(),
+            agentKindRegistry: new AgentKindRegistry([]));
+
+        var result = await port.ParseWorkflowYamlAsync(
+            """
+            name: sample
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: step1
+                type: llm_call
+                target_role: assistant
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.WorkflowName.Should().Be("sample");
+    }
+
+    [Fact]
     public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsUnknown_ShouldReturnActionableInvalidResult()
     {
         var port = CreatePort(

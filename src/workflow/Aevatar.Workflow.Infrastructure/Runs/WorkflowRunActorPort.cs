@@ -3,8 +3,6 @@ using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
-using Aevatar.Workflow.Core.Primitives;
-using Aevatar.Workflow.Core.Validation;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,17 +19,14 @@ internal sealed class WorkflowRunActorPort :
     IWorkflowDefinitionProvisioningPort,
     IWorkflowRunProvisioningPort,
     IWorkflowRunIdentityProvisioningPort,
-    IWorkflowRunIdentityExecutionPort,
-    IWorkflowDefinitionParser
+    IWorkflowRunIdentityExecutionPort
 {
     private const string WorkflowRunActorPortPublisherId = "workflow.run.actor.port";
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IWorkflowActorBindingReader _bindingReader;
-    private readonly ISet<string> _knownStepTypes;
-    private readonly IAgentKindRegistry? _agentKindRegistry;
+    private readonly WorkflowDefinitionParser _definitionParser;
     private readonly ILogger<WorkflowRunActorPort> _logger;
-    private readonly WorkflowParser _workflowParser = new();
 
     public WorkflowRunActorPort(
         IActorRuntime runtime,
@@ -44,14 +39,8 @@ internal sealed class WorkflowRunActorPort :
         _runtime = runtime;
         _dispatchPort = dispatchPort;
         _bindingReader = bindingReader;
-        _agentKindRegistry = agentKindRegistry;
         _logger = logger ?? NullLogger<WorkflowRunActorPort>.Instance;
-        var packs = modulePacks?.ToList()
-            ?? throw new ArgumentNullException(nameof(modulePacks));
-        if (packs.Count == 0)
-            packs.Add(new WorkflowCoreModulePack());
-        _knownStepTypes = WorkflowPrimitiveCatalog.BuildCanonicalStepTypeSet(
-            packs.SelectMany(x => x.Modules).SelectMany(x => x.Names));
+        _definitionParser = new WorkflowDefinitionParser(modulePacks, agentKindRegistry);
     }
 
     public async Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(
@@ -272,55 +261,10 @@ internal sealed class WorkflowRunActorPort :
             ct);
     }
 
-    public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default)
-    {
-        ct.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(workflowYaml))
-            return Task.FromResult(WorkflowYamlParseResult.Invalid("Workflow YAML is required."));
-
-        try
-        {
-            var workflow = _workflowParser.Parse(workflowYaml);
-            var errors = WorkflowValidator.Validate(
-                workflow,
-                new WorkflowValidator.WorkflowValidationOptions
-                {
-                    RequireKnownStepTypes = true,
-                    KnownStepTypes = _knownStepTypes,
-                },
-                availableWorkflowNames: null);
-            if (errors.Count > 0)
-                return Task.FromResult(WorkflowYamlParseResult.Invalid(string.Join("; ", errors)));
-
-            if (_agentKindRegistry != null)
-            {
-                foreach (var role in workflow.Roles)
-                {
-                    var agentKind = role.AgentKind?.Trim() ?? string.Empty;
-                    if (!_agentKindRegistry.TryResolve(agentKind, out _))
-                    {
-                        return Task.FromResult(WorkflowYamlParseResult.Invalid(
-                            $"Role '{role.Id}' declares unknown agent_kind '{agentKind}'. " +
-                            $"Register an agent for that kind or use the default '{WorkflowRoleConventions.DefaultAgentKind}'."));
-                    }
-                }
-            }
-
-            var workflowName = string.IsNullOrWhiteSpace(workflow.Name)
-                ? string.Empty
-                : workflow.Name.Trim();
-            if (string.IsNullOrWhiteSpace(workflowName))
-                return Task.FromResult(WorkflowYamlParseResult.Invalid("Workflow name is required."));
-
-            return Task.FromResult(WorkflowYamlParseResult.Success(
-                workflowName,
-                WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow)));
-        }
-        catch (Exception ex)
-        {
-            return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message));
-        }
-    }
+    public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+        string workflowYaml,
+        CancellationToken ct = default) =>
+        _definitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
 
     private async Task<DefinitionActorResolutionResult> EnsureDefinitionActorAsync(
         WorkflowDefinitionBinding definition,
