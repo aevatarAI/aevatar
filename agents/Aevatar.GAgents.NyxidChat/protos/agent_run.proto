@@ -189,6 +189,11 @@ message AgentRunToolCall {
   string arguments_json = 3;
 }
 
+message AgentRunAuthorizedTool {
+  string name = 1;
+  bytes contract_fingerprint = 2;
+}
+
 message AgentRunChatMessage {
   string role = 1;
   string content = 2;
@@ -227,6 +232,7 @@ message AgentRunReplyStepState {
   // tool-stripping / server-default-routing semantics of final_no_tools_step: the recovery retry
   // keeps tools + the user's routing + channel-context and only trims history to the recent floor.
   bool empty_reply_retry = 25;
+  repeated AgentRunAuthorizedTool authorized_tools = 26;
 }
 
 // Typed LLM IO facts returned by the executor. The run actor reconciles these
@@ -241,6 +247,7 @@ message AgentRunLlmStepResult {
   string finish_reason = 6;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
   bool has_streamed_text_content = 8;
+  repeated AgentRunAuthorizedTool authorized_tools = 9;
 }
 
 // Typed tool IO facts returned by the executor. The run actor owns round

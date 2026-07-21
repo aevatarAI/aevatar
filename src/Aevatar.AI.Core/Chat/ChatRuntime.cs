@@ -881,6 +881,8 @@ public sealed class ChatRuntime
         TokenUsage? streamedUsage = null;
         IReadOnlyList<ToolCall>? streamedToolCalls = null;
         string? streamedFinishReason = null;
+        IReadOnlyList<IAgentTool> authorizedTools = [];
+        var authorizedToolContext = AgentToolExecutionContext.Empty;
 
         var llmBridge = new LLMCallMiddlewareBridge();
         var middlewareTask = MiddlewarePipeline.RunLLMCallAsync(
@@ -896,6 +898,8 @@ public sealed class ChatRuntime
         if (readyTask == coreTurnTask && !llmCallContext.Terminate)
         {
             llmCallContext.Request = authorizationFence.Apply(llmCallContext.Request);
+            authorizedTools = llmCallContext.Request.Tools?.ToArray() ?? [];
+            authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(llmCallContext.Request);
             onRequestAuthorized?.Invoke(llmCallContext.Request);
             var full = new StringBuilder();
             var fullReasoning = new StringBuilder();
@@ -960,6 +964,9 @@ public sealed class ChatRuntime
 
         if (llmCallContext.Terminate)
         {
+            var authorizedRequest = authorizationFence.Apply(llmCallContext.Request);
+            authorizedTools = authorizedRequest.Tools?.ToArray() ?? [];
+            authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(authorizedRequest);
             streamedContent = llmCallContext.Response?.Content;
             streamedReasoningContent = llmCallContext.Response?.ReasoningContent;
             streamedUsage = llmCallContext.Response?.Usage;
@@ -990,7 +997,9 @@ public sealed class ChatRuntime
             response.ToolCalls,
             llmCallContext.Terminate,
             response.FinishReason ?? streamedFinishReason,
-            response.Usage);
+            response.Usage,
+            authorizedTools,
+            authorizedToolContext);
     }
 
     internal async Task<StreamingRoundResult> ExecuteSingleLlmStepAsync(
@@ -1244,7 +1253,9 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall>? ToolCalls,
         bool Terminated,
         string? FinishReason,
-        TokenUsage? Usage);
+        TokenUsage? Usage,
+        IReadOnlyList<IAgentTool> AuthorizedTools,
+        AgentToolExecutionContext AuthorizedToolContext);
 
     // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
     //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity

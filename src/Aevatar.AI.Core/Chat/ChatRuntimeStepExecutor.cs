@@ -122,8 +122,27 @@ public sealed class ChatRuntimeStepExecutor
                 result.ToolCalls,
                 result.Terminated,
                 result.FinishReason,
-                result.Usage);
+                result.Usage,
+                result.AuthorizedTools,
+                result.AuthorizedToolContext);
         }
+    }
+
+    public async Task<IReadOnlyList<ToolExecutionResult>> ExecuteToolStepAsync(
+        IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyList<IAgentTool>? authorizedTools,
+        AgentToolExecutionContext? toolContext,
+        CancellationToken ct)
+    {
+        var runtime = new ChatRuntime(
+            _providerFactory,
+            new ChatHistory(),
+            _toolLoop,
+            _hooks,
+            _requestBuilder,
+            llmMiddlewares: _llmMiddlewares);
+        return await runtime.ExecuteSingleToolStepAsync(toolCalls, authorizedTools, toolContext, ct)
+            .ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<ToolExecutionResult>> ExecuteToolStepAsync(
@@ -177,4 +196,6 @@ public sealed record ChatRuntimeStepLlmResult(
     IReadOnlyList<ToolCall>? ToolCalls,
     bool Terminated,
     string? FinishReason,
-    TokenUsage? Usage);
+    TokenUsage? Usage,
+    IReadOnlyList<IAgentTool> AuthorizedTools,
+    AgentToolExecutionContext AuthorizedToolContext);
