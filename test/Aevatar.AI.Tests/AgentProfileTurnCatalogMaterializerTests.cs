@@ -160,6 +160,38 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         recoveredBody.ReconcileProposal.AuthorityCeilingToolNames.Should().Equal("recovery");
         recoveredBody.ReconcileProposal.DegradationReasons.Should().Contain(
             AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch);
+
+        var authorityOnlyReasons = new[]
+        {
+            AgentProfileTurnDegradationReason.LegacyAuthorityMissing,
+            AgentProfileTurnDegradationReason.MaterializerUnavailable,
+            AgentProfileTurnDegradationReason.MaterializationFailed,
+        };
+        foreach (var reason in authorityOnlyReasons)
+        {
+            var authorityOnly = preparation.Authority;
+            authorityOnly.CandidateRoute = null;
+            authorityOnly.SelectedExactSkillRef = null;
+            authorityOnly.AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty;
+            authorityOnly.AuthorityCeilingToolNames.Clear();
+            authorityOnly.DegradationReasons.Clear();
+            authorityOnly.DegradationReasons.Add(reason);
+            var preserved = await NewMaterializer(
+                    RegistryWithRoute(tools),
+                    new RecordingClassifier(new InvalidOperationException("must not classify")),
+                    new RecordingFetcher(SuccessfulFetch()))
+                .MaterializeCommittedAsync(
+                    profile,
+                    authorityOnly,
+                    "token",
+                    tools,
+                    ToolContext(),
+                    CancellationToken.None);
+
+            preserved.ReconcileProposal.DegradationReasons.Should().Equal(reason);
+            preserved.Catalog.Diagnostics.Should().NotContain(diagnostic =>
+                diagnostic.Code == AgentProfileTurnDiagnosticCode.ProfileInvalid);
+        }
     }
 
     [Fact]
@@ -278,7 +310,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
         catalog.Diagnostics.Should().Contain(diagnostic =>
-            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed);
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Detail == "alias_collision");
         classifier.CallCount.Should().Be(0);
         fetcher.CallCount.Should().Be(0);
     }
@@ -412,7 +445,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
         catalog.Diagnostics.Should().ContainSingle(diagnostic =>
-            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed);
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Detail == "classifier_not_configured");
         classifier.CallCount.Should().Be(0);
         fetcher.CallCount.Should().Be(0);
     }
@@ -486,7 +520,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
 
         catalog.FinalAllowedToolNames.Should().BeEquivalentTo("recovery");
         catalog.Diagnostics.Should().Contain(diagnostic =>
-            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed);
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Detail == "classifier_exception");
     }
 
     [Fact]
@@ -513,7 +548,8 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         catalog.CandidateIntentId.Should().BeNull();
         catalog.SelectedSkillPromptLayer.Should().BeNull();
         catalog.Diagnostics.Should().Contain(diagnostic =>
-            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed);
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ClassifierFailed &&
+            diagnostic.Detail == "unknown_intent");
         fetcher.CallCount.Should().Be(0);
     }
 

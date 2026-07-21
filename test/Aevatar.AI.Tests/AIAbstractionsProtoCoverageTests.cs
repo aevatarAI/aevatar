@@ -85,6 +85,83 @@ public sealed class AIAbstractionsProtoCoverageTests
     }
 
     [Fact]
+    public void AgentProfileTurnAuthorityContracts_ShouldRoundTripTypedStateEventWithoutSensitiveFields()
+    {
+        var authority = new AgentProfileTurnAuthorityState
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = "session-authority",
+                Attempt = 2,
+            },
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                ProfileId = "profile-a",
+                ProfileVersion = "v3",
+                PolicyRevision = "policy-7",
+                IntentId = "intent-a",
+            },
+            SelectedExactSkillRef = new ExactRemoteSkillRef
+            {
+                Guid = "skill-guid",
+                LiteralVersion = "1.2.3",
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            DegradationReasons =
+            {
+                AgentProfileTurnDegradationReason.ToolNameCollision,
+                AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
+            },
+            AuthorityCeilingToolNames = { "search", "task" },
+        };
+        var committed = new AgentProfileTurnAuthorityCommittedEvent
+        {
+            CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+            Authority = authority,
+        };
+
+        var stateRoundTrip = RoleGAgentState.Parser.ParseFrom(new RoleGAgentState
+        {
+            AgentProfileTurnAuthority = authority,
+        }.ToByteArray());
+        var eventRoundTrip = AgentProfileTurnAuthorityCommittedEvent.Parser.ParseFrom(committed.ToByteArray());
+
+        stateRoundTrip.AgentProfileTurnAuthority.Should().BeEquivalentTo(authority);
+        eventRoundTrip.Should().BeEquivalentTo(committed);
+        ((int)AgentProfileTurnAuthorityKind.RestrictedEmpty).Should().Be(1);
+        ((int)AgentProfileTurnAuthorityKind.Recovery).Should().Be(2);
+        ((int)AgentProfileTurnAuthorityKind.Selected).Should().Be(3);
+        ((int)AgentProfileTurnAuthorityCommitKind.Initial).Should().Be(1);
+        ((int)AgentProfileTurnAuthorityCommitKind.RetryStarted).Should().Be(2);
+        ((int)AgentProfileTurnAuthorityCommitKind.Reconcile).Should().Be(3);
+        ((int)AgentProfileTurnDegradationReason.MaterializationFailed).Should().Be(15);
+        AiMessagesReflection.Descriptor.EnumTypes
+            .Single(enumType => enumType.Name == nameof(AgentProfileTurnDegradationReason))
+            .Values.Select(value => value.Name).Should().Contain([
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_ALIAS_COLLISION",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_NOT_CONFIGURED",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_INVOCATION_FAILED",
+            "AGENT_PROFILE_TURN_DEGRADATION_REASON_CLASSIFIER_UNKNOWN_INTENT",
+        ]);
+
+        var forbiddenFragments = new[]
+        {
+            "body", "prompt", "tool_object", "token", "credential", "header",
+            "model_argument", "diagnostic", "metadata", "adapter", "runtime_instance",
+        };
+        foreach (var descriptor in new[]
+                 {
+                     AgentProfileTurnAuthorityState.Descriptor,
+                     AgentProfileTurnAuthorityCommittedEvent.Descriptor,
+                 })
+        {
+            descriptor.Fields.InDeclarationOrder().Select(field => field.Name).Should()
+                .NotContain(name => forbiddenFragments.Any(fragment =>
+                    name.Contains(fragment, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    [Fact]
     public void ProtoMessages_ShouldRoundTripAndClone()
     {
         var receipt = new AgentToolReceipt

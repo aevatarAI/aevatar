@@ -67,6 +67,156 @@ public sealed class RoleGAgentStateCoverageTests
         .GetMethod("ExtractStateConfigOverrides", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("ExtractStateConfigOverrides not found.");
 
+    private static readonly MethodInfo ApplyAgentProfileTurnAuthorityCommittedMethod = typeof(RoleGAgent)
+        .GetMethod("ApplyAgentProfileTurnAuthorityCommitted", BindingFlags.NonPublic | BindingFlags.Static)
+        ?? throw new InvalidOperationException("ApplyAgentProfileTurnAuthorityCommitted not found.");
+
+    [Fact]
+    public void ApplyTurnAuthorityInitial_ShouldReplaceOnlyForNewActiveSession()
+    {
+        var current = new RoleGAgentState
+        {
+            MessageCount = 2,
+            AgentProfileTurnAuthority = TurnAuthority("session-old", 1, "intent-a", "skill-a"),
+            Sessions =
+            {
+                ["session-old"] = new RoleChatSessionState { Sequence = 1 },
+                ["session-new"] = new RoleChatSessionState { Sequence = 2 },
+            },
+        };
+        var initial = TurnAuthority("session-new", 1, "intent-a", "skill-a");
+        initial.AuthorityCeilingToolNames.Clear();
+        initial.AuthorityCeilingToolNames.Add([" task ", "Search", "TASK"]);
+        initial.DegradationReasons.Add([
+            AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
+            AgentProfileTurnDegradationReason.ClassifierFailed,
+            AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
+        ]);
+
+        var next = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Initial, initial);
+
+        next.Should().NotBeSameAs(current);
+        next.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-new");
+        next.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should().Equal("Search", "task");
+        next.AgentProfileTurnAuthority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.ClassifierFailed,
+            AgentProfileTurnDegradationReason.ExactSkillFetchFailed);
+        var invalidAttempt = initial.Clone();
+        invalidAttempt.ReconciliationKey.Attempt = 2;
+        ApplyAuthority(next, AgentProfileTurnAuthorityCommitKind.Initial, invalidAttempt).Should().BeSameAs(next);
+    }
+
+    [Fact]
+    public void ApplyTurnAuthorityRetryStarted_ShouldAdvanceExactlyOneAttemptAndFreezeCandidate()
+    {
+        var current = StateWithIncompleteAuthority(TurnAuthority("session-a", 1, "intent-a", "skill-a"));
+        var retry = current.AgentProfileTurnAuthority.Clone();
+        retry.ReconciliationKey.Attempt = 2;
+
+        var next = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.RetryStarted, retry);
+
+        next.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(2);
+        next.AgentProfileTurnAuthority.CandidateRoute.Should().BeEquivalentTo(
+            current.AgentProfileTurnAuthority.CandidateRoute);
+        next.AgentProfileTurnAuthority.SelectedExactSkillRef.Should().BeEquivalentTo(
+            current.AgentProfileTurnAuthority.SelectedExactSkillRef);
+        next.AgentProfileTurnAuthority.AuthorityKind.Should().Be(current.AgentProfileTurnAuthority.AuthorityKind);
+        Action<AgentProfileTurnAuthorityState>[] mutations =
+        [
+            authority => authority.CandidateRoute.IntentId = "intent-mutated",
+            authority => authority.SelectedExactSkillRef.LiteralVersion = "9.9.9",
+            authority => authority.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery,
+            authority => authority.AuthorityCeilingToolNames.Add("hidden"),
+            authority => authority.DegradationReasons.Add(AgentProfileTurnDegradationReason.ClassifierFailed),
+        ];
+        foreach (var mutate in mutations)
+        {
+            var mutatedRetry = retry.Clone();
+            mutate(mutatedRetry);
+            ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.RetryStarted, mutatedRetry)
+                .Should().BeSameAs(current);
+        }
+
+        var gap = retry.Clone();
+        gap.ReconciliationKey.Attempt = 4;
+        ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.RetryStarted, gap).Should().BeSameAs(current);
+    }
+
+    [Fact]
+    public void ApplyTurnAuthority_ShouldRejectWrongSessionAttemptLateAndMutatingEvents()
+    {
+        var current = StateWithIncompleteAuthority(TurnAuthority("session-a", 2, "intent-a", "skill-a"));
+        var invalidAuthorities = new[]
+        {
+            MutateAuthority(current, authority => authority.ReconciliationKey.SessionId = "session-b"),
+            MutateAuthority(current, authority => authority.ReconciliationKey.Attempt = 1),
+            MutateAuthority(current, authority => authority.CandidateRoute.IntentId = "intent-b"),
+            MutateAuthority(current, authority => authority.SelectedExactSkillRef.LiteralVersion = "9.9.9"),
+        };
+
+        foreach (var invalidAuthority in invalidAuthorities)
+        {
+            ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Reconcile, invalidAuthority)
+                .Should().BeSameAs(current);
+        }
+
+        var completed = current.Clone();
+        completed.Sessions["session-a"].Completed = true;
+        ApplyAuthority(completed, AgentProfileTurnAuthorityCommitKind.Reconcile,
+                completed.AgentProfileTurnAuthority.Clone())
+            .Should().BeSameAs(completed);
+    }
+
+    [Fact]
+    public void ApplyTurnAuthorityReconcile_ShouldBeIdempotentForDuplicateAndReplay()
+    {
+        var current = StateWithIncompleteAuthority(TurnAuthority("session-a", 1, "intent-a", "skill-a"));
+        var reconcile = current.AgentProfileTurnAuthority.Clone();
+        reconcile.AuthorityCeilingToolNames.Add("TASK");
+        reconcile.DegradationReasons.Add(AgentProfileTurnDegradationReason.ClassifierFailed);
+
+        var first = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Reconcile, reconcile);
+        var second = ApplyAuthority(first, AgentProfileTurnAuthorityCommitKind.Reconcile, reconcile);
+
+        second.Should().BeEquivalentTo(first);
+        second.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should().Equal("recovery", "task");
+        second.AgentProfileTurnAuthority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.ClassifierFailed);
+    }
+
+    [Fact]
+    public void ApplyTurnAuthorityReconcile_ShouldOnlyAttenuateAndUnionReasons()
+    {
+        var authority = TurnAuthority("session-a", 1, "intent-a", "skill-a");
+        authority.AuthorityCeilingToolNames.Clear();
+        authority.AuthorityCeilingToolNames.Add(["a", "B", "task"]);
+        authority.DegradationReasons.Add(AgentProfileTurnDegradationReason.ClassifierFailed);
+        var current = StateWithIncompleteAuthority(authority);
+        var attenuated = authority.Clone();
+        attenuated.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+        attenuated.AuthorityCeilingToolNames.Clear();
+        attenuated.AuthorityCeilingToolNames.Add(["task", "A"]);
+        attenuated.DegradationReasons.Clear();
+        attenuated.DegradationReasons.Add(AgentProfileTurnDegradationReason.ExactSkillFetchFailed);
+
+        var next = ApplyAuthority(current, AgentProfileTurnAuthorityCommitKind.Reconcile, attenuated);
+
+        next.AgentProfileTurnAuthority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.Recovery);
+        next.AgentProfileTurnAuthority.AuthorityCeilingToolNames.Should().Equal("A", "task");
+        next.AgentProfileTurnAuthority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.ClassifierFailed,
+            AgentProfileTurnDegradationReason.ExactSkillFetchFailed);
+        var wideningKind = MutateAuthority(next, value => value.AuthorityKind = AgentProfileTurnAuthorityKind.Selected);
+        var wideningCeiling = MutateAuthority(next, value => value.AuthorityCeilingToolNames.Add("hidden"));
+        var reasonRemoval = MutateAuthority(next, value => value.DegradationReasons.Clear());
+        ApplyAuthority(next, AgentProfileTurnAuthorityCommitKind.Reconcile, wideningKind).Should().BeSameAs(next);
+        ApplyAuthority(next, AgentProfileTurnAuthorityCommitKind.Reconcile, wideningCeiling).Should().BeSameAs(next);
+        ApplyAuthority(next, AgentProfileTurnAuthorityCommitKind.Reconcile, reasonRemoval)
+            .AgentProfileTurnAuthority.DegradationReasons.Should().Equal(
+                AgentProfileTurnDegradationReason.ClassifierFailed,
+                AgentProfileTurnDegradationReason.ExactSkillFetchFailed);
+    }
+
     [Fact]
     public void ApplyClearPendingApproval_ShouldHandleMissingMismatchAndMatchBranches()
     {
@@ -1473,6 +1623,66 @@ public sealed class RoleGAgentStateCoverageTests
         GetProperty<int?>(overrides, "MaxPromptTokenBudget").Should().Be(2048);
         GetProperty<double?>(overrides, "CompressionThreshold").Should().Be(512);
         GetProperty<bool?>(overrides, "EnableSummarization").Should().BeTrue();
+    }
+
+    private static AgentProfileTurnAuthorityState TurnAuthority(
+        string sessionId,
+        int attempt,
+        string intentId,
+        string exactSkillGuid) =>
+        new()
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = sessionId,
+                Attempt = attempt,
+            },
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                ProfileId = "profile-a",
+                ProfileVersion = "v1",
+                PolicyRevision = "policy-a",
+                IntentId = intentId,
+            },
+            SelectedExactSkillRef = new ExactRemoteSkillRef
+            {
+                Guid = exactSkillGuid,
+                LiteralVersion = "1.0.0",
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            AuthorityCeilingToolNames = { "recovery", "task" },
+        };
+
+    private static RoleGAgentState StateWithIncompleteAuthority(AgentProfileTurnAuthorityState authority) =>
+        new()
+        {
+            AgentProfileTurnAuthority = authority,
+            Sessions =
+            {
+                [authority.ReconciliationKey.SessionId] = new RoleChatSessionState { Sequence = 1 },
+            },
+        };
+
+    private static RoleGAgentState ApplyAuthority(
+        RoleGAgentState current,
+        AgentProfileTurnAuthorityCommitKind commitKind,
+        AgentProfileTurnAuthorityState authority) =>
+        InvokePrivateStatic<RoleGAgentState>(
+            ApplyAgentProfileTurnAuthorityCommittedMethod,
+            current,
+            new AgentProfileTurnAuthorityCommittedEvent
+            {
+                CommitKind = commitKind,
+                Authority = authority,
+            });
+
+    private static AgentProfileTurnAuthorityState MutateAuthority(
+        RoleGAgentState current,
+        Action<AgentProfileTurnAuthorityState> mutate)
+    {
+        var authority = current.AgentProfileTurnAuthority.Clone();
+        mutate(authority);
+        return authority;
     }
 
     private static ServiceProvider BuildServiceProvider()

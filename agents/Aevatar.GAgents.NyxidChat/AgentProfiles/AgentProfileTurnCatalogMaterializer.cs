@@ -616,7 +616,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         authority.AuthorityCeilingToolNames.Add(CanonicalToolNames(ceilingToolNames));
         authority.DegradationReasons.Add(
             diagnostics
-                .Select(static diagnostic => ToDegradationReason(diagnostic.Code))
+                .Select(static diagnostic => ToDegradationReason(diagnostic))
                 .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
                 .Distinct()
                 .OrderBy(static reason => (int)reason));
@@ -639,7 +639,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         proposal.DegradationReasons.Clear();
         proposal.DegradationReasons.Add(
             committedAuthority.DegradationReasons
-                .Concat(diagnostics.Select(static diagnostic => ToDegradationReason(diagnostic.Code)))
+                .Concat(diagnostics.Select(static diagnostic => ToDegradationReason(diagnostic)))
                 .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
                 .Distinct()
                 .OrderBy(static reason => (int)reason));
@@ -710,52 +710,87 @@ public sealed class AgentProfileTurnCatalogMaterializer
             .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
             .Distinct()
             .OrderBy(static reason => (int)reason)
-            .Select(static reason => new AgentProfileTurnDiagnostic(
-                ToDiagnosticCode(reason),
-                reason.ToString()))
+            .Select(static reason => ToDiagnostic(reason))
+            .OfType<AgentProfileTurnDiagnostic>()
             .ToList();
 
     private static AgentProfileTurnDegradationReason ToDegradationReason(
-        AgentProfileTurnDiagnosticCode code) => code switch
+        AgentProfileTurnDiagnostic diagnostic) => (diagnostic.Code, diagnostic.Detail) switch
     {
-        AgentProfileTurnDiagnosticCode.ProfileInvalid => AgentProfileTurnDegradationReason.ProfileInvalid,
-        AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable =>
+        (AgentProfileTurnDiagnosticCode.ProfileInvalid, _) => AgentProfileTurnDegradationReason.ProfileInvalid,
+        (AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable, _) =>
             AgentProfileTurnDegradationReason.RouteToolSetUnavailable,
-        AgentProfileTurnDiagnosticCode.ToolSetUnavailable => AgentProfileTurnDegradationReason.ToolSetUnavailable,
-        AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed => AgentProfileTurnDegradationReason.ToolDiscoveryFailed,
-        AgentProfileTurnDiagnosticCode.ToolNameCollision => AgentProfileTurnDegradationReason.ToolNameCollision,
-        AgentProfileTurnDiagnosticCode.ToolCapabilityRejected =>
+        (AgentProfileTurnDiagnosticCode.ToolSetUnavailable, _) =>
+            AgentProfileTurnDegradationReason.ToolSetUnavailable,
+        (AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed, _) =>
+            AgentProfileTurnDegradationReason.ToolDiscoveryFailed,
+        (AgentProfileTurnDiagnosticCode.ToolNameCollision, _) =>
+            AgentProfileTurnDegradationReason.ToolNameCollision,
+        (AgentProfileTurnDiagnosticCode.ToolCapabilityRejected, _) =>
             AgentProfileTurnDegradationReason.ToolCapabilityRejected,
-        AgentProfileTurnDiagnosticCode.ClassifierNoMatch => AgentProfileTurnDegradationReason.ClassifierNoMatch,
-        AgentProfileTurnDiagnosticCode.ClassifierFailed => AgentProfileTurnDegradationReason.ClassifierFailed,
-        AgentProfileTurnDiagnosticCode.ShadowCandidate => AgentProfileTurnDegradationReason.ShadowMode,
-        AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed => AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
-        AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch =>
+        (AgentProfileTurnDiagnosticCode.ClassifierNoMatch, _) =>
+            AgentProfileTurnDegradationReason.ClassifierNoMatch,
+        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "alias_collision") =>
+            AgentProfileTurnDegradationReason.ClassifierAliasCollision,
+        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_not_configured") =>
+            AgentProfileTurnDegradationReason.ClassifierNotConfigured,
+        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_exception") =>
+            AgentProfileTurnDegradationReason.ClassifierInvocationFailed,
+        (AgentProfileTurnDiagnosticCode.ClassifierFailed, "unknown_intent") =>
+            AgentProfileTurnDegradationReason.ClassifierUnknownIntent,
+        (AgentProfileTurnDiagnosticCode.ClassifierFailed, _) =>
+            AgentProfileTurnDegradationReason.ClassifierFailed,
+        (AgentProfileTurnDiagnosticCode.ShadowCandidate, _) => AgentProfileTurnDegradationReason.ShadowMode,
+        (AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed, _) =>
+            AgentProfileTurnDegradationReason.ExactSkillFetchFailed,
+        (AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch, _) =>
             AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch,
-        AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid =>
+        (AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid, _) =>
             AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid,
         _ => AgentProfileTurnDegradationReason.Unspecified,
     };
 
-    private static AgentProfileTurnDiagnosticCode ToDiagnosticCode(
+    private static AgentProfileTurnDiagnostic? ToDiagnostic(
         AgentProfileTurnDegradationReason reason) => reason switch
     {
+        AgentProfileTurnDegradationReason.ProfileInvalid => new AgentProfileTurnDiagnostic(
+            AgentProfileTurnDiagnosticCode.ProfileInvalid,
+            reason.ToString()),
         AgentProfileTurnDegradationReason.RouteToolSetUnavailable =>
-            AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
-        AgentProfileTurnDegradationReason.ToolSetUnavailable => AgentProfileTurnDiagnosticCode.ToolSetUnavailable,
-        AgentProfileTurnDegradationReason.ToolDiscoveryFailed => AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed,
-        AgentProfileTurnDegradationReason.ToolNameCollision => AgentProfileTurnDiagnosticCode.ToolNameCollision,
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable, reason.ToString()),
+        AgentProfileTurnDegradationReason.ToolSetUnavailable =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ToolSetUnavailable, reason.ToString()),
+        AgentProfileTurnDegradationReason.ToolDiscoveryFailed =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed, reason.ToString()),
+        AgentProfileTurnDegradationReason.ToolNameCollision =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ToolNameCollision, reason.ToString()),
         AgentProfileTurnDegradationReason.ToolCapabilityRejected =>
-            AgentProfileTurnDiagnosticCode.ToolCapabilityRejected,
-        AgentProfileTurnDegradationReason.ClassifierNoMatch => AgentProfileTurnDiagnosticCode.ClassifierNoMatch,
-        AgentProfileTurnDegradationReason.ClassifierFailed => AgentProfileTurnDiagnosticCode.ClassifierFailed,
-        AgentProfileTurnDegradationReason.ShadowMode => AgentProfileTurnDiagnosticCode.ShadowCandidate,
-        AgentProfileTurnDegradationReason.ExactSkillFetchFailed => AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed,
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ToolCapabilityRejected, reason.ToString()),
+        AgentProfileTurnDegradationReason.ClassifierNoMatch =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierNoMatch, reason.ToString()),
+        AgentProfileTurnDegradationReason.ClassifierFailed =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, reason.ToString()),
+        AgentProfileTurnDegradationReason.ClassifierAliasCollision =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "alias_collision"),
+        AgentProfileTurnDegradationReason.ClassifierNotConfigured =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_not_configured"),
+        AgentProfileTurnDegradationReason.ClassifierInvocationFailed =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "classifier_exception"),
+        AgentProfileTurnDegradationReason.ClassifierUnknownIntent =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ClassifierFailed, "unknown_intent"),
+        AgentProfileTurnDegradationReason.ShadowMode =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ShadowCandidate, reason.ToString()),
+        AgentProfileTurnDegradationReason.ExactSkillFetchFailed =>
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ExactSkillFetchFailed, reason.ToString()),
         AgentProfileTurnDegradationReason.ExactSkillIdentityMismatch =>
-            AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch,
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.ExactSkillIdentityMismatch, reason.ToString()),
         AgentProfileTurnDegradationReason.SelectedSkillBodyInvalid =>
-            AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid,
-        _ => AgentProfileTurnDiagnosticCode.ProfileInvalid,
+            new AgentProfileTurnDiagnostic(AgentProfileTurnDiagnosticCode.SelectedSkillBodyInvalid, reason.ToString()),
+        AgentProfileTurnDegradationReason.Unspecified or
+            AgentProfileTurnDegradationReason.LegacyAuthorityMissing or
+            AgentProfileTurnDegradationReason.MaterializerUnavailable or
+            AgentProfileTurnDegradationReason.MaterializationFailed => null,
+        _ => null,
     };
 
     private static AgentProfileTurnCatalog BuildCatalog(
