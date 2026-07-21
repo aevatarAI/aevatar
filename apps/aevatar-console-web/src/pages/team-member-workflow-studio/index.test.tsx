@@ -3867,6 +3867,18 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(headerMainRow).toHaveClass("workflow-studio-header__row");
     expect(headerPrimaryActions).toHaveClass("workflow-studio-header__actions");
     expect(headerPrimaryActions).toHaveAttribute("data-responsive-actions", "true");
+    expect(screen.getByTestId("workflow-header-run-actions")).toHaveClass(
+      "workflow-studio-header__action-group--primary",
+    );
+    expect(screen.getByTestId("workflow-header-edit-actions")).toHaveClass(
+      "workflow-studio-header__action-group--edit",
+    );
+    expect(screen.getByTestId("workflow-header-commit-actions")).toHaveClass(
+      "workflow-studio-header__action-group--commit",
+    );
+    expect(screen.getByTestId("workflow-header-secondary-actions")).toHaveClass(
+      "workflow-studio-header__action-group--secondary",
+    );
     const titleShell = headerIdentity.querySelector(
       ".workflow-studio-header__title-shell",
     );
@@ -3882,7 +3894,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(headerResponsiveRules).toContain(
       "max-width: min(360px, 100%);",
     );
-    expect(headerResponsiveRules).toContain("@media (max-width: 1320px)");
+    expect(headerResponsiveRules).toContain("@media (max-width: 1500px)");
     expect(headerResponsiveRules).toContain("@media (max-width: 980px)");
     expect(headerResponsiveRules).toContain("overflow: hidden;");
     expect(headerResponsiveRules).not.toContain("overflow-x: auto;");
@@ -3914,6 +3926,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
     ).toBeTruthy();
     expect(
       within(headerPrimaryActions).getByRole("button", { name: "Add node" }),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("workflow-header-edit-actions")).getByRole(
+        "button",
+        { name: "Edit YAML" },
+      ),
     ).toBeTruthy();
     const publishedRunsButton = within(headerPrimaryActions).getByRole("button", {
       name: "Published runs",
@@ -4218,8 +4236,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(readActionButtonNames()).toEqual([
       "Run",
       "Add node",
-      "Save",
       "Edit YAML",
+      "Save",
     ]);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
@@ -4250,8 +4268,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(readActionButtonNames()).toEqual([
       "Run",
       "Add node",
-      "Save",
       "Edit YAML",
+      "Save",
     ]);
 
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
