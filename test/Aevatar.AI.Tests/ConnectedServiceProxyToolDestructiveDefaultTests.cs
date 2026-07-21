@@ -23,7 +23,7 @@ namespace Aevatar.AI.Tests;
 public class ConnectedServiceProxyToolDestructiveDefaultTests
 {
     private const string ServiceSlug = "api-shop";
-    private const string ServiceId = "svc-1";
+    private const string ServiceId = "us-shop-alpha";
 
     [Fact]
     public async Task WriteOperation_WithoutMarkerOverride_IsDestructiveByDefault()

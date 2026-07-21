@@ -672,7 +672,7 @@ public class NyxIdChatGAgentTests
                         Id = "call-unauthorized",
                         Name = "nyxid_proxy",
                         ArgumentsJson =
-                            """{"slug":"api-github","path":"/repos/private?access_token=query-secret","headers":{"X-Credential":"header-secret"}}""",
+                            """{"service_id":"us-github-alpha","slug":"api-github","path":"/repos/private?access_token=query-secret","headers":{"X-Credential":"header-secret"}}""",
                     },
                 }],
                 [new LLMStreamChunk { DeltaContent = "later answer" }],
@@ -786,7 +786,7 @@ public class NyxIdChatGAgentTests
                         Id = "call-forbidden",
                         Name = "nyxid_proxy",
                         ArgumentsJson =
-                            """{"slug":"api-github","path":"/repos/private?access_token=query-secret","headers":{"X-Credential":"header-secret"}}""",
+                            """{"service_id":"us-github-alpha","slug":"api-github","path":"/repos/private?access_token=query-secret","headers":{"X-Credential":"header-secret"}}""",
                     },
                 }],
                 [new LLMStreamChunk { DeltaContent = "The service request was denied." }],

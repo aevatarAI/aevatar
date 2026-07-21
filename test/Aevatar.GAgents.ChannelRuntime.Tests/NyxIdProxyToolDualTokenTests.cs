@@ -112,8 +112,10 @@ public class NyxIdProxyToolDualTokenTests
             AgentSkillRecoveryContext.Empty,
             new Dictionary<string, string>(StringComparer.Ordinal)));
 
-        var first = await tool.ExecuteAsync("""{"slug":"org-service","path":"/ping"}""");
-        var second = await tool.ExecuteAsync("""{"slug":"org-service","path":"/ping"}""");
+        var first = await tool.ExecuteAsync(
+            """{"service_id":"us-org-alpha","slug":"org-service","path":"/ping"}""");
+        var second = await tool.ExecuteAsync(
+            """{"service_id":"us-org-alpha","slug":"org-service","path":"/ping"}""");
 
         first.Should().Be("""{"ok":true,"token":"org-token"}""");
         second.Should().Be("""{"ok":true,"token":"org-token"}""");
@@ -157,12 +159,12 @@ public class NyxIdProxyToolDualTokenTests
             var token = request.Headers.Authorization?.Parameter ?? string.Empty;
             var path = request.RequestUri?.AbsolutePath ?? string.Empty;
 
-            if (path == "/api/v1/proxy/services")
+            if (path == "/api/v1/keys")
             {
                 ServiceDiscoveryRequests++;
                 var body = token == "user-token"
-                    ? """[{"slug":"user-service"}]"""
-                    : """[{"slug":"org-service"}]""";
+                    ? """[{"id":"us-user-alpha","slug":"user-service"}]"""
+                    : """[{"id":"us-org-alpha","slug":"org-service"}]""";
                 return Task.FromResult(Json(body));
             }
 
