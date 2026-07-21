@@ -580,7 +580,7 @@ public class NyxIdChatGAgentTests
                             Id = "call-auth",
                             Name = "nyxid_require_service",
                             ArgumentsJson =
-                                """{"service_slug":"api-github","resource_uri":"/repos/private?token=bearer-secret"}""",
+                                """{"service_slug":"api-github","resource_uri":"/repos/private?access_token=query-secret#credential=fragment-secret"}""",
                         },
                     },
                 ],
@@ -609,14 +609,33 @@ public class NyxIdChatGAgentTests
         llmProviderFactory.StreamRequests.Should().HaveCount(2);
         llmProviderFactory.StreamRequests[1].Messages.Should().Contain(message =>
             message.Role == "user" && message.Content == "read private repository");
-        llmProviderFactory.StreamRequests[1].Messages
-            .Select(static message => message.ToString())
-            .Should()
-            .NotContain(text => text.Contains("bearer-secret", StringComparison.Ordinal));
+        var replayedToolMessages = llmProviderFactory.StreamRequests[1].Messages;
+        var replayedAssistant = replayedToolMessages.Should().ContainSingle(message =>
+            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 1).Which;
+        replayedAssistant.ToolCalls![0].Id.Should().Be("call-auth");
+        replayedAssistant.ToolCalls[0].Name.Should().Be("nyxid_require_service");
+        replayedAssistant.ToolCalls[0].ArgumentsJson.Should()
+            .NotContain("query-secret")
+            .And.NotContain("fragment-secret");
+        replayedAssistant.ToolCalls[0].ArgumentsJson.Should().Be("{}");
+        replayedToolMessages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == "call-auth");
+        replayedToolMessages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.ArgumentsJson)
+            .Should().NotContain(arguments =>
+                arguments.Contains("query-secret", StringComparison.Ordinal) ||
+                arguments.Contains("fragment-secret", StringComparison.Ordinal));
         agent.State.Sessions["turn-blocked"].Outcome.Should().Be(RoleChatSessionOutcome.Blocked);
+        agent.State.Sessions["turn-blocked"].ToolCalls.Should().ContainSingle(call =>
+            call.CallId == "call-auth" &&
+            call.ToolName == "nyxid_require_service" &&
+            call.ArgumentsJson == string.Empty);
         agent.State.Sessions["turn-blocked"].ToolReceipts
             .Should()
-            .OnlyContain(receipt => !receipt.ToString().Contains("bearer-secret", StringComparison.Ordinal));
+            .OnlyContain(receipt =>
+                !receipt.ToString().Contains("query-secret", StringComparison.Ordinal) &&
+                !receipt.ToString().Contains("fragment-secret", StringComparison.Ordinal));
         agent.State.Sessions["turn-after-block"].Outcome.Should().Be(RoleChatSessionOutcome.Completed);
 
         history.Saved.Should().HaveCount(2);
@@ -645,16 +664,19 @@ public class NyxIdChatGAgentTests
                 HttpStatusCode.Unauthorized,
                 """{"error":"unauthorized","error_code":1001,"message":"expired bearer-secret"}""")));
         var llmProviderFactory = new StreamingToolLoopProviderFactory(
-            [[new LLMStreamChunk
-            {
-                DeltaToolCall = new ToolCall
+            [
+                [new LLMStreamChunk
                 {
-                    Id = "call-unauthorized",
-                    Name = "nyxid_proxy",
-                    ArgumentsJson =
-                        """{"slug":"api-github","path":"/repos/private?access_token=query-secret"}""",
-                },
-            }]]);
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "call-unauthorized",
+                        Name = "nyxid_proxy",
+                        ArgumentsJson =
+                            """{"slug":"api-github","path":"/repos/private?access_token=query-secret","headers":{"X-Credential":"header-secret"}}""",
+                    },
+                }],
+                [new LLMStreamChunk { DeltaContent = "later answer" }],
+            ]);
         var agent = CreateAgent(
             services,
             actorId,
@@ -681,13 +703,22 @@ public class NyxIdChatGAgentTests
         completed.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
         completed.ToolReceipts.Should().ContainSingle(receipt =>
             receipt.Status == AgentToolReceiptStatus.AuthorizationRequired);
+        completed.ToolCalls.Should().ContainSingle(call =>
+            call.CallId == "call-unauthorized" &&
+            call.ToolName == "nyxid_proxy" &&
+            call.ArgumentsJson == string.Empty);
         completed.ToString().Should()
             .NotContain("bearer-secret")
             .And.NotContain("query-secret")
+            .And.NotContain("header-secret")
             .And.NotContain("request-token-secret")
             .And.NotContain("access_token");
+        publisher.Published.OfType<ToolCallEvent>().Should().ContainSingle().Which.Should().Match<ToolCallEvent>(call =>
+            call.CallId == "call-unauthorized" &&
+            call.ToolName == "nyxid_proxy" &&
+            call.ArgumentsJson == string.Empty);
         publisher.Published.OfType<ToolResultEvent>().Should().ContainSingle().Which.ToString()
-            .Should().NotContain("bearer-secret").And.NotContain("query-secret");
+            .Should().NotContain("bearer-secret").And.NotContain("query-secret").And.NotContain("header-secret");
         var frames = NyxIdChatCompletionAguiFrameBuilder.Build(
             new NyxIdChatSessionProjectionContext
             {
@@ -706,6 +737,32 @@ public class NyxIdChatGAgentTests
         history.Saved.Should().ContainSingle();
         history.Saved.Single().Messages.Select(message => message.ToString()).Should()
             .NotContain(text => text.Contains("secret", StringComparison.OrdinalIgnoreCase));
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            ScopeId = "scope-a",
+            Prompt = "ordinary follow-up",
+            SessionId = "turn-after-unauthorized",
+        });
+
+        llmProviderFactory.StreamRequests.Should().HaveCount(2);
+        var laterRequestMessages = llmProviderFactory.StreamRequests[1].Messages;
+        var replayedAssistant = laterRequestMessages.Should().ContainSingle(message =>
+            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 1).Which;
+        replayedAssistant.ToolCalls![0].Id.Should().Be("call-unauthorized");
+        replayedAssistant.ToolCalls[0].Name.Should().Be("nyxid_proxy");
+        replayedAssistant.ToolCalls[0].ArgumentsJson.Should()
+            .NotContain("query-secret")
+            .And.NotContain("header-secret");
+        replayedAssistant.ToolCalls[0].ArgumentsJson.Should().Be("{}");
+        laterRequestMessages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == "call-unauthorized");
+        laterRequestMessages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.ArgumentsJson)
+            .Should().NotContain(arguments =>
+                arguments.Contains("query-secret", StringComparison.Ordinal) ||
+                arguments.Contains("header-secret", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -728,7 +785,8 @@ public class NyxIdChatGAgentTests
                     {
                         Id = "call-forbidden",
                         Name = "nyxid_proxy",
-                        ArgumentsJson = """{"slug":"api-github","path":"/repos/private"}""",
+                        ArgumentsJson =
+                            """{"slug":"api-github","path":"/repos/private?access_token=query-secret","headers":{"X-Credential":"header-secret"}}""",
                     },
                 }],
                 [new LLMStreamChunk { DeltaContent = "The service request was denied." }],
@@ -757,17 +815,45 @@ public class NyxIdChatGAgentTests
         completed.ToolReceipts.Should().ContainSingle(receipt =>
             receipt.Status == AgentToolReceiptStatus.Error &&
             receipt.ErrorCode == "NYXID_PROXY_FORBIDDEN");
-        completed.ToString().Should().NotContain("bearer-secret").And.NotContain("request-token-secret");
-        NyxIdChatCompletionAguiFrameBuilder.Build(
+        completed.ToolCalls.Should().ContainSingle(call =>
+            call.CallId == "call-forbidden" &&
+            call.ToolName == "nyxid_proxy" &&
+            call.ArgumentsJson == string.Empty);
+        completed.ToString().Should()
+            .NotContain("bearer-secret")
+            .And.NotContain("query-secret")
+            .And.NotContain("header-secret")
+            .And.NotContain("request-token-secret");
+        var frames = NyxIdChatCompletionAguiFrameBuilder.Build(
                 new NyxIdChatSessionProjectionContext
                 {
                     RootActorId = actorId,
                     SessionId = completed.SessionId,
                     ProjectionKind = "nyxid-chat-session",
                 },
-                completed)
-            .Any(frame => frame.Custom != null && frame.Custom.Name == "nyxid.authorization.required")
+                completed);
+        frames.Any(frame => frame.Custom != null && frame.Custom.Name == "nyxid.authorization.required")
             .Should().BeFalse();
+        frames.Select(frame => frame.ToString()).Should()
+            .NotContain(text => text.Contains("secret", StringComparison.OrdinalIgnoreCase));
+        llmProviderFactory.StreamRequests.Should().HaveCount(2);
+        var immediateFollowUpMessages = llmProviderFactory.StreamRequests[1].Messages;
+        var failedAssistant = immediateFollowUpMessages.Should().ContainSingle(message =>
+            message.Role == "assistant" && message.ToolCalls != null && message.ToolCalls.Count == 1).Which;
+        failedAssistant.ToolCalls![0].Id.Should().Be("call-forbidden");
+        failedAssistant.ToolCalls[0].Name.Should().Be("nyxid_proxy");
+        failedAssistant.ToolCalls[0].ArgumentsJson.Should()
+            .NotContain("query-secret")
+            .And.NotContain("header-secret");
+        failedAssistant.ToolCalls[0].ArgumentsJson.Should().Be("{}");
+        immediateFollowUpMessages.Should().ContainSingle(message =>
+            message.Role == "tool" && message.ToolCallId == "call-forbidden");
+        immediateFollowUpMessages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Select(call => call.ArgumentsJson)
+            .Should().NotContain(arguments =>
+                arguments.Contains("query-secret", StringComparison.Ordinal) ||
+                arguments.Contains("header-secret", StringComparison.Ordinal));
         history.Saved.Should().ContainSingle();
         history.Saved.Single().Messages.Should().ContainSingle(message =>
             message.Role == "assistant" &&

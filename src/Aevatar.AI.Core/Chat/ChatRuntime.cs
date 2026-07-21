@@ -511,12 +511,12 @@ public sealed class ChatRuntime
                             break;
                         }
 
-                        AppendAssistantMessage(
+                        var parsedAssistantToolCallMessage = AppendAssistantMessage(
                             messages,
                             pendingHistoryMessages,
                             parsed.CleanedContent,
                             roundResult.ReasoningContent,
-                            parsed.ToolCalls);
+                            parsed.ToolCalls)!;
 
                         var textToolExecutor = new StreamingToolExecutor(
                             _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
@@ -531,6 +531,11 @@ public sealed class ChatRuntime
                         await foreach (var result in textToolExecutor.GetRemainingResultsAsync(textToolState, runToken))
                         {
                             executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, parsed.ToolCalls));
+                            parsedAssistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
+                                messages,
+                                pendingHistoryMessages,
+                                parsedAssistantToolCallMessage,
+                                result);
                             yield return BuildToolCallCompletedChunk(result);
                             var toolMsg = ToolCallLoop.BuildToolResultMessage(
                                 result.CallId,
@@ -539,10 +544,7 @@ public sealed class ChatRuntime
                             messages.Add(toolMsg);
                             pendingHistoryMessages.Add(toolMsg);
                             if (IsAuthorizationRequired(result))
-                            {
                                 authorizationBlocked = true;
-                                break;
-                            }
                         }
 
                         if (authorizationBlocked)
@@ -620,19 +622,21 @@ public sealed class ChatRuntime
                 }
             }
 
-            var assistantToolCallMessage = new ChatMessage
-            {
-                Role = "assistant",
-                Content = roundResult.Content,
-                ReasoningContent = roundResult.ReasoningContent,
-                ToolCalls = roundResult.ToolCalls,
-            };
-            messages.Add(assistantToolCallMessage);
-            pendingHistoryMessages.Add(assistantToolCallMessage);
+            var assistantToolCallMessage = AppendAssistantMessage(
+                messages,
+                pendingHistoryMessages,
+                roundResult.Content,
+                roundResult.ReasoningContent,
+                roundResult.ToolCalls)!;
 
             await foreach (var result in streamingExecutor.GetRemainingResultsAsync(streamingToolState, runToken))
             {
                 executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, roundResult.ToolCalls));
+                assistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
+                    messages,
+                    pendingHistoryMessages,
+                    assistantToolCallMessage,
+                    result);
                 yield return BuildToolCallCompletedChunk(result);
                 var toolMsg = ToolCallLoop.BuildToolResultMessage(
                     result.CallId,
@@ -641,10 +645,7 @@ public sealed class ChatRuntime
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
                 if (IsAuthorizationRequired(result))
-                {
                     authorizationBlocked = true;
-                    break;
-                }
             }
 
             if (authorizationBlocked)
@@ -689,12 +690,12 @@ public sealed class ChatRuntime
                 : null;
             if (finalParsed?.ToolCalls.Count > 0)
             {
-                AppendAssistantMessage(
+                var assistantToolCallMessage = AppendAssistantMessage(
                     messages,
                     pendingHistoryMessages,
                     finalParsed.CleanedContent,
                     finalRound.ReasoningContent,
-                    finalParsed.ToolCalls);
+                    finalParsed.ToolCalls)!;
 
                 var finalToolExecutor = new StreamingToolExecutor(
                     _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
@@ -709,6 +710,11 @@ public sealed class ChatRuntime
                 await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(finalToolState, runToken))
                 {
                     executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, finalParsed.ToolCalls));
+                    assistantToolCallMessage = FailedToolCallArgumentRedactor.Redact(
+                        messages,
+                        pendingHistoryMessages,
+                        assistantToolCallMessage,
+                        result);
                     yield return BuildToolCallCompletedChunk(result);
                     var toolMsg = ToolCallLoop.BuildToolResultMessage(
                         result.CallId,
@@ -717,10 +723,7 @@ public sealed class ChatRuntime
                     messages.Add(toolMsg);
                     pendingHistoryMessages.Add(toolMsg);
                     if (IsAuthorizationRequired(result))
-                    {
                         authorizationBlocked = true;
-                        break;
-                    }
                 }
 
                 if (!authorizationBlocked)
@@ -1084,7 +1087,7 @@ public sealed class ChatRuntime
         return results;
     }
 
-    private static void AppendAssistantMessage(
+    private static ChatMessage? AppendAssistantMessage(
         List<ChatMessage> messages,
         List<ChatMessage> pendingHistoryMessages,
         string? content,
@@ -1092,18 +1095,26 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall>? toolCalls)
     {
         if (string.IsNullOrEmpty(content) && string.IsNullOrEmpty(reasoningContent) && toolCalls is not { Count: > 0 })
-            return;
+            return null;
 
         var assistantMessage = new ChatMessage
         {
             Role = "assistant",
             Content = content,
             ReasoningContent = reasoningContent,
-            ToolCalls = toolCalls,
+            ToolCalls = toolCalls?.Select(CloneToolCall).ToArray(),
         };
         messages.Add(assistantMessage);
         pendingHistoryMessages.Add(assistantMessage);
+        return assistantMessage;
     }
+
+    private static ToolCall CloneToolCall(ToolCall toolCall) => new()
+    {
+        Id = toolCall.Id,
+        Name = toolCall.Name,
+        ArgumentsJson = toolCall.ArgumentsJson,
+    };
 
     /// <summary>
     /// Build the LLM messages list from the current history snapshot plus a pending user message,
