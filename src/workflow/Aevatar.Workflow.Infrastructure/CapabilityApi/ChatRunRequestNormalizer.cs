@@ -34,7 +34,8 @@ internal static class ChatRunRequestNormalizer
         ChatInput input,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
-        string? trustedScopeId = null)
+        string? trustedScopeId = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false)
     {
         // Refactor (iter112/cluster-3): Old pattern: host passed normalized legacy mirror fields into Application commands. New principle: host normalizes wire aliases once into typed WorkflowChatSource.
         // Refactor (iter349/cluster-349):
@@ -48,6 +49,7 @@ internal static class ChatRunRequestNormalizer
             defaultMetadata,
             trustedCallerCredential,
             trustedScopeId,
+            allowEmptyInputForResolvedMemberWorkflow,
             chatConversation: null);
     }
 
@@ -55,7 +57,8 @@ internal static class ChatRunRequestNormalizer
         HttpChatInput input,
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
-        string? trustedScopeId = null)
+        string? trustedScopeId = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -70,6 +73,7 @@ internal static class ChatRunRequestNormalizer
             defaultMetadata,
             trustedCallerCredential,
             trustedScopeId,
+            allowEmptyInputForResolvedMemberWorkflow,
             conversationResult.Conversation);
     }
 
@@ -148,7 +152,8 @@ internal static class ChatRunRequestNormalizer
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
         CancellationToken cancellationToken = default,
-        string? trustedScopeId = null)
+        string? trustedScopeId = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false)
     {
         ArgumentNullException.ThrowIfNull(input);
         var normalizedInputParts = fileIngressPort == null
@@ -160,6 +165,7 @@ internal static class ChatRunRequestNormalizer
             defaultMetadata,
             trustedCallerCredential,
             trustedScopeId,
+            allowEmptyInputForResolvedMemberWorkflow,
             chatConversation: null);
     }
 
@@ -169,7 +175,8 @@ internal static class ChatRunRequestNormalizer
         IReadOnlyDictionary<string, string>? defaultMetadata = null,
         WorkflowCallerCredential? trustedCallerCredential = null,
         CancellationToken cancellationToken = default,
-        string? trustedScopeId = null)
+        string? trustedScopeId = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -186,6 +193,7 @@ internal static class ChatRunRequestNormalizer
             defaultMetadata,
             trustedCallerCredential,
             trustedScopeId,
+            allowEmptyInputForResolvedMemberWorkflow,
             conversationResult.Conversation);
     }
 
@@ -195,6 +203,7 @@ internal static class ChatRunRequestNormalizer
         IReadOnlyDictionary<string, string>? defaultMetadata,
         WorkflowCallerCredential? trustedCallerCredential,
         string? trustedScopeId,
+        bool allowEmptyInputForResolvedMemberWorkflow,
         WorkflowChatConversationIntent? chatConversation)
     {
         if (normalizedInputPartsResult.Error != WorkflowChatRunStartError.None)
@@ -215,7 +224,8 @@ internal static class ChatRunRequestNormalizer
             return ChatRunRequestNormalizationResult.Failed(sourceResult.Error);
 
         var rawPrompt = ResolvePrompt(input.Prompt, normalizedInputParts);
-        if (rawPrompt.Length == 0)
+        if (rawPrompt.Length == 0 &&
+            !CanStartWithoutInput(sourceResult.Source!, allowEmptyInputForResolvedMemberWorkflow))
             return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
 
         var callerCredentialResult = NormalizeCallerCredential(trustedCallerCredential);
@@ -848,6 +858,13 @@ internal static class ChatRunRequestNormalizer
 
     private static string? NormalizeSessionId(string? sessionId) =>
         string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();
+
+    private static bool CanStartWithoutInput(
+        WorkflowChatSource source,
+        bool allowEmptyInputForResolvedMemberWorkflow) =>
+        allowEmptyInputForResolvedMemberWorkflow &&
+        source.Kind == WorkflowChatSourceKind.DefinitionActor &&
+        !string.IsNullOrWhiteSpace(source.DefinitionActorSource?.ActorId);
 
     private static string ResolvePrompt(string? prompt, IReadOnlyList<WorkflowChatInputPart>? inputParts)
     {

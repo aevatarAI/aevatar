@@ -1278,6 +1278,120 @@ describe('StudioMemberInvokePanel', () => {
     });
   });
 
+  it('allows bound member-run chat endpoints to start without prompt or files', async () => {
+    (runtimeRunsApi.streamEndpoint as jest.Mock).mockResolvedValue({});
+    (scopeRuntimeApi.getMemberEndpointContract as jest.Mock).mockResolvedValueOnce({
+      defaultSmokeInputMode: 'prompt',
+      defaultSmokePrompt: null,
+      deploymentStatus: 'Active',
+      endpointId: 'chat',
+      fetchExample: null,
+      curlExample: null,
+      invokePath: '/api/scopes/scope-1/members/m-alpha/invoke/chat:stream',
+      memberId: 'm-alpha',
+      method: 'POST',
+      publishedServiceId: 'svc-alpha',
+      requestContentType: 'application/json',
+      requestTypeUrl: '',
+      responseContentType: 'text/event-stream',
+      responseTypeUrl: '',
+      revisionId: 'rev-workflow',
+      sampleRequestJson: null,
+      scopeId: 'scope-1',
+      serviceId: 'svc-alpha',
+      smokeTestSupported: true,
+      streamFrameFormat: 'workflow-run-event',
+      supportsAguiFrames: false,
+      supportsSse: true,
+      supportsWebSocket: false,
+    });
+
+    render(
+      React.createElement(StudioMemberInvokePanel, {
+        enableFileAttachments: true,
+        memberId: 'm-alpha',
+        memberRevision: {
+          allocationWeight: 100,
+          artifactHash: 'hash-workflow',
+          createdAt: '2026-03-26T07:00:00Z',
+          deploymentId: 'dep-workflow',
+          failureReason: '',
+          implementationKind: 'workflow',
+          inlineWorkflowCount: 1,
+          isActiveServing: true,
+          isDefaultServing: true,
+          isServingTarget: true,
+          preparedAt: '2026-03-26T07:01:00Z',
+          primaryActorId: 'actor-workflow',
+          publishedAt: '2026-03-26T07:02:00Z',
+          retiredAt: null,
+          revisionId: 'rev-workflow',
+          scriptDefinitionActorId: '',
+          scriptId: '',
+          scriptRevision: '',
+          scriptSourceHash: '',
+          servingState: 'Active',
+          staticActorTypeName: '',
+          status: 'Published',
+          workflowDefinitionActorId: 'wf-alpha',
+          workflowName: 'status-report',
+        },
+        presentation: 'member-run',
+        runtimeTarget: 'member',
+        scopeId: 'scope-1',
+        selectedMemberLabel: 'Status reporter',
+        services: [
+          {
+            deploymentStatus: 'Active',
+            displayName: 'Status reporter service',
+            endpoints: [
+              {
+                description: 'Run the bound workflow.',
+                displayName: 'Chat',
+                endpointId: 'chat',
+                kind: 'chat',
+                requestTypeUrl: '',
+                responseTypeUrl: '',
+              },
+            ],
+            kind: 'service',
+            namespace: 'default',
+            primaryActorId: 'actor-workflow',
+            serviceId: 'svc-alpha',
+          },
+        ],
+        teamId: 'team-alpha',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(scopeRuntimeApi.getMemberEndpointContract).toHaveBeenCalledWith(
+        'scope-1',
+        'm-alpha',
+        'chat',
+      );
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start run' }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamEndpoint).toHaveBeenCalledWith(
+        'scope-1',
+        {
+          endpointId: 'chat',
+          prompt: '',
+        },
+        expect.any(AbortSignal),
+        {
+          memberId: 'm-alpha',
+        },
+      );
+    });
+    expect(
+      screen.queryByText('Enter a request before running this workflow.'),
+    ).toBeNull();
+  });
+
   it('records runs into read-only Run history without exposing internal identifiers', async () => {
     const onObserveSessionChange = jest.fn();
 
