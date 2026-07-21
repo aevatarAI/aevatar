@@ -63,20 +63,33 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationScopeLeasePrepara
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
+            await ReleaseAfterFailureAsync(lease).ConfigureAwait(false);
 
             throw;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             _logger.LogWarning(
-                ex,
                 "Failed to prepare a NyxID catalog refresh observation scope for actor {ActorId} and refresh {RefreshId}.",
-                actorId,
-                refreshId);
-            await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
+                normalizedActorId,
+                normalizedRefreshId);
+            await ReleaseAfterFailureAsync(lease).ConfigureAwait(false);
 
             return null;
+        }
+    }
+
+    private async Task ReleaseAfterFailureAsync(
+        NyxIdAuthorizationCatalogRefreshObservationRuntimeLease lease)
+    {
+        try
+        {
+            await _releaseService.ReleaseIfIdleAsync(lease, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            _logger.LogWarning(
+                "Failed to roll back a NyxID catalog refresh observation scope after preparation failure.");
         }
     }
 

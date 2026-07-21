@@ -76,16 +76,6 @@ public sealed class NyxIdAuthorizationCatalogVisibilityService
                 visibleStateVersion,
                 "nyxid_catalog_snapshot_invalidated");
         }
-
-        var now = _timeProvider.GetUtcNow();
-        if (snapshot.ObservedAtUtc > now || snapshot.FreshUntilUtc <= now)
-        {
-            return Result(
-                NyxIdAuthorizationCatalogVisibilityStatus.Stale,
-                requiredStateVersion,
-                visibleStateVersion,
-                "nyxid_catalog_snapshot_stale");
-        }
         if (!snapshot.Activated ||
             snapshot.ObservedAtUtc == default ||
             string.IsNullOrWhiteSpace(snapshot.ContractVersion) ||
@@ -98,6 +88,16 @@ public sealed class NyxIdAuthorizationCatalogVisibilityService
                 requiredStateVersion,
                 visibleStateVersion,
                 "nyxid_catalog_snapshot_invalid");
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        if (snapshot.ObservedAtUtc > now || snapshot.FreshUntilUtc <= now)
+        {
+            return Result(
+                NyxIdAuthorizationCatalogVisibilityStatus.Stale,
+                requiredStateVersion,
+                visibleStateVersion,
+                "nyxid_catalog_snapshot_stale");
         }
 
         return Result(

@@ -2,6 +2,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Microsoft.Extensions.Logging;
+using System.Runtime.ExceptionServices;
 
 namespace Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 
@@ -94,6 +95,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         EventSinkProjectionAttachment<INyxIdAuthorizationCatalogRefreshObservationProjectionLease>?
             attachment = null;
         await using var sink = new EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome>(8);
+        NyxIdAuthorizationCatalogRefreshResult? result = null;
+        ExceptionDispatchInfo? operationFailure = null;
         try
         {
             preparation = await _observationPreparation.PrepareAsync(actorId, refreshId, ct)
@@ -127,49 +130,35 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                     ct)
                 .ConfigureAwait(false);
             if (began == null)
-                return ObservationTimedOut();
-            if (began.Status == NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded)
-                return ToRefreshResult(began);
-
-            return await RunProviderWhileObservingAsync(
-                    normalizedOwner,
-                    bearerToken,
-                    refreshId,
-                    sink,
-                    ct)
-                .ConfigureAwait(false);
+            {
+                result = ObservationTimedOut();
+            }
+            else if (began.Status == NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded)
+            {
+                result = ToRefreshResult(began);
+            }
+            else
+            {
+                result = await RunProviderWhileObservingAsync(
+                        normalizedOwner,
+                        bearerToken,
+                        refreshId,
+                        sink,
+                        ct)
+                    .ConfigureAwait(false);
+            }
         }
-        finally
+        catch (Exception ex)
         {
-            try
-            {
-                if (attachment != null)
-                {
-                    try
-                    {
-                        await _observationProjection.DetachLiveSinkAsync(
-                                attachment.LiveSinkLease,
-                                CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        await _observationProjection.ReleaseActorProjectionAsync(
-                                attachment.ProjectionLease,
-                                CancellationToken.None)
-                            .ConfigureAwait(false);
-                    }
-                }
-            }
-            finally
-            {
-                if (preparation != null)
-                {
-                    await _observationPreparation.ReleaseAsync(preparation, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-            }
+            operationFailure = ExceptionDispatchInfo.Capture(ex);
         }
+
+        var cleanupFailure = await ReleaseObservationAsync(attachment, preparation).ConfigureAwait(false);
+        operationFailure?.Throw();
+        if (cleanupFailure != null)
+            ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+
+        return result ?? throw new InvalidOperationException("nyxid_catalog_refresh_result_missing");
     }
 
     private async Task<NyxIdAuthorizationCatalogRefreshResult> RunProviderWhileObservingAsync(
@@ -202,8 +191,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
                 throw;
             }
 
-            if (terminal.Status is NyxIdAuthorizationCatalogRefreshStatus.Superseded or
-                NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)
+            if (terminal.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
             {
                 providerCancellation.Cancel();
                 await ObserveAfterCancellationAsync(providerTask).ConfigureAwait(false);
@@ -225,7 +213,65 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             throw;
         }
 
-        return await terminalTask.ConfigureAwait(false);
+        using var timeout = new CancellationTokenSource(CatalogObservationTimeout, _timeProvider);
+        using var observationDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        var deadlineTask = Task.Delay(Timeout.InfiniteTimeSpan, _timeProvider, observationDeadline.Token);
+        completed = await Task.WhenAny(terminalTask, deadlineTask).ConfigureAwait(false);
+        if (ReferenceEquals(completed, terminalTask))
+            return await terminalTask.ConfigureAwait(false);
+
+        terminalCancellation.Cancel();
+        await ObserveAfterCancellationAsync(terminalTask).ConfigureAwait(false);
+        if (ct.IsCancellationRequested)
+            ct.ThrowIfCancellationRequested();
+        return ObservationTimedOut();
+    }
+
+    private async Task<Exception?> ReleaseObservationAsync(
+        EventSinkProjectionAttachment<INyxIdAuthorizationCatalogRefreshObservationProjectionLease>? attachment,
+        NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation? preparation)
+    {
+        Exception? firstFailure = null;
+
+        async Task ReleaseAsync(string stage, Func<Task> release)
+        {
+            try
+            {
+                await release().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                firstFailure ??= ex;
+                _logger.LogWarning(
+                    "Failed to release NyxID catalog refresh observation resource at stage {CleanupStage}.",
+                    stage);
+            }
+        }
+
+        if (attachment != null)
+        {
+            await ReleaseAsync(
+                "live_sink",
+                () => _observationProjection.DetachLiveSinkAsync(
+                    attachment.LiveSinkLease,
+                    CancellationToken.None)).ConfigureAwait(false);
+            await ReleaseAsync(
+                "actor_projection",
+                () => _observationProjection.ReleaseActorProjectionAsync(
+                    attachment.ProjectionLease,
+                    CancellationToken.None)).ConfigureAwait(false);
+        }
+
+        if (preparation != null)
+        {
+            await ReleaseAsync(
+                "scope_preparation",
+                () => _observationPreparation.ReleaseAsync(
+                    preparation,
+                    CancellationToken.None)).ConfigureAwait(false);
+        }
+
+        return firstFailure;
     }
 
     private async Task RefreshProviderAsync(
@@ -403,10 +449,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         {
             _logger.LogDebug("Canceled the losing NyxID catalog refresh task after terminal observation.");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             _logger.LogWarning(
-                ex,
                 "The losing NyxID catalog refresh task failed after terminal observation.");
         }
     }
@@ -416,14 +461,14 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         string refreshId,
         CancellationToken ct)
     {
-        var outcome = await AwaitOutcomeAsync(
+        var outcome = await AwaitOutcomeCoreAsync(
                 sink,
                 refreshId,
                 static candidate => candidate.Status !=
                                     NyxIdAuthorizationCatalogRefreshOutcomeStatus.Started,
                 ct)
             .ConfigureAwait(false);
-        return outcome == null ? ObservationTimedOut() : ToRefreshResult(outcome);
+        return ToRefreshResult(outcome);
     }
 
     private async Task<NyxIdAuthorizationCatalogRefreshCommittedOutcome?> AwaitOutcomeAsync(
@@ -436,18 +481,28 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
         try
         {
-            await foreach (var outcome in sink.ReadAllAsync(linked.Token).ConfigureAwait(false))
-            {
-                if (string.Equals(outcome.RefreshId, refreshId, StringComparison.Ordinal) &&
-                    matchesStage(outcome))
-                {
-                    return outcome;
-                }
-            }
+            return await AwaitOutcomeCoreAsync(sink, refreshId, matchesStage, linked.Token)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !ct.IsCancellationRequested)
         {
             return null;
+        }
+    }
+
+    private static async Task<NyxIdAuthorizationCatalogRefreshCommittedOutcome> AwaitOutcomeCoreAsync(
+        EventChannel<NyxIdAuthorizationCatalogRefreshCommittedOutcome> sink,
+        string refreshId,
+        Func<NyxIdAuthorizationCatalogRefreshCommittedOutcome, bool> matchesStage,
+        CancellationToken ct)
+    {
+        await foreach (var outcome in sink.ReadAllAsync(ct).ConfigureAwait(false))
+        {
+            if (string.Equals(outcome.RefreshId, refreshId, StringComparison.Ordinal) &&
+                matchesStage(outcome))
+            {
+                return outcome;
+            }
         }
 
         throw new InvalidOperationException("nyxid_catalog_refresh_observation_ended");

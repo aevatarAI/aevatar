@@ -6,6 +6,7 @@ using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -236,6 +237,123 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshPersonalAsync_WhenLosingProviderFaults_ShouldNotLogProviderDetails()
+    {
+        var commands = new RecordingCommandPort
+        {
+            RefreshFailureException = new InvalidOperationException(
+                "private-provider-detail bearer-secret"),
+        };
+        var observation = new RecordingObservationRuntime();
+        var handler = new SupersessionFaultingHandler();
+        var logger = new RecordingLogger<NyxIdAuthorizationCatalogRefreshPort>();
+        var refresh = Create(
+                commands,
+                handler,
+                observation: observation,
+                logger: logger)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+        await handler.Blocked;
+        var refreshId = commands.Beginnings.Should().ContainSingle().Which.RefreshId;
+
+        observation.Publish(
+            refreshId,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded,
+            "nyxid_catalog_refresh_superseded");
+
+        var result = await refresh;
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Superseded);
+        logger.Messages.Should().ContainSingle();
+        logger.Exceptions.Should().ContainSingle().Which.Should().BeNull();
+        string.Join('\n', logger.Messages).Should().NotContain("private-provider-detail");
+        string.Join('\n', logger.Messages).Should().NotContain("bearer-secret");
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenProviderTimeoutOccursAfterObservationInterval_ShouldCommitFailure()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime();
+        var handler = new DelayedProviderTimeoutHandler();
+        var clock = new FakeTimeProvider(Now);
+        var refresh = Create(
+                commands,
+                handler,
+                observation: observation,
+                timeProvider: clock)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+        await handler.Blocked;
+
+        clock.Advance(NyxIdAuthorizationCatalogRefreshPort.CatalogObservationTimeout.Add(TimeSpan.FromSeconds(1)));
+        await Task.Yield();
+        await Task.Yield();
+        handler.CompleteWithProviderTimeout();
+        var result = await refresh;
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Failed);
+        result.FailureCode.Should().Be("nyxid_catalog_refresh_provider_timed_out");
+        commands.Failures.Should().ContainSingle().Which.Code.Should()
+            .Be("nyxid_catalog_refresh_provider_timed_out");
+        commands.Observations.Should().BeEmpty();
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenCallerCancelsAndCleanupFails_ShouldPreserveCancellationAndReleaseAll()
+    {
+        var commands = new RecordingCommandPort();
+        var observation = new RecordingObservationRuntime
+        {
+            DetachFailure = new InvalidOperationException("detach-private-detail"),
+            ProjectionReleaseFailure = new InvalidOperationException("projection-release-private-detail"),
+            PreparationReleaseFailure = new InvalidOperationException("preparation-release-private-detail"),
+        };
+        var handler = new CallerCancellationHandler(0);
+        using var cancellation = new CancellationTokenSource();
+        var refresh = Create(commands, handler, observation: observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret", cancellation.Token);
+        await handler.Blocked;
+
+        cancellation.Cancel();
+        var act = () => refresh;
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RefreshPersonalAsync_WhenProviderAndCleanupFail_ShouldPreserveProviderFailureAndReleaseAll()
+    {
+        var commands = new RecordingCommandPort
+        {
+            ObservationException = new InvalidOperationException("provider-original-failure"),
+        };
+        var observation = new RecordingObservationRuntime
+        {
+            DetachFailure = new InvalidOperationException("detach-private-detail"),
+            ProjectionReleaseFailure = new InvalidOperationException("projection-release-private-detail"),
+            PreparationReleaseFailure = new InvalidOperationException("preparation-release-private-detail"),
+        };
+        var handler = new RoutingJsonHandler(
+            Ok(UserServicesJson()),
+            Ok(ScopePlanJson()));
+
+        var act = () => Create(commands, handler, observation: observation)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("provider-original-failure");
+        observation.Detached.Should().Be(1);
+        observation.ProjectionReleases.Should().Be(1);
+        observation.PreparationReleases.Should().Be(1);
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_WhenDetachFails_ShouldStillReleaseBothScopes()
     {
         var commands = new RecordingCommandPort();
@@ -449,7 +567,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         bool publishCommittedOutcomes = true,
         RecordingObservationRuntime? observation = null,
         TimeProvider? timeProvider = null,
-        RecordingCatalogQueryPort? catalogQuery = null)
+        RecordingCatalogQueryPort? catalogQuery = null,
+        ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
     {
         observation ??= new RecordingObservationRuntime();
         commands.Observation = publishCommittedOutcomes ? observation : null;
@@ -463,7 +582,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             observation,
             observation,
             timeProvider ?? new FakeTimeProvider(Now),
-            NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
+            logger ?? NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
     }
 
     private static AuthorizationOwnerIdentity Owner() => new()
@@ -625,6 +744,74 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         }
     }
 
+    private sealed class SupersessionFaultingHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<bool> _blocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<HttpResponseMessage> _pendingResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Blocked => _blocked.Task;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _blocked.TrySetResult(true);
+            try
+            {
+                return await _pendingResponse.Task.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new InvalidOperationException("private-provider-detail bearer-secret");
+            }
+        }
+    }
+
+    private sealed class DelayedProviderTimeoutHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<bool> _blocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<HttpResponseMessage> _response =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Blocked => _blocked.Task;
+
+        public void CompleteWithProviderTimeout() =>
+            _response.TrySetException(new TaskCanceledException("provider request timed out"));
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            _blocked.TrySetResult(true);
+            return _response.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public List<Exception?> Exceptions { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+            Exceptions.Add(exception);
+        }
+    }
+
     private sealed class RecordingCommandPort : INyxIdAuthorizationCatalogCommandPort
     {
         public List<(
@@ -645,6 +832,10 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         public RecordingObservationRuntime? Observation { get; set; }
 
         public bool PublishTerminalOutcomes { get; init; } = true;
+
+        public Exception? ObservationException { get; init; }
+
+        public Exception? RefreshFailureException { get; init; }
 
         public NyxIdAuthorizationCatalogRefreshOutcomeStatus BeginOutcomeStatus { get; init; } =
             NyxIdAuthorizationCatalogRefreshOutcomeStatus.Started;
@@ -675,6 +866,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             Observations.Add(observation);
+            if (ObservationException != null)
+                return Task.FromException(ObservationException);
             if (PublishTerminalOutcomes)
             {
                 Observation?.Publish(
@@ -693,6 +886,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             Failures.Add((owner.Clone(), refreshId, failedAtUtc, failureCode));
+            if (RefreshFailureException != null)
+                return Task.FromException(RefreshFailureException);
             if (PublishTerminalOutcomes)
             {
                 Observation?.Publish(
@@ -789,6 +984,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
 
         public Exception? ProjectionReleaseFailure { get; init; }
 
+        public Exception? PreparationReleaseFailure { get; init; }
+
         public Action? OnPrepare { get; init; }
 
         public Task<NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation?> PrepareAsync(
@@ -808,7 +1005,9 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             PreparationReleases++;
-            return Task.CompletedTask;
+            return PreparationReleaseFailure == null
+                ? Task.CompletedTask
+                : Task.FromException(PreparationReleaseFailure);
         }
 
         public Task<

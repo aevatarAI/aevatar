@@ -87,6 +87,8 @@ public sealed record StudioMemberAutomationUpdateCommand(
     public string? Prompt { get; init; }
 
     public string? DisplayName { get; init; }
+
+    public string? ProvisioningBearerToken { get; init; }
 }
 
 public sealed record StudioMemberAutomationActionCommand(
@@ -177,6 +179,14 @@ public sealed class StudioMemberAutomationCatalogRefreshSupersededException : Ex
 {
     public StudioMemberAutomationCatalogRefreshSupersededException()
         : base("The authorization catalog refresh was superseded by a newer refresh.")
+    {
+    }
+}
+
+public sealed class StudioMemberAutomationCatalogRefreshUnavailableException : Exception
+{
+    public StudioMemberAutomationCatalogRefreshUnavailableException()
+        : base("The authorization catalog could not be refreshed. Retry this request.")
     {
     }
 }

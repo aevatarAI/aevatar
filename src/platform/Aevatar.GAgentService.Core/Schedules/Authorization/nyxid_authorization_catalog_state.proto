@@ -7,8 +7,8 @@ import "google/protobuf/timestamp.proto";
 import "scheduled_invocation_authorization_evidence.proto";
 
 message NyxIdAuthorizationCatalogState {
-  reserved 5;
-  reserved "external_revision";
+  reserved 5, 23 to 24;
+  reserved "external_revision", "newest_refresh_id", "newest_refresh_started_at";
 
   aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
   repeated aevatar.gagentservice.schedules.authorization.NyxIdAuthorizationServiceEvidence services = 2;
@@ -31,8 +31,6 @@ message NyxIdAuthorizationCatalogState {
   google.protobuf.Timestamp evaluated_at = 20;
   string active_refresh_id = 21;
   google.protobuf.Timestamp active_refresh_started_at = 22;
-  string newest_refresh_id = 23;
-  google.protobuf.Timestamp newest_refresh_started_at = 24;
 }
 
 message ObserveNyxIdAuthorizationCatalogCommand {
@@ -111,6 +109,7 @@ message NyxIdAuthorizationCatalogRefreshFailedEvent {
   google.protobuf.Timestamp failed_at = 2;
   string failure_code = 3;
   string refresh_id = 4;
+  optional int64 lifecycle_fence = 5;
 }
 
 message NyxIdAuthorizationCatalogInvalidatedEvent {

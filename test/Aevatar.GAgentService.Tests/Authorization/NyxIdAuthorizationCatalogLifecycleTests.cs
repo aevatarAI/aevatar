@@ -32,7 +32,12 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         await agent.HandleObserveAsync(observation);
         agent.State.ActiveRefreshId.Should().BeEmpty();
 
-        await BeginRefreshAsync(agent, owner, "refresh-failure", ObservedAt.AddMinutes(2));
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-failure",
+            ObservedAt.AddMinutes(2),
+            agent.State.LifecycleFence);
         var refreshFailure = new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
         {
             Owner = owner.Clone(),
@@ -44,7 +49,12 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         agent.State.LastRefreshFailureCode.Should().Be("provider_unavailable");
         agent.State.ActiveRefreshId.Should().BeEmpty();
 
-        await BeginRefreshAsync(agent, owner, "refresh-invalidated", ObservedAt.AddMinutes(3));
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-invalidated",
+            ObservedAt.AddMinutes(3),
+            agent.State.LifecycleFence);
         var invalidation = new InvalidateNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
@@ -53,7 +63,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         };
         await agent.HandleInvalidateAsync(invalidation);
         await agent.HandleInvalidateAsync(invalidation.Clone());
-        agent.State.LifecycleFence.Should().Be(2);
+        agent.State.LifecycleFence.Should().Be(4);
         agent.State.ActiveRefreshId.Should().BeEmpty();
 
         await BeginRefreshAsync(
@@ -66,7 +76,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             ObservationCommand(owner, "refresh-recovery", ObservedAt.AddMinutes(5)));
 
         agent.State.Invalidated.Should().BeFalse();
-        agent.State.LifecycleFence.Should().Be(2);
+        agent.State.LifecycleFence.Should().Be(5);
         agent.State.ContractVersion.Should().Be("1");
         agent.State.PolicyVersion.Should().Be("api-key-scope-v1");
         agent.State.EvaluatedAt.Should().Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(4)));
@@ -83,7 +93,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         agent.State.Cleaned.Should().BeTrue();
         agent.State.CleanupReason.Should().Be("owner_unbound");
         agent.State.Activated.Should().BeFalse();
-        agent.State.LifecycleFence.Should().Be(4);
+        agent.State.LifecycleFence.Should().Be(7);
     }
 
     [Fact]
@@ -200,29 +210,127 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         agent.State.ActiveRefreshId.Should().Be("refresh-new");
     }
 
-    [Fact]
-    public async Task RefreshSession_ShouldKeepNewestWatermarkAfterTerminalCompletion()
+    [Theory]
+    [InlineData("observed")]
+    [InlineData("failed")]
+    public async Task RefreshSession_ShouldAdvanceEpochAfterTerminalAndAllowClockRollback(
+        string terminal)
     {
         var owner = Owner();
         var eventStore = new InMemoryEventStore();
         var agent = CreateAgent(owner, eventStore);
-        await BeginRefreshAsync(agent, owner, "refresh-newer", ObservedAt.AddSeconds(2));
-        await agent.HandleObserveAsync(
-            ObservationCommand(owner, "refresh-newer", ObservedAt.AddMinutes(1)));
+        var priorEpoch = agent.State.LifecycleFence;
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-prior-epoch",
+            ObservedAt.AddMinutes(10),
+            priorEpoch);
+        if (terminal == "observed")
+        {
+            await agent.HandleObserveAsync(
+                ObservationCommand(owner, "refresh-prior-epoch", ObservedAt.AddMinutes(11)));
+        }
+        else
+        {
+            await agent.HandleRefreshFailureAsync(new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-prior-epoch",
+                FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(11)),
+                FailureCode = "provider_unavailable",
+            });
+        }
 
-        await BeginRefreshAsync(agent, owner, "refresh-older", ObservedAt.AddSeconds(1));
+        var currentEpoch = agent.State.LifecycleFence;
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-current-epoch",
+            ObservedAt.AddMinutes(1),
+            currentEpoch);
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-delayed-prior-epoch",
+            ObservedAt.AddMinutes(12),
+            priorEpoch);
 
-        agent.State.ActiveRefreshId.Should().BeEmpty();
-        agent.State.ContentDigest.Should().NotBeEmpty();
+        currentEpoch.Should().Be(priorEpoch + 1);
+        agent.State.ActiveRefreshId.Should().Be("refresh-current-epoch");
         await AssertLastRefreshOutcomeAsync(
             eventStore,
             agent.Id,
-            "refresh-older",
+            "refresh-delayed-prior-epoch",
             NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded);
     }
 
     [Fact]
-    public async Task RefreshSession_ShouldResetPriorEpochWatermarkAcrossCleanup()
+    public async Task RefreshFailure_AfterClockRollback_ShouldReplacePriorEpochFailureFacts()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-prior-epoch",
+            ObservedAt.AddMinutes(10));
+        await agent.HandleRefreshFailureAsync(new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = "refresh-prior-epoch",
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(11)),
+            FailureCode = "prior-provider-failure",
+        });
+
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-current-epoch",
+            ObservedAt.AddMinutes(1),
+            agent.State.LifecycleFence);
+        await agent.HandleRefreshFailureAsync(new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = "refresh-current-epoch",
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)),
+            FailureCode = "current-provider-failure",
+        });
+
+        agent.State.LastRefreshFailedAt.Should()
+            .Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)));
+        agent.State.LastRefreshFailureCode.Should().Be("current-provider-failure");
+    }
+
+    [Fact]
+    public async Task RefreshObservation_AfterClockRollback_ShouldReplacePriorEpochSnapshot()
+    {
+        var owner = Owner();
+        var agent = CreateAgent(owner);
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-prior-epoch",
+            ObservedAt.AddMinutes(10));
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-prior-epoch", ObservedAt.AddMinutes(11)));
+
+        await BeginRefreshAsync(
+            agent,
+            owner,
+            "refresh-current-epoch",
+            ObservedAt.AddMinutes(1),
+            agent.State.LifecycleFence);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-current-epoch", ObservedAt.AddMinutes(2)));
+
+        agent.State.ObservedAt.Should()
+            .Be(Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(2)));
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RefreshSession_ShouldAllowCurrentEpochAfterCleanup()
     {
         var owner = Owner();
         var eventStore = new InMemoryEventStore();
@@ -244,7 +352,6 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
             currentEpoch);
 
         agent.State.ActiveRefreshId.Should().Be("refresh-current-epoch");
-        agent.State.NewestRefreshId.Should().Be("refresh-current-epoch");
         await AssertLastRefreshOutcomeAsync(
             eventStore,
             agent.Id,
@@ -656,6 +763,32 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
     }
 
     [Fact]
+    public void RefreshFailureTransition_WhenLegacyEventOmitsFence_ShouldPreserveReplayedFence()
+    {
+        var agent = new NyxIdAuthorizationCatalogGAgent();
+        var owner = Owner();
+        var state = new NyxIdAuthorizationCatalogState
+        {
+            Owner = owner.Clone(),
+            LifecycleFence = 7,
+            ActiveRefreshId = "refresh-legacy",
+            ActiveRefreshStartedAt = Timestamp.FromDateTimeOffset(ObservedAt),
+        };
+
+        var failed = Transition(agent, state, new NyxIdAuthorizationCatalogRefreshFailedEvent
+        {
+            Owner = owner.Clone(),
+            RefreshId = "refresh-legacy",
+            FailedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddMinutes(1)),
+            FailureCode = "provider_unavailable",
+        });
+
+        failed.LifecycleFence.Should().Be(7);
+        failed.ActiveRefreshId.Should().BeEmpty();
+        failed.LastRefreshFailureCode.Should().Be("provider_unavailable");
+    }
+
+    [Fact]
     public void CleanupTransition_ShouldClearCatalogFactsAndAdvanceFence()
     {
         var agent = new NyxIdAuthorizationCatalogGAgent();
@@ -679,8 +812,6 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         cleaned.Cleaned.Should().BeTrue();
         cleaned.CleanupReason.Should().Be("account_removed");
         cleaned.LifecycleFence.Should().Be(1);
-        cleaned.NewestRefreshId.Should().BeEmpty();
-        cleaned.NewestRefreshStartedAt.Should().BeNull();
     }
 
     [Fact]
@@ -807,11 +938,21 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         var state = NyxIdAuthorizationCatalogState.Descriptor;
         state.FindFieldByName("active_refresh_id").Should().NotBeNull();
         state.FindFieldByName("active_refresh_started_at").Should().NotBeNull();
-        state.FindFieldByName("newest_refresh_id").Should().NotBeNull();
-        state.FindFieldByName("newest_refresh_started_at").Should().NotBeNull();
+        state.FindFieldByName("newest_refresh_id").Should().BeNull();
+        state.FindFieldByName("newest_refresh_started_at").Should().BeNull();
+        state.FindFieldByNumber(23).Should().BeNull();
+        state.FindFieldByNumber(24).Should().BeNull();
+        state.ToProto().ReservedName.Should().Contain(new[]
+        {
+            "newest_refresh_id",
+            "newest_refresh_started_at",
+        });
+        state.ToProto().ReservedRange.Should().Contain(static range => range.Start == 23 && range.End == 25);
         state.DescriptorForType("BeginNyxIdAuthorizationCatalogRefreshCommand")!
             .FindFieldByName("expected_lifecycle_fence").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshBeganEvent").Should().NotBeNull();
+        state.DescriptorForType("NyxIdAuthorizationCatalogRefreshFailedEvent")!
+            .FindFieldByName("lifecycle_fence").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshOutcomeEvent").Should().NotBeNull();
 
         NyxIdAuthorizationCatalogDocument.Descriptor.FindFieldByName("active_refresh_id").Should().BeNull();

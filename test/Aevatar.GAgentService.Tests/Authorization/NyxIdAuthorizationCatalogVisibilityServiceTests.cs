@@ -72,6 +72,29 @@ public sealed class NyxIdAuthorizationCatalogVisibilityServiceTests
     }
 
     [Fact]
+    public async Task ResolveAsync_WhenActivatedSnapshotWasNeverObserved_ShouldReturnInvalid()
+    {
+        var query = new StubCatalogQueryPort(Snapshot(23) with
+        {
+            ObservedAtUtc = default,
+            FreshUntilUtc = default,
+            ContractVersion = string.Empty,
+            PolicyVersion = string.Empty,
+            EvaluatedAtUtc = default,
+            ContentDigest = string.Empty,
+        });
+        var service = NewService(query);
+
+        var result = await service.ResolveAsync(Owner(), 23);
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogVisibilityStatus.Invalid);
+        result.FailureCode.Should().Be("nyxid_catalog_snapshot_invalid");
+        result.RequiredStateVersion.Should().Be(23);
+        result.VisibleStateVersion.Should().Be(23);
+        query.QueryCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ResolveAsync_WhenVisibleOwnerDoesNotMatch_ShouldReturnOwnerMismatch()
     {
         var otherOwner = Owner();

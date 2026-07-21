@@ -168,6 +168,51 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTes
     }
 
     [Fact]
+    public async Task PreparationPort_WhenCancellationRollbackFails_ShouldPreserveCallerCancellation()
+    {
+        var activation = new RecordingActivationService();
+        var release = new RecordingProjectionReleaseService<
+            NyxIdAuthorizationCatalogRefreshObservationRuntimeLease>
+        {
+            Exception = new InvalidOperationException("cleanup-private-detail"),
+        };
+        var port = new NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort(
+            activation,
+            release);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var act = () => port.PrepareAsync(
+            "nyxid-authorization-catalog:owner-alpha",
+            "refresh-alpha",
+            cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        release.Released.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task PreparationPort_WhenFailureRollbackFails_ShouldPreservePreparationFailureResult()
+    {
+        var activation = new PartiallyFailingActivationService();
+        var release = new RecordingProjectionReleaseService<
+            NyxIdAuthorizationCatalogRefreshObservationRuntimeLease>
+        {
+            Exception = new InvalidOperationException("cleanup-private-detail"),
+        };
+        var port = new NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort(
+            activation,
+            release);
+
+        var preparation = await port.PrepareAsync(
+            "nyxid-authorization-catalog:owner-alpha",
+            "refresh-alpha");
+
+        preparation.Should().BeNull();
+        release.Released.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ProjectionPort_ShouldAttachOnlyToPreparedExistingRefreshScope()
     {
         var hub = new RecordingSessionEventHub();

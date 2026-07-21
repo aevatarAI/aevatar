@@ -230,6 +230,7 @@ internal static class StudioMemberAutomationEndpoints
             {
                 DisplayName = body.DisplayName,
                 Prompt = body.Prompt,
+                ProvisioningBearerToken = ResolveBearerToken(http),
             }, ct);
             return Results.Accepted(value: receipt);
         }
@@ -471,6 +472,14 @@ internal static class StudioMemberAutomationEndpoints
                 {
                     code = "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED",
                     message = "A newer authorization catalog refresh superseded this request. Retry this request.",
+                    retryable = true,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRefreshUnavailableException => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_UNAVAILABLE",
+                    message = "The authorization catalog could not be refreshed. Retry this request.",
                     retryable = true,
                 },
                 statusCode: StatusCodes.Status503ServiceUnavailable),

@@ -350,6 +350,70 @@ public sealed class StudioMemberAutomationEndpointsTests
         schedules.ScheduleMutationCalls.Should().Be(0);
     }
 
+    [Fact]
+    public async Task Update_ShouldReturnSanitizedRetryableCatalogRefreshUnavailable()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioMemberAutomationCatalogRefreshUnavailableException(),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationUpdateRequest(
+                "0 9 * * *",
+                "UTC",
+                "prompt",
+                "name",
+                true,
+                "op-alpha",
+                "idem-alpha"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be("TEAM_AUTOMATION_AUTHORIZATION_REFRESH_UNAVAILABLE");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        JsonSerializer.Serialize(value).Should().NotContain("private-provider-detail");
+        AssertNoCredentialMaterial(value);
+        schedules.ScheduleMutationCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Update_ShouldPassFreshBearerOnlyToApplicationCommand()
+    {
+        var schedules = new StubSchedules();
+
+        var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationUpdateRequest(
+                "0 9 * * *",
+                "UTC",
+                "prompt",
+                "name",
+                true,
+                "op-alpha",
+                "idem-alpha"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        schedules.LastUpdate.Should().NotBeNull();
+        schedules.LastUpdate!.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
+        AssertNoCredentialMaterial(Value(result));
+    }
+
     [Theory]
     [InlineData("pause")]
     [InlineData("resume")]

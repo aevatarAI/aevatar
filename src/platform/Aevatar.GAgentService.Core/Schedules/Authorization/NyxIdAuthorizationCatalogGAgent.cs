@@ -39,34 +39,26 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             return;
         }
 
-        var newestRefreshId = string.IsNullOrEmpty(State.NewestRefreshId)
-            ? State.ActiveRefreshId
-            : State.NewestRefreshId;
-        var newestRefreshStartedAt = State.NewestRefreshStartedAt ?? State.ActiveRefreshStartedAt;
-        if (string.Equals(newestRefreshId, refreshId, StringComparison.Ordinal))
+        if (string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal))
         {
-            if (newestRefreshStartedAt?.Equals(command.StartedAt) != true)
+            if (State.ActiveRefreshStartedAt?.Equals(command.StartedAt) != true)
                 throw new InvalidOperationException("A catalog refresh identity cannot change its start time.");
 
             await PersistRefreshOutcomeAsync(
                 refreshId,
-                string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal)
-                    ? NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started
-                    : NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
+                NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started,
                 command.StartedAt,
-                string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal)
-                    ? string.Empty
-                    : RefreshSupersededFailureCode);
+                string.Empty);
             return;
         }
 
-        if (!string.IsNullOrEmpty(newestRefreshId) &&
-            newestRefreshStartedAt != null &&
+        if (!string.IsNullOrEmpty(State.ActiveRefreshId) &&
+            State.ActiveRefreshStartedAt != null &&
             CompareRefreshOrder(
                 command.StartedAt,
                 refreshId,
-                newestRefreshStartedAt,
-                newestRefreshId) < 0)
+                State.ActiveRefreshStartedAt,
+                State.ActiveRefreshId) < 0)
         {
             await PersistRefreshOutcomeAsync(
                 refreshId,
@@ -133,36 +125,6 @@ public sealed class NyxIdAuthorizationCatalogGAgent
 
         ValidateObservation(command);
 
-        if (!State.Invalidated && State.ObservedAt != null)
-        {
-            var ordering = command.ObservedAt.CompareTo(State.ObservedAt);
-            if (ordering < 0)
-            {
-                await PersistRefreshOutcomeAsync(
-                    refreshId,
-                    NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
-                    command.ObservedAt,
-                    RefreshSupersededFailureCode);
-                return;
-            }
-            if (ordering == 0)
-            {
-                if (string.Equals(State.ContentDigest, command.ContentDigest, StringComparison.Ordinal) &&
-                    State.FreshUntil?.Equals(command.FreshUntil) == true &&
-                    string.Equals(State.ContractVersion, command.ContractVersion, StringComparison.Ordinal) &&
-                    string.Equals(State.PolicyVersion, command.PolicyVersion, StringComparison.Ordinal) &&
-                    State.EvaluatedAt?.Equals(command.EvaluatedAt) == true)
-                {
-                    // A distinct refresh may confirm the same provider snapshot.
-                }
-                else
-                {
-                    throw new InvalidOperationException(
-                        "A NyxID authorization catalog observation timestamp cannot identify conflicting content.");
-                }
-            }
-        }
-
         var observed = new NyxIdAuthorizationCatalogObservedEvent
         {
             Owner = command.Owner.Clone(),
@@ -173,7 +135,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             PolicyVersion = command.PolicyVersion.Trim(),
             EvaluatedAt = command.EvaluatedAt.Clone(),
             ContentDigest = command.ContentDigest.Trim(),
-            LifecycleFence = State.LifecycleFence,
+            LifecycleFence = checked(State.LifecycleFence + 1),
         };
         observed.Services.Add(command.Services.Select(static service => service.Clone()));
         await PersistRefreshTransitionAsync(
@@ -209,6 +171,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
                 RefreshId = refreshId,
                 FailedAt = command.FailedAt.Clone(),
                 FailureCode = command.FailureCode.Trim(),
+                LifecycleFence = checked(State.LifecycleFence + 1),
             },
             refreshId,
             NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Failed,
@@ -345,8 +308,6 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Owner ??= evt.Owner.Clone();
         next.ActiveRefreshId = evt.RefreshId;
         next.ActiveRefreshStartedAt = evt.StartedAt.Clone();
-        next.NewestRefreshId = evt.RefreshId;
-        next.NewestRefreshStartedAt = evt.StartedAt.Clone();
         return next;
     }
 
@@ -372,8 +333,6 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             ActivatedAt = state.ActivatedAt?.Clone() ?? evt.ObservedAt.Clone(),
             Cleaned = false,
             CleanupReason = string.Empty,
-            NewestRefreshId = state.NewestRefreshId,
-            NewestRefreshStartedAt = state.NewestRefreshStartedAt?.Clone(),
         };
         next.Services.Add(evt.Services.Select(static service => service.Clone()));
         return next;
@@ -387,11 +346,10 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.Owner ??= evt.Owner.Clone();
         next.ActiveRefreshId = string.Empty;
         next.ActiveRefreshStartedAt = null;
-        if (next.LastRefreshFailedAt == null || evt.FailedAt.CompareTo(next.LastRefreshFailedAt) > 0)
-        {
-            next.LastRefreshFailedAt = evt.FailedAt.Clone();
-            next.LastRefreshFailureCode = evt.FailureCode;
-        }
+        if (evt.HasLifecycleFence)
+            next.LifecycleFence = evt.LifecycleFence;
+        next.LastRefreshFailedAt = evt.FailedAt.Clone();
+        next.LastRefreshFailureCode = evt.FailureCode;
         return next;
     }
 
@@ -407,8 +365,6 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         next.LifecycleFence = evt.LifecycleFence;
         next.ActiveRefreshId = string.Empty;
         next.ActiveRefreshStartedAt = null;
-        next.NewestRefreshId = string.Empty;
-        next.NewestRefreshStartedAt = null;
         return next;
     }
 
@@ -425,8 +381,6 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         Cleaned = true,
         CleanedAt = evt.CleanedAt.Clone(),
         CleanupReason = evt.Reason,
-        NewestRefreshId = string.Empty,
-        NewestRefreshStartedAt = null,
     };
 
     private static NyxIdAuthorizationCatalogState ApplyRefreshOutcome(

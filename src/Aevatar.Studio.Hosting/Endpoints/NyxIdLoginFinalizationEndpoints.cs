@@ -83,39 +83,64 @@ public static class NyxIdLoginFinalizationEndpoints
             }, statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        var result = await catalogRefresh
-            .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
-            .ConfigureAwait(false);
-        var owner = PersonalCatalogOwner(subject);
-        var visibility = result.Success
-            ? await catalogVisibilityPort.ResolveAsync(owner, result.StateVersion, ct).ConfigureAwait(false)
-            : new NyxIdAuthorizationCatalogVisibilityResult(
-                NyxIdAuthorizationCatalogVisibilityStatus.Unspecified,
-                0,
-                0,
-                string.Empty);
-        var response = new NyxIdAuthorizationCatalogRefreshResponse(
-            visibility.Ready,
-            ToCatalogRefreshStatus(result.Status),
-            result.FailureCode,
-            ToCatalogVisibilityStatus(visibility.Status),
-            visibility.FailureCode,
-            visibility.RequiredStateVersion,
-            visibility.VisibleStateVersion);
-        return result.Status switch
+        try
         {
-            NyxIdAuthorizationCatalogRefreshStatus.Observed when visibility.Ready => Results.Ok(response),
-            NyxIdAuthorizationCatalogRefreshStatus.Observed when visibility.ProjectionPending => Results.Json(
-                response,
-                statusCode: StatusCodes.Status202Accepted),
-            NyxIdAuthorizationCatalogRefreshStatus.AccessDenied => Results.Json(
-                response,
-                statusCode: StatusCodes.Status403Forbidden),
-            NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => Results.Json(
-                response,
-                statusCode: StatusCodes.Status403Forbidden),
-            _ => Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable),
-        };
+            var result = await catalogRefresh
+                .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
+                .ConfigureAwait(false);
+            var owner = PersonalCatalogOwner(subject);
+            var visibility = result.Success
+                ? await catalogVisibilityPort.ResolveAsync(owner, result.StateVersion, ct).ConfigureAwait(false)
+                : new NyxIdAuthorizationCatalogVisibilityResult(
+                    NyxIdAuthorizationCatalogVisibilityStatus.Unspecified,
+                    0,
+                    0,
+                    string.Empty);
+            var response = new NyxIdAuthorizationCatalogRefreshResponse(
+                visibility.Ready,
+                ToCatalogRefreshStatus(result.Status),
+                result.FailureCode,
+                ToCatalogVisibilityStatus(visibility.Status),
+                visibility.FailureCode,
+                visibility.RequiredStateVersion,
+                visibility.VisibleStateVersion);
+            return result.Status switch
+            {
+                NyxIdAuthorizationCatalogRefreshStatus.Observed when visibility.Ready => Results.Ok(response),
+                NyxIdAuthorizationCatalogRefreshStatus.Observed when visibility.ProjectionPending => Results.Json(
+                    response,
+                    statusCode: StatusCodes.Status202Accepted),
+                NyxIdAuthorizationCatalogRefreshStatus.AccessDenied => Results.Json(
+                    response,
+                    statusCode: StatusCodes.Status403Forbidden),
+                NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => Results.Json(
+                    response,
+                    statusCode: StatusCodes.Status403Forbidden),
+                _ => Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable),
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            var loggerFactory = http.RequestServices.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
+            loggerFactory?.CreateLogger(typeof(NyxIdLoginFinalizationEndpoints).FullName!)
+                .LogWarning(
+                    "Failed to refresh the NyxID authorization catalog for owner kind {OwnerKind}.",
+                    AuthorizationOwnerKind.Personal);
+            return Results.Json(
+                new NyxIdAuthorizationCatalogRefreshResponse(
+                    Ready: false,
+                    RefreshStatus: "failed",
+                    RefreshFailureCode: "nyxid_catalog_refresh_failed",
+                    VisibilityStatus: "not_evaluated",
+                    VisibilityFailureCode: string.Empty,
+                    RequiredStateVersion: 0,
+                    VisibleStateVersion: 0),
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     internal static async Task<IResult> HandleConfigAsync(

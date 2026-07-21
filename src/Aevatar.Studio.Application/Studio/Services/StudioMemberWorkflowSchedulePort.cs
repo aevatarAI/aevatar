@@ -117,6 +117,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ScheduledInvocationAuthorizationRequest authorizationRequest,
         ScheduledInvocationAuthorizationConfirmation confirmation,
         string? provisioningBearerToken,
+        DateTimeOffset? fixedCredentialExpiresAtUtc,
         CancellationToken ct)
     {
         var first = await _authorizationRevalidator.RevalidateAsync(authorizationRequest, confirmation, ct);
@@ -143,15 +144,16 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
         {
             _logger.LogWarning(
-                ex,
                 "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
                 authorizationRequest.Owner.OwnerKind);
-            return ScheduledInvocationAuthorizationValidationResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_failed:{ex.GetType().Name}");
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
         }
 
         if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
@@ -165,6 +167,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             }
 
             throw new StudioMemberAutomationCatalogRefreshSupersededException();
+        }
+
+        if (refresh.Status is NyxIdAuthorizationCatalogRefreshStatus.Failed or
+            NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)
+        {
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
         }
 
         if (!refresh.Success)
@@ -181,19 +189,15 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var retryRequest = authorizationRequest with
         {
             EvaluatedAtUtc = retryEvaluatedAtUtc,
-            ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
+            ExpiresAtUtc = fixedCredentialExpiresAtUtc ??
+                           _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
         };
         var second = await _authorizationRevalidator.RevalidateAsync(retryRequest, confirmation, ct);
-        if (second.Success ||
-            !IsRecoverableNyxIdCatalogSnapshotFailure(second.Detail) ||
-            second.ObservedCatalogStateVersion >= refresh.StateVersion)
-        {
-            return second;
-        }
-
-        return ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
-            refresh.StateVersion,
-            second.ObservedCatalogStateVersion);
+        return second.ObservedCatalogStateVersion < refresh.StateVersion
+            ? ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
+                refresh.StateVersion,
+                second.ObservedCatalogStateVersion)
+            : second;
     }
 
     public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
@@ -273,12 +277,21 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             current.AuthorizationRequest,
             existing.Schedule.PermissionDigest,
             existing.Schedule.PolicyVersion);
-        var validated = await _authorizationRevalidator.RevalidateAsync(
+        var validated = await RevalidateWithCatalogRefreshRetryAsync(
             current.AuthorizationRequest,
             confirmation,
+            command.ProvisioningBearerToken,
+            current.AuthorizationRequest.ExpiresAtUtc,
             ct);
         if (!validated.Success)
         {
+            if (validated.FailureCode ==
+                ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending)
+            {
+                throw new StudioMemberAutomationProjectionPendingException(
+                    validated.RequiredStateVersion);
+            }
+
             throw new StudioMemberAutomationPlanConflictException(
                 "reauthorization_required",
                 validated.Detail);
@@ -440,7 +453,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             resolved.AuthorizationRequest,
             confirmation,
             request.ProvisioningBearerToken,
-            ct);
+            fixedCredentialExpiresAtUtc: null,
+            ct: ct);
         if (!validation.Success)
         {
             if (validation.FailureCode ==
