@@ -619,6 +619,27 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("ftp://nyx.test/api/v1/proxy/services/us-personal-7/openapi.json")]
+    [InlineData("https://nyx.test/api/v1/services/us-personal-7/openapi.json")]
+    [InlineData("https://nyx.test/api/v1/proxy/services/us-other/openapi.json")]
+    public async Task DiscoverToolsAsync_InvalidOpenApiBinding_FailsClosedWithoutDownstreamRequests(
+        string openApiUrl)
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            InstanceWithOpenApiUrl("us-personal-7", "api-shop", "svc-shop", openApiUrl));
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().BeEmpty();
+        handler.SpecRequests.Should().BeEmpty();
+        handler.ExactReads.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
     private static string SpecWithPing(string operationId) => $$"""
         { "paths": { "/ping": { "get": { "operationId": "{{operationId}}", "x-aevatar-tool": true } } } }
         """;
@@ -648,6 +669,19 @@ public class NyxIdConnectedServiceToolSourceTests
         string id,
         string slug,
         string catalogServiceId,
+        string credentialSource = PersonalCredentialSource) =>
+        InstanceWithOpenApiUrl(
+            id,
+            slug,
+            catalogServiceId,
+            $"https://nyx.test/api/v1/proxy/services/{id}/openapi.json",
+            credentialSource);
+
+    private static string InstanceWithOpenApiUrl(
+        string id,
+        string slug,
+        string catalogServiceId,
+        string openApiUrl,
         string credentialSource = PersonalCredentialSource) => $$"""
         {
           "id": "{{id}}",
@@ -656,7 +690,7 @@ public class NyxIdConnectedServiceToolSourceTests
           "catalog_service_id": "{{catalogServiceId}}",
           "endpoint_id": "endpoint-1",
           "endpoint_url": "https://shop.test",
-          "openapi_url": "https://nyx.test/api/v1/proxy/services/{{id}}/openapi.json",
+          "openapi_url": "{{openApiUrl}}",
           "is_active": true,
           "credential_source": {{credentialSource}}
         }
