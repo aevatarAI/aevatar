@@ -350,6 +350,104 @@ describe("ChatPage MVP", () => {
     });
   });
 
+  it("recovers a pending backend watermark before retrying a continuation", async () => {
+    const postBodies: any[] = [];
+    const firstRunFrames = [
+      {
+        custom: {
+          name: "aevatar.chat.context",
+          payload: {
+            fields: {
+              conversationId: {
+                stringValue: "conversation-alpha",
+              },
+              scopeId: {
+                stringValue: "scope-a",
+              },
+              stateVersion: {
+                numberValue: 7,
+              },
+              turnId: {
+                stringValue: "turn-alpha-1",
+              },
+            },
+          },
+        },
+      },
+      {
+        runFinished: {
+          result: {
+            output: "Choose a Team: team01 or team02.",
+          },
+        },
+      },
+    ];
+    const secondRunFrames = [
+      {
+        runFinished: {
+          result: {
+            output: "Team selected. Confirm creation?",
+          },
+        },
+      },
+    ];
+    const thirdRunFrames = [
+      {
+        runFinished: {
+          result: {
+            output: "Created the workflow for team01.",
+          },
+        },
+      },
+    ];
+    const serverStateVersions = [8, 8, 9, 10];
+    let postCount = 0;
+    (authFetch as jest.Mock).mockImplementation(
+      async (url: string, options?: RequestInit) => {
+        if (url === "/api/chat") {
+          postBodies.push(JSON.parse(String(options?.body)));
+          postCount += 1;
+          return createSseResponse(
+            postCount === 1
+              ? firstRunFrames
+              : postCount === 2
+                ? secondRunFrames
+                : thirdRunFrames
+          );
+        }
+
+        if (
+          url ===
+          "/api/scopes/scope-a/chat-history/conversations/conversation-alpha"
+        ) {
+          return createJsonResponse({
+            messages: [],
+            stateVersion: serverStateVersions.shift() ?? 10,
+          });
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Create a workflow that generates fund analysis reports");
+    await screen.findByText("Choose a Team: team01 or team02.");
+    await sendPrompt("team01");
+    await screen.findByText("Team selected. Confirm creation?");
+    await sendPrompt("Confirm");
+
+    await waitFor(() => expect(postBodies).toHaveLength(3));
+    expect(postBodies[1].conversation).toEqual({
+      conversationId: "conversation-alpha",
+      minimumStateVersion: 8,
+    });
+    expect(postBodies[2].conversation).toEqual({
+      conversationId: "conversation-alpha",
+      minimumStateVersion: 9,
+    });
+  });
+
   it("opens Workflow Studio only when structured identifiers are returned", async () => {
     (authFetch as jest.Mock).mockResolvedValueOnce(
       createSseResponse([

@@ -59,6 +59,7 @@ import { t } from "@/shared/i18n/messages";
 type ConversationState = {
   id: string;
   messages: ChatMessage[];
+  pendingReadModelStateVersionFloor?: number;
   serverConversationId?: string;
   status: LocalChatStatus;
   stateVersion?: number;
@@ -235,6 +236,29 @@ function shouldAskForConfirmation(content: string): boolean {
 function normalizeStateVersion(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeStateVersionFloor(
+  value: number | undefined
+): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+async function loadAdvancedStateVersion(
+  scopeId: string,
+  conversationId: string,
+  floor: number
+): Promise<number | undefined> {
+  const serverRecord = await chatHistoryApi.loadServerConversation(
+    scopeId,
+    conversationId
+  );
+  const verifiedStateVersion = normalizeStateVersion(serverRecord?.stateVersion);
+  return verifiedStateVersion !== undefined && verifiedStateVersion > floor
+    ? verifiedStateVersion
     : undefined;
 }
 
@@ -423,6 +447,9 @@ const ChatPage: React.FC = () => {
         createdAt: existing?.createdAt || now,
         id: conversation.id,
         messageCount: storedMessages.length,
+        pendingReadModelStateVersionFloor: normalizeStateVersionFloor(
+          conversation.pendingReadModelStateVersionFloor
+        ),
         scopeId,
         serviceId: "chat",
         serviceKind: "chat",
@@ -467,6 +494,9 @@ const ChatPage: React.FC = () => {
       const restoredConversation: ConversationState = {
         id: conversationId,
         messages,
+        pendingReadModelStateVersionFloor: normalizeStateVersionFloor(
+          meta?.pendingReadModelStateVersionFloor
+        ),
         serverConversationId: meta?.serverConversationId,
         status: meta?.status || "draft",
         stateVersion: normalizeStateVersion(meta?.stateVersion),
@@ -576,6 +606,60 @@ const ChatPage: React.FC = () => {
         return;
       }
 
+      const serverConversationId =
+        conversation.serverConversationId?.trim() || undefined;
+      let conversationForRun = conversation;
+      let sourceStateVersion = normalizeStateVersion(conversation.stateVersion);
+      const pendingReadModelStateVersionFloor = normalizeStateVersionFloor(
+        conversation.pendingReadModelStateVersionFloor
+      );
+      if (
+        serverConversationId &&
+        (pendingReadModelStateVersionFloor !== undefined || !sourceStateVersion)
+      ) {
+        const recoveryFloor = pendingReadModelStateVersionFloor ?? 0;
+        let recoveredStateVersion: number | undefined;
+        try {
+          recoveredStateVersion = await loadAdvancedStateVersion(
+            scopeId,
+            serverConversationId,
+            recoveryFloor
+          );
+        } catch (error) {
+          setSession({
+            ...createIdleSession(scopeId),
+            error: error instanceof Error ? error.message : String(error),
+            status: "error",
+            updatedAt: Date.now(),
+          });
+          return;
+        }
+        if (recoveredStateVersion === undefined) {
+          setSession({
+            ...createIdleSession(scopeId),
+            error: t(
+              "pages.chat.index.historySynchronizing",
+              "Conversation history is still synchronizing. Try again shortly."
+            ),
+            status: "error",
+            updatedAt: Date.now(),
+          });
+          return;
+        }
+
+        conversationForRun = {
+          ...conversation,
+          pendingReadModelStateVersionFloor: undefined,
+          stateVersion: recoveredStateVersion,
+        };
+        sourceStateVersion = recoveredStateVersion;
+        activeConversationRef.current = conversationForRun;
+        setActiveConversation((current) =>
+          current?.id === conversation.id ? conversationForRun : current
+        );
+        await persistConversation(conversationForRun);
+      }
+
       const userMessage = createChatMessage("user", trimmedInput);
       const assistantMessageId = createClientId();
       const assistantMessage: ChatMessage = {
@@ -590,20 +674,17 @@ const ChatPage: React.FC = () => {
         toolCalls: [],
       };
       const title =
-        conversation.title === t("pages.chat.index.newChat", "New chat")
+        conversationForRun.title === t("pages.chat.index.newChat", "New chat")
           ? trimTitle(trimmedInput)
-          : conversation.title;
+          : conversationForRun.title;
       const nextStatus: LocalChatStatus =
-        conversation.status === "needs_confirmation" ? "creating" : "streaming";
+        conversationForRun.status === "needs_confirmation" ? "creating" : "streaming";
       const startedConversation: ConversationState = {
-        ...conversation,
-        messages: [...conversation.messages, userMessage, assistantMessage],
+        ...conversationForRun,
+        messages: [...conversationForRun.messages, userMessage, assistantMessage],
         status: nextStatus,
         title,
       };
-      const serverConversationId =
-        conversation.serverConversationId?.trim() || undefined;
-      const sourceStateVersion = normalizeStateVersion(conversation.stateVersion);
       const conversationInput = serverConversationId
         ? {
             conversationId: serverConversationId,
@@ -689,27 +770,28 @@ const ChatPage: React.FC = () => {
 
         const artifacts = extractChatStreamArtifacts(rawFrames);
         let finalServerConversationId =
-          artifacts.chatContext?.conversationId || conversation.serverConversationId;
-        let finalStateVersion =
-          normalizeStateVersion(artifacts.chatContext?.stateVersion) ??
-          normalizeStateVersion(conversation.stateVersion);
+          artifacts.chatContext?.conversationId ||
+          conversationForRun.serverConversationId;
+        let finalStateVersion = sourceStateVersion;
+        let finalPendingReadModelStateVersionFloor: number | undefined;
         if (finalServerConversationId) {
-          finalStateVersion = undefined;
+          const readModelRecoveryFloor =
+            sourceStateVersion ??
+            normalizeStateVersion(artifacts.chatContext?.stateVersion) ??
+            0;
           try {
-            const serverRecord = await chatHistoryApi.loadServerConversation(
+            const recoveredStateVersion = await loadAdvancedStateVersion(
               scopeId,
-              finalServerConversationId
+              finalServerConversationId,
+              readModelRecoveryFloor
             );
-            const verifiedStateVersion = normalizeStateVersion(
-              serverRecord?.stateVersion
-            );
-            finalStateVersion =
-              verifiedStateVersion &&
-              (!sourceStateVersion || verifiedStateVersion > sourceStateVersion)
-                ? verifiedStateVersion
-                : undefined;
+            if (recoveredStateVersion !== undefined) {
+              finalStateVersion = recoveredStateVersion;
+            } else {
+              finalPendingReadModelStateVersionFloor = readModelRecoveryFloor;
+            }
           } catch {
-            finalStateVersion = undefined;
+            finalPendingReadModelStateVersionFloor = readModelRecoveryFloor;
           }
         }
         const finalAssistantStatus: ChatMessage["status"] = accumulator.errorText
@@ -738,6 +820,8 @@ const ChatPage: React.FC = () => {
                 }
               : message
           ),
+          pendingReadModelStateVersionFloor:
+            finalPendingReadModelStateVersionFloor,
           serverConversationId: finalServerConversationId,
           status: finalStatus,
           stateVersion: finalStateVersion,

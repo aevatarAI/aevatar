@@ -110,6 +110,7 @@ export type ConversationMeta = {
   title: string;
   serviceId: string;
   serviceKind: string;
+  pendingReadModelStateVersionFloor?: number;
   serverConversationId?: string;
   scopeId?: string;
   stateVersion?: number;
@@ -140,6 +141,7 @@ export type LocalChatConversation = {
   createdAt: string;
   id: string;
   messages: StoredChatMessage[];
+  pendingReadModelStateVersionFloor?: number;
   scopeId: string;
   serverConversationId?: string;
   status: LocalChatStatus;

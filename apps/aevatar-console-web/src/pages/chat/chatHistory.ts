@@ -84,6 +84,9 @@ export function listConversations(scopeId: string): LocalChatConversation[] {
     .map((item) => ({
       ...item,
       messages: Array.isArray(item.messages) ? item.messages : [],
+      pendingReadModelStateVersionFloor: normalizeStateVersionFloor(
+        item.pendingReadModelStateVersionFloor
+      ),
       serverConversationId: item.serverConversationId?.trim() || undefined,
       stateVersion: normalizeStateVersion(item.stateVersion),
       status: normalizeStatus(item.status),
@@ -292,6 +295,14 @@ function normalizeStateVersion(value: number | undefined): number | undefined {
     : undefined;
 }
 
+function normalizeStateVersionFloor(
+  value: number | undefined
+): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
 function toConversationMeta(
   conversation: LocalChatConversation
 ): ConversationMeta {
@@ -299,6 +310,9 @@ function toConversationMeta(
     createdAt: conversation.createdAt,
     id: conversation.id,
     messageCount: conversation.messages.length,
+    pendingReadModelStateVersionFloor: normalizeStateVersionFloor(
+      conversation.pendingReadModelStateVersionFloor
+    ),
     scopeId: conversation.scopeId,
     serviceId: "chat",
     serviceKind: "chat",
@@ -321,6 +335,9 @@ function fromMeta(
     createdAt: meta.createdAt,
     id: meta.id,
     messages,
+    pendingReadModelStateVersionFloor: normalizeStateVersionFloor(
+      meta.pendingReadModelStateVersionFloor
+    ),
     scopeId,
     serverConversationId: meta.serverConversationId?.trim() || undefined,
     status: normalizeStatus(meta.status),
