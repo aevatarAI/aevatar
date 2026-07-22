@@ -1040,8 +1040,14 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
