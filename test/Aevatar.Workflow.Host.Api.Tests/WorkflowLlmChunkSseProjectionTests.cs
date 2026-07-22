@@ -91,7 +91,9 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             SessionId = "session-1",
             Prompt = "hello",
         });
-        await responseBody.WaitForFlushedFrameCountAsync(2, TimeSpan.FromSeconds(2));
+        await responseBody.WaitForSnapshotAsync(
+            text => ReadSseFrames(text).Count(HasTextMessageContent) >= 1,
+            TimeSpan.FromSeconds(2));
         var firstChunkSse = responseBody.SnapshotText();
         ReadSseFrames(firstChunkSse)
             .Count(HasTextMessageContent)
@@ -99,8 +101,9 @@ public sealed class WorkflowLlmChunkSseProjectionTests
 
         llmProvider.ReleaseRemainingChunks();
         await execution;
-        await responseBody.WaitForFlushedFrameCountAsync(2, TimeSpan.FromSeconds(2));
-        await responseBody.WaitForFlushedFrameCountAsync(3, TimeSpan.FromSeconds(2));
+        await responseBody.WaitForSnapshotAsync(
+            text => ReadSseFrames(text).Count(HasTextMessageContent) >= 2,
+            TimeSpan.FromSeconds(2));
 
         var preTerminalFrames = ReadSseFrames(responseBody.SnapshotText());
         var preTerminalText = preTerminalFrames
@@ -128,7 +131,9 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             Success = true,
             Output = "Hello world",
         }, TopologyAudience.Self);
-        await responseBody.WaitForFlushedFrameCountAsync(7, TimeSpan.FromSeconds(2));
+        await responseBody.WaitForSnapshotAsync(
+            text => ReadSseFrames(text).Any(HasRunFinished),
+            TimeSpan.FromSeconds(2));
 
         var frames = ReadSseFrames(responseBody.SnapshotText());
         frames.FindIndex(HasRunFinished)
@@ -201,6 +206,7 @@ public sealed class WorkflowLlmChunkSseProjectionTests
     {
         private readonly object _gate = new();
         private readonly List<(int Count, TaskCompletionSource Signal)> _waiters = [];
+        private readonly List<(Func<string, bool> Predicate, TaskCompletionSource Signal)> _snapshotWaiters = [];
         private int _dataFrameCount;
 
         public int FlushedFrameCount { get; private set; }
@@ -220,6 +226,19 @@ public sealed class WorkflowLlmChunkSseProjectionTests
 
                 var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 _waiters.Add((expectedCount, waiter));
+                return waiter.Task.WaitAsync(timeout);
+            }
+        }
+
+        public Task WaitForSnapshotAsync(Func<string, bool> predicate, TimeSpan timeout)
+        {
+            lock (_gate)
+            {
+                if (predicate(SnapshotTextUnsafe()))
+                    return Task.CompletedTask;
+
+                var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _snapshotWaiters.Add((predicate, waiter));
                 return waiter.Task.WaitAsync(timeout);
             }
         }
@@ -248,9 +267,22 @@ public sealed class WorkflowLlmChunkSseProjectionTests
                     _waiters.RemoveAt(index);
                     waiter.Signal.TrySetResult();
                 }
+
+                var text = SnapshotTextUnsafe();
+                for (var index = _snapshotWaiters.Count - 1; index >= 0; index--)
+                {
+                    var waiter = _snapshotWaiters[index];
+                    if (!waiter.Predicate(text))
+                        continue;
+
+                    _snapshotWaiters.RemoveAt(index);
+                    waiter.Signal.TrySetResult();
+                }
             }
 
             return Task.CompletedTask;
         }
+
+        private string SnapshotTextUnsafe() => System.Text.Encoding.UTF8.GetString(ToArray());
     }
 }
