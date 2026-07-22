@@ -221,16 +221,17 @@ Run the command from Step 2.
 
 Expected: PASS with 5 tests in `chatContent.test.ts`.
 
-- [ ] **Step 5: Commit the parser behavior**
+- [ ] **Step 5: Inspect the parser diff and keep it uncommitted**
 
 ```bash
-git add \
+git diff --check -- \
   apps/aevatar-console-web/src/pages/chat/chatContent.ts \
   apps/aevatar-console-web/src/pages/chat/chatContent.test.ts
-git -c user.name=AbigailDeng \
-  -c user.email=108705114+AbigailDeng@users.noreply.github.com \
-  commit -m "Parse Chat Markdown tables"
 ```
+
+Expected: no whitespace errors. Keep this change uncommitted because the new
+union member requires the Chat, Studio, and Explorer consumers to be updated
+before the source commit can pass `tsc`.
 
 ### Task 2: Render Responsive Semantic Tables In Chat
 
@@ -391,16 +392,16 @@ Run the command from Step 2.
 
 Expected: PASS with 5 tests in `chatPresentation.test.tsx`.
 
-- [ ] **Step 5: Commit the Chat renderer**
+- [ ] **Step 5: Inspect the Chat renderer diff and keep it uncommitted**
 
 ```bash
-git add \
+git diff --check -- \
   apps/aevatar-console-web/src/pages/chat/chatPresentation.tsx \
   apps/aevatar-console-web/src/pages/chat/chatPresentation.test.tsx
-git -c user.name=AbigailDeng \
-  -c user.email=108705114+AbigailDeng@users.noreply.github.com \
-  commit -m "Render responsive Chat Markdown tables"
 ```
+
+Expected: no whitespace errors. Keep this change with Task 1 until all shared
+parser consumers compile.
 
 ### Task 3: Keep Shared Parser Consumers Exhaustive
 
@@ -560,15 +561,19 @@ pnpm --dir apps/aevatar-console-web exec jest \
 
 Expected: TypeScript passes; 2 test suites and 10 tests pass.
 
-- [ ] **Step 5: Commit shared-consumer alignment**
+- [ ] **Step 5: Commit the complete buildable implementation**
 
 ```bash
 git add \
+  apps/aevatar-console-web/src/pages/chat/chatContent.ts \
+  apps/aevatar-console-web/src/pages/chat/chatContent.test.ts \
+  apps/aevatar-console-web/src/pages/chat/chatPresentation.tsx \
+  apps/aevatar-console-web/src/pages/chat/chatPresentation.test.tsx \
   apps/aevatar-console-web/src/pages/studio/components/StudioMemberCurrentRunPanel.tsx \
   apps/aevatar-console-web/src/pages/studio/explorer/ExplorerContentView.tsx
 git -c user.name=AbigailDeng \
   -c user.email=108705114+AbigailDeng@users.noreply.github.com \
-  commit -m "Align Markdown table consumers"
+  commit -m "Render Chat Markdown tables"
 ```
 
 ### Task 4: Verify The Complete Frontend Change
