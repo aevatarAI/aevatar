@@ -74,6 +74,46 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
+    public async Task ListWorkflows_ShouldEnumerateOnlyPublicLibraryTemplates()
+    {
+        var port = new RecordingWorkflowCatalogPort
+        {
+            Catalog =
+            [
+                new()
+                {
+                    Name = "public_template",
+                    ShowInLibrary = true,
+                    AuthorityStateVersion = 3,
+                    ProjectionWatermark = ProjectionWatermark,
+                    LastEventId = "event-3",
+                },
+                new()
+                {
+                    Name = "hidden_primitive_example",
+                    ShowInLibrary = false,
+                    AuthorityStateVersion = 4,
+                    ProjectionWatermark = ProjectionWatermark,
+                    LastEventId = "event-4",
+                },
+            ],
+        };
+        var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
+            .Single(item => item.Name == "aevatar_list_workflows");
+
+        var output = await tool.ExecuteAsync("{}");
+
+        using var document = JsonDocument.Parse(output);
+        document.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+        var names = document.RootElement.GetProperty("workflows")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("name").GetString())
+            .ToArray();
+        names.Should().Equal("public_template");
+        names.Should().NotContain("hidden_primitive_example");
+    }
+
+    [Fact]
     public async Task WorkflowCatalogTools_ShouldForwardCallerCancellationToken()
     {
         var port = new RecordingWorkflowCatalogPort();
