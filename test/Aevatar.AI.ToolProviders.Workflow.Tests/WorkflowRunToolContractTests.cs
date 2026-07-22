@@ -173,7 +173,7 @@ public sealed class WorkflowRunToolContractTests
     }
 
     [Fact]
-    public async Task WorkflowStatusTool_CatalogAndDetail_ShouldAwaitAsyncQueryMethods()
+    public async Task WorkflowStatusTool_CatalogAndDetail_ShouldBeDeniedWithoutCallerAuthorization()
     {
         var query = new RecordingWorkflowExecutionQueryService
         {
@@ -222,11 +222,14 @@ public sealed class WorkflowRunToolContractTests
         var catalogResult = await tool.ExecuteAsync("""{"action":"catalog"}""");
         var detailResult = await tool.ExecuteAsync("""{"action":"detail","workflow_name":"direct"}""");
 
+        tool.Description.Should().NotContain("catalog").And.NotContain("definitions");
+        tool.ParametersSchema.Should().NotContain("\"catalog\"").And.NotContain("\"detail\"");
+        tool.ParametersSchema.Should().NotContain("workflow_name");
         using var catalogDocument = JsonDocument.Parse(catalogResult);
-        catalogDocument.RootElement.GetProperty("workflows")[0].GetProperty("name").GetString().Should().Be("direct");
+        catalogDocument.RootElement.GetProperty("error").GetString().Should().Be("Unsupported action 'catalog'");
         using var detailDocument = JsonDocument.Parse(detailResult);
-        detailDocument.RootElement.GetProperty("name").GetString().Should().Be("direct");
-        query.Calls.Should().Equal("ListWorkflowCatalog", "GetWorkflowDetail:direct");
+        detailDocument.RootElement.GetProperty("error").GetString().Should().Be("Unsupported action 'detail'");
+        query.Calls.Should().BeEmpty();
     }
 
     [Fact]

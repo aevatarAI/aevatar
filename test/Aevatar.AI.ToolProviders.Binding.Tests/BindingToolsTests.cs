@@ -151,6 +151,27 @@ public class BindingToolsTests
     }
 
     [Fact]
+    public async Task BindingBindTool_WorkflowKind_DoesNotResolveGlobalDefinitionByName()
+    {
+        var commandPort = new StubCommandPort();
+        var tool = new BindingBindTool(commandPort);
+
+        AgentToolRequestContext.Current = OwnerContext("scope-current");
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """{"kind":"workflow","workflow_name":"private-global-workflow"}""");
+
+            ReadError(result).Should().Be("'workflow_yamls' is required for 'workflow' kind");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
     public async Task BindingBindTool_ScriptingKind_CallsUpsert()
     {
         ScopeBindingUpsertRequest? captured = null;

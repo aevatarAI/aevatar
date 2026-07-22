@@ -66,41 +66,6 @@ public class LocalWorkflowDefinitionCommandAdapterTests : IDisposable
     }
 
     [Fact]
-    public async Task GetDefinitionAsync_ReturnsNull_WhenNotFound()
-    {
-        var result = await _adapter.GetDefinitionAsync("no-such-workflow");
-        result.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetDefinitionAsync_ReturnsSnapshot()
-    {
-        var yaml = "name: readable-wf\nsteps:\n  - id: s1";
-        await _adapter.CreateAsync("readable-wf", yaml);
-
-        var snapshot = await _adapter.GetDefinitionAsync("readable-wf");
-
-        snapshot.Should().NotBeNull();
-        snapshot!.Name.Should().Be("readable-wf");
-        snapshot.Yaml.Should().Be(yaml);
-        snapshot.RevisionId.Should().NotBeNullOrEmpty();
-        snapshot.LastModified.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5));
-    }
-
-    [Fact]
-    public async Task ListDefinitionsAsync_ReturnsAll()
-    {
-        await _adapter.CreateAsync("list-wf-one", "name: list-wf-one\nsteps:\n  - id: s1");
-        await _adapter.CreateAsync("list-wf-two", "name: list-wf-two\nsteps:\n  - id: s1\n  - id: s2");
-
-        var defs = await _adapter.ListDefinitionsAsync();
-
-        defs.Should().HaveCount(2);
-        defs.Select(d => d.Name).Should().Contain("list-wf-one");
-        defs.Select(d => d.Name).Should().Contain("list-wf-two");
-    }
-
-    [Fact]
     public async Task UpdateAsync_Succeeds_WithCorrectRevision()
     {
         var yaml1 = "name: upd-wf\nsteps:\n  - id: s1";
@@ -114,8 +79,7 @@ public class LocalWorkflowDefinitionCommandAdapterTests : IDisposable
         updateResult.RevisionId.Should().NotBe(revision);
         updateResult.Yaml.Should().Be(yaml2);
 
-        var snapshot = await _adapter.GetDefinitionAsync("upd-wf");
-        snapshot!.Yaml.Should().Be(yaml2);
+        File.ReadAllText(Path.Combine(_tempDir, "upd-wf.yaml")).Should().Be(yaml2);
     }
 
     [Fact]

@@ -1,6 +1,5 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.ToolProviders.Workflow.Ports;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 
@@ -13,21 +12,16 @@ namespace Aevatar.AI.ToolProviders.Binding.Tools;
 public sealed class BindingBindTool : IAgentTool
 {
     private readonly IScopeBindingCommandPort _commandPort;
-    private readonly IWorkflowDefinitionCommandAdapter? _definitionAdapter;
-
-    public BindingBindTool(
-        IScopeBindingCommandPort commandPort,
-        IWorkflowDefinitionCommandAdapter? definitionAdapter = null)
+    public BindingBindTool(IScopeBindingCommandPort commandPort)
     {
         _commandPort = commandPort;
-        _definitionAdapter = definitionAdapter;
     }
 
     public string Name => "binding_bind";
 
     public string Description =>
         "Bind a service to the current scope. " +
-        "Supports three implementation kinds: 'workflow' (requires workflow_name or workflow_yamls), " +
+        "Supports three implementation kinds: 'workflow' (requires workflow_yamls), " +
         "'scripting' (requires script_id), and 'gagent' (requires agent_kind). " +
         "Use binding_list to see existing bindings before creating new ones.";
 
@@ -40,14 +34,10 @@ public sealed class BindingBindTool : IAgentTool
               "enum": ["workflow", "scripting", "gagent"],
               "description": "Implementation kind to bind"
             },
-            "workflow_name": {
-              "type": "string",
-              "description": "Name of a locally saved workflow definition to bind (for 'workflow' kind)"
-            },
             "workflow_yamls": {
               "type": "array",
               "items": { "type": "string" },
-              "description": "Inline workflow YAML definitions (for 'workflow' kind, alternative to workflow_name)"
+              "description": "Inline workflow YAML definitions (required for 'workflow' kind)"
             },
             "script_id": {
               "type": "string",
@@ -102,9 +92,9 @@ public sealed class BindingBindTool : IAgentTool
             switch (kindStr.ToLowerInvariant())
             {
                 case "workflow":
-                    var wfReq = await BuildWorkflowRequestAsync(scopeId, serviceId, args, ct);
+                    var wfReq = BuildWorkflowRequest(scopeId, serviceId, args);
                     if (wfReq == null)
-                        return JsonDefaults.Error("'workflow_name' or 'workflow_yamls' is required for 'workflow' kind");
+                        return JsonDefaults.Error("'workflow_yamls' is required for 'workflow' kind");
                     request = wfReq;
                     break;
                 case "scripting":
@@ -146,38 +136,20 @@ public sealed class BindingBindTool : IAgentTool
         }
     }
 
-    private async Task<ScopeBindingUpsertRequest?> BuildWorkflowRequestAsync(
-        string scopeId, string? serviceId, ToolArgs args, CancellationToken ct)
+    private static ScopeBindingUpsertRequest? BuildWorkflowRequest(
+        string scopeId, string? serviceId, ToolArgs args)
     {
-        // Option 1: inline YAML
         var yamls = args.StrArray("workflow_yamls");
-        string? workflowName = null;
-
-        // Option 2: read from local definition by name
-        if (yamls.Length == 0 && _definitionAdapter is not null)
-        {
-            workflowName = args.Str("workflow_name");
-            if (!string.IsNullOrWhiteSpace(workflowName))
-            {
-                var snapshot = await _definitionAdapter.GetDefinitionAsync(workflowName, ct);
-                if (snapshot is not null)
-                    yamls = [snapshot.Yaml];
-            }
-        }
-
         if (yamls.Length == 0)
             return null;
 
-        // Derive service ID from workflow name if not explicitly provided
-        serviceId ??= !string.IsNullOrWhiteSpace(workflowName)
-            ? $"wf-{workflowName}"
-            : $"wf-{Guid.NewGuid():N}"[..16];
+        serviceId ??= $"wf-{Guid.NewGuid():N}"[..16];
 
         return new ScopeBindingUpsertRequest(
             ScopeId: scopeId,
             ImplementationKind: ScopeBindingImplementationKind.Workflow,
             Workflow: new ScopeBindingWorkflowSpec(yamls),
-            DisplayName: args.Str("display_name") ?? workflowName,
+            DisplayName: args.Str("display_name"),
             ServiceId: serviceId);
     }
 
