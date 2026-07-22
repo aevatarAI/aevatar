@@ -2,6 +2,8 @@ using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -21,6 +23,7 @@ using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.NyxidChat.Slash;
 using Aevatar.GAgents.NyxidChat.WorkflowDraftRun;
 using Aevatar.GAgents.NyxidChat.WorkflowRunDelivery;
@@ -46,6 +49,7 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder => builder.ScanAssemblies(typeof(NyxIdChatGAgent).Assembly));
 
         services.AddCqrsCore();
+        services.AddToolSetRegistry();
         services.AddHttpClient();
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
@@ -53,6 +57,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<NyxIdRelayTransport>();
         services.TryAddSingleton<NyxIdRelayAuthValidator>();
         services.TryAddSingleton<INyxIdRelayIngressPort, NyxIdRelayIngressPort>();
+        services.TryAddSingleton<INyxIdChatAgentProfileSnapshotSource, DisabledNyxIdChatAgentProfileSnapshotSource>();
+        services.TryAddSingleton<SkillFrontmatterParser>();
+        services.TryAddSingleton<StreamingAgentProfileTurnClassifier>();
+        services.TryAddSingleton<IAgentProfileTurnClassifier>(sp =>
+            sp.GetRequiredService<StreamingAgentProfileTurnClassifier>());
+        services.TryAddSingleton(sp => new AgentProfileTurnCatalogMaterializer(
+            sp.GetRequiredService<IToolSetRegistry>(),
+            sp.GetRequiredService<IAgentProfileTurnClassifier>(),
+            sp.GetService<IExactRemoteSkillFetcher>(),
+            sp.GetRequiredService<SkillFrontmatterParser>(),
+            sp.GetService<ILogger<AgentProfileTurnCatalogMaterializer>>()));
         services.TryAddSingleton<IChannelRelayTailTextSender, MissingChannelRelayTailTextSender>();
         services.TryAddSingleton<IChannelRelayProxyResponseClassifier, MissingChannelRelayProxyResponseClassifier>();
         services.TryAddSingleton<NyxIdChatLifecycleFacade>();
@@ -109,18 +124,12 @@ public static class ServiceCollectionExtensions
                     sp.GetRequiredService<ILogger<ChannelCardConversationTurnRunner>>());
             }));
         }
-        // Built-in default System Skill Overlay: always force-inject the per-domain capability how-to
-        // the kernel no longer carries, so both reply seams stay behavior-complete even before a host
-        // wires the Ornn-sourced overlay. Registered as the concrete type plus both the provider
-        // interface (the default source) and the fallback interface (the no-regression floor the
-        // Ornn-sourced provider degrades to). The Ornn provider, when enabled, registers
-        // ISystemSkillOverlayProvider via AddSingleton and wins regardless of module order.
-        services.TryAddSingleton<SystemSkillOverlayDefaultProvider>();
-        services.TryAddSingleton<ISystemSkillOverlayProvider>(sp => sp.GetRequiredService<SystemSkillOverlayDefaultProvider>());
-        services.TryAddSingleton<ISystemSkillOverlayFallback>(sp => sp.GetRequiredService<SystemSkillOverlayDefaultProvider>());
+        services.TryAddSingleton<BuiltInPromptFloorProvider>();
+        services.TryAddSingleton<IBuiltInPromptFloorProvider>(sp => sp.GetRequiredService<BuiltInPromptFloorProvider>());
         services.TryAddSingleton<IConversationReplyGenerator>(sp =>
             new NyxIdConversationReplyGenerator(
                 sp.GetRequiredService<ILLMProviderFactory>(),
+                sp.GetRequiredService<IBuiltInPromptFloorProvider>(),
                 sp.GetServices<IAgentToolSource>(),
                 sp.GetServices<IAgentRunMiddleware>(),
                 sp.GetServices<IToolCallMiddleware>(),

@@ -432,9 +432,10 @@ public sealed class StreamingToolExecutor
                         effectiveTool,
                         toolCallContext.ToolCallId,
                         toolCallContext.ToolName,
-                        safeFailureResult,
-                        "tool_execution_error",
-                        SafeToolFailureMessage) ??
+                        callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
+                        resultJson: safeFailureResult,
+                        errorCode: "tool_execution_error",
+                        errorMessage: SafeToolFailureMessage) ??
                         ToolCallReceiptFinalizer.Finalize(toolCallContext, error).Receipt;
                 }
                 else
@@ -443,6 +444,7 @@ public sealed class StreamingToolExecutor
                         effectiveTool,
                         toolCallContext.ToolCallId,
                         toolCallContext.ToolName,
+                        effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
                         result,
                         toolCallContext.ArgumentsJson);
                 }
@@ -459,6 +461,7 @@ public sealed class StreamingToolExecutor
                 effectiveTool,
                 toolCallContext.ToolCallId,
                 toolCallContext.ToolName,
+                effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
                 toolResult,
                 toolCallContext.ArgumentsJson);
             var isErrorReceipt = executionFailed ||

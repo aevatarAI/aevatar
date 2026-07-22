@@ -94,7 +94,6 @@ public static partial class NyxIdChatEndpoints
             heartbeat.Start();
             var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
             var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
-            await InjectConnectedServicesAsync(http, accessToken, metadata, ct);
 
             // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
             // Streaming endpoints no longer pre-read runtime state before command dispatch.

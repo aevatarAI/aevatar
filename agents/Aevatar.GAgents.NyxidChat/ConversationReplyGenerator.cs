@@ -2,9 +2,11 @@ using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Core.Prompting;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.Skills;
@@ -79,6 +81,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly IFileArtifactReadPort? _fileArtifactReadPort;
     private readonly ILarkOutboundClientFactory? _larkOutboundClientFactory;
     private readonly ISystemSkillOverlayProvider? _overlayProvider;
+    private readonly IBuiltInPromptFloorProvider _builtInPromptFloorProvider;
     private readonly ILogger<NyxIdConversationReplyGenerator> _logger;
 
     // Refactor (issue1318/first-slice): Old: unbound sender still saw tool dispatch + unknown
@@ -106,6 +109,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     public NyxIdConversationReplyGenerator(
         ILLMProviderFactory llmProviderFactory,
+        IBuiltInPromptFloorProvider builtInPromptFloorProvider,
         IEnumerable<IAgentToolSource>? toolSources = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
@@ -139,6 +143,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _fileArtifactReadPort = fileArtifactReadPort;
         _larkOutboundClientFactory = larkOutboundClientFactory;
         _overlayProvider = overlayProvider;
+        _builtInPromptFloorProvider = builtInPromptFloorProvider ??
+                                      throw new ArgumentNullException(nameof(builtInPromptFloorProvider));
         _logger = logger ?? NullLogger<NyxIdConversationReplyGenerator>.Instance;
     }
 
@@ -333,15 +339,17 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         // discard InitialMessages, so this notice is stamped exactly once per run.
         var initialMessages = new List<ChatMessage>
         {
-            ChatMessage.System(AppendSystemPromptSuffix(
-                BuildSystemPrompt(externalMetadata, effectiveToolContext, input.AttachmentVisibilityInstruction),
+            ChatMessage.System(BuildSystemPrompt(
+                externalMetadata,
+                effectiveToolContext,
+                input.AttachmentVisibilityInstruction,
                 replyPlan.DisableTools ? UnboundSenderToolsDisabledNotice : null)),
         };
         initialMessages.AddRange((priorHistory ?? []).Where(IsReplayableHistoryEntry).TakeLast(MaxRecentPriorHistoryMessages).Select(ToChatMessage));
         initialMessages.Add(ChatMessage.User(input.Parts, input.Text));
 
         return new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(),
+            runtime.CreateStepExecutor(turnCatalog: null),
             externalMetadata,
             replyPlan.PrimaryControl,
             effectiveToolContext,
@@ -421,12 +429,14 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 toolMiddlewares: BuildToolMiddlewaresForTurn(),
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages =
                 [
-                    ChatMessage.System(AppendSystemPromptSuffix(
-                        BuildSystemPrompt(effectiveMetadata, toolContext, input.AttachmentVisibilityInstruction),
+                    ChatMessage.System(BuildSystemPrompt(
+                        effectiveMetadata,
+                        toolContext,
+                        input.AttachmentVisibilityInstruction,
                         systemPromptSuffix)),
                 ],
                 Metadata = externalMetadata,
@@ -455,6 +465,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                            activity.Id,
                            llmControl,
                            toolContext,
+                           turnCatalog: null,
                            externalMetadata,
                            ct))
         {
@@ -1074,7 +1085,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 toolMiddlewares: BuildToolMiddlewaresForTurn(),
                 llmMiddlewares: _llmMiddlewares),
             hooks: null,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages =
                 [
@@ -1394,35 +1405,44 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return valid.Length == 0 ? null : valid;
     }
 
-    private static string AppendSystemPromptSuffix(string prompt, string? suffix) =>
-        string.IsNullOrEmpty(suffix) ? prompt : $"{prompt.TrimEnd()}\n\n{suffix}";
-
     private string BuildSystemPrompt(
         IReadOnlyDictionary<string, string> metadata,
         AgentToolExecutionContext toolContext,
-        string? attachmentVisibilityInstruction = null)
+        string? attachmentVisibilityInstruction = null,
+        string? runtimeNotice = null)
     {
-        var prompt = LoadBaseSystemPrompt();
-        prompt = AppendSystemSkillOverlay(
-            prompt,
-            ResolveChannelPlatform(toolContext, metadata),
-            toolContext.Credentials.NyxIdAccessToken);
-        prompt += NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions);
+        var runtimeFacts = new StringBuilder();
+        AppendRuntimeFact(
+            runtimeFacts,
+            NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions));
         var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
-        if (!string.IsNullOrWhiteSpace(channelContext))
-            prompt += "\n\n" + channelContext;
+        AppendRuntimeFact(runtimeFacts, channelContext);
 
         if (_localSkillCatalog is not null && _localSkillCatalog.Count > 0)
         {
             var skillSection = _localSkillCatalog.BuildSystemPromptSection();
-            if (!string.IsNullOrEmpty(skillSection))
-                prompt += "\n" + skillSection;
+            AppendRuntimeFact(runtimeFacts, skillSection);
         }
 
-        if (!string.IsNullOrWhiteSpace(attachmentVisibilityInstruction))
-            prompt += "\n\n" + attachmentVisibilityInstruction.Trim();
+        AppendRuntimeFact(runtimeFacts, attachmentVisibilityInstruction);
+        AppendRuntimeFact(runtimeFacts, runtimeNotice);
 
-        return prompt;
+        var global = _overlayProvider?.GetCurrent(new SystemSkillOverlayRequest(
+            ResolveChannelPlatform(toolContext, metadata),
+            toolContext.Credentials.NyxIdAccessToken));
+        var runtime = runtimeFacts.Length == 0
+            ? null
+            : new RuntimeFactsPromptLayer(
+                runtimeFacts.ToString(),
+                new RuntimeFactsPromptProvenance("nyxid-relay-runtime"));
+        return SystemPromptLayerComposer.Compose(
+            NyxIdChatSystemPrompt.Value,
+            _builtInPromptFloorProvider.GetFloor(),
+            global,
+            profile: null,
+            selectedSkill: null,
+            runtime,
+            conversation: null).Prompt;
     }
 
     // The typed channel context is the authoritative platform source: the per-step plan path hands
@@ -1441,35 +1461,12 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             : null;
     }
 
-    private string AppendSystemSkillOverlay(string prompt, string? platform, string? nyxIdAccessToken)
+    private static void AppendRuntimeFact(StringBuilder builder, string? content)
     {
-        var overlayMarkdown = _overlayProvider
-            ?.GetCurrent(new SystemSkillOverlayRequest(platform, nyxIdAccessToken))
-            ?.OverlayMarkdown;
-        if (string.IsNullOrWhiteSpace(overlayMarkdown))
-            return prompt;
-
-        if (string.IsNullOrWhiteSpace(prompt))
-            return overlayMarkdown.Trim();
-
-        return $"{prompt.TrimEnd()}\n\n{overlayMarkdown.Trim()}";
-    }
-
-    private static string LoadBaseSystemPrompt()
-    {
-        // Kernel source lock: channel replies and NyxIdChatSystemPrompt.Load both read the same
-        // embedded system-prompt.md resource; channel-only runtime facts are appended after it.
-        var assembly = typeof(NyxIdChatGAgent).Assembly;
-        var resourceName = assembly.GetManifestResourceNames()
-            .FirstOrDefault(name => name.EndsWith("system-prompt.md", StringComparison.OrdinalIgnoreCase));
-        if (resourceName is null)
-            return "You are a helpful NyxID assistant.";
-
-        using var stream = assembly.GetManifestResourceStream(resourceName);
-        if (stream is null)
-            return "You are a helpful NyxID assistant.";
-
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+        if (builder.Length > 0)
+            builder.Append("\n\n");
+        builder.Append(content.Trim());
     }
 }

@@ -22,7 +22,7 @@ public sealed class ChatRuntimeToolProgressTests
             history: new ChatHistory(),
             toolLoop: new ToolCallLoop(tools),
             hooks: null,
-            requestBuilder: static () => new LLMRequest { Messages = [] });
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
         var toolContext = AgentToolExecutionContext.Empty with
         {
             SkillRecovery = new AgentSkillRecoveryContext(
@@ -40,6 +40,7 @@ public sealed class ChatRuntimeToolProgressTests
                 maxToolRounds: 1,
                 requestId: "recovery-request",
                 toolContext,
+                turnCatalog: null,
                 metadata: null)
             .GetAsyncEnumerator();
         var firstMove = stream.MoveNextAsync().AsTask();
@@ -85,9 +86,10 @@ public sealed class ChatRuntimeToolProgressTests
             history: new ChatHistory(),
             toolLoop: new ToolCallLoop(tools),
             hooks: null,
-            requestBuilder: static () => new LLMRequest { Messages = [] });
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
 
-        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2).GetAsyncEnumerator();
+        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null)
+            .GetAsyncEnumerator();
         LLMStreamChunk? started = null;
         while (await stream.MoveNextAsync())
         {
@@ -140,9 +142,10 @@ public sealed class ChatRuntimeToolProgressTests
             history: new ChatHistory(),
             toolLoop: new ToolCallLoop(tools),
             hooks: null,
-            requestBuilder: static () => new LLMRequest { Messages = [] });
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
 
-        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2).GetAsyncEnumerator();
+        await using var stream = runtime.ChatStreamAsync("hello", maxToolRounds: 2, turnCatalog: null)
+            .GetAsyncEnumerator();
         while (await stream.MoveNextAsync() && stream.Current.ToolCallStarted == null)
         {
         }

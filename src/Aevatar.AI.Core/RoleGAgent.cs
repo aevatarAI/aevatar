@@ -15,6 +15,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions.Attributes;
@@ -57,6 +58,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     /// never persisted or logged, cleared when the turn ends.
     /// </summary>
     protected string? CurrentTurnNyxIdAccessToken => _currentTurnNyxIdAccessToken;
+
+    protected virtual TimeProvider ChatRequestTimeProvider => TimeProvider.System;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -800,6 +803,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             .On<SystemSkillOverlayMaterializedEvent>(ApplySystemSkillOverlayMaterialized)
             .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
             .On<RoleChatSessionProgressedEvent>(ApplyChatSessionProgressed)
+            .On<AgentProfileTurnAuthorityCommittedEvent>(ApplyAgentProfileTurnAuthorityCommitted)
             .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
             .On<RoleChatCompletionNotificationRetryScheduledEvent>(ApplyCompletionNotificationRetryScheduled)
             .On<RoleChatCompletionNotificationDispatchedEvent>(ApplyCompletionNotificationDispatched)
@@ -865,6 +869,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         try
         {
             await HandleChatRequestCoreAsync(request);
+        }
+        catch (AgentProfileTurnAuthorityException)
+        {
+            throw;
         }
         catch (OperationCanceledException)
         {
@@ -982,17 +990,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(request.SessionId) && trackedSession == null)
-        {
-            await PersistDomainEventAsync(new RoleChatSessionStartedEvent
-            {
-                SessionId = request.SessionId,
-                Prompt = request.Prompt,
-                InputParts = { request.InputParts },
-                RunContext = request.RunContext?.Clone(),
-            });
-        }
-        else if (trackedSession != null)
+        var turnStartedTimestamp = ChatRequestTimeProvider.GetTimestamp();
+        var timeoutMs = ResolveLlmTimeoutMs(request);
+        var useWorkflowFailureMarker = timeoutMs > 0;
+        using var timeoutCts = timeoutMs > 0
+            ? new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs), ChatRequestTimeProvider)
+            : null;
+        var streamCt = timeoutCts?.Token ?? CancellationToken.None;
+        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
+        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        var committedAuthority = await EstablishTurnAuthorityAsync(
+            request,
+            trackedSession,
+            toolContext,
+            streamCt);
+        if (trackedSession != null)
         {
             Logger.LogInformation(
                 "[{Role}] Resuming incomplete LLM session={SessionId}",
@@ -1010,10 +1022,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             request.SessionId,
             requestSummary.PromptLength,
             requestSummary.InputPartCount);
-        var timeoutMs = ResolveLlmTimeoutMs(request);
-        var useWorkflowFailureMarker = timeoutMs > 0;
-        using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
-        var streamCt = timeoutCts?.Token ?? CancellationToken.None;
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PersistSessionProgressAsync(request.SessionId, progress =>
@@ -1027,7 +1035,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         SessionReplayRecord replayRecord;
         try
         {
-            replayRecord = await ExecuteStreamingChatAsync(request, streamCt);
+            streamCt.ThrowIfCancellationRequested();
+            var turnCatalog = await MaterializeAndCommitAgentProfileTurnCatalogAsync(
+                request,
+                toolContext,
+                committedAuthority,
+                streamCt);
+            replayRecord = await ExecuteStreamingChatAsync(
+                request,
+                llmControl,
+                toolContext,
+                turnCatalog,
+                turnStartedTimestamp,
+                streamCt);
         }
         catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
         {
@@ -1066,6 +1086,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         // ─── Detect approval-pending tool result and set up continuation ───
         var pendingApproval = DetectPendingApproval(replayRecord, request);
+        OnPlanOrHandoffObserved(pendingApproval is not null);
         if (pendingApproval != null)
         {
             var approvalProgress = CreateSessionProgress(request.SessionId, progress =>
@@ -1118,7 +1139,192 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
     private static string SanitizeFailureMessage(string? message) =>
         string.IsNullOrWhiteSpace(message) ? "LLM request failed." : message.Trim();
 
-    private async Task<SessionReplayRecord> ExecuteStreamingChatAsync(ChatRequestEvent request, CancellationToken streamCt)
+    private async Task<AgentProfileTurnAuthorityState?> EstablishTurnAuthorityAsync(
+        ChatRequestEvent request,
+        RoleChatSessionState? trackedSession,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.SessionId))
+            return null;
+
+        if (trackedSession is null)
+        {
+            var started = new RoleChatSessionStartedEvent
+            {
+                SessionId = request.SessionId,
+                Prompt = request.Prompt,
+                InputParts = { request.InputParts },
+                RunContext = request.RunContext?.Clone(),
+            };
+            var preparation = await PrepareAgentProfileTurnAuthorityAsync(request, toolContext, ct);
+            if (preparation is null)
+            {
+                await PersistDomainEventAsync(started, CancellationToken.None);
+                return null;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var initial = new AgentProfileTurnAuthorityCommittedEvent
+            {
+                CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                Authority = preparation.Authority,
+            };
+            var predictedStartedState = ApplyChatSessionStarted(State, started);
+            if (!TryApplyAgentProfileTurnAuthorityCommitted(predictedStartedState, initial, out _))
+            {
+                throw new AgentProfileTurnAuthorityException(
+                    "Prepared turn authority is not valid for the new session.");
+            }
+
+            try
+            {
+                await PersistDomainEventsAsync([started, initial], CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new AgentProfileTurnAuthorityException(ex.Message, ex);
+            }
+            return ResolveCommittedTurnAuthority(request.SessionId);
+        }
+
+        if (State.AgentProfile is null)
+            return null;
+
+        var active = State.AgentProfileTurnAuthority;
+        if (active?.ReconciliationKey is null ||
+            !string.Equals(
+                active.ReconciliationKey.SessionId,
+                request.SessionId,
+                StringComparison.Ordinal))
+        {
+            var legacy = new AgentProfileTurnAuthorityCommittedEvent
+            {
+                CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                Authority = CreateLegacyRestrictedEmptyAuthority(request.SessionId),
+            };
+            await PersistRequiredTurnAuthorityAsync(legacy);
+            return ResolveCommittedTurnAuthority(request.SessionId);
+        }
+
+        if (active.SelectedExactSkillRef is null)
+            return active.Clone();
+
+        var retryAuthority = active.Clone();
+        retryAuthority.ReconciliationKey.Attempt++;
+        var retry = new AgentProfileTurnAuthorityCommittedEvent
+        {
+            CommitKind = AgentProfileTurnAuthorityCommitKind.RetryStarted,
+            Authority = retryAuthority,
+        };
+        await PersistRequiredTurnAuthorityAsync(retry);
+        return ResolveCommittedTurnAuthority(request.SessionId);
+    }
+
+    private async Task<AgentProfileTurnCatalog?> MaterializeAndCommitAgentProfileTurnCatalogAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext toolContext,
+        AgentProfileTurnAuthorityState? committedAuthority,
+        CancellationToken ct)
+    {
+        if (committedAuthority is null)
+            return null;
+
+        var materialization = await MaterializeCommittedAgentProfileTurnCatalogAsync(
+            request,
+            toolContext,
+            committedAuthority.Clone(),
+            ct);
+        if (materialization is null)
+            return null;
+
+        var reconcile = new AgentProfileTurnAuthorityCommittedEvent
+        {
+            CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+            Authority = materialization.ReconcileProposal,
+        };
+        await PersistValidatedTurnAuthorityAsync(reconcile);
+        var active = State.AgentProfileTurnAuthority;
+        return active is not null && HasSameReconciliationKey(active, reconcile.Authority)
+            ? materialization.Catalog
+            : null;
+    }
+
+    private async Task PersistValidatedTurnAuthorityAsync(
+        AgentProfileTurnAuthorityCommittedEvent authorityEvent)
+    {
+        if (!TryApplyAgentProfileTurnAuthorityCommitted(State, authorityEvent, out _))
+            throw new InvalidOperationException("Turn authority transition would violate the active fencing key or ceiling.");
+
+        await PersistDomainEventAsync(authorityEvent, CancellationToken.None);
+    }
+
+    private async Task PersistRequiredTurnAuthorityAsync(
+        AgentProfileTurnAuthorityCommittedEvent authorityEvent)
+    {
+        try
+        {
+            await PersistValidatedTurnAuthorityAsync(authorityEvent);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new AgentProfileTurnAuthorityException(ex.Message, ex);
+        }
+    }
+
+    private AgentProfileTurnAuthorityState ResolveCommittedTurnAuthority(string sessionId)
+    {
+        var active = State.AgentProfileTurnAuthority;
+        if (active?.ReconciliationKey is null ||
+            !string.Equals(active.ReconciliationKey.SessionId, sessionId, StringComparison.Ordinal))
+        {
+            throw new AgentProfileTurnAuthorityException(
+                "The committed turn authority does not match the active session.");
+        }
+
+        return active.Clone();
+    }
+
+    private static AgentProfileTurnAuthorityState CreateLegacyRestrictedEmptyAuthority(string sessionId) =>
+        new()
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = sessionId,
+                Attempt = 1,
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty,
+            DegradationReasons = { AgentProfileTurnDegradationReason.LegacyAuthorityMissing },
+        };
+
+    protected virtual Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct) =>
+        Task.FromResult<AgentProfileTurnAuthorityPreparation?>(null);
+
+    protected virtual Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+        ChatRequestEvent request,
+        AgentToolExecutionContext toolContext,
+        AgentProfileTurnAuthorityState committedAuthority,
+        CancellationToken ct) =>
+        Task.FromResult<AgentProfileTurnCatalogMaterialization?>(null);
+
+    protected virtual void OnPlanOrHandoffObserved(bool handoffPending)
+    {
+    }
+
+    protected virtual void OnFirstStreamedOutputObserved(TimeSpan elapsed)
+    {
+    }
+
+    private async Task<SessionReplayRecord> ExecuteStreamingChatAsync(
+        ChatRequestEvent request,
+        LLMControlContext llmControl,
+        AgentToolExecutionContext toolContext,
+        AgentProfileTurnCatalog? turnCatalog,
+        long turnStartedTimestamp,
+        CancellationToken streamCt)
     {
         // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
         var initialHistoryCount = History.Count;
@@ -1130,22 +1336,38 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var toolResults = new List<ToolResultEvent>();
         var toolCallSnapshots = new List<ToolCallEvent>();
         TokenUsage? usage = null;
+        var firstStreamedOutputObserved = false;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
             : null;
-        var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
-        var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
         // Stash this turn's token for chartered direct-chat subclasses (System Skill Overlay seam).
         // Kept in memory only for the turn; never persisted or logged.
         _currentTurnNyxIdAccessToken = toolContext.Credentials.NyxIdAccessToken;
         var inputParts = ResolveRequestInputParts(request);
 
-        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
+        await foreach (var chunk in ChatStreamAsync(
+                           inputParts,
+                           request.SessionId,
+                           llmControl,
+                           toolContext,
+                           turnCatalog,
+                           metadata,
+                           streamCt))
         {
             if (chunk.Usage != null)
                 usage = chunk.Usage;
+
+            if (!firstStreamedOutputObserved &&
+                (!string.IsNullOrEmpty(chunk.DeltaContent) ||
+                 chunk.DeltaContentPart != null ||
+                 !string.IsNullOrEmpty(chunk.DeltaReasoningContent)))
+            {
+                firstStreamedOutputObserved = true;
+                OnFirstStreamedOutputObserved(
+                    ChatRequestTimeProvider.GetElapsedTime(turnStartedTimestamp));
+            }
 
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
@@ -2156,6 +2378,190 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         return next;
     }
 
+    private static RoleGAgentState ApplyAgentProfileTurnAuthorityCommitted(
+        RoleGAgentState current,
+        AgentProfileTurnAuthorityCommittedEvent evt) =>
+        TryApplyAgentProfileTurnAuthorityCommitted(current, evt, out var next) ? next : current;
+
+    private static bool TryApplyAgentProfileTurnAuthorityCommitted(
+        RoleGAgentState current,
+        AgentProfileTurnAuthorityCommittedEvent evt,
+        out RoleGAgentState next)
+    {
+        next = current;
+        if (evt.Authority?.ReconciliationKey is null)
+            return false;
+
+        var incoming = CanonicalizeTurnAuthority(evt.Authority);
+        var sessionId = incoming.ReconciliationKey.SessionId;
+        if (string.IsNullOrWhiteSpace(sessionId) || incoming.ReconciliationKey.Attempt <= 0 ||
+            !current.Sessions.TryGetValue(sessionId, out var session) || session.Completed ||
+            AuthorityRank(incoming.AuthorityKind) < 0 ||
+            !HasConsistentAuthorityKindAndCeiling(incoming))
+        {
+            return false;
+        }
+
+        var active = current.AgentProfileTurnAuthority;
+        AgentProfileTurnAuthorityState accepted;
+        switch (evt.CommitKind)
+        {
+            case AgentProfileTurnAuthorityCommitKind.Initial:
+                if (incoming.ReconciliationKey.Attempt != 1 || !CanApplyInitialAuthority(current, active, incoming))
+                    return false;
+                accepted = incoming;
+                break;
+            case AgentProfileTurnAuthorityCommitKind.RetryStarted:
+                if (!CanApplyRetryAuthority(active, incoming))
+                    return false;
+                accepted = incoming;
+                break;
+            case AgentProfileTurnAuthorityCommitKind.Reconcile:
+                if (!CanApplyReconciledAuthority(active, incoming))
+                    return false;
+                accepted = MergeReconciledAuthority(active!, incoming);
+                break;
+            default:
+                return false;
+        }
+
+        if (active is not null && active.Equals(accepted))
+            return true;
+
+        next = current.Clone();
+        next.AgentProfileTurnAuthority = accepted;
+        return true;
+    }
+
+    private static bool CanApplyInitialAuthority(
+        RoleGAgentState current,
+        AgentProfileTurnAuthorityState? active,
+        AgentProfileTurnAuthorityState incoming)
+    {
+        if (active is null)
+            return true;
+
+        if (HasSameReconciliationKey(active, incoming))
+            return CanonicalizeTurnAuthority(active).Equals(incoming);
+
+        if (IsLegacyRestrictedEmptyAuthority(incoming))
+            return true;
+
+        if (!current.Sessions.TryGetValue(active.ReconciliationKey.SessionId, out var activeSession) ||
+            !current.Sessions.TryGetValue(incoming.ReconciliationKey.SessionId, out var incomingSession))
+        {
+            return false;
+        }
+
+        return incomingSession.Sequence > activeSession.Sequence;
+    }
+
+    private static bool CanApplyRetryAuthority(
+        AgentProfileTurnAuthorityState? active,
+        AgentProfileTurnAuthorityState incoming)
+    {
+        if (active?.ReconciliationKey is null || active.SelectedExactSkillRef is null ||
+            !string.Equals(
+                active.ReconciliationKey.SessionId,
+                incoming.ReconciliationKey.SessionId,
+                StringComparison.Ordinal) ||
+            incoming.ReconciliationKey.Attempt != active.ReconciliationKey.Attempt + 1)
+        {
+            return false;
+        }
+
+        var expected = CanonicalizeTurnAuthority(active);
+        expected.ReconciliationKey.Attempt = incoming.ReconciliationKey.Attempt;
+        return expected.Equals(incoming);
+    }
+
+    private static bool CanApplyReconciledAuthority(
+        AgentProfileTurnAuthorityState? active,
+        AgentProfileTurnAuthorityState incoming)
+    {
+        if (active?.ReconciliationKey is null || !HasSameReconciliationKey(active, incoming) ||
+            !Equals(active.CandidateRoute, incoming.CandidateRoute) ||
+            !Equals(active.SelectedExactSkillRef, incoming.SelectedExactSkillRef) ||
+            AuthorityRank(incoming.AuthorityKind) > AuthorityRank(active.AuthorityKind))
+        {
+            return false;
+        }
+
+        var activeNames = active.AuthorityCeilingToolNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return incoming.AuthorityCeilingToolNames.All(activeNames.Contains);
+    }
+
+    private static AgentProfileTurnAuthorityState MergeReconciledAuthority(
+        AgentProfileTurnAuthorityState active,
+        AgentProfileTurnAuthorityState incoming)
+    {
+        var accepted = incoming.Clone();
+        accepted.DegradationReasons.Clear();
+        accepted.DegradationReasons.Add(
+            active.DegradationReasons
+                .Concat(incoming.DegradationReasons)
+                .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
+                .Distinct()
+                .OrderBy(static reason => (int)reason));
+        return accepted;
+    }
+
+    private static AgentProfileTurnAuthorityState CanonicalizeTurnAuthority(
+        AgentProfileTurnAuthorityState authority)
+    {
+        var canonical = authority.Clone();
+        canonical.AuthorityCeilingToolNames.Clear();
+        canonical.AuthorityCeilingToolNames.Add(
+            authority.AuthorityCeilingToolNames
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Select(static name => name.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static name => name, StringComparer.Ordinal));
+        canonical.DegradationReasons.Clear();
+        canonical.DegradationReasons.Add(
+            authority.DegradationReasons
+                .Where(static reason => reason != AgentProfileTurnDegradationReason.Unspecified)
+                .Distinct()
+                .OrderBy(static reason => (int)reason));
+        return canonical;
+    }
+
+    private static bool HasSameReconciliationKey(
+        AgentProfileTurnAuthorityState left,
+        AgentProfileTurnAuthorityState right) =>
+        left.ReconciliationKey is not null &&
+        right.ReconciliationKey is not null &&
+        left.ReconciliationKey.Attempt == right.ReconciliationKey.Attempt &&
+        string.Equals(
+            left.ReconciliationKey.SessionId,
+            right.ReconciliationKey.SessionId,
+            StringComparison.Ordinal);
+
+    private static bool IsLegacyRestrictedEmptyAuthority(AgentProfileTurnAuthorityState authority) =>
+        authority.AuthorityKind == AgentProfileTurnAuthorityKind.RestrictedEmpty &&
+        authority.CandidateRoute is null &&
+        authority.SelectedExactSkillRef is null &&
+        authority.AuthorityCeilingToolNames.Count == 0 &&
+        authority.DegradationReasons.Count == 1 &&
+        authority.DegradationReasons[0] == AgentProfileTurnDegradationReason.LegacyAuthorityMissing;
+
+    private static bool HasConsistentAuthorityKindAndCeiling(AgentProfileTurnAuthorityState authority) =>
+        authority.AuthorityKind switch
+        {
+            AgentProfileTurnAuthorityKind.RestrictedEmpty => authority.AuthorityCeilingToolNames.Count == 0,
+            AgentProfileTurnAuthorityKind.Recovery => authority.AuthorityCeilingToolNames.Count > 0,
+            AgentProfileTurnAuthorityKind.Selected => true,
+            _ => false,
+        };
+
+    private static int AuthorityRank(AgentProfileTurnAuthorityKind kind) => kind switch
+    {
+        AgentProfileTurnAuthorityKind.RestrictedEmpty => 1,
+        AgentProfileTurnAuthorityKind.Recovery => 2,
+        AgentProfileTurnAuthorityKind.Selected => 3,
+        _ => -1,
+    };
+
     private static RoleGAgentState ApplyChatSessionCompleted(
         RoleGAgentState current,
         RoleChatSessionCompletedEvent evt)
@@ -2639,6 +3045,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         new(request.Prompt?.Length ?? 0, ResolveRequestInputParts(request).Count);
 
     private readonly record struct LLMRequestLogSummary(int PromptLength, int InputPartCount);
+
+    private sealed class AgentProfileTurnAuthorityException : InvalidOperationException
+    {
+        public AgentProfileTurnAuthorityException(string message)
+            : base(message)
+        {
+        }
+
+        public AgentProfileTurnAuthorityException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
 
     private static bool HaveMatchingInputParts(
         Google.Protobuf.Collections.RepeatedField<ChatContentPart> existing,
