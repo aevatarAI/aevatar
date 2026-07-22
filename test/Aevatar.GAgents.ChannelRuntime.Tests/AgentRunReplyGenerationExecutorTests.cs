@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
@@ -189,6 +190,45 @@ public sealed class AgentRunReplyGenerationExecutorTests
         tool.ExecuteCount.Should().Be(1);
     }
 
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesTools_ShouldRejectFabricatedToolCall()
+    {
+        var tool = new CountingTool("use_skill");
+        var provider = new ToolCallProvider(tool.Name);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = new ChatRuntime(
+            () => provider,
+            new ChatHistory(),
+            new ToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() },
+            llmMiddlewares: [new RemoveToolsMiddleware()]);
+        var plan = new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(turnCatalog: null),
+            new Dictionary<string, string>(),
+            LLMControlContext.Empty,
+            AgentToolExecutionContext.Empty,
+            InitialMessages: [],
+            MaxToolRounds: 1);
+        var executor = new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            new StaticStepPlanReplyGenerator(plan),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+
+        var continuation = await executor.BuildLlmStepContinuationAsync(
+            BuildToolEnabledWorkItem(),
+            CancellationToken.None);
+
+        provider.Requests.Should().ContainSingle().Which.Tools.Should().BeNull();
+        continuation.LlmStepResult.ToolStepResult.Should().NotBeNull();
+        continuation.LlmStepResult.ToolStepResult!.ResultMessages.Should().ContainSingle()
+            .Which.Content.Should().Contain("not found");
+        tool.ExecuteCount.Should().Be(0);
+    }
+
     private static AgentRunReplyGenerationExecutor CreateExecutor(
         RecordingProvider provider,
         IFileArtifactReadPort? fileArtifactReadPort = null)
@@ -304,11 +344,13 @@ public sealed class AgentRunReplyGenerationExecutorTests
     private sealed class ToolCallProvider(string toolName) : ILLMProvider
     {
         public string Name => "tool-call-provider";
+        public List<LLMRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
             LLMRequest request,
             [EnumeratorCancellation] CancellationToken ct = default)
         {
+            Requests.Add(request);
             yield return new LLMStreamChunk
             {
                 DeltaToolCall = new ToolCall
@@ -319,6 +361,30 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 },
             };
             await Task.Yield();
+        }
+    }
+
+    private sealed class RemoveToolsMiddleware : ILLMCallMiddleware
+    {
+        public Task InvokeAsync(LLMCallContext context, Func<Task> next)
+        {
+            var request = context.Request;
+            context.Request = new LLMRequest
+            {
+                Messages = request.Messages,
+                RequestId = request.RequestId,
+                Metadata = request.Metadata,
+                CallerContext = request.CallerContext,
+                ToolContext = request.ToolContext,
+                RoutingContext = request.RoutingContext,
+                LlmControl = request.LlmControl,
+                Tools = null,
+                Model = request.Model,
+                Temperature = request.Temperature,
+                MaxTokens = request.MaxTokens,
+                ResponseFormat = request.ResponseFormat,
+            };
+            return next();
         }
     }
 

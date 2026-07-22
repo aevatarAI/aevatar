@@ -33,8 +33,9 @@ public sealed class AgentRunToolStepInteractiveReplyTests
 
         var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
 
-        var toolStepResult = continuation.LlmStepResult.ToolStepResult.Should().NotBeNull().Subject;
-        var resultMessage = toolStepResult.ResultMessages.Should().ContainSingle().Subject;
+        var toolStepResult = continuation.LlmStepResult.ToolStepResult;
+        toolStepResult.Should().NotBeNull();
+        var resultMessage = toolStepResult!.ResultMessages.Should().ContainSingle().Subject;
         resultMessage.Content.Should().NotContain("no_active_interactive_scope");
         resultMessage.Content.Should().Contain("queued");
         toolStepResult.OutboundIntent.Should().NotBeNull();
@@ -52,8 +53,9 @@ public sealed class AgentRunToolStepInteractiveReplyTests
 
         var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
 
-        var toolStepResult = continuation.LlmStepResult.ToolStepResult.Should().NotBeNull().Subject;
-        var resultMessage = toolStepResult.ResultMessages.Should().ContainSingle().Subject;
+        var toolStepResult = continuation.LlmStepResult.ToolStepResult;
+        toolStepResult.Should().NotBeNull();
+        var resultMessage = toolStepResult!.ResultMessages.Should().ContainSingle().Subject;
         resultMessage.Content.Should().Contain("no_active_interactive_scope");
         toolStepResult.OutboundIntent.Should().BeNull();
     }
