@@ -8,6 +8,8 @@ public interface IWorkOrderExecutionQueue
 {
     void Enqueue(WorkOrderExecutionRequest request);
 
+    void CompleteAdding();
+
     IAsyncEnumerable<WorkOrderExecutionRequest> DequeueAllAsync(CancellationToken ct = default);
 }
 
@@ -36,6 +38,8 @@ public sealed class WorkOrderExecutionQueue : IWorkOrderExecutionQueue
                 $"WorkOrder execution queue is full for work order '{request.WorkOrderId}' command '{request.DispatchCommandId}'.");
         }
     }
+
+    public void CompleteAdding() => _channel.Writer.TryComplete();
 
     public IAsyncEnumerable<WorkOrderExecutionRequest> DequeueAllAsync(CancellationToken ct = default) =>
         _channel.Reader.ReadAllAsync(ct);

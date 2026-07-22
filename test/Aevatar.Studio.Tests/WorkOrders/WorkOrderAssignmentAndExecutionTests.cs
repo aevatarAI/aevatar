@@ -399,6 +399,54 @@ public sealed class WorkOrderExecutionInfrastructureTests
     }
 
     [Fact]
+    public async Task WorkOrderExecutionQueue_WhenAdmissionCloses_ShouldRejectSynchronouslyAndDrainAcceptedWork()
+    {
+        var queue = new WorkOrderExecutionQueue(
+            Options.Create(new WorkOrderExecutionWorkerOptions { QueueCapacity = 2 }));
+        queue.Enqueue(BuildExecutionRequest("work-order-before-stop", "command-before-stop"));
+
+        queue.CompleteAdding();
+        var rejected = Record.Exception(() =>
+            queue.Enqueue(BuildExecutionRequest("work-order-after-stop", "command-after-stop")));
+
+        rejected.Should().BeOfType<WorkOrderExecutionQueueFullException>()
+            .Which.Message.Should().Match("*work-order-after-stop*command-after-stop*");
+        await using var reader = queue.DequeueAllAsync().GetAsyncEnumerator();
+        (await reader.MoveNextAsync()).Should().BeTrue();
+        reader.Current.WorkOrderId.Should().Be("work-order-before-stop");
+        (await reader.MoveNextAsync()).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task WorkOrderExecutionWorker_WhenStopped_ShouldCloseQueueAdmission()
+    {
+        var queue = new WorkOrderExecutionQueue(
+            Options.Create(new WorkOrderExecutionWorkerOptions { QueueCapacity = 1 }));
+        var dispatch = new RecordingActorDispatchPort();
+        using var worker = new WorkOrderExecutionWorker(
+            queue,
+            new WorkOrderExecutionService(
+                new StubExecutionPort((_, _) => Task.FromResult(BuildAcceptedResult())),
+                dispatch),
+            Options.Create(new WorkOrderExecutionWorkerOptions
+            {
+                MaxConcurrency = 1,
+                ShutdownDrainGraceSeconds = 1,
+            }),
+            NullLogger<WorkOrderExecutionWorker>.Instance);
+        await worker.StartAsync(CancellationToken.None);
+        queue.Enqueue(BuildExecutionRequest("work-order-before-stop", "command-before-stop"));
+        await dispatch.Dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await worker.StopAsync(CancellationToken.None);
+        var rejected = Record.Exception(() =>
+            queue.Enqueue(BuildExecutionRequest("work-order-late", "command-late")));
+
+        rejected.Should().BeOfType<WorkOrderExecutionQueueFullException>()
+            .Which.Message.Should().Match("*work-order-late*command-late*");
+    }
+
+    [Fact]
     public async Task WorkOrderExecutionService_WhenAccepted_ShouldDispatchAcceptedContinuation()
     {
         var accepted = BuildAcceptedResult();
@@ -525,6 +573,8 @@ public sealed class WorkOrderExecutionInfrastructureTests
             await blockedPort.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await worker.StopAsync(CancellationToken.None);
             worker.Dispose();
+            var rejected = Record.Exception(() =>
+                queue.Enqueue(BuildExecutionRequest("work-order-late", "command-late")));
 
             var concurrency = (SemaphoreSlim)(typeof(WorkOrderExecutionWorker)
                 .GetField("_concurrency", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -533,6 +583,7 @@ public sealed class WorkOrderExecutionInfrastructureTests
 
             inspect.Should().NotThrow(
                 "late execution completion must be able to return its permit after shutdown grace");
+            rejected.Should().BeOfType<WorkOrderExecutionQueueFullException>();
         }
         finally
         {

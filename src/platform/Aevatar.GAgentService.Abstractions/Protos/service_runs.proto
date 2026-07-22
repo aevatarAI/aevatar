@@ -100,11 +100,13 @@ message ServiceRunTerminalNotificationPreparedEvent {
 message ServiceRunTerminalNotificationDispatchedEvent {
   string delivery_id = 1;
   google.protobuf.Timestamp dispatched_at = 2;
+  optional int32 attempt = 3;
 }
 
 message ServiceRunTerminalNotificationExpiredEvent {
   string delivery_id = 1;
   google.protobuf.Timestamp expired_at = 2;
+  optional int32 attempt = 3;
 }
 
 message ServiceRunTerminalNotificationRetryScheduledEvent {

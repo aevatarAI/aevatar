@@ -49,6 +49,10 @@ public sealed class WorkOrderExecutionWorker : BackgroundService
         {
             // Normal host shutdown; in-flight execution drains below.
         }
+        finally
+        {
+            _queue.CompleteAdding();
+        }
 
         await DrainInFlightAsync().ConfigureAwait(false);
     }

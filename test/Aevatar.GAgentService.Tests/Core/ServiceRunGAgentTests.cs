@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -368,6 +369,160 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
+    public async Task DurableRetrySchedulerFailure_ShouldRemainObservableAndRecoverThroughSelfInbox()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new InvalidOperationException("simulated durable scheduler failure"),
+        };
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+
+        var terminal = () => actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+
+        await terminal.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated durable scheduler failure");
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Prepared);
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        var recovery = publisher.Publications.Should()
+            .ContainSingle(publication => publication.Audience == TopologyAudience.Self)
+            .Subject;
+        var retry = recovery.Event.Should()
+            .BeOfType<ServiceRunTerminalNotificationRetryFiredEvent>().Subject;
+        retry.DeliveryId.Should().Be("delivery-1");
+        retry.Attempt.Should().Be(1);
+        recovery.Options!.Delivery!.DeduplicationOperationId.Should()
+            .Be("service-run-terminal-retry:delivery-1:1");
+
+        var recoveryEnvelope = BuildSelfEnvelope(actor.Id, retry, recovery.Options);
+        var deduplicator = new MemoryCacheDeduplicator();
+        RuntimeEnvelopeDeduplication.TryBuildDedupKey(actor.Id, recoveryEnvelope, out var recoveryKey)
+            .Should().BeTrue();
+        (await deduplicator.TryRecordAsync(recoveryKey)).Should().BeTrue();
+        (await deduplicator.TryRecordAsync(recoveryKey)).Should().BeFalse();
+
+        scheduler.ScheduleException = null;
+        await actor.HandleEventAsync(recoveryEnvelope);
+        var attemptTwo = scheduler.TimeoutRequests.Should().ContainSingle().Subject;
+        attemptTwo.CallbackId.Should().Be("service-run-terminal-retry:delivery-1");
+        attemptTwo.TriggerEnvelope.Payload.Unpack<ServiceRunTerminalNotificationRetryFiredEvent>()
+            .Attempt.Should().Be(2);
+        attemptTwo.TriggerEnvelope.Runtime!.Deduplication!.OperationId.Should()
+            .Be("service-run-terminal-retry:delivery-1:2");
+
+        publisher.SendException = null;
+        await actor.HandleEventAsync(attemptTwo.TriggerEnvelope);
+
+        publisher.Sends.Should().ContainSingle();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+        actor.State.TerminalNotificationAttempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task LaterAttemptSchedulerFailure_ShouldRemainObservableWithoutSelfFallbackOrLoop()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+        await actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+        var attemptOne = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+        scheduler.ScheduleException = new InvalidOperationException("simulated later scheduler failure");
+
+        var retry = () => actor.HandleEventAsync(attemptOne);
+
+        await retry.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated later scheduler failure");
+        publisher.Publications.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().ContainSingle();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
+        actor.State.TerminalNotificationAttempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RetrySchedulerCancellation_ShouldPropagateWithoutSelfFallback()
+    {
+        var scheduler = new RecordingRuntimeCallbackScheduler
+        {
+            ScheduleException = new OperationCanceledException("simulated scheduler cancellation"),
+        };
+        var publisher = new RecordingEventPublisher
+        {
+            SendException = new InvalidOperationException("simulated terminal notification failure"),
+        };
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+
+        var terminal = () => actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+
+        await terminal.Should().ThrowAsync<OperationCanceledException>()
+            .WithMessage("simulated scheduler cancellation");
+        publisher.Publications.Should().BeEmpty();
+        scheduler.TimeoutRequests.Should().BeEmpty();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Prepared);
+    }
+
+    [Fact]
+    public async Task DispatchedCommitFailure_ShouldScheduleRetryAndRethrowCommitFailure()
+    {
+        var eventStore = new FailOnceDispatchedEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var publisher = new RecordingEventPublisher();
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent(),
+            services => services.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
+        actor.EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ServiceRunState>(eventStore);
+        actor.EventPublisher = publisher;
+        await RegisterNotificationRunAsync(actor, DateTimeOffset.UtcNow.AddMinutes(1));
+
+        var terminal = () => actor.HandleRoleChatCompletedAsync(BuildTerminalEvent(actor.Id));
+
+        await terminal.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("simulated dispatched event commit failure");
+        publisher.Sends.Should().ContainSingle();
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled);
+        actor.State.TerminalNotificationAttempt.Should().Be(1);
+        var callback = scheduler.TimeoutRequests.Should().ContainSingle().Subject.TriggerEnvelope;
+
+        await actor.HandleEventAsync(callback);
+
+        publisher.Sends.Should().HaveCount(2);
+        publisher.Sends.Select(static send => send.Options!.Delivery!.DeduplicationOperationId)
+            .Should().OnlyContain(static operationId => operationId == "service-run-terminal-delivery-1");
+        actor.State.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Dispatched);
+    }
+
+    [Fact]
     public async Task RetryCallbackEnvelopes_ShouldKeepStableCallbackId_AndDeduplicatePerAttempt()
     {
         var scheduler = new RecordingRuntimeCallbackScheduler();
@@ -675,6 +830,129 @@ public sealed class ServiceRunGAgentTests
     }
 
     [Fact]
+    public void TerminalDeliveryEventAttempts_ShouldUseAdditiveOptionalFieldThree()
+    {
+        ServiceRunTerminalNotificationDispatchedEvent.Descriptor.FindFieldByNumber(3)!.Name
+            .Should().Be("attempt");
+        ServiceRunTerminalNotificationExpiredEvent.Descriptor.FindFieldByNumber(3)!.Name
+            .Should().Be("attempt");
+
+        var currentDispatched = new ServiceRunTerminalNotificationDispatchedEvent { Attempt = 0 };
+        var currentExpired = new ServiceRunTerminalNotificationExpiredEvent { Attempt = 0 };
+        currentDispatched.HasAttempt.Should().BeTrue();
+        currentExpired.HasAttempt.Should().BeTrue();
+
+        var legacyDispatched = ServiceRunTerminalNotificationDispatchedEvent.Parser.ParseFrom(
+            new ServiceRunTerminalNotificationDispatchedEvent
+            {
+                DeliveryId = "delivery-1",
+                DispatchedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }.ToByteArray());
+        var legacyExpired = ServiceRunTerminalNotificationExpiredEvent.Parser.ParseFrom(
+            new ServiceRunTerminalNotificationExpiredEvent
+            {
+                DeliveryId = "delivery-1",
+                ExpiredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            }.ToByteArray());
+        legacyDispatched.HasAttempt.Should().BeFalse();
+        legacyExpired.HasAttempt.Should().BeFalse();
+    }
+
+    [Fact]
+    public void TerminalDeliveryReducers_ShouldRejectInvalidEventsWithoutMutatingState()
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent());
+        var state = BuildPendingDeliveryState();
+
+        AssertRejected(actor, state, RetryScheduled("delivery-other", 1, "wrong-delivery"));
+        AssertRejected(actor, state, RetryScheduled("delivery-1", 2, "skipped-prepared"));
+        state = Reduce(actor, state, RetryScheduled("delivery-1", 1, "callback-1"));
+        AssertRejected(actor, state, RetryScheduled("delivery-1", 1, "stale"));
+        AssertRejected(actor, state, RetryScheduled("delivery-1", 3, "skipped"));
+        AssertRejected(actor, state, new ServiceRunTerminalNotificationDispatchedEvent
+        {
+            DeliveryId = "delivery-other",
+            Attempt = 1,
+        });
+        AssertRejected(actor, state, new ServiceRunTerminalNotificationDispatchedEvent
+        {
+            DeliveryId = "delivery-1",
+            Attempt = 0,
+        });
+        AssertRejected(actor, state, new ServiceRunTerminalNotificationExpiredEvent
+        {
+            DeliveryId = "delivery-1",
+            Attempt = 3,
+        });
+
+        state = Reduce(actor, state, new ServiceRunTerminalNotificationExpiredEvent
+        {
+            DeliveryId = "delivery-1",
+            Attempt = 2,
+        });
+        state.TerminalNotificationDeliveryStatus.Should()
+            .Be(ServiceRunTerminalNotificationDeliveryStatus.Expired);
+        state.TerminalNotificationAttempt.Should().Be(2);
+        AssertRejected(actor, state, new ServiceRunTerminalNotificationPreparedEvent
+        {
+            Notification = new ServiceRunTerminalNotification
+            {
+                DeliveryId = "delivery-2",
+                RunId = "run-1",
+            },
+        });
+        AssertRejected(actor, state, RetryScheduled("delivery-1", 3, "terminal-reopen"));
+        AssertRejected(actor, state, new ServiceRunTerminalNotificationDispatchedEvent
+        {
+            DeliveryId = "delivery-1",
+            Attempt = 2,
+        });
+        AssertRejected(actor, state, new ServiceRunTerminalNotificationExpiredEvent
+        {
+            DeliveryId = "delivery-1",
+            Attempt = 2,
+        });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void LegacyTerminalDeliveryEventWithoutAttempt_ShouldPreservePendingReplay(bool dispatched)
+    {
+        var actor = GAgentServiceTestKit.CreateStatefulAgent<ServiceRunGAgent, ServiceRunState>(
+            new InMemoryEventStore(),
+            "service-run:run-1",
+            static () => new ServiceRunGAgent());
+        var state = BuildPendingDeliveryState();
+        state.TerminalNotificationDeliveryStatus =
+            ServiceRunTerminalNotificationDeliveryStatus.RetryScheduled;
+        state.TerminalNotificationAttempt = 3;
+        IMessage legacy = dispatched
+            ? ServiceRunTerminalNotificationDispatchedEvent.Parser.ParseFrom(
+                new ServiceRunTerminalNotificationDispatchedEvent
+                {
+                    DeliveryId = "delivery-1",
+                }.ToByteArray())
+            : ServiceRunTerminalNotificationExpiredEvent.Parser.ParseFrom(
+                new ServiceRunTerminalNotificationExpiredEvent
+                {
+                    DeliveryId = "delivery-1",
+                }.ToByteArray());
+
+        var reduced = Reduce(actor, state, legacy);
+
+        reduced.Should().NotBeSameAs(state);
+        reduced.TerminalNotificationDeliveryStatus.Should().Be(dispatched
+            ? ServiceRunTerminalNotificationDeliveryStatus.Dispatched
+            : ServiceRunTerminalNotificationDeliveryStatus.Expired);
+        reduced.TerminalNotificationAttempt.Should().Be(3);
+        reduced.LastAppliedEventVersion.Should().Be(state.LastAppliedEventVersion + 1);
+    }
+
+    [Fact]
     public async Task HandleRoleChatCompletedAsync_ShouldMapMatchingCommittedTerminalFact()
     {
         var publisher = new RecordingEventPublisher();
@@ -818,6 +1096,60 @@ public sealed class ServiceRunGAgentTests
         actor.State.Record!.Status.Should().Be(ServiceRunStatus.Accepted);
     }
 
+    private static void AssertRejected(
+        ServiceRunGAgent actor,
+        ServiceRunState state,
+        IMessage evt)
+    {
+        var before = state.ToByteArray();
+
+        var reduced = Reduce(actor, state, evt);
+
+        reduced.Should().BeSameAs(state);
+        reduced.ToByteArray().Should().Equal(before);
+        reduced.LastAppliedEventVersion.Should().Be(state.LastAppliedEventVersion);
+        reduced.LastEventId.Should().Be(state.LastEventId);
+    }
+
+    private static ServiceRunState Reduce(
+        ServiceRunGAgent actor,
+        ServiceRunState state,
+        IMessage evt)
+    {
+        var transition = typeof(ServiceRunGAgent).GetMethod(
+            "TransitionState",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        transition.Should().NotBeNull();
+        return (ServiceRunState)transition!.Invoke(actor, [state, evt])!;
+    }
+
+    private static ServiceRunState BuildPendingDeliveryState() =>
+        new()
+        {
+            Record = BuildRecord("run-1"),
+            PendingTerminalNotification = new ServiceRunTerminalNotification
+            {
+                DeliveryId = "delivery-1",
+                RunId = "run-1",
+            },
+            TerminalNotificationDeliveryStatus =
+                ServiceRunTerminalNotificationDeliveryStatus.Prepared,
+            LastAppliedEventVersion = 41,
+            LastEventId = "before-rejected-delivery-event",
+        };
+
+    private static ServiceRunTerminalNotificationRetryScheduledEvent RetryScheduled(
+        string deliveryId,
+        int attempt,
+        string callbackId) =>
+        new()
+        {
+            DeliveryId = deliveryId,
+            Attempt = attempt,
+            CallbackId = callbackId,
+            RetryAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddSeconds(1)),
+        };
+
     private static ServiceRunRecord BuildRecord(string runId) =>
         new()
         {
@@ -880,11 +1212,31 @@ public sealed class ServiceRunGAgentTests
                 "service-run:tenant-1:svc-1:run-1"),
         };
 
+    private static EventEnvelope BuildSelfEnvelope(
+        string actorId,
+        IMessage payload,
+        EventEnvelopePublishOptions options) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
+            Runtime = new EnvelopeRuntime
+            {
+                Deduplication = new DeliveryDeduplication
+                {
+                    OperationId = options.Delivery!.DeduplicationOperationId,
+                },
+            },
+        };
+
     private sealed class RecordingEventPublisher : IEventPublisher
     {
         public Exception? SendException { get; set; }
 
         public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> Sends { get; } = [];
+
+        public List<(IMessage Event, TopologyAudience Audience, EventEnvelopePublishOptions? Options)> Publications { get; } = [];
 
         public Task PublishAsync<TEvent>(
             TEvent evt,
@@ -892,8 +1244,12 @@ public sealed class ServiceRunGAgentTests
             CancellationToken ct = default,
             EventEnvelope? sourceEnvelope = null,
             EventEnvelopePublishOptions? options = null)
-            where TEvent : IMessage =>
-            Task.CompletedTask;
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            Publications.Add((evt, audience, options));
+            return Task.CompletedTask;
+        }
 
         public Task SendToAsync<TEvent>(
             string targetActorId,
@@ -903,6 +1259,7 @@ public sealed class ServiceRunGAgentTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
+            ct.ThrowIfCancellationRequested();
             if (SendException != null)
                 throw SendException;
 
@@ -913,6 +1270,8 @@ public sealed class ServiceRunGAgentTests
 
     private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
     {
+        public Exception? ScheduleException { get; set; }
+
         public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
@@ -920,6 +1279,8 @@ public sealed class ServiceRunGAgentTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            if (ScheduleException != null)
+                throw ScheduleException;
             TimeoutRequests.Add(new RuntimeCallbackTimeoutRequest
             {
                 ActorId = request.ActorId,
@@ -987,5 +1348,43 @@ public sealed class ServiceRunGAgentTests
         private bool IsFailedRetryScheduledEvent(StateEvent stateEvent) =>
             stateEvent.EventData.Is(ServiceRunTerminalNotificationRetryScheduledEvent.Descriptor) &&
             stateEvent.EventData.Unpack<ServiceRunTerminalNotificationRetryScheduledEvent>().Attempt == failedAttempt;
+    }
+
+    private sealed class FailOnceDispatchedEventStore : IEventStore
+    {
+        private readonly InMemoryEventStore _inner = new();
+        private bool _failed;
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var buffered = events.ToArray();
+            if (!_failed && buffered.Any(stateEvent =>
+                    stateEvent.EventData.Is(ServiceRunTerminalNotificationDispatchedEvent.Descriptor)))
+            {
+                _failed = true;
+                throw new InvalidOperationException("simulated dispatched event commit failure");
+            }
+
+            return _inner.AppendAsync(agentId, buffered, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId,
+            long? fromVersion = null,
+            CancellationToken ct = default) =>
+            _inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            _inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(
+            string agentId,
+            long toVersion,
+            CancellationToken ct = default) =>
+            _inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 }
