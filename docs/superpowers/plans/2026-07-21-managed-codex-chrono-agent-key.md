@@ -16,7 +16,7 @@
 - The raw NyxID key exists only in lifecycle/proxy method-local memory and `ISecretVault`.
 - The key scope is exactly `proxy`; wildcard service/node grants are forbidden.
 - Only the exact user-owned `chrono-sandbox` UserService is granted; `chrono-llm-public` is readiness evidence, not a key grant.
-- The persistent key terminates at NyxID and never enters chrono-sandbox, codex-runner, workflow state, envelopes, logs, or results.
+- Aevatar sends the persistent key only as the NyxID proxy Authorization value and never serializes it into chrono-sandbox, codex-runner, workflow state, envelopes, logs, or results. End-to-end non-forwarding relies on the internal P0 NyxID policy trust boundary described in the lifecycle-hardening plan and #2899.
 - Every production behavior starts with a failing focused test and a verified RED result.
 - Update canonical and operational documentation with the same runtime contract.
 
@@ -102,7 +102,7 @@ Create the key only after exact service/readiness validation. Validate the NyxID
 
 - [ ] **Step 4: Write rotation/revocation and Vault isolation tests, then verify RED**
 
-Assert rotation uses NyxID rotate plus `ISecretVault.RotateAsync`, previous key becomes unusable, wrong purpose/owner/subject fails resolution, revoke executes independent NyxID/Vault tracks, and serialized results never contain `full_key`.
+Assert rotation uses NyxID rotation plus a distinct deterministic Vault reference for the new key, previous key material becomes unusable, wrong purpose/owner/subject fails resolution, revoke executes independent NyxID/Vault tracks, and serialized results never contain `full_key`.
 
 - [ ] **Step 5: Implement rotate/revoke and verify GREEN**
 

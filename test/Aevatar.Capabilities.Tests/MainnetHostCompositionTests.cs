@@ -3,6 +3,9 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Application.CodexExecution;
+using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -161,11 +164,13 @@ public sealed class MainnetHostCompositionTests
         readModelDescriptors.Select(static descriptor => descriptor.Name)
             .Should()
             .OnlyHaveUniqueItems();
-        readModelDescriptors.Should().HaveCount(18);
+        readModelDescriptors.Should().HaveCount(19);
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "workflow-external-approval-continuation");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "user-agent-api-key-revocation");
+        readModelDescriptors.Should()
+            .ContainSingle(static descriptor => descriptor.Name == "managed-codex-credential");
         readModelDescriptors.Should()
             .ContainSingle(static descriptor => descriptor.Name == "streaming-proxy-chat-session");
         readModelDescriptors.Should()
@@ -185,6 +190,14 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<IProjectionDocumentReader<ExternalIdentityBindingDocument, string>>()
             .Should()
             .NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<ManagedCodexCredentialDocument, string>>()
+            .Should()
+            .NotBeNull();
+        app.Services.GetRequiredService<IManagedCodexCredentialLifecycle>().Should().NotBeNull();
+        app.Services.GetServices<ICodexExecutionPort>()
+            .Should()
+            .ContainSingle(static port =>
+                port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox);
         app.Services.GetServices<IHealthProbeExecutor>()
             .Select(static executor => executor.Kind)
             .Should()

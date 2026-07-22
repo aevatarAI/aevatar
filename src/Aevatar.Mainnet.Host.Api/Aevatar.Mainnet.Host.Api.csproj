@@ -55,7 +55,8 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ToolSetRegistry\Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
-    <ProjectReference Include="..\Aevatar.AI.Infrastructure.OpenSandbox\Aevatar.AI.Infrastructure.OpenSandbox.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Application.CodexExecution\Aevatar.AI.Application.CodexExecution.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="BackendConsole\admin.html" />
