@@ -1297,6 +1297,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         foreach (var source in _toolSources)
         {
             var tools = await source.DiscoverToolsAsync(ct);
+            var excludedDirectChannelToolNames = new List<string>();
+            var excludedHumanSessionToolNames = new List<string>();
             foreach (var tool in tools)
             {
                 // Channel-side exclusion by GENERIC capability, not by tool name: a tool that
@@ -1307,7 +1309,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 // workflow allowlist path; the exclusion is channel-side only. No channel agent
                 // depended on these tools, so this changes no existing channel flow.
                 if (IsExcludedFromDirectChannelChat(tool))
+                {
+                    excludedDirectChannelToolNames.Add(tool.Name);
                     continue;
+                }
 
                 // Issue #2580 Item 2: in a channel-relay turn the effective credential is a
                 // bot-class relay/API-key token that the broker rejects on human-only surfaces, so a
@@ -1315,13 +1320,36 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 // turns — never offered to the model, never registered so it cannot be invoked.
                 // Console/studio human-session turns keep the full set. Name-agnostic, like above.
                 if (isChannelTurn && DeclaresCapability(tool, AgentToolCapabilities.RequiresHumanSession))
+                {
+                    excludedHumanSessionToolNames.Add(tool.Name);
                     continue;
+                }
 
                 discovered[tool.Name] = tool;
             }
+
+            if (isChannelTurn)
+            {
+                _logger.LogInformation(
+                    "Channel tool source discovery: source={SourceType}, discoveredTools={DiscoveredTools}, excludedDirectChannelTools={ExcludedDirectChannelTools}, excludedHumanSessionTools={ExcludedHumanSessionTools}",
+                    source.GetType().Name,
+                    FormatToolNames(tools.Select(static tool => tool.Name)),
+                    FormatToolNames(excludedDirectChannelToolNames),
+                    FormatToolNames(excludedHumanSessionToolNames));
+            }
         }
 
-        return discovered.Values.ToArray();
+        var effectiveTools = discovered.Values.ToArray();
+        if (isChannelTurn)
+        {
+            _logger.LogInformation(
+                "Channel effective tool discovery completed: sourceCount={SourceCount}, toolCount={ToolCount}, tools={Tools}",
+                _toolSources.Count,
+                effectiveTools.Length,
+                FormatToolNames(effectiveTools.Select(static tool => tool.Name)));
+        }
+
+        return effectiveTools;
     }
 
     // A tool is hidden from the direct channel/chat surface when it self-declares the
@@ -1335,6 +1363,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         tool is IAgentToolCapabilityDescriptor descriptor &&
         descriptor.Capabilities.Any(declared =>
             string.Equals(declared, capability, StringComparison.OrdinalIgnoreCase));
+
+    private static string FormatToolNames(IEnumerable<string?> toolNames)
+    {
+        var names = toolNames
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name!.Trim())
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+        return names.Length == 0 ? "<none>" : string.Join(",", names);
+    }
 
     private ILLMProvider ResolveProvider()
     {
