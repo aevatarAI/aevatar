@@ -18,5 +18,5 @@ public sealed class MainnetNyxIdChatAgentProfileSnapshotSource : INyxIdChatAgent
             : null;
     }
 
-    public AgentProfileSnapshot? GetSnapshotForNewConversation() => _sealedSnapshot?.Clone();
+    public AgentProfileSnapshot? GetSnapshotForNewConversation(string actorId) => _sealedSnapshot?.Clone();
 }

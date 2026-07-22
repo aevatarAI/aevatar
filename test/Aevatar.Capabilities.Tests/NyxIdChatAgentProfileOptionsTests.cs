@@ -678,8 +678,8 @@ public sealed class NyxIdChatAgentProfileOptionsTests
             }));
         configuredProfile.ProfileVersion = "mutated-after-startup";
 
-        var first = source.GetSnapshotForNewConversation();
-        var second = source.GetSnapshotForNewConversation();
+        var first = source.GetSnapshotForNewConversation("actor-a");
+        var second = source.GetSnapshotForNewConversation("actor-b");
         first!.ProfileVersion = "caller-mutation";
 
         second.Should().NotBeNull();

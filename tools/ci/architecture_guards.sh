@@ -2111,14 +2111,16 @@ check_system_skill_overlay_dual_seam_injection() {
   fi
 }
 
-# Honest scope: this only asserts the golden-tasks document exists and is non-empty. No eval is
-# executed — there is no eval harness yet. Rename to check_system_skill_overlay_eval_gate once a
-# real runner consumes the tasks and its exit code gates CI.
-check_system_skill_overlay_golden_tasks_doc_present() {
+check_system_skill_overlay_eval_docs() {
   local eval_file="tools/eval/system_skill_overlay_golden_tasks.md"
+  local profile_eval_file="tools/eval/nyxid-chat-profile-rollout-matrix.md"
 
   if [ ! -s "${eval_file}" ]; then
     echo "System skill overlay golden-tasks document is required (tools/eval/system_skill_overlay_golden_tasks.md)."
+    exit 1
+  fi
+  if [ ! -s "${profile_eval_file}" ]; then
+    echo "NyxID chat profile rollout evaluation matrix is required."
     exit 1
   fi
 }
@@ -2174,8 +2176,11 @@ check_orchestration_class_guard \
   190 \
   10
 check_system_skill_overlay_dual_seam_injection
-check_system_skill_overlay_golden_tasks_doc_present
+check_system_skill_overlay_eval_docs
 check_system_skill_overlay_set_source
+
+echo "Running agent profile governance guard..."
+bash tools/ci/agent_profile_governance_guard.sh
 
 echo "Running CQRS/EventSourcing boundary guard..."
 bash tools/ci/cqrs_eventsourcing_boundary_guard.sh

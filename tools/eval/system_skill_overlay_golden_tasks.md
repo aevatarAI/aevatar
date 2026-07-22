@@ -1,10 +1,9 @@
 # System Skill Overlay Golden Tasks
 
-Status: scaffold only — no eval harness exists yet, and CI only checks that this
-document is present and non-empty (`check_system_skill_overlay_golden_tasks_doc_present`
-in `tools/ci/architecture_guards.sh`). When a real eval runner lands it should
-consume these tasks and assert the invariants below against direct-chat and
-channel reply paths.
+Status: the dynamic overlay tasks remain a human-readable review source. The
+immutable NyxID chat profile has a separate executable 64-case xUnit matrix and
+typed rollout report gate; see `nyxid-chat-profile-rollout-matrix.md`. CI checks
+both documents and runs the profile governance behavior test.
 
 ## Task 1: Kernel Plus Overlay Composition
 

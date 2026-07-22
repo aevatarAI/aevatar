@@ -843,6 +843,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
             return;
         }
 
+        var turnStartedTimestamp = ChatRequestTimeProvider.GetTimestamp();
         var timeoutMs = ResolveLlmTimeoutMs(request);
         var useWorkflowFailureMarker = timeoutMs > 0;
         using var timeoutCts = timeoutMs > 0
@@ -896,6 +897,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
                 llmControl,
                 toolContext,
                 turnCatalog,
+                turnStartedTimestamp,
                 streamCt);
         }
         catch (OperationCanceledException) when (timeoutCts is { IsCancellationRequested: true })
@@ -934,6 +936,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
 
         // ─── Detect approval-pending tool result and set up continuation ───
         var pendingApproval = DetectPendingApproval(replayRecord, request);
+        OnPlanOrHandoffObserved(pendingApproval is not null);
         if (pendingApproval != null)
         {
             await PersistDomainEventAsync(new PendingToolApprovalPersistedEvent
@@ -1126,11 +1129,20 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         CancellationToken ct) =>
         Task.FromResult<AgentProfileTurnCatalogMaterialization?>(null);
 
+    protected virtual void OnPlanOrHandoffObserved(bool handoffPending)
+    {
+    }
+
+    protected virtual void OnFirstStreamedOutputObserved(TimeSpan elapsed)
+    {
+    }
+
     private async Task<SessionReplayRecord> ExecuteStreamingChatAsync(
         ChatRequestEvent request,
         LLMControlContext llmControl,
         AgentToolExecutionContext toolContext,
         AgentProfileTurnCatalog? turnCatalog,
+        long turnStartedTimestamp,
         CancellationToken streamCt)
     {
         // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
@@ -1141,6 +1153,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         var contentParts = new List<ContentPart>();
         var toolReceipts = new List<AgentToolReceipt>();
         TokenUsage? usage = null;
+        var firstStreamedOutputObserved = false;
         // Refactor (iter56/cluster-917-workflow-llm-control-metadata): old=Headers/Metadata bag for control fields, new=typed ChatRequestEvent.Telegram
         IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
@@ -1162,6 +1175,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent, IVoicePrese
         {
             if (chunk.Usage != null)
                 usage = chunk.Usage;
+
+            if (!firstStreamedOutputObserved &&
+                (!string.IsNullOrEmpty(chunk.DeltaContent) ||
+                 chunk.DeltaContentPart != null ||
+                 !string.IsNullOrEmpty(chunk.DeltaReasoningContent)))
+            {
+                firstStreamedOutputObserved = true;
+                OnFirstStreamedOutputObserved(
+                    ChatRequestTimeProvider.GetElapsedTime(turnStartedTimestamp));
+            }
 
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {

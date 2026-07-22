@@ -58,6 +58,7 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="Profiles\nyxid-chat\*.profile.pb.json" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
     <EmbeddedResource Include="Status\status.html" />

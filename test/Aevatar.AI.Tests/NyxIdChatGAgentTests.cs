@@ -1,9 +1,11 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Diagnostics.Metrics;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Observability;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
@@ -55,6 +57,7 @@ public class NyxIdChatGAgentTests
         result.Succeeded.Should().BeTrue();
         source.CallCount.Should().Be(1);
         runtime.CreateCalls.Should().ContainSingle();
+        source.ActorIds.Should().Equal(runtime.CreateCalls.Select(static call => call.Id!));
         command.AgentProfile.Should().NotBeNull();
         AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
         command.AgentProfile.Should().NotBeSameAs(source.Snapshot);
@@ -722,6 +725,131 @@ public class NyxIdChatGAgentTests
     }
 
     [Fact]
+    public async Task HandleChatRequest_ShadowTurn_ShouldObserveRouteWithoutChangingLegacyExecution()
+    {
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+            new DelegateTool("legacy", _ => "legacy complete"),
+        };
+        var registry = new StaticProfileToolSetRegistry("profile.route", tools);
+        var fetcher = new RecordingExactFetcher(ExactRemoteSkillFetchResult.Success(
+            ExactSkillGuid,
+            ExactSkillVersion,
+            ExactSkillName,
+            ExactSkillPublisher,
+            "hash-alpha",
+            "---\nname: skill-alpha\n---\nSelected turn instructions."));
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            registry,
+            new NoMatchClassifier(),
+            fetcher);
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        const string actorId = "nyxid-chat-shadow-zero-side-effects";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedShadowProfile() });
+        var llm = new StreamingToolLoopProviderFactory(
+        [
+            [new LLMStreamChunk { DeltaContent = "done" }],
+        ]);
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            llm,
+            [new StaticToolSource(tools)],
+            turnCatalogMaterializer: materializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "/alpha run",
+            SessionId = "shadow-zero-side-effects-session",
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload { NyxIdAccessToken = "turn-token" },
+            },
+        });
+
+        registry.ResolveCount.Should().Be(1);
+        fetcher.CallCount.Should().Be(0);
+        llm.StreamRequests.Should().ContainSingle();
+        llm.StreamRequests[0].ToolContext!.ToolVisibility.IsRestricted.Should().BeFalse();
+        llm.StreamRequests[0].Messages.Single(static message => message.Role == "system").Content
+            .Should().NotContain("Agent profile:").And.NotContain("Selected turn instructions.");
+        var events = await provider.GetRequiredService<IEventStore>().GetEventsAsync(actorId);
+        events.Should().NotContain(stateEvent =>
+            stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor));
+    }
+
+    [Fact]
+    public async Task HandleChatRequest_EnforcedTurn_ShouldRecordFiveRealTelemetrySeams()
+    {
+        var seams = new List<string>();
+        using var meterListener = new MeterListener();
+        meterListener.InstrumentPublished = (instrument, listener) =>
+        {
+            if (instrument.Meter.Name == AgentProfileTelemetry.MeterName &&
+                instrument.Name == "aevatar.agent_profile.seam.events")
+            {
+                listener.EnableMeasurementEvents(instrument);
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "aevatar.agent_profile.seam" && tag.Value?.ToString() is { } seam)
+                    seams.Add(seam);
+            }
+        });
+        meterListener.Start();
+
+        var tools = new IAgentTool[]
+        {
+            new DelegateTool("recovery", _ => "recovered"),
+            new DelegateTool("task", _ => "task complete"),
+        };
+        var materializer = new AgentProfileTurnCatalogMaterializer(
+            new StaticProfileToolSetRegistry("profile.route", tools),
+            new NoMatchClassifier(),
+            new RecordingExactFetcher(ExactRemoteSkillFetchResult.Success(
+                ExactSkillGuid,
+                ExactSkillVersion,
+                ExactSkillName,
+                ExactSkillPublisher,
+                "hash-alpha",
+                "---\nname: skill-alpha\n---\nSelected turn instructions.")));
+        using var provider = BuildServiceProvider(historyCommandPort: new RecordingChatHistoryCommandPort());
+        const string actorId = "nyxid-chat-five-telemetry-seams";
+        await AppendCommittedEventsAsync(
+            provider,
+            actorId,
+            new AgentProfileBoundEvent { Profile = BuildSealedEnforcedProfile() });
+        var agent = CreateAgent(
+            provider,
+            actorId,
+            new StreamingToolLoopProviderFactory([[new LLMStreamChunk { DeltaContent = "done" }]]),
+            [new StaticToolSource(tools)],
+            turnCatalogMaterializer: materializer);
+
+        await agent.ActivateAsync();
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "/alpha run",
+            SessionId = "five-telemetry-seams-session",
+            ToolContext = new AgentToolExecutionContextPayload
+            {
+                Credentials = new AgentToolCredentialsPayload { NyxIdAccessToken = "turn-token" },
+            },
+        });
+
+        seams.Should().Contain(["route", "exact_fetch", "materialize", "plan_handoff", "first_stream_output"]);
+    }
+
+    [Fact]
     public async Task HandleChatRequest_BoundTurnWithoutMaterializer_ShouldRejectAllTools()
     {
         await AssertBoundTurnMaterializationFailureRejectsAllToolsAsync(
@@ -1180,6 +1308,16 @@ public class NyxIdChatGAgentTests
         return AgentProfileSnapshotCodec.Seal(profile);
     }
 
+    private static AgentProfileSnapshot BuildSealedShadowProfile()
+    {
+        var profile = BuildSealedEnforcedProfile();
+        profile.DeterministicPolicySha256 = ByteString.Empty;
+        profile.ProfileVersion = "profile-shadow-v1";
+        profile.PolicyRevision = "policy-shadow-v1";
+        profile.ActivationMode = AgentProfileActivationMode.Shadow;
+        return AgentProfileSnapshotCodec.Seal(profile);
+    }
+
     private sealed class StaticChatRouteFallbackProvider(string modelName) : IChatRouteFallbackProvider
     {
         public ChatRouteDecision GetFallbackDecision() => new()
@@ -1221,10 +1359,12 @@ public class NyxIdChatGAgentTests
     {
         public AgentProfileSnapshot Snapshot { get; } = snapshot;
         public int CallCount { get; private set; }
+        public List<string> ActorIds { get; } = [];
 
-        public AgentProfileSnapshot? GetSnapshotForNewConversation()
+        public AgentProfileSnapshot? GetSnapshotForNewConversation(string actorId)
         {
             CallCount++;
+            ActorIds.Add(actorId);
             return Snapshot.Clone();
         }
     }

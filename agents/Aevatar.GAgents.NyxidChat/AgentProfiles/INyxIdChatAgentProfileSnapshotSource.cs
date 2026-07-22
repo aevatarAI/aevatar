@@ -4,5 +4,5 @@ namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
 public interface INyxIdChatAgentProfileSnapshotSource
 {
-    AgentProfileSnapshot? GetSnapshotForNewConversation();
+    AgentProfileSnapshot? GetSnapshotForNewConversation(string actorId);
 }

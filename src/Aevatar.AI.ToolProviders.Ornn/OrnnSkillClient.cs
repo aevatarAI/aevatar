@@ -141,7 +141,7 @@ public sealed class OrnnSkillClient
         }
     }
 
-    internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(
+    public Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(
         string accessToken,
         string guid,
         string literalVersion,
@@ -152,7 +152,7 @@ public sealed class OrnnSkillClient
             guid,
             ct);
 
-    internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(
+    public Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(
         string accessToken,
         string guid,
         string literalVersion,
@@ -326,6 +326,66 @@ public sealed class OrnnSkillClient
         {
             _logger.LogWarning(ex, "Ornn get skillset failed for '{IdOrName}'", idOrName);
             return null;
+        }
+    }
+
+    public Task<OrnnSkillSet?> GetExactSkillSetAsync(
+        string accessToken,
+        string skillsetGuid,
+        string literalVersion,
+        CancellationToken ct = default)
+    {
+        ValidateExactReference(skillsetGuid, literalVersion, nameof(skillsetGuid));
+        var path = $"/api/v1/skillsets/{Uri.EscapeDataString(skillsetGuid)}?version={Uri.EscapeDataString(literalVersion)}";
+        return GetExactAsync<OrnnSkillSet>(accessToken, path, "skillset", skillsetGuid, literalVersion, ct);
+    }
+
+    public Task<OrnnSkillSetClosure?> GetExactSkillSetClosureAsync(
+        string accessToken,
+        string skillsetGuid,
+        string literalVersion,
+        CancellationToken ct = default)
+    {
+        ValidateExactReference(skillsetGuid, literalVersion, nameof(skillsetGuid));
+        var path = $"/api/v1/skillsets/{Uri.EscapeDataString(skillsetGuid)}/closure?version={Uri.EscapeDataString(literalVersion)}";
+        return GetExactAsync<OrnnSkillSetClosure>(accessToken, path, "skillset closure", skillsetGuid, literalVersion, ct);
+    }
+
+    public async Task<OrnnSkillSetPublishResponse> CreateSkillSetAsync(
+        string accessToken,
+        OrnnSkillSetPublishRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: "/api/v1/skillsets",
+                method: "POST",
+                body: JsonSerializer.Serialize(request, JsonOptions),
+                extraHeaders: null,
+                ct: linkedCts.Token);
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return new OrnnSkillSetPublishResponse(false, null, proxyError.Detail);
+
+            var envelope = JsonSerializer.Deserialize<OrnnApiResponse<OrnnSkillSet>>(response, JsonOptions);
+            return envelope?.Data is null
+                ? new OrnnSkillSetPublishResponse(false, null, envelope?.Error ?? "Ornn returned no skillset.")
+                : new OrnnSkillSetPublishResponse(true, envelope.Data);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "Ornn skillset publish failed for '{SkillsetName}'", request.Name);
+            return new OrnnSkillSetPublishResponse(false, null, ex.Message);
         }
     }
 
@@ -523,6 +583,62 @@ public sealed class OrnnSkillClient
             ? prop.GetString()
             : null;
 
+    private async Task<T?> GetExactAsync<T>(
+        string accessToken,
+        string path,
+        string resourceKind,
+        string guid,
+        string literalVersion,
+        CancellationToken ct)
+        where T : class
+    {
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "GET",
+                body: null,
+                extraHeaders: null,
+                ct: linkedCts.Token);
+            if (TryUnwrapNyxIdProxyError(response, out _))
+                return null;
+
+            return JsonSerializer.Deserialize<OrnnApiResponse<T>>(response, JsonOptions)?.Data;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                ex,
+                "Ornn exact {ResourceKind} read failed for guid={Guid} version={LiteralVersion}",
+                resourceKind,
+                guid,
+                literalVersion);
+            return null;
+        }
+    }
+
+    private static void ValidateExactReference(string guid, string literalVersion, string parameterName)
+    {
+        if (!Guid.TryParseExact(guid, "D", out _))
+            throw new ArgumentException("Exact Ornn references require a canonical GUID.", parameterName);
+        if (string.IsNullOrWhiteSpace(literalVersion) ||
+            literalVersion.Split('.', StringSplitOptions.None) is not [var major, var minor] ||
+            !int.TryParse(major, out _) ||
+            !int.TryParse(minor, out _))
+        {
+            throw new ArgumentException("Exact Ornn references require a literal major.minor version.", nameof(literalVersion));
+        }
+    }
+
     private sealed record NyxIdProxyError(int Status, string Detail);
 }
 
@@ -564,7 +680,7 @@ public sealed class OrnnExactSkillDetail
     public string? CreatedBy { get; set; }
 }
 
-internal sealed record OrnnExactSkillReadResult<T>(T? Value, int? ProxyStatus, string? FailureDetail)
+public sealed record OrnnExactSkillReadResult<T>(T? Value, int? ProxyStatus, string? FailureDetail)
     where T : class
 {
     public static OrnnExactSkillReadResult<T> Success(T? value) => new(value, null, null);
@@ -578,6 +694,13 @@ public sealed class OrnnSkillMetadata
     public string? Category { get; set; }
     [JsonPropertyName("tag")]
     public List<string>? Tags { get; set; }
+    public List<OrnnSkillToolDeclaration>? Tools { get; set; }
+}
+
+public sealed class OrnnSkillToolDeclaration
+{
+    public string? Tool { get; set; }
+    public string? Type { get; set; }
 }
 
 public sealed class OrnnSkillJson
@@ -595,11 +718,41 @@ public sealed class OrnnSkillSet
 {
     public string? Guid { get; set; }
     public string? Name { get; set; }
+    public string? Version { get; set; }
+    public string? LatestVersion { get; set; }
+    public string? CreatedBy { get; set; }
     /// <summary>Set-level master prompt authored on the skillset itself.</summary>
     public string? Instructions { get; set; }
     public bool IsPrivate { get; set; }
     public List<OrnnSkillSetMember> Members { get; set; } = [];
 }
+
+public sealed class OrnnSkillSetClosure
+{
+    public string? Instructions { get; set; }
+    public List<OrnnSkillSetClosureItem> Items { get; set; } = [];
+}
+
+public sealed class OrnnSkillSetClosureItem
+{
+    public string? Guid { get; set; }
+    public string? Name { get; set; }
+    public string? Version { get; set; }
+}
+
+public sealed record OrnnSkillSetPublishRequest(
+    string Name,
+    string Description,
+    string Instructions,
+    string Kind,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<string> Members,
+    string Version);
+
+public sealed record OrnnSkillSetPublishResponse(
+    bool Succeeded,
+    OrnnSkillSet? Skillset,
+    string? Error = null);
 
 /// <summary>
 /// One skillset member. The upstream serializes members either as <c>"name@version"</c> strings or as

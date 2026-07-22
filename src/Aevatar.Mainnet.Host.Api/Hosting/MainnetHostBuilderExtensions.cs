@@ -52,6 +52,7 @@ using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
+using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -153,6 +154,9 @@ public static class MainnetHostBuilderExtensions
         // Authentication: config-driven, provider-agnostic
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
+        builder.Services.AddSingleton(MainnetAgentProfileRolloutSelector.Create(
+            builder.Configuration,
+            builder.Environment.ContentRootPath));
         builder.Services.AddNyxIdChat(builder.Configuration);
         AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
@@ -382,8 +386,8 @@ public static class MainnetHostBuilderExtensions
             ServiceDescriptor.Singleton<IValidateOptions<NyxIdChatAgentProfileOptions>,
                 NyxIdChatAgentProfileOptionsValidator>());
         builder.Services.Replace(
-            ServiceDescriptor.Singleton<INyxIdChatAgentProfileSnapshotSource,
-                MainnetNyxIdChatAgentProfileSnapshotSource>());
+            ServiceDescriptor.Singleton<INyxIdChatAgentProfileSnapshotSource>(serviceProvider =>
+                serviceProvider.GetRequiredService<MainnetAgentProfileRolloutSelector>()));
     }
 
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)

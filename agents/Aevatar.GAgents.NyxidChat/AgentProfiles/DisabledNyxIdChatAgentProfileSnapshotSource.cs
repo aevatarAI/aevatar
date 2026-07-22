@@ -4,5 +4,5 @@ namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
 
 public sealed class DisabledNyxIdChatAgentProfileSnapshotSource : INyxIdChatAgentProfileSnapshotSource
 {
-    public AgentProfileSnapshot? GetSnapshotForNewConversation() => null;
+    public AgentProfileSnapshot? GetSnapshotForNewConversation(string actorId) => null;
 }

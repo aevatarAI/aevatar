@@ -143,3 +143,13 @@ Instant fleet rollout is forbidden. Rollback disables only the optional global l
 through host configuration (`Aevatar:SystemSkills:Enabled`) or removes the offending
 member from the set. Rollback never disables the built-in floor; do not patch around
 the sourcing or composition contract in runtime code.
+
+## Relationship to immutable agent profiles
+
+This dynamic overlay is not the trust source for an immutable agent profile. Reviewed
+profiles use exact Ornn GUID and literal-version references, bind only when a direct
+conversation is created, and use the separate deployment contract documented in
+[Agent Profile Rollout](agent-profile-rollout.md). Overlay set membership, cached bodies,
+watermarks, name lookup, and the built-in fallback cannot satisfy an exact profile
+closure and never grant profile tools. Mainnet keeps this overlay disabled during the
+initial profile rollout, and relay does not consume the profile new-binding gate.

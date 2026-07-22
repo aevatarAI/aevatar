@@ -40,6 +40,7 @@ using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -87,8 +88,8 @@ public sealed class MainnetHostCompositionTests
         profileOptions.ExternalReference.Should().Be(NyxIdChatAgentProfileOptions.StableExternalReference);
         baseline.RequiredRecoveryToolNames.Should().BeEmpty();
         baseline.DeniedLegacyToolNames.Should().BeEmpty();
-        source.Should().BeOfType<MainnetNyxIdChatAgentProfileSnapshotSource>();
-        source.GetSnapshotForNewConversation().Should().BeNull();
+        source.Should().BeSameAs(app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>());
+        source.GetSnapshotForNewConversation("conversation-a").Should().BeNull();
     }
 
     [Fact]
@@ -147,6 +148,9 @@ public sealed class MainnetHostCompositionTests
         await app.StartAsync();
 
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
+        app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>()
+            .GetSnapshotForNewConversation("new-conversation")
+            .Should().BeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
             .NotBeNull();

@@ -8,6 +8,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Prompting;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Observability;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
@@ -47,6 +48,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     private readonly NyxIdRelayOptions? _relayOptions;
     private readonly TimeProvider _timeProvider;
     private readonly AgentProfileTurnCatalogMaterializer? _turnCatalogMaterializer;
+    private AgentProfileTelemetryContext? _activeAgentProfileTelemetryContext;
     private int _systemSkillOverlayPromptLogCounter;
 
     public NyxIdChatGAgent(
@@ -355,18 +357,27 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         AgentToolExecutionContext toolContext,
         CancellationToken ct)
     {
-        if (State.AgentProfile is null)
+        var profile = State.AgentProfile;
+        if (profile is null)
             return null;
 
         if (_turnCatalogMaterializer is null)
-            return CreateFailClosedPreparation(
+        {
+            var unavailable = CreateFailClosedPreparation(
                 request.SessionId,
                 AgentProfileTurnDegradationReason.MaterializerUnavailable);
+            RecordRouteDecision(unavailable, "materializer_unavailable", 0);
+            return profile.ActivationMode == AgentProfileActivationMode.Shadow
+                ? null
+                : unavailable;
+        }
 
+        var startedTimestamp = _timeProvider.GetTimestamp();
+        AgentProfileTurnAuthorityPreparation preparation;
         try
         {
-            return await _turnCatalogMaterializer.PrepareAsync(
-                State.AgentProfile,
+            preparation = await _turnCatalogMaterializer.PrepareAsync(
+                profile,
                 request.SessionId,
                 request.Prompt ?? string.Empty,
                 Tools.GetAll(),
@@ -380,10 +391,18 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Agent profile turn authority preparation failed closed.");
-            return CreateFailClosedPreparation(
+            preparation = CreateFailClosedPreparation(
                 request.SessionId,
                 AgentProfileTurnDegradationReason.MaterializationFailed);
         }
+
+        RecordRouteDecision(
+            preparation,
+            "observed",
+            _timeProvider.GetElapsedTime(startedTimestamp).TotalMilliseconds);
+        return profile.ActivationMode == AgentProfileActivationMode.Shadow
+            ? null
+            : preparation;
     }
 
     protected override async Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
@@ -392,7 +411,8 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         AgentProfileTurnAuthorityState committedAuthority,
         CancellationToken ct)
     {
-        if (State.AgentProfile is null)
+        var profile = State.AgentProfile;
+        if (profile is null)
             return null;
 
         if (_turnCatalogMaterializer is null)
@@ -402,10 +422,12 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 AgentProfileTurnDegradationReason.MaterializerUnavailable);
         }
 
+        var startedTimestamp = _timeProvider.GetTimestamp();
+        AgentProfileTurnCatalogMaterialization materialization;
         try
         {
-            return await _turnCatalogMaterializer.MaterializeCommittedAsync(
-                State.AgentProfile,
+            materialization = await _turnCatalogMaterializer.MaterializeCommittedAsync(
+                profile,
                 committedAuthority,
                 toolContext.Credentials.NyxIdAccessToken,
                 Tools.GetAll(),
@@ -419,10 +441,106 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Committed agent profile turn materialization failed closed.");
-            return CreateFailClosedMaterialization(
+            materialization = CreateFailClosedMaterialization(
                 committedAuthority,
                 AgentProfileTurnDegradationReason.MaterializationFailed);
         }
+
+        RecordMaterialization(
+            committedAuthority,
+            materialization,
+            _timeProvider.GetElapsedTime(startedTimestamp).TotalMilliseconds);
+        return materialization;
+    }
+
+    protected override void OnPlanOrHandoffObserved(bool handoffPending)
+    {
+        if (_activeAgentProfileTelemetryContext is not { } context)
+            return;
+
+        AgentProfileTelemetry.RecordPlanOrHandoff(
+            context,
+            handoffPending ? "handoff_pending" : "completed",
+            planStep: 0,
+            ordinaryRecoveryCount: 0);
+    }
+
+    protected override void OnFirstStreamedOutputObserved(TimeSpan elapsed)
+    {
+        if (_activeAgentProfileTelemetryContext is not { } context)
+            return;
+
+        AgentProfileTelemetry.RecordFirstStreamedOutput(
+            context,
+            "ok",
+            Math.Max(0, elapsed.TotalMilliseconds));
+    }
+
+    private void RecordRouteDecision(
+        AgentProfileTurnAuthorityPreparation preparation,
+        string outcome,
+        double durationMs)
+    {
+        if (_activeAgentProfileTelemetryContext is not { } context)
+            return;
+
+        var diagnostics = preparation.Diagnostics;
+        var routeDiagnostic = diagnostics.FirstOrDefault(static diagnostic => diagnostic.Code is
+            AgentProfileTurnDiagnosticCode.AliasMatched or
+            AgentProfileTurnDiagnosticCode.ClassifierMatched or
+            AgentProfileTurnDiagnosticCode.ClassifierNoMatch or
+            AgentProfileTurnDiagnosticCode.ClassifierFailed);
+        var authority = preparation.Authority;
+        var degradation = authority.DegradationReasons
+            .FirstOrDefault(static reason => reason != AgentProfileTurnDegradationReason.Unspecified);
+        var routingMode = routeDiagnostic?.Code switch
+        {
+            AgentProfileTurnDiagnosticCode.AliasMatched => "alias",
+            AgentProfileTurnDiagnosticCode.ClassifierMatched or
+                AgentProfileTurnDiagnosticCode.ClassifierNoMatch or
+                AgentProfileTurnDiagnosticCode.ClassifierFailed => "classifier",
+            _ => "none",
+        };
+        AgentProfileTelemetry.RecordRouteDecision(
+            context,
+            routingMode,
+            authority.CandidateRoute?.IntentId ?? string.Empty,
+            degradation == AgentProfileTurnDegradationReason.Unspecified
+                ? outcome
+                : degradation.ToString().ToLowerInvariant(),
+            routeDiagnostic?.Code.ToString().ToLowerInvariant() ?? string.Empty,
+            Math.Max(0, durationMs));
+    }
+
+    private void RecordMaterialization(
+        AgentProfileTurnAuthorityState committedAuthority,
+        AgentProfileTurnCatalogMaterialization materialization,
+        double durationMs)
+    {
+        if (_activeAgentProfileTelemetryContext is not { } context)
+            return;
+
+        var catalog = materialization.Catalog;
+        var selectedSkill = catalog.SelectedSkillPromptLayer;
+        var outcome = selectedSkill is not null ? "ok" : "degraded";
+        if (committedAuthority.SelectedExactSkillRef is { } selectedRef)
+        {
+            AgentProfileTelemetry.RecordExactFetch(
+                context,
+                selectedRef.Guid,
+                selectedRef.LiteralVersion,
+                outcome,
+                Math.Max(0, durationMs));
+        }
+
+        AgentProfileTelemetry.RecordPromptAndToolMaterialization(
+            context,
+            selectedSkill is not null
+                ? "selected_skill"
+                : catalog.ProfilePromptLayer is not null ? "profile" : "recovery",
+            selectedSkill?.ActualUtf8Bytes ?? 0,
+            catalog.FinalAllowedToolNames.Count,
+            outcome);
     }
 
     private static AgentProfileTurnAuthorityPreparation CreateFailClosedPreparation(
@@ -467,9 +585,33 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        await base.HandleChatRequest(request);
-        await SaveDirectChatCompletionAsync(request, CancellationToken.None);
+        var telemetryContext = State.AgentProfile is { } profile
+            ? CreateTelemetryContext(profile)
+            : null;
+        using var telemetryActivity = telemetryContext is null
+            ? null
+            : AgentProfileTelemetry.StartTurn(telemetryContext);
+        _activeAgentProfileTelemetryContext = telemetryContext;
+        try
+        {
+            await base.HandleChatRequest(request);
+            await SaveDirectChatCompletionAsync(request, CancellationToken.None);
+        }
+        finally
+        {
+            _activeAgentProfileTelemetryContext = null;
+        }
     }
+
+    private static AgentProfileTelemetryContext CreateTelemetryContext(AgentProfileSnapshot profile) =>
+        new(
+            profile.ProfileId,
+            profile.ProfileVersion,
+            profile.PolicyRevision,
+            Convert.ToHexString(profile.DeterministicPolicySha256.Span).ToLowerInvariant(),
+            profile.ActivationMode.ToString().ToLowerInvariant(),
+            profile.SkillsetProvenance?.Guid ?? string.Empty,
+            profile.SkillsetProvenance?.LiteralVersion ?? string.Empty);
 
     private static void AppendRuntimeFact(System.Text.StringBuilder builder, string? content)
     {
