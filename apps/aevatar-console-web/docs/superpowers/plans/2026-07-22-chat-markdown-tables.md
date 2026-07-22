@@ -16,7 +16,7 @@
 - Modify: `apps/aevatar-console-web/src/pages/chat/chatContent.test.ts`
 - Modify: `apps/aevatar-console-web/src/pages/chat/chatContent.ts`
 
-- [ ] **Step 1: Write the failing parser test**
+- [x] **Step 1: Write the failing parser test**
 
 Append this test inside `describe("chatContent", ...)`:
 
@@ -60,7 +60,7 @@ it("keeps malformed table syntax as paragraph content", () => {
 });
 ```
 
-- [ ] **Step 2: Run the parser test and verify RED**
+- [x] **Step 2: Run the parser test and verify RED**
 
 Run:
 
@@ -73,7 +73,7 @@ pnpm --dir apps/aevatar-console-web exec jest \
 
 Expected: FAIL because the actual value is a `paragraph` block containing raw table lines.
 
-- [ ] **Step 3: Add the typed table contract and scanner**
+- [x] **Step 3: Add the typed table contract and scanner**
 
 Add these exported types and the union member near `MarkdownBlock`:
 
@@ -172,13 +172,12 @@ function parseMarkdownTableAlignments(
 
   const alignments: MarkdownTableAlignment[] = [];
   for (const cell of cells) {
-    const delimiter = cell.replace(/\s+/g, "");
-    if (!MARKDOWN_TABLE_DELIMITER_CELL_PATTERN.test(delimiter)) {
+    if (!MARKDOWN_TABLE_DELIMITER_CELL_PATTERN.test(cell)) {
       return null;
     }
 
-    const left = delimiter.startsWith(":");
-    const right = delimiter.endsWith(":");
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
     alignments.push(left && right ? "center" : right ? "right" : left ? "left" : null);
   }
 
@@ -215,13 +214,14 @@ if (headers && alignments && headers.length === alignments.length) {
 }
 ```
 
-- [ ] **Step 4: Run the parser test and verify GREEN**
+- [x] **Step 4: Run the parser test and verify GREEN**
 
 Run the command from Step 2.
 
-Expected: PASS with 5 tests in `chatContent.test.ts`.
+Actual: PASS with 6 tests in `chatContent.test.ts`, including the review-driven
+internal-whitespace delimiter regression.
 
-- [ ] **Step 5: Inspect the parser diff and keep it uncommitted**
+- [x] **Step 5: Inspect the parser diff and keep it uncommitted**
 
 ```bash
 git diff --check -- \
@@ -239,7 +239,7 @@ before the source commit can pass `tsc`.
 - Modify: `apps/aevatar-console-web/src/pages/chat/chatPresentation.test.tsx`
 - Modify: `apps/aevatar-console-web/src/pages/chat/chatPresentation.tsx`
 
-- [ ] **Step 1: Write the failing Chat presentation test**
+- [x] **Step 1: Write the failing Chat presentation test**
 
 Change imports to include `within`, `ChatMessageBubble`, and `ChatMessage`, then append:
 
@@ -276,7 +276,7 @@ it('renders GFM tables with accessible headers and responsive containment', () =
 });
 ```
 
-- [ ] **Step 2: Run the presentation test and verify RED**
+- [x] **Step 2: Run the presentation test and verify RED**
 
 Run:
 
@@ -289,7 +289,7 @@ pnpm --dir apps/aevatar-console-web exec jest \
 
 Expected: FAIL because no accessible `region` or `table` exists.
 
-- [ ] **Step 3: Add stable table styles and render the typed block**
+- [x] **Step 3: Add stable table styles and render the typed block**
 
 Add module-level `React.CSSProperties` constants near the Markdown renderer:
 
@@ -386,13 +386,13 @@ case "table":
   );
 ```
 
-- [ ] **Step 4: Run the presentation test and verify GREEN**
+- [x] **Step 4: Run the presentation test and verify GREEN**
 
 Run the command from Step 2.
 
 Expected: PASS with 5 tests in `chatPresentation.test.tsx`.
 
-- [ ] **Step 5: Inspect the Chat renderer diff and keep it uncommitted**
+- [x] **Step 5: Inspect the Chat renderer diff and keep it uncommitted**
 
 ```bash
 git diff --check -- \
@@ -409,7 +409,7 @@ parser consumers compile.
 - Modify: `apps/aevatar-console-web/src/pages/studio/components/StudioMemberCurrentRunPanel.tsx`
 - Modify: `apps/aevatar-console-web/src/pages/studio/explorer/ExplorerContentView.tsx`
 
-- [ ] **Step 1: Run TypeScript and verify the typed-contract failures**
+- [x] **Step 1: Run TypeScript and verify the typed-contract failures**
 
 Run:
 
@@ -419,7 +419,7 @@ pnpm --dir apps/aevatar-console-web tsc
 
 Expected: FAIL where Studio and Explorer default branches read `block.lines` from the new table member.
 
-- [ ] **Step 2: Convert Studio's workaround to the typed table block**
+- [x] **Step 2: Convert Studio's workaround to the typed table block**
 
 Add `case 'table': return renderMarkdownTable(block, index);` before the code case. Delete `splitMarkdownTableRow` and `isMarkdownTableSeparator`. Change the existing table renderer to:
 
@@ -483,7 +483,7 @@ return (
 );
 ```
 
-- [ ] **Step 3: Add an explicit Explorer table case**
+- [x] **Step 3: Add an explicit Explorer table case**
 
 Before Explorer's code case, render the typed block directly:
 
@@ -545,7 +545,7 @@ case "table":
   );
 ```
 
-- [ ] **Step 4: Run TypeScript and focused Chat tests**
+- [x] **Step 4: Run TypeScript and focused Chat tests**
 
 Run:
 
@@ -559,9 +559,9 @@ pnpm --dir apps/aevatar-console-web exec jest \
   --runInBand
 ```
 
-Expected: TypeScript passes; 2 test suites and 10 tests pass.
+Actual: TypeScript passes; 2 test suites and 11 tests pass.
 
-- [ ] **Step 5: Commit the complete buildable implementation**
+- [x] **Step 5: Commit the complete buildable implementation**
 
 ```bash
 git add \
@@ -581,13 +581,13 @@ git -c user.name=AbigailDeng \
 **Files:**
 - Inspect: all files changed from `origin/dev`
 
-- [ ] **Step 1: Run focused regression tests**
+- [x] **Step 1: Run focused regression tests**
 
 Run the exact Jest command from Task 3 Step 4.
 
-Expected: 2 suites and 10 tests pass with no warnings caused by this change.
+Actual: 2 suites and 11 tests pass with no warnings caused by this change.
 
-- [ ] **Step 2: Run mandatory frontend validation**
+- [x] **Step 2: Run mandatory frontend validation**
 
 Run each command independently:
 
@@ -598,9 +598,11 @@ pnpm --dir apps/aevatar-console-web build
 bash tools/ci/test_stability_guards.sh
 ```
 
-Expected: all commands exit 0. Record any unrelated baseline failure before deciding whether it blocks delivery.
+Actual: TypeScript, test stability, production build, and the second full UI
+run all exited 0. The first UI run exposed the missing catalog entry; after the
+catalog fix, 114 suites and 1028 tests passed.
 
-- [ ] **Step 3: Run diff and architecture checks**
+- [x] **Step 3: Run diff and architecture checks**
 
 ```bash
 git diff --check origin/dev...HEAD
@@ -610,7 +612,7 @@ git status --short
 
 Expected: no whitespace errors, no changes outside `apps/aevatar-console-web/**`, and a clean worktree.
 
-- [ ] **Step 4: Validate desktop and mobile containment locally**
+- [x] **Step 4: Validate desktop and mobile containment locally**
 
 Start the frontend on an allowed port:
 
@@ -620,7 +622,11 @@ pnpm --dir apps/aevatar-console-web start:dev --port 5173
 
 Open the local Chat route in the in-app browser at desktop and mobile widths. Verify the table is nonblank, headers and cells align, the message width does not expand, horizontal scrolling is available when required, inline code remains legible, and no adjacent content overlaps. If authentication or backend state prevents a table-bearing Chat message, document that limitation and use the DOM-focused Jest evidence as the authoritative rendering verification.
 
-- [ ] **Step 5: Commit any verification-only corrections**
+Actual: the local route was blocked by the NyxID configuration gate before Chat
+rendered. The DOM-focused Jest test is the authoritative responsive/semantic
+evidence for this environment.
+
+- [x] **Step 5: Commit any verification-only corrections**
 
 If verification required a source correction, repeat its focused red-green test and commit only the verified correction with an imperative message. If no correction was needed, do not create an empty commit.
 
@@ -669,6 +675,8 @@ Chat treated valid GFM table source as paragraph text because the custom typed M
 ## Impacted paths
 
 - `apps/aevatar-console-web/src/pages/chat/**`
+- `apps/aevatar-console-web/src/locales/projectMessages.en-US.ts`
+- `apps/aevatar-console-web/src/locales/projectMessages.zh-CN.ts`
 - `apps/aevatar-console-web/src/pages/studio/components/StudioMemberCurrentRunPanel.tsx`
 - `apps/aevatar-console-web/src/pages/studio/explorer/ExplorerContentView.tsx`
 - `apps/aevatar-console-web/docs/superpowers/**`
