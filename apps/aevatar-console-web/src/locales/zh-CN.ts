@@ -48,6 +48,7 @@ const zhCNMessages = {
   'pages.chat.index.deleteChat': '删除 {title}',
   'pages.chat.index.emptyDescription': '描述你想创建的 Team、Member 或 Workflow。',
   'pages.chat.index.historyStoredLocally': '历史记录会保存在当前浏览器。',
+  'pages.chat.index.historySynchronizing': '会话历史仍在同步，请稍后重试。',
   'pages.chat.index.newChat': '新会话',
   'pages.chat.index.newChatAction': '新建会话',
   'pages.chat.index.noChatHistory': '暂无会话历史',

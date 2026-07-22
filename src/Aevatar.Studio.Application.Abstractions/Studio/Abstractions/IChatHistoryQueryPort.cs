@@ -39,14 +39,20 @@ public enum ChatHistoryConversationResultStatus
 
 public sealed record ChatHistoryConversationMessagesResult(
     ChatHistoryConversationResultStatus Status,
-    IReadOnlyList<StoredChatMessage> Messages)
+    IReadOnlyList<StoredChatMessage> Messages,
+    long StateVersion)
 {
     public static ChatHistoryConversationMessagesResult Found(
         IReadOnlyList<StoredChatMessage> messages) =>
-        new(ChatHistoryConversationResultStatus.Found, messages);
+        Found(messages, 0);
+
+    public static ChatHistoryConversationMessagesResult Found(
+        IReadOnlyList<StoredChatMessage> messages,
+        long stateVersion) =>
+        new(ChatHistoryConversationResultStatus.Found, messages, Math.Max(0, stateVersion));
 
     public static ChatHistoryConversationMessagesResult NotFound() =>
-        new(ChatHistoryConversationResultStatus.NotFound, []);
+        new(ChatHistoryConversationResultStatus.NotFound, [], 0);
 }
 
 public enum ChatHistoryCreateRecoveryStatus

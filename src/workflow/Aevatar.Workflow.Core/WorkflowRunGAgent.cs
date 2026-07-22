@@ -17,6 +17,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text;
 using ApplicationWorkflowFileArtifactOwnershipPort = Aevatar.Workflow.Application.Abstractions.Runs.IFileArtifactOwnershipPort;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
 using ApplicationFileArtifactSourceKind = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactSourceKind;
@@ -688,8 +689,49 @@ public sealed class WorkflowRunGAgent
             return seedInput ?? string.Empty;
         }
 
+        if (request.ConversationContext != null)
+        {
+            return RenderConversationExecutionInput(request.ConversationContext, request.Prompt);
+        }
+
         return request.Prompt ?? string.Empty;
     }
+
+    private static string RenderConversationExecutionInput(
+        WorkflowConversationContext conversationContext,
+        string? currentPrompt)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("<conversation_context>");
+        foreach (var message in conversationContext.Messages
+                     .OrderBy(static message => message.Sequence))
+        {
+            var content = message.Content?.Trim();
+            if (string.IsNullOrWhiteSpace(content))
+                continue;
+
+            builder
+                .Append('[')
+                .Append(ToConversationRoleLabel(message.Role))
+                .Append("] ")
+                .AppendLine(content);
+        }
+
+        builder.AppendLine("</conversation_context>");
+        builder.AppendLine("<current_user_message>");
+        builder.AppendLine(currentPrompt?.Trim() ?? string.Empty);
+        builder.Append("</current_user_message>");
+        return builder.ToString();
+    }
+
+    private static string ToConversationRoleLabel(WorkflowConversationRole role) =>
+        role switch
+        {
+            WorkflowConversationRole.User => "user",
+            WorkflowConversationRole.Assistant => "assistant",
+            WorkflowConversationRole.Tool => "tool",
+            _ => "unknown",
+        };
 
     private static IReadOnlyList<WorkflowFileRef> ExtractInputFileRefs(
         IEnumerable<WorkflowChatInputPartPayload> inputParts) =>

@@ -41,6 +41,13 @@ export type ChatStudioTarget = {
   workflowId?: string;
 };
 
+export type ChatContext = {
+  conversationId: string;
+  scopeId: string;
+  stateVersion: number;
+  turnId: string;
+};
+
 export type LocalChatStatus =
   | "draft"
   | "streaming"
@@ -103,7 +110,10 @@ export type ConversationMeta = {
   title: string;
   serviceId: string;
   serviceKind: string;
+  pendingReadModelStateVersionFloor?: number;
+  serverConversationId?: string;
   scopeId?: string;
+  stateVersion?: number;
   status?: LocalChatStatus;
   target?: ChatStudioTarget;
   usage?: ChatUsageSummary;
@@ -131,8 +141,11 @@ export type LocalChatConversation = {
   createdAt: string;
   id: string;
   messages: StoredChatMessage[];
+  pendingReadModelStateVersionFloor?: number;
   scopeId: string;
+  serverConversationId?: string;
   status: LocalChatStatus;
+  stateVersion?: number;
   target?: ChatStudioTarget;
   title: string;
   updatedAt: string;

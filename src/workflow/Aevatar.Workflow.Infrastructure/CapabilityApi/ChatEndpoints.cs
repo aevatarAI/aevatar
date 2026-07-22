@@ -784,6 +784,7 @@ public static class WorkflowCapabilityEndpoints
                     ScopeId = context.ScopeId,
                     ConversationId = context.ConversationId,
                     TurnId = context.TurnId,
+                    StateVersion = Math.Max(0, context.StateVersion),
                 }),
             },
         };

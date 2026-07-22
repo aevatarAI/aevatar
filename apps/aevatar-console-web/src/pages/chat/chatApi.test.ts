@@ -10,7 +10,7 @@ describe("chatApi", () => {
     jest.clearAllMocks();
   });
 
-  it("posts directly to /api/chat with the MVP request body", async () => {
+  it("posts typed conversation identity and read-model watermark to /api/chat", async () => {
     (authFetch as jest.Mock).mockResolvedValue({
       ok: true,
     } as Response);
@@ -21,6 +21,11 @@ describe("chatApi", () => {
         prompt: " Create a workflow ",
         scopeId: " scope-a ",
         sessionId: "session-a",
+        commandId: "command-a",
+        conversation: {
+          conversationId: " conversation-a ",
+          minimumStateVersion: 7,
+        },
       },
       controller.signal
     );
@@ -33,10 +38,50 @@ describe("chatApi", () => {
           scopeId: "scope-a",
           sessionId: "session-a",
           workflow: "studio",
+          commandId: "command-a",
+          conversation: {
+            conversationId: "conversation-a",
+            minimumStateVersion: 7,
+          },
         }),
         method: "POST",
       })
     );
+  });
+
+  it("extracts server chat context from structured frames", () => {
+    expect(
+      extractChatStreamArtifacts([
+        {
+          custom: {
+            name: "aevatar.chat.context",
+            payload: {
+              fields: {
+                conversationId: {
+                  stringValue: "conversation-alpha",
+                },
+                scopeId: {
+                  stringValue: "scope-a",
+                },
+                stateVersion: {
+                  numberValue: 7,
+                },
+                turnId: {
+                  stringValue: "turn-alpha",
+                },
+              },
+            },
+          },
+        },
+      ])
+    ).toEqual({
+      chatContext: {
+        conversationId: "conversation-alpha",
+        scopeId: "scope-a",
+        stateVersion: 7,
+        turnId: "turn-alpha",
+      },
+    });
   });
 
   it("extracts usage and studio target only from structured frames", () => {

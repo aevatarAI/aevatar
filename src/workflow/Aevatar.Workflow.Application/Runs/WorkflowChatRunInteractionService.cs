@@ -167,6 +167,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             : attempt.Request with
             {
                 CompletionNotificationTarget = CreateCompletionNotificationTarget(chatHistoryDelivery.Reservation),
+                ConversationContext = chatHistoryDelivery.ConversationContext,
             };
         CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> result;
         try
@@ -299,7 +300,8 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             new WorkflowChatContext(
                 normalizedScopeId,
                 recovery.ConversationId.Trim(),
-                recovery.TurnId.Trim()));
+                recovery.TurnId.Trim(),
+                recovery.StateVersion));
 
         return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
             .Success(
@@ -321,7 +323,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 : conversation.ConversationId.Trim();
             return conversationId == null
                 ? null
-                : WorkflowChatConversationIntent.Continue(conversationId);
+                : WorkflowChatConversationIntent.Continue(
+                    conversationId,
+                    conversation.MinimumStateVersion);
         }
 
         return null;
@@ -382,6 +386,12 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     {
         if (!_projectionPort.ProjectionEnabled)
             return WorkflowChatRunStartError.ProjectionDisabled;
+        if (request.ChatConversation is { Intent: WorkflowChatConversationIntentKind.Continue } conversation &&
+            !string.IsNullOrWhiteSpace(conversation.ConversationId) &&
+            conversation.MinimumStateVersion is not > 0)
+        {
+            return WorkflowChatRunStartError.ChatHistoryReservationUnavailable;
+        }
 
         return Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens
             .ParseOptional(request.CallerCredential?.BearerToken)

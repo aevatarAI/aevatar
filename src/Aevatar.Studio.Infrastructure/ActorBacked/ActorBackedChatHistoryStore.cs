@@ -102,13 +102,15 @@ internal sealed class ActorBackedChatHistoryStore :
             return ChatHistoryConversationMessagesResult.NotFound();
 
         if (resolved.Value.Document.Turns.Count == 0)
-            return ChatHistoryConversationMessagesResult.Found([]);
+            return ChatHistoryConversationMessagesResult.Found([], resolved.Value.Document.StateVersion);
 
-        return ChatHistoryConversationMessagesResult.Found(resolved.Value.Document.Turns
-            .OrderBy(static turn => turn.Sequence)
-            .SelectMany(ToStoredChatMessages)
-            .ToList()
-            .AsReadOnly());
+        return ChatHistoryConversationMessagesResult.Found(
+            resolved.Value.Document.Turns
+                .OrderBy(static turn => turn.Sequence)
+                .SelectMany(ToStoredChatMessages)
+                .ToList()
+                .AsReadOnly(),
+            resolved.Value.Document.StateVersion);
     }
 
     public async Task SaveMessagesAsync(
