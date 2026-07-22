@@ -48,7 +48,7 @@ public sealed class ManagedCodexDependencyBoundaryTests
     }
 
     [Fact]
-    public void AevatarRuntimeMustNotRestoreTheDirectOpenSandboxSdkPath()
+    public void RepositoryMustNotRestoreTheDirectOpenSandboxSdkPath()
     {
         var root = FindRepositoryRoot();
         var forbiddenTerms = new[]
@@ -56,8 +56,9 @@ public sealed class ManagedCodexDependencyBoundaryTests
             "Alibaba." + "OpenSandbox",
             "OpenSandboxCodexExecution" + "Adapter",
             "AddOpenSandboxCodex" + "Execution",
+            "tools/" + "opensandbox-codex-smoke",
         };
-        var files = new[] { "src", "tools" }
+        var files = new[] { "src", "tools", ".github" }
             .SelectMany(directory => Directory.EnumerateFiles(
                 Path.Combine(root, directory),
                 "*",
@@ -65,7 +66,7 @@ public sealed class ManagedCodexDependencyBoundaryTests
             .Where(static path =>
                 !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
                 !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
-                Path.GetExtension(path) is ".cs" or ".csproj" or ".props")
+                Path.GetExtension(path) is ".cs" or ".csproj" or ".props" or ".yml" or ".yaml")
             .Append(Path.Combine(root, "aevatar.slnx"))
             .Append(Path.Combine(root, "Directory.Packages.props"));
 

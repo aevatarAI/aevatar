@@ -5,7 +5,6 @@ on:
     paths:
       - ".github/workflows/codex-runner-image.yml"
       - "containers/codex-runner/**"
-      - "tools/opensandbox-codex-smoke/**"
       - "Directory.Packages.props"
   push:
     branches:
@@ -13,7 +12,6 @@ on:
     paths:
       - ".github/workflows/codex-runner-image.yml"
       - "containers/codex-runner/**"
-      - "tools/opensandbox-codex-smoke/**"
       - "Directory.Packages.props"
   workflow_dispatch:
 
@@ -41,16 +39,6 @@ jobs:
           source containers/codex-runner/version.env
           echo "codex_version=${PINNED_CODEX_VERSION}" >> "${GITHUB_OUTPUT}"
           echo "runner_version=${PINNED_RUNNER_VERSION}" >> "${GITHUB_OUTPUT}"
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-
-      - name: Build direct OpenSandbox smoke tool
-        run: dotnet build tools/opensandbox-codex-smoke/Aevatar.OpenSandbox.CodexRunner.Smoke.csproj --configuration Release --nologo
-
-      - name: Run smoke-tool self-test
-        run: dotnet run --project tools/opensandbox-codex-smoke/Aevatar.OpenSandbox.CodexRunner.Smoke.csproj --configuration Release --no-build -- --self-test
 
       - uses: docker/setup-buildx-action@v3
 
