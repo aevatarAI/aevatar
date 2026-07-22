@@ -19,8 +19,11 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
         if existingTtl >= 0 and (requestedTtl == -1 or existingTtl < requestedTtl) then
             effectiveTtl = existingTtl
         end
+        local maximumRelativeMilliseconds = tonumber(ARGV[4])
         if effectiveTtl == -1 then
             redis.call('SET', KEYS[1], ARGV[2])
+        elseif effectiveTtl > maximumRelativeMilliseconds then
+            redis.call('SET', KEYS[1], ARGV[2], 'EX', math.ceil(effectiveTtl / 1000))
         else
             redis.call('PSETEX', KEYS[1], math.max(1, effectiveTtl), ARGV[2])
         end
@@ -102,6 +105,7 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
                 expectedValue.ToArray(),
                 newValue.ToArray(),
                 expiry.HasValue ? ToExpiryMilliseconds(expiry.Value) : -1,
+                MaximumRelativeExpiryMilliseconds,
             ]);
         ct.ThrowIfCancellationRequested();
 
@@ -155,6 +159,8 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
     {
         if (expiry <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(expiry), "Expiry must be positive.");
+        if (expiry.Ticks > MaximumRelativeExpiryTicks)
+            _ = ToGarnetCompatibleWholeSeconds(expiry);
 
         return Math.Max(1, checked((long)Math.Ceiling(expiry.TotalMilliseconds)));
     }
