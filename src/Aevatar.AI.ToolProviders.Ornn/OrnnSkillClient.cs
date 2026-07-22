@@ -20,6 +20,7 @@ public sealed class OrnnSkillClient
     private readonly NyxIdApiClient _nyxApi;
     private readonly OrnnOptions _options;
     private readonly ILogger _logger;
+    private readonly TimeProvider _timeProvider;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -52,7 +53,8 @@ public sealed class OrnnSkillClient
         OrnnOptions options,
         NyxIdApiClient nyxApi,
         TimeSpan perCallTimeout,
-        ILogger<OrnnSkillClient>? logger = null)
+        ILogger<OrnnSkillClient>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _nyxApi = nyxApi ?? throw new ArgumentNullException(nameof(nyxApi));
@@ -60,6 +62,7 @@ public sealed class OrnnSkillClient
             throw new ArgumentOutOfRangeException(nameof(perCallTimeout), "Per-call timeout must be positive.");
         _perCallTimeout = perCallTimeout;
         _logger = logger ?? NullLogger<OrnnSkillClient>.Instance;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Search skills.</summary>
@@ -195,6 +198,82 @@ public sealed class OrnnSkillClient
         {
             _logger.LogWarning(ex, "Ornn get skill failed for '{IdOrName}'", idOrName);
             return null;
+        }
+    }
+
+    internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(
+        string accessToken,
+        string guid,
+        string literalVersion,
+        CancellationToken ct = default) =>
+        GetExactAsync<OrnnExactSkillDetail>(
+            accessToken,
+            $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}",
+            guid,
+            ct);
+
+    internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(
+        string accessToken,
+        string guid,
+        string literalVersion,
+        CancellationToken ct = default) =>
+        GetExactAsync<OrnnSkillJson>(
+            accessToken,
+            $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}",
+            guid,
+            ct);
+
+    private async Task<OrnnExactSkillReadResult<T>> GetExactAsync<T>(
+        string accessToken,
+        string path,
+        string guid,
+        CancellationToken ct)
+        where T : class
+    {
+        using var timeoutCts = new CancellationTokenSource(_perCallTimeout, _timeProvider);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+        try
+        {
+            var response = await _nyxApi.ProxyRequestAsync(
+                token: accessToken,
+                slug: _options.NyxIdSlug,
+                path: path,
+                method: "GET",
+                body: null,
+                extraHeaders: null,
+                ct: linkedCts.Token);
+            if (TryUnwrapNyxIdProxyError(response, out var proxyError))
+                return OrnnExactSkillReadResult<T>.ProxyFailure(proxyError.Status);
+
+            try
+            {
+                var envelope = JsonSerializer.Deserialize<OrnnApiResponse<T>>(response, JsonOptions);
+                return envelope?.Data is null
+                    ? OrnnExactSkillReadResult<T>.InvalidResponse()
+                    : OrnnExactSkillReadResult<T>.Success(envelope.Data);
+            }
+            catch (JsonException)
+            {
+                return OrnnExactSkillReadResult<T>.InvalidResponse();
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Exact Ornn skill read exceeded {TimeoutSeconds}s per-call budget for {SkillGuid}",
+                (int)_perCallTimeout.TotalSeconds,
+                guid);
+            return OrnnExactSkillReadResult<T>.Timeout();
+        }
+        catch (Exception)
+        {
+            _logger.LogWarning("Exact Ornn skill read failed for {SkillGuid}", guid);
+            return OrnnExactSkillReadResult<T>.Unavailable();
         }
     }
 
@@ -498,8 +577,48 @@ public sealed class OrnnSkillJson
 {
     public string? Name { get; set; }
     public string? Description { get; set; }
+    public string? Version { get; set; }
     public OrnnSkillMetadata? Metadata { get; set; }
     public Dictionary<string, string>? Files { get; set; }
+}
+
+internal sealed class OrnnExactSkillDetail
+{
+    public string? Guid { get; set; }
+    public string? Name { get; set; }
+    public string? SkillHash { get; set; }
+    public string? CreatedBy { get; set; }
+}
+
+internal enum OrnnExactSkillReadFailure
+{
+    None = 0,
+    ProxyFailure = 1,
+    Timeout = 2,
+    InvalidResponse = 3,
+    Unavailable = 4,
+}
+
+internal sealed record OrnnExactSkillReadResult<T>(
+    T? Value,
+    OrnnExactSkillReadFailure Failure,
+    int? ProxyStatus)
+    where T : class
+{
+    public static OrnnExactSkillReadResult<T> Success(T value) =>
+        new(value, OrnnExactSkillReadFailure.None, null);
+
+    public static OrnnExactSkillReadResult<T> ProxyFailure(int status) =>
+        new(null, OrnnExactSkillReadFailure.ProxyFailure, status);
+
+    public static OrnnExactSkillReadResult<T> Timeout() =>
+        new(null, OrnnExactSkillReadFailure.Timeout, null);
+
+    public static OrnnExactSkillReadResult<T> InvalidResponse() =>
+        new(null, OrnnExactSkillReadFailure.InvalidResponse, null);
+
+    public static OrnnExactSkillReadResult<T> Unavailable() =>
+        new(null, OrnnExactSkillReadFailure.Unavailable, null);
 }
 
 /// <summary>A curated Ornn skillset. Its <see cref="Members"/> are references; fetch each body via
