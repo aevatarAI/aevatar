@@ -150,6 +150,30 @@ public sealed class NyxIdServiceToolsTests
         handler.ProxyRequests.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("{")]
+    [InlineData("[]")]
+    public async Task FixedUpdateTool_InvalidJsonArguments_ShouldFailBeforeExactReadOrMutation(
+        string argumentsJson)
+    {
+        var handler = new ServiceHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop", true));
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var update = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_update");
+
+        var result = await update.ExecuteAsync(argumentsJson);
+
+        ErrorCode(result).Should().Be("invalid_arguments");
+        handler.ExactReads.Should().BeEmpty();
+        handler.Requests.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task OperationTool_ShouldRevalidateExactIdentityAndUseEncodedViaOnCatalogRoute()
     {

@@ -160,27 +160,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     {
         var tool = new CountingTool("use_skill");
         var provider = new ToolCallProvider(tool.Name);
-        var tools = new ToolManager();
-        tools.Register(tool);
-        var runtime = new ChatRuntime(
-            () => provider,
-            new ChatHistory(),
-            new ToolCallLoop(tools),
-            hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
-        var plan = new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(turnCatalog: null),
-            new Dictionary<string, string>(),
-            LLMControlContext.Empty,
-            AgentToolExecutionContext.Empty,
-            InitialMessages: [],
-            MaxToolRounds: 1);
-        var executor = new AgentRunReplyGenerationExecutor(
-            Substitute.For<IActorDispatchPort>(),
-            new StaticStepPlanReplyGenerator(plan),
-            interactiveReplyCollector: null,
-            relayOptions: null,
-            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var executor = CreateToolEnabledExecutor(tool, provider);
         var workItem = BuildToolEnabledWorkItem();
 
         var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
@@ -196,28 +176,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     {
         var tool = new CountingTool("use_skill");
         var provider = new ToolCallProvider(tool.Name);
-        var tools = new ToolManager();
-        tools.Register(tool);
-        var runtime = new ChatRuntime(
-            () => provider,
-            new ChatHistory(),
-            new ToolCallLoop(tools),
-            hooks: null,
-            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() },
-            llmMiddlewares: [new RemoveToolsMiddleware()]);
-        var plan = new AgentRunReplyStepPlan(
-            runtime.CreateStepExecutor(turnCatalog: null),
-            new Dictionary<string, string>(),
-            LLMControlContext.Empty,
-            AgentToolExecutionContext.Empty,
-            InitialMessages: [],
-            MaxToolRounds: 1);
-        var executor = new AgentRunReplyGenerationExecutor(
-            Substitute.For<IActorDispatchPort>(),
-            new StaticStepPlanReplyGenerator(plan),
-            interactiveReplyCollector: null,
-            relayOptions: null,
-            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var executor = CreateToolEnabledExecutor(tool, provider, [new RemoveToolsMiddleware()]);
 
         var llmWorkItem = BuildToolEnabledWorkItem();
         var execution = await executor.BuildLlmStepExecutionAsync(
@@ -234,6 +193,36 @@ public sealed class AgentRunReplyGenerationExecutorTests
         continuation.ToolStepResult.ResultMessages.Should().ContainSingle()
             .Which.Content.Should().Contain("not found");
         tool.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BuildToolStepContinuation_WithoutMatchingAuthorization_ShouldRejectAllPendingCalls()
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(registeredTool, new RecordingProvider());
+        var workItem = BuildToolEnabledWorkItem();
+        workItem.StepState.NextStepIndex = 2;
+        workItem.StepState.PendingToolCalls.AddRange(
+        [
+            new AgentRunToolCall { Id = "call-1", Name = registeredTool.Name, ArgumentsJson = "{}" },
+            new AgentRunToolCall { Id = "call-2", Name = registeredTool.Name, ArgumentsJson = "{}" },
+        ]);
+        workItem = workItem with { StepIndex = 2 };
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            workItem,
+            authorizedToolStep: null,
+            CancellationToken.None);
+
+        continuation.StepIndex.Should().Be(3);
+        var result = continuation.ToolStepResult;
+        result.Should().NotBeNull();
+        result.AdvanceRound.Should().BeTrue();
+        result.ResultMessages.Select(static message => message.ToolCallId)
+            .Should().Equal("call-1", "call-2");
+        result.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not found", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
     }
 
     private static AgentRunReplyGenerationExecutor CreateExecutor(
@@ -262,6 +251,35 @@ public sealed class AgentRunReplyGenerationExecutorTests
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance,
             fileArtifactReadPort: fileArtifactReadPort);
+    }
+
+    private static AgentRunReplyGenerationExecutor CreateToolEnabledExecutor(
+        IAgentTool tool,
+        ILLMProvider provider,
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+    {
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = new ChatRuntime(
+            () => provider,
+            new ChatHistory(),
+            new ToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() },
+            llmMiddlewares: llmMiddlewares);
+        var plan = new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(turnCatalog: null),
+            new Dictionary<string, string>(),
+            LLMControlContext.Empty,
+            AgentToolExecutionContext.Empty,
+            InitialMessages: [],
+            MaxToolRounds: 1);
+        return new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            new StaticStepPlanReplyGenerator(plan),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
     }
 
     private static AgentRunReplyStepExecutionRequest BuildFinalNoToolsWorkItem(params AgentToolReceipt[] receipts)

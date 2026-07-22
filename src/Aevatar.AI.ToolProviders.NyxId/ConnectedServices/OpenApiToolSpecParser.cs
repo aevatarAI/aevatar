@@ -230,7 +230,7 @@ public static class OpenApiToolSpecParser
 
         var resolved = ResolveComponentRef(requestBody, components, "requestBodies");
         if (resolved.ValueKind != JsonValueKind.Object)
-            return (null, false, null, false);
+            return (null, false, null, true);
 
         var required = resolved.TryGetProperty("required", out var req) && req.ValueKind == JsonValueKind.True;
 

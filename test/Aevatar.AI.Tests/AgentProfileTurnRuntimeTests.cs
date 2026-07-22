@@ -51,6 +51,21 @@ public sealed class AgentProfileTurnRuntimeTests
     }
 
     [Fact]
+    public void Catalog_SameNameCollisionFollowedByOriginalObject_ShouldRemainRestrictedEmpty()
+    {
+        var first = new CountingTool("route-only");
+        var replacement = new CountingTool("ROUTE-ONLY");
+
+        var catalog = NewCatalog(
+            ["route-only"],
+            routeOwnedTools: [first, replacement, first]);
+
+        catalog.RouteOwnedTools.Should().BeEmpty();
+        first.ExecuteCount.Should().Be(0);
+        replacement.ExecuteCount.Should().Be(0);
+    }
+
+    [Fact]
     public void BaseRequest_ShouldIncludeRouteOnlyExactTool()
     {
         var routeOnly = new CountingTool("route-only");
@@ -60,6 +75,23 @@ public sealed class AgentProfileTurnRuntimeTests
             .BuildBaseRequest(null, null, null, null);
 
         request.Tools.Should().ContainSingle().Which.Should().BeSameAs(routeOnly);
+    }
+
+    [Fact]
+    public async Task MainTurn_BaseAndRouteOwnedSameNameDifferentObjects_ShouldFailClosed()
+    {
+        var baseTool = new CountingTool("shared");
+        var routeOwnedTool = new CountingTool("SHARED");
+        var provider = new ForgedToolProvider("shared");
+        var runtime = NewRuntime(provider, NewToolManager(baseTool));
+
+        await DrainAsync(runtime.ChatStreamAsync(
+            "run",
+            NewCatalog(["shared"], routeOwnedTools: [routeOwnedTool])));
+
+        provider.Requests[0].Tools.Should().BeNull();
+        baseTool.ExecuteCount.Should().Be(0);
+        routeOwnedTool.ExecuteCount.Should().Be(0);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using FluentAssertions;
@@ -248,6 +249,33 @@ public class ConnectedServiceToolSpecParserTests
             """;
 
         OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("""{ "required": true }""")]
+    [InlineData("""{ "required": true, "content": [] }""")]
+    public void Parse_MalformedOrUnsupportedRequiredRequestBody_ShouldNotAdmitOperation(
+        string requestBodyJson)
+    {
+        var operation = new JsonObject
+        {
+            ["operationId"] = "unsafe",
+            ["x-aevatar-tool"] = true,
+            ["requestBody"] = JsonNode.Parse(requestBodyJson),
+        };
+        var spec = new JsonObject
+        {
+            ["paths"] = new JsonObject
+            {
+                ["/unsafe"] = new JsonObject
+                {
+                    ["post"] = operation,
+                },
+            },
+        };
+
+        OpenApiToolSpecParser.Parse(spec.ToJsonString()).AdmittedOperations().Should().BeEmpty();
     }
 
     [Fact]
