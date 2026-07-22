@@ -6,7 +6,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Empty, Tag } from 'antd';
+import { Alert, Button, Empty, Space, Tag } from 'antd';
 import React from 'react';
 import { chatHistoryApi } from '@/pages/chat/chatHistoryApi';
 import type {
@@ -99,6 +99,57 @@ type NoticeState = {
   readonly message: string;
 };
 
+type ChatHistoryMessageView = Omit<
+  StoredChatMessage,
+  'error' | 'status' | 'thinking'
+> & {
+  readonly authorName?: string | null;
+  readonly error?: string | null;
+  readonly status?: string | null;
+  readonly thinking?: string | null;
+};
+
+function formatChatTurnCount(count: number): string {
+  const normalizedCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+  return normalizedCount === 1
+    ? t("pages.studio.studiofilesdetailpane.conversation.turn.count.one", "1 turn")
+    : t(
+        "pages.studio.studiofilesdetailpane.conversation.turn.count.many",
+        "{count} turns",
+        { count: normalizedCount },
+      );
+}
+
+function formatChatMessageAuthor(message: ChatHistoryMessageView): string {
+  const authorName = message.authorName?.trim();
+  if (authorName) {
+    return authorName;
+  }
+
+  if (message.role === 'assistant') {
+    return t("pages.studio.studiofilesdetailpane.chat.author.assistant", "Assistant");
+  }
+
+  if (message.role === 'user') {
+    return t("pages.studio.studiofilesdetailpane.chat.author.user", "User");
+  }
+
+  return message.role || t("pages.studio.studiofilesdetailpane.chat.author.unknown", "Unknown author");
+}
+
+function formatChatMessageStatus(status: string | null | undefined): string {
+  const normalizedStatus = status?.trim().toLowerCase();
+  if (normalizedStatus === 'complete') {
+    return t("pages.studio.studiofilesdetailpane.chat.status.complete", "Complete");
+  }
+
+  if (normalizedStatus === 'error') {
+    return t("pages.studio.studiofilesdetailpane.chat.status.error", "Error");
+  }
+
+  return status?.trim() || t("pages.studio.studiofilesdetailpane.chat.status.unknown", "Unknown");
+}
+
 function formatScriptDetailLabel(
   detail: ScopedScriptDetail | null | undefined,
 ): string {
@@ -130,8 +181,17 @@ type Props = {
   readonly scopeId: string;
   readonly workflowStorageMode: string;
   readonly scriptsEnabled: boolean;
+  readonly onChatConversationDeleted: (
+    scopeId: string,
+    conversationId: string,
+  ) => void;
   readonly onOpenWorkflowInStudio: (workflowId: string) => void;
   readonly onOpenScriptInStudio: (scriptId: string) => void;
+};
+
+type ChatDeleteOperation = {
+  readonly conversationId: string;
+  readonly scopeId: string;
 };
 
 const detailScrollStyle: React.CSSProperties = {
@@ -979,10 +1039,15 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   scopeId,
   workflowStorageMode,
   scriptsEnabled,
+  onChatConversationDeleted,
   onOpenWorkflowInStudio,
   onOpenScriptInStudio,
 }) => {
   const queryClient = useQueryClient();
+  const scopeIdRef = React.useRef(scopeId);
+  scopeIdRef.current = scopeId;
+  const chatDeleteOperationRef = React.useRef<ChatDeleteOperation | null>(null);
+  const selectedConversationIdRef = React.useRef("");
 
   const settingsDocument = React.useMemo(
     () =>
@@ -1025,6 +1090,9 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const [connectorAddMenuOpen, setConnectorAddMenuOpen] =
     React.useState(false);
   const [chatNotice, setChatNotice] = React.useState<NoticeState | null>(null);
+  const [chatDeleteConfirmationOpen, setChatDeleteConfirmationOpen] =
+    React.useState(false);
+  const [chatDeletePending, setChatDeletePending] = React.useState(false);
 
   React.useEffect(() => {
     setSettingsEditorValue(settingsSnapshot);
@@ -1092,6 +1160,7 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   const selectedConversationId = selectedFile.startsWith('chat-history:')
     ? selectedFile.slice('chat-history:'.length)
     : '';
+  selectedConversationIdRef.current = selectedConversationId;
   const selectedConversationMeta =
     chatConversations.data?.find(
       (conversation) => conversation.id === selectedConversationId,
@@ -1101,6 +1170,15 @@ const StudioFilesDetailPane: React.FC<Props> = ({
     enabled: Boolean(scopeId && selectedConversationId),
     queryFn: () => chatHistoryApi.loadConversation(scopeId, selectedConversationId),
   });
+
+  React.useEffect(() => {
+    setChatDeleteConfirmationOpen(false);
+    setChatNotice(null);
+    if (chatDeleteOperationRef.current?.scopeId !== scopeId) {
+      chatDeleteOperationRef.current = null;
+      setChatDeletePending(false);
+    }
+  }, [scopeId, selectedConversationId]);
 
   const handleSaveSettings = async () => {
     setSettingsPending(true);
@@ -1274,25 +1352,54 @@ const StudioFilesDetailPane: React.FC<Props> = ({
   };
 
   const handleDeleteConversation = async () => {
-    if (!scopeId || !selectedConversationId) {
+    if (!scopeId || !selectedConversationId || chatDeleteOperationRef.current) {
       return;
     }
 
     setChatNotice(null);
+    setChatDeletePending(true);
+    const operation: ChatDeleteOperation = {
+      conversationId: selectedConversationId,
+      scopeId,
+    };
+    chatDeleteOperationRef.current = operation;
 
     try {
-      await chatHistoryApi.deleteConversation(scopeId, selectedConversationId);
+      await chatHistoryApi.deleteConversation(
+        operation.scopeId,
+        operation.conversationId,
+      );
+      if (scopeIdRef.current !== operation.scopeId) {
+        return;
+      }
+      await queryClient.cancelQueries({
+        queryKey: ['studio-files-chat-histories', operation.scopeId],
+      });
+      onChatConversationDeleted(operation.scopeId, operation.conversationId);
       await queryClient.invalidateQueries({
-        queryKey: ['studio-files-chat-histories', scopeId],
+        queryKey: ['studio-files-chat-histories', operation.scopeId],
       });
       queryClient.removeQueries({
-        queryKey: ['studio-files-chat-history', scopeId, selectedConversationId],
+        queryKey: [
+          'studio-files-chat-history',
+          operation.scopeId,
+          operation.conversationId,
+        ],
       });
-      setChatNotice({
-        type: 'success',
-        message: t("pages.studio.studiofilesdetailpane.conversation.deleted", "Conversation deleted."),
-      });
+      if (selectedConversationIdRef.current === operation.conversationId) {
+        setChatNotice({
+          type: 'success',
+          message: t("pages.studio.studiofilesdetailpane.conversation.deleted", "Conversation deleted."),
+        });
+        setChatDeleteConfirmationOpen(false);
+      }
     } catch (error) {
+      if (
+        scopeIdRef.current !== operation.scopeId ||
+        selectedConversationIdRef.current !== operation.conversationId
+      ) {
+        return;
+      }
       setChatNotice({
         type: 'error',
         message:
@@ -1300,6 +1407,11 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             ? error.message
             : t("pages.studio.studiofilesdetailpane.failed.to.delete.conversation", "Failed to delete conversation."),
       });
+    } finally {
+      if (chatDeleteOperationRef.current === operation) {
+        chatDeleteOperationRef.current = null;
+        setChatDeletePending(false);
+      }
     }
   };
 
@@ -2486,8 +2598,8 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
               <div style={editorHeaderDescriptionStyle}>
                 {selectedConversationMeta
-                  ? t("pages.studio.studiofilesdetailpane.conversation.meta", "{count} messages · {serviceKind} · {updatedAt}", {
-                      count: selectedConversationMeta.messageCount,
+                  ? t("pages.studio.studiofilesdetailpane.conversation.turn.meta", "{turnCount} · {serviceKind} · {updatedAt}", {
+                      turnCount: formatChatTurnCount(selectedConversationMeta.messageCount),
                       serviceKind: selectedConversationMeta.serviceKind || 'chat',
                       updatedAt: selectedConversationMeta.updatedAt
                         ? formatDateTime(selectedConversationMeta.updatedAt)
@@ -2497,18 +2609,71 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               </div>
             </div>
             <button
+              aria-controls="chat-history-delete-confirmation"
+              aria-expanded={chatDeleteConfirmationOpen}
               className={AEVATAR_INTERACTIVE_BUTTON_CLASS}
               type="button"
-              onClick={() => void handleDeleteConversation()}
+              disabled={chatDeletePending}
+              onClick={() => {
+                setChatNotice(null);
+                setChatDeleteConfirmationOpen(true);
+              }}
               style={{
                 ...secondaryActionStyle,
                 borderColor: '#fecaca',
                 color: '#dc2626',
+                opacity: chatDeletePending ? 0.5 : 1,
               }}
             >
               <DeleteOutlined />
               {t("pages.studio.studiofilesdetailpane.delete", "Delete")}</button>
           </div>
+
+          {chatDeleteConfirmationOpen ? (
+            <Alert
+              id="chat-history-delete-confirmation"
+              type="warning"
+              showIcon
+              message={t(
+                "pages.studio.studiofilesdetailpane.delete.conversation.confirmation.title",
+                "Delete this conversation?",
+              )}
+              description={t(
+                "pages.studio.studiofilesdetailpane.delete.conversation.confirmation.description",
+                "{title} will be removed from chat history and cannot be recovered from this view.",
+                {
+                  title:
+                    selectedConversationMeta?.title || selectedConversationId,
+                },
+              )}
+              action={
+                <Space wrap size={[8, 8]}>
+                  <Button
+                    size="small"
+                    disabled={chatDeletePending}
+                    onClick={() => setChatDeleteConfirmationOpen(false)}
+                  >
+                    {t(
+                      "pages.studio.studiofilesdetailpane.keep.conversation",
+                      "Keep conversation",
+                    )}
+                  </Button>
+                  <Button
+                    danger
+                    size="small"
+                    type="primary"
+                    loading={chatDeletePending}
+                    onClick={() => void handleDeleteConversation()}
+                  >
+                    {t(
+                      "pages.studio.studiofilesdetailpane.delete.conversation.now",
+                      "Delete now",
+                    )}
+                  </Button>
+                </Space>
+              }
+            />
+          ) : null}
 
           {chatNotice ? (
             <Alert type={chatNotice.type} showIcon message={chatNotice.message} />
@@ -2527,8 +2692,10 @@ const StudioFilesDetailPane: React.FC<Props> = ({
             <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.no.messages.in.this.conversation", "No messages in this conversation")}</div>
           ) : (
             <section aria-label={t("pages.studio.studiofilesdetailpane.chat.history.messages", "Chat history messages")} style={chatMessageListStyle}>
-              {(selectedConversationMessages.data ?? []).map(
-                (message: StoredChatMessage) => (
+              {(
+                (selectedConversationMessages.data ?? []) as ChatHistoryMessageView[]
+              ).map(
+                (message) => (
                   <article
                     key={message.id}
                     style={{
@@ -2542,15 +2709,39 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                     }}
                   >
                     <div style={chatMessageMetaStyle}>
-                      <span
-                        style={{
-                          color: message.role === 'user' ? '#2563eb' : '#6b7280',
-                          fontWeight: 700,
-                          letterSpacing: 0,
-                          textTransform: 'uppercase',
-                        }}
-                      >
-                        {message.role}
+                      <span style={{ alignItems: 'center', display: 'flex', gap: 8 }}>
+                        <span
+                          style={{
+                            color: message.role === 'user' ? '#2563eb' : '#6b7280',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {formatChatMessageAuthor(message)}
+                        </span>
+                        {message.authorName?.trim() ? (
+                          <span
+                            style={{
+                              color: '#9ca3af',
+                              fontSize: 10,
+                              fontWeight: 600,
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            {message.role}
+                          </span>
+                        ) : null}
+                        <Tag
+                          color={
+                            message.status?.trim().toLowerCase() === 'error'
+                              ? 'error'
+                              : message.status?.trim().toLowerCase() === 'complete'
+                                ? 'success'
+                                : undefined
+                          }
+                          style={{ marginInlineEnd: 0 }}
+                        >
+                          {formatChatMessageStatus(message.status)}
+                        </Tag>
                       </span>
                       <span style={{ color: '#9ca3af' }}>
                         {message.timestamp
@@ -2571,26 +2762,51 @@ const StudioFilesDetailPane: React.FC<Props> = ({
                           whiteSpace: 'pre-wrap',
                         }}
                       >
+                        <div
+                          style={{
+                            fontStyle: 'normal',
+                            fontWeight: 700,
+                            marginBottom: 4,
+                          }}
+                        >
+                          {t(
+                            "pages.studio.studiofilesdetailpane.chat.message.thinking",
+                            "Thinking",
+                          )}
+                        </div>
                         {message.thinking}
                       </div>
                     ) : null}
 
-                    <div
-                      style={{
-                        color: '#374151',
-                        fontSize: 13,
-                        lineHeight: 1.8,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {message.content ||
-                        t("pages.studio.studiofilesdetailpane.empty.message", "(empty message)")}
-                    </div>
+                    {message.content || !message.error ? (
+                      <div
+                        style={{
+                          color: '#374151',
+                          fontSize: 13,
+                          lineHeight: 1.8,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {message.content ||
+                          t("pages.studio.studiofilesdetailpane.empty.message", "(empty message)")}
+                      </div>
+                    ) : null}
 
                     {message.error ? (
-                      <div style={{ color: '#dc2626', fontSize: 12, marginTop: 12 }}>
-                        {message.error}
+                      <div
+                        style={{ color: '#dc2626', fontSize: 12, marginTop: 12 }}
+                      >
+                        <strong>
+                          {t(
+                            "pages.studio.studiofilesdetailpane.chat.message.error",
+                            "Error",
+                          )}
+                          :{' '}
+                        </strong>
+                        <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {message.error}
+                        </span>
                       </div>
                     ) : null}
                   </article>
