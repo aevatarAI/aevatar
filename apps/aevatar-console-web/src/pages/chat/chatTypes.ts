@@ -149,7 +149,7 @@ export type ChatHistoryIndex = {
 
 export type ChatCreateRecovery = {
   conversationId: string;
-  sourceVersion: number;
+  stateVersion: number;
   status: string;
   turnId: string;
 };

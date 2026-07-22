@@ -258,7 +258,7 @@ describe("ChatPage server-backed history", () => {
     );
     (chatHistoryApi.recoverCreate as jest.Mock).mockResolvedValue({
       conversationId: "recovered-conversation",
-      sourceVersion: 2,
+      stateVersion: 2,
       status: "append_committed",
       turnId: "recovered-turn",
     });
@@ -268,17 +268,13 @@ describe("ChatPage server-backed history", () => {
 
     expect(await screen.findByText("Recovered response")).toBeTruthy();
     const [body] = chatRequestBodies();
-    expect(body.conversation).toEqual({
-      createIdempotencyKey: expect.any(String),
-    });
-    const createIdempotencyKey = String(
-      (body.conversation as { createIdempotencyKey: unknown })
-        .createIdempotencyKey
-    );
+    expect(body.conversation).toEqual({});
+    expect(body.commandId).toEqual(expect.any(String));
+    const createCommandId = String(body.commandId);
     await waitFor(() =>
       expect(chatHistoryApi.recoverCreate).toHaveBeenCalledWith(
         "scope-a",
-        createIdempotencyKey
+        createCommandId
       )
     );
     expect(
@@ -486,7 +482,8 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
     const [body] = chatRequestBodies();
     expect(body).toEqual({
-      conversation: { createIdempotencyKey: expect.any(String) },
+      commandId: expect.any(String),
+      conversation: {},
       prompt: "Create a support team",
       sessionId: expect.any(String),
       workflow: "studio",
@@ -516,6 +513,38 @@ describe("ChatPage server-backed history", () => {
     ).toBeTruthy();
   });
 
+  it("keeps a create command id for the same prompt and replaces it for new input", async () => {
+    (authFetch as jest.Mock).mockResolvedValue(
+      createSseResponse([
+        { runFinished: { result: { output: "Unbound response" } } },
+      ])
+    );
+    (chatHistoryApi.recoverCreate as jest.Mock).mockRejectedValue(
+      new Error("Recovery failed.")
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Original create request");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument()
+    );
+
+    await sendPrompt("Original create request");
+    await waitFor(() => expect(chatRequestBodies()).toHaveLength(2));
+    const [firstBody, retryBody] = chatRequestBodies();
+    expect(retryBody.commandId).toBe(firstBody.commandId);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument(),
+      { timeout: 5_000 }
+    );
+    await sendPrompt("Changed create request");
+    await waitFor(() => expect(chatRequestBodies()).toHaveLength(3));
+    const changedBody = chatRequestBodies()[2];
+    expect(changedBody.commandId).toEqual(expect.any(String));
+    expect(changedBody.commandId).not.toBe(firstBody.commandId);
+  });
+
   it("binds the server conversation id and reuses the independent session id", async () => {
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
@@ -538,15 +567,39 @@ describe("ChatPage server-backed history", () => {
     await screen.findByText("Second answer");
 
     const [firstBody, secondBody] = chatRequestBodies();
-    expect(firstBody.conversation).toEqual({
-      createIdempotencyKey: expect.any(String),
-    });
+    expect(firstBody.commandId).toEqual(expect.any(String));
+    expect(firstBody.conversation).toEqual({});
     expect(secondBody.conversation).toEqual({
       conversationId: "server-conversation",
     });
+    expect(secondBody).not.toHaveProperty("commandId");
     expect(secondBody.sessionId).toBe(firstBody.sessionId);
     expect(secondBody.prompt).toBe("Second prompt");
     expect(String(secondBody.prompt)).not.toContain("<conversation_history>");
+  });
+
+  it("does not use create recovery for a continuation without context", async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      serverConversation,
+    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(serverMessages);
+    (authFetch as jest.Mock).mockResolvedValue(
+      createSseResponse([
+        { runFinished: { result: { output: "Unbound follow-up" } } },
+      ])
+    );
+
+    renderWithQueryClient(<ChatPage />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Server conversation" })
+    );
+    await screen.findByText("The support workflow is ready.");
+    await sendPrompt("Continue without context");
+
+    expect(
+      await screen.findByText("Chat completed without a conversation context.")
+    ).toBeTruthy();
+    expect(chatHistoryApi.recoverCreate).not.toHaveBeenCalled();
   });
 
   it("rejects a later Chat History context from a different scope", async () => {
@@ -950,6 +1003,7 @@ describe("ChatPage server-backed history", () => {
       conversation: { conversationId: "conversation-a" },
       prompt: "Add retry handling",
     });
+    expect(body).not.toHaveProperty("commandId");
     expect(String(body.prompt)).not.toContain("Create a support workflow");
   });
 

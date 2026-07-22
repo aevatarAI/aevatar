@@ -191,14 +191,14 @@ export function decodeChatHistoryIndex(value: unknown): ChatHistoryIndex {
 
 export function decodeChatCreateRecovery(value: unknown): ChatCreateRecovery {
   const record = asRecord(value, "$recovery");
-  const sourceVersion = readNumber(record, "sourceVersion", "$recovery");
-  if (!Number.isInteger(sourceVersion) || sourceVersion < 0) {
-    return failContract("$recovery.sourceVersion", "a non-negative integer");
+  const stateVersion = readNumber(record, "stateVersion", "$recovery");
+  if (!Number.isInteger(stateVersion) || stateVersion < 0) {
+    return failContract("$recovery.stateVersion", "a non-negative integer");
   }
 
   return {
     conversationId: readString(record, "conversationId", "$recovery"),
-    sourceVersion,
+    stateVersion,
     status: readString(record, "status", "$recovery"),
     turnId: readString(record, "turnId", "$recovery"),
   };
@@ -230,10 +230,10 @@ function buildConversationPath(scopeId: string, conversationId: string): string 
 
 function buildCreateRecoveryPath(
   scopeId: string,
-  createIdempotencyKey: string
+  commandId: string
 ): string {
-  return `${buildHistoryPath(scopeId)}/create-recoveries/${encodeSegment(
-    createIdempotencyKey
+  return `${buildHistoryPath(scopeId)}/create-recovery/${encodeSegment(
+    commandId
   )}`;
 }
 
@@ -297,10 +297,10 @@ export const chatHistoryApi = {
 
   async recoverCreate(
     scopeId: string,
-    createIdempotencyKey: string
+    commandId: string
   ): Promise<ChatCreateRecovery> {
     return requestJson(
-      buildCreateRecoveryPath(scopeId, createIdempotencyKey),
+      buildCreateRecoveryPath(scopeId, commandId),
       decodeChatCreateRecovery
     );
   },
