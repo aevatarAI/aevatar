@@ -54,25 +54,30 @@ public sealed class GarnetSecretKeyValueStoreExpirationTests
     }
 
     [Fact]
-    public async Task CompareSetAsync_LongRelativeTtl_ShouldCarrySecondsFallbackIntoLua()
+    public async Task CompareSetAsync_MaximumRelativeMilliseconds_ShouldKeepInclusivePSETEXBoundary()
     {
-        string? capturedScript = null;
-        RedisValue[]? capturedValues = null;
-        var database = Substitute.For<IDatabase>();
-        database.ScriptEvaluateAsync(
-                Arg.Any<string>(),
-                Arg.Any<RedisKey[]>(),
-                Arg.Any<RedisValue[]>(),
-                Arg.Any<CommandFlags>())
-            .Returns(call =>
-            {
-                capturedScript = call.ArgAt<string>(0);
-                capturedValues = call.ArgAt<RedisValue[]>(2);
-                return Task.FromResult(RedisResult.Create((RedisValue)1));
-            });
-        var connection = Substitute.For<IGarnetSecretConnection>();
-        connection.GetDatabase(Arg.Any<int>()).Returns(database);
-        var store = new GarnetSecretKeyValueStore(connection, CreateOptions());
+        var (store, _, capture) = CreateCompareSetStore();
+
+        var replaced = await store.CompareSetAsync(
+            "boundary-cas-ttl",
+            new byte[] { 0x01 },
+            new byte[] { 0x02 },
+            TimeSpan.FromMilliseconds(int.MaxValue));
+
+        replaced.Should().BeTrue();
+        capture.Script.Should().Contain("elseif effectiveTtl > maximumRelativeMilliseconds then");
+        capture.Script.Should().Contain(
+            "redis.call('PSETEX', KEYS[1], math.max(1, effectiveTtl), ARGV[2])");
+        capture.Values.Should().NotBeNull();
+        capture.Values.Should().HaveCount(4);
+        capture.Values![2].ToString().Should().Be(int.MaxValue.ToString());
+        capture.Values[3].ToString().Should().Be(int.MaxValue.ToString());
+    }
+
+    [Fact]
+    public async Task CompareSetAsync_LongRelativeTtl_ShouldPassExactMillisecondsAndCeilingSecondsLua()
+    {
+        var (store, _, capture) = CreateCompareSetStore();
 
         var replaced = await store.CompareSetAsync(
             "long-cas-ttl",
@@ -81,11 +86,52 @@ public sealed class GarnetSecretKeyValueStoreExpirationTests
             TimeSpan.FromDays(90) + TimeSpan.FromMilliseconds(123));
 
         replaced.Should().BeTrue();
-        capturedScript.Should().Contain("effectiveTtl > maximumRelativeMilliseconds");
-        capturedScript.Should().Contain("'EX'");
-        capturedValues.Should().NotBeNull();
-        capturedValues.Should().HaveCount(4);
-        capturedValues![3].ToString().Should().Be(int.MaxValue.ToString());
+        capture.Script.Should().Contain(
+            "redis.call('SET', KEYS[1], ARGV[2], 'EX', math.ceil(effectiveTtl / 1000))");
+        capture.Values.Should().NotBeNull();
+        capture.Values.Should().HaveCount(4);
+        capture.Values![2].ToString().Should().Be("7776000123");
+        capture.Values[3].ToString().Should().Be(int.MaxValue.ToString());
+    }
+
+    [Fact]
+    public async Task CompareSetAsync_NullExpiry_ShouldPassPersistentSentinelAndSetBranch()
+    {
+        var (store, _, capture) = CreateCompareSetStore();
+
+        var replaced = await store.CompareSetAsync(
+            "persistent-cas",
+            new byte[] { 0x01 },
+            new byte[] { 0x02 },
+            null);
+
+        replaced.Should().BeTrue();
+        capture.Script.Should().Contain(
+            """
+            if effectiveTtl == -1 then
+                redis.call('SET', KEYS[1], ARGV[2])
+            elseif effectiveTtl > maximumRelativeMilliseconds then
+            """);
+        capture.Values.Should().NotBeNull();
+        capture.Values.Should().HaveCount(4);
+        capture.Values![2].ToString().Should().Be("-1");
+        capture.Values[3].ToString().Should().Be(int.MaxValue.ToString());
+    }
+
+    [Fact]
+    public async Task CompareSetAsync_ExpiryBeyondWholeSecondRange_ShouldRejectBeforeLua()
+    {
+        var (store, database, _) = CreateCompareSetStore();
+
+        var act = () => store.CompareSetAsync(
+            "unsupported-cas-ttl",
+            new byte[] { 0x01 },
+            new byte[] { 0x02 },
+            TimeSpan.FromSeconds((double)int.MaxValue + 1));
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>()
+            .WithMessage("*whole-second range*");
+        database.ReceivedCalls().Should().BeEmpty();
     }
 
     [GarnetIntegrationFact]
@@ -121,6 +167,32 @@ public sealed class GarnetSecretKeyValueStoreExpirationTests
         }
     }
 
+    private static (
+        GarnetSecretKeyValueStore Store,
+        IDatabase Database,
+        CompareSetCapture Capture) CreateCompareSetStore()
+    {
+        var capture = new CompareSetCapture();
+        var database = Substitute.For<IDatabase>();
+        database.ScriptEvaluateAsync(
+                Arg.Any<string>(),
+                Arg.Any<RedisKey[]>(),
+                Arg.Any<RedisValue[]>(),
+                Arg.Any<CommandFlags>())
+            .Returns(call =>
+            {
+                capture.Script = call.ArgAt<string>(0);
+                capture.Values = call.ArgAt<RedisValue[]>(2);
+                return Task.FromResult(RedisResult.Create((RedisValue)1));
+            });
+        database.ClearReceivedCalls();
+
+        var connection = Substitute.For<IGarnetSecretConnection>();
+        connection.GetDatabase(Arg.Any<int>()).Returns(database);
+        var store = new GarnetSecretKeyValueStore(connection, CreateOptions());
+        return (store, database, capture);
+    }
+
     private static GarnetSecretKeyValueStore CreateStore(Action<Expiration> captureExpiration)
     {
         var database = Substitute.For<IDatabase>();
@@ -146,4 +218,11 @@ public sealed class GarnetSecretKeyValueStoreExpirationTests
         SecretVaultPrefix = "test:secret-vault",
         RuntimeSecretPrefix = "test:runtime-secrets",
     };
+
+    private sealed class CompareSetCapture
+    {
+        public string? Script { get; set; }
+
+        public RedisValue[]? Values { get; set; }
+    }
 }
