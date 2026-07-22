@@ -15,6 +15,8 @@ public interface IScriptRuntimeCommandPort
         string requestedEventType,
         string? scopeId,
         string? completionNotificationActorId,
+        string? completionNotificationDeliveryId,
+        long completionNotificationExpiresAtUnixMs,
         CancellationToken ct);
 
     Task RunRuntimeAsync(
@@ -36,6 +38,8 @@ public interface IScriptRuntimeCommandPort
             requestedEventType,
             scopeId: null,
             completionNotificationActorId: null,
+            completionNotificationDeliveryId: null,
+            completionNotificationExpiresAtUnixMs: 0,
             ct);
 
     Task RunRuntimeAsync(
@@ -58,6 +62,8 @@ public interface IScriptRuntimeCommandPort
             requestedEventType,
             scopeId,
             completionNotificationActorId: null,
+            completionNotificationDeliveryId: null,
+            completionNotificationExpiresAtUnixMs: 0,
             ct);
 
     // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
@@ -85,5 +91,34 @@ public interface IScriptRuntimeCommandPort
             requestedEventType,
             scopeId,
             completionNotificationActorId: null,
+            completionNotificationDeliveryId: null,
+            completionNotificationExpiresAtUnixMs: 0,
+            ct);
+
+    Task RunRuntimeAsync(
+        string runtimeActorId,
+        string runId,
+        string commandId,
+        string correlationId,
+        Any? inputPayload,
+        string scriptRevision,
+        string definitionActorId,
+        string requestedEventType,
+        string? scopeId,
+        string? completionNotificationActorId,
+        CancellationToken ct) =>
+        RunRuntimeAsync(
+            runtimeActorId,
+            runId,
+            commandId,
+            correlationId,
+            inputPayload,
+            scriptRevision,
+            definitionActorId,
+            requestedEventType,
+            scopeId,
+            completionNotificationActorId,
+            completionNotificationDeliveryId: null,
+            completionNotificationExpiresAtUnixMs: 0,
             ct);
 }

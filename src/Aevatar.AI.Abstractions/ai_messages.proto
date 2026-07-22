@@ -79,6 +79,8 @@ message RoleChatRunContext {
   string command_id = 2;
   string correlation_id = 3;
   string completion_notification_actor_id = 4;
+  string completion_notification_delivery_id = 5;
+  int64 completion_notification_expires_at_unix_ms = 6;
 }
 
 message LLMControlContextPayload {
@@ -494,10 +496,41 @@ message RoleChatSessionProgressedEvent {
   }
 }
 
+enum RoleChatCompletionNotificationDeliveryStatus {
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_UNSPECIFIED = 0;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_PREPARED = 1;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_RETRY_SCHEDULED = 2;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_DISPATCHED = 3;
+  ROLE_CHAT_COMPLETION_NOTIFICATION_DELIVERY_STATUS_EXPIRED = 4;
+}
+
+message RoleChatCompletionNotificationRetryScheduledEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  string callback_id = 4;
+  google.protobuf.Timestamp retry_at = 5;
+}
+
+message RoleChatCompletionNotificationRetryFiredEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+}
+
 message RoleChatCompletionNotificationDispatchedEvent {
   string session_id = 1;
   RoleChatRunContext run_context = 2;
   int64 dispatched_at_unix_time_ms = 3;
+  string delivery_id = 4;
+  int32 attempt = 5;
+}
+
+message RoleChatCompletionNotificationExpiredEvent {
+  string session_id = 1;
+  string delivery_id = 2;
+  int32 attempt = 3;
+  int64 expired_at_unix_time_ms = 4;
 }
 
 message InitializeRoleAgentEvent {
@@ -594,6 +627,8 @@ message ToolApprovalDecisionEvent {
 }
 
 message RoleChatSessionState {
+  reserved 19;
+  reserved "completion_notification_dispatched";
   string prompt = 1;
   bool completed = 2;
   string final_content = 3;
@@ -612,9 +647,12 @@ message RoleChatSessionState {
   string safe_message = 16;
   google.protobuf.Timestamp terminal_time = 17;
   RoleChatRunContext run_context = 18;
-  bool completion_notification_dispatched = 19;
   int64 last_progress_sequence = 20;
   repeated ToolResultEvent tool_results = 21;
+  RoleChatCompletionNotificationDeliveryStatus completion_notification_delivery_status = 22;
+  int32 completion_notification_attempt = 23;
+  string completion_notification_retry_callback_id = 24;
+  google.protobuf.Timestamp completion_notification_retry_at = 25;
 }
 
 message RoleGAgentState {

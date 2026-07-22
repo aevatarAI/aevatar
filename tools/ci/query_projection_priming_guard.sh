@@ -56,7 +56,41 @@ identity_oauth_hits="$(
     || true
 )"
 
-if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}" ]]; then
+schedule_port="src/Aevatar.Studio.Application/Studio/Services/StudioMemberWorkflowSchedulePort.cs"
+schedule_preflight_body="$(
+  awk '
+    /public async Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync\(/ {
+      capture = 1
+    }
+    capture {
+      print
+      opens = gsub(/\{/, "{")
+      closes = gsub(/\}/, "}")
+      depth += opens - closes
+      if (opens > 0) {
+        opened = 1
+      }
+      if (opened && depth == 0) {
+        exit
+      }
+    }
+  ' "${schedule_port}"
+)"
+
+schedule_preflight_hits="$(
+  printf '%s\n' "${schedule_preflight_body}" \
+    | rg -n "PlanWithCatalogRefreshRetryAsync|ResolveProvisioningBearerTokenAsync|_catalogRefreshPort|\\.RefreshAsync\\(|EnsureActorProjectionAsync|EnsureProjectionForActorAsync|EnsureAndAttachLeaseAsync|AttachLiveSinkAsync|ActivateAsync|PrimeAsync|ObserveAsync|WaitFor.*ObservedAsync|PollAsync" \
+    || true
+)"
+
+schedule_preflight_contract_error=""
+if [[ -z "${schedule_preflight_body}" ]]; then
+  schedule_preflight_contract_error="Studio schedule PreflightAsync was not found in ${schedule_port}."
+elif ! printf '%s\n' "${schedule_preflight_body}" | rg -q "_authorizationPlanner\\.PlanAsync\\("; then
+  schedule_preflight_contract_error="Studio schedule PreflightAsync must query the authorization planner directly."
+fi
+
+if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}${schedule_preflight_hits}${schedule_preflight_contract_error}" ]]; then
   if [[ -n "${hits}" ]]; then
     echo "${hits}"
   fi
@@ -79,6 +113,13 @@ if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${
   if [[ -n "${identity_oauth_hits}" ]]; then
     echo "${identity_oauth_hits}"
     echo "Identity OAuth endpoints/bootstrap must use typed CQRS dispatch and accepted/pending ACKs, not projection readiness, rebuild observation, or readmodel polling."
+  fi
+  if [[ -n "${schedule_preflight_hits}" ]]; then
+    echo "${schedule_preflight_hits}"
+    echo "Studio schedule PreflightAsync must not refresh catalogs, issue credentials, observe/poll materialization, or invoke projection lifecycle helpers."
+  fi
+  if [[ -n "${schedule_preflight_contract_error}" ]]; then
+    echo "${schedule_preflight_contract_error}"
   fi
   echo "Query/read paths must not trigger projection priming, activation, or lifecycle control."
   exit 1

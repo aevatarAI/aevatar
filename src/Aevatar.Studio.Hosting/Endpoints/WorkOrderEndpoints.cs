@@ -110,9 +110,17 @@ internal static class WorkOrderEndpoints
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return denied;
 
+        WorkOrderCurrentStateResponse response;
         try
         {
-            return Results.Ok(await service.GetAsync(scopeId, workOrderId, ct));
+            response = await service.GetAsync(scopeId, workOrderId, ct);
+        }
+        catch (ArgumentException ex) when (
+            string.Equals(ex.ParamName, nameof(workOrderId), StringComparison.Ordinal))
+        {
+            return BadRequest(
+                "INVALID_WORK_ORDER_ID",
+                "The WorkOrder identity is malformed.");
         }
         catch (WorkOrderNotFoundException ex)
         {
@@ -122,6 +130,8 @@ internal static class WorkOrderEndpoints
         {
             return BadRequest("INVALID_WORK_ORDER_REQUEST", ex.Message);
         }
+
+        return Results.Ok(response);
     }
 
     internal static Task<IResult> HandleReassignAsync(
@@ -213,10 +223,17 @@ internal static class WorkOrderEndpoints
         if (!TryResolvePrincipal(http.User, out var principal))
             return Results.Unauthorized();
 
+        WorkOrderAcceptedReceipt receipt;
         try
         {
-            var receipt = await command(principal, ct);
-            return Results.Accepted(BuildLocation(scopeId, workOrderId), receipt);
+            receipt = await command(principal, ct);
+        }
+        catch (ArgumentException ex) when (
+            string.Equals(ex.ParamName, nameof(workOrderId), StringComparison.Ordinal))
+        {
+            return BadRequest(
+                "INVALID_WORK_ORDER_ID",
+                "The WorkOrder identity is malformed.");
         }
         catch (WorkOrderNotFoundException ex)
         {
@@ -226,6 +243,8 @@ internal static class WorkOrderEndpoints
         {
             return BadRequest("INVALID_WORK_ORDER_COMMAND", ex.Message);
         }
+
+        return Results.Accepted(BuildLocation(scopeId, workOrderId), receipt);
     }
 
     private static bool TryResolvePrincipal(

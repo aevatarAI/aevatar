@@ -7,6 +7,7 @@ import {
   FileOutlined,
   FolderOpenOutlined,
   MessageOutlined,
+  ReloadOutlined,
   RightOutlined,
   SearchOutlined,
   SettingOutlined,
@@ -194,6 +195,10 @@ function matchesSearch(values: Array<string | null | undefined>, search: string)
   return values.some((value) => String(value || '').toLowerCase().includes(keyword));
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function formatScriptTreeLabel(detail: ScopedScriptDetail, index: number): string {
   const record = detail as ScopedScriptDetail & {
     script?: { displayName?: string | null; name?: string | null } | null;
@@ -228,6 +233,17 @@ function fileKeyIsVisible(
   }
 
   return visibleStaticFiles.includes(fileKey);
+}
+
+function formatChatTurnCount(count: number): string {
+  const normalizedCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+  return normalizedCount === 1
+    ? t("pages.studio.studiofilespage.chat.history.turn.count.one", "1 turn")
+    : t(
+        "pages.studio.studiofilespage.chat.history.turn.count.many",
+        "{count} turns",
+        { count: normalizedCount },
+      );
 }
 
 const TreeRow: React.FC<{
@@ -297,6 +313,8 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   onOpenScriptInStudio,
   showHeader = true,
 }) => {
+  const scopeIdRef = React.useRef(scopeId);
+  scopeIdRef.current = scopeId;
   const [selectedFile, setSelectedFile] = React.useState<StudioFileKey>('settings.json');
   const [viewMode, setViewMode] = React.useState<FilesViewMode>('curated');
   const [explorerDirty, setExplorerDirty] = React.useState(false);
@@ -306,6 +324,8 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   const [workflowsOpen, setWorkflowsOpen] = React.useState(true);
   const [scriptsOpen, setScriptsOpen] = React.useState(true);
   const [chatHistoriesOpen, setChatHistoriesOpen] = React.useState(false);
+  const [deletedChatConversationIds, setDeletedChatConversationIds] =
+    React.useState<ReadonlySet<string>>(() => new Set());
   const explorer = useExplorerStore(scopeId);
 
   const scripts = useQuery({
@@ -317,6 +337,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
     queryKey: ['studio-files-chat-histories', scopeId],
     enabled: Boolean(scopeId),
     queryFn: () => chatHistoryApi.listConversationMetas(scopeId),
+    retry: false,
   });
 
   const filteredWorkflows = React.useMemo(
@@ -363,16 +384,20 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
         .map((item) => item.file),
     [search],
   );
+  const availableChatConversations = React.useMemo(
+    () =>
+      (chatConversations.data ?? []).filter(
+        (conversation) => !deletedChatConversationIds.has(conversation.id),
+      ),
+    [chatConversations.data, deletedChatConversationIds],
+  );
   const filteredChatConversations = React.useMemo(
     () =>
-      [...(chatConversations.data ?? [])]
+      [...availableChatConversations]
         .filter((conversation) =>
           matchesSearch(
             [
               conversation.id,
-              conversation.actorId,
-              conversation.commandId,
-              conversation.runId,
               conversation.title,
               conversation.serviceId,
               conversation.serviceKind,
@@ -381,7 +406,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
           ),
         )
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-    [chatConversations.data, search],
+    [availableChatConversations, search],
   );
   const visibleExplorerKeys = React.useMemo(
     () =>
@@ -391,6 +416,27 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
         )
         .map((entry) => entry.key),
     [explorer.manifest, search],
+  );
+
+  React.useEffect(() => {
+    setDeletedChatConversationIds(new Set());
+  }, [scopeId]);
+
+  const handleChatConversationDeleted = React.useCallback(
+    (operationScopeId: string, conversationId: string) => {
+      if (scopeIdRef.current !== operationScopeId) {
+        return;
+      }
+      setDeletedChatConversationIds((current) => {
+        const next = new Set(current);
+        next.add(conversationId);
+        return next;
+      });
+      setSelectedFile((current) =>
+        current === `chat-history:${conversationId}` ? 'settings.json' : current,
+      );
+    },
+    [],
   );
 
   React.useEffect(() => {
@@ -716,7 +762,7 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
               <FolderToggle
                 label="chat-histories/"
                 open={chatHistoriesOpen}
-                count={scopeId ? chatConversations.data?.length ?? 0 : 0}
+                count={scopeId ? availableChatConversations.length : 0}
                 onToggle={() => setChatHistoriesOpen((current) => !current)}
               />
               {chatHistoriesOpen ? (
@@ -729,10 +775,33 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                         icon={<MessageOutlined />}
                         indent
                         label={conversation.title || t("pages.studio.studiofilespage.chat.history", "Chat history")}
-                        meta={`${conversation.messageCount} messages`}
+                        meta={formatChatTurnCount(conversation.messageCount)}
                         onClick={() => setSelectedFile(`chat-history:${conversation.id}`)}
                       />
                     ))
+                  ) : chatConversations.isError ? (
+                    <Alert
+                      action={
+                        <Button
+                          aria-label={t(
+                            "pages.studio.studiofilespage.retry.conversations",
+                            "Retry conversations",
+                          )}
+                          icon={<ReloadOutlined />}
+                          onClick={() => void chatConversations.refetch()}
+                          size="small"
+                          type="text"
+                        />
+                      }
+                      description={describeError(chatConversations.error)}
+                      message={t(
+                        "pages.studio.studiofilespage.failed.to.load.conversations",
+                        "Failed to load conversations",
+                      )}
+                      showIcon
+                      style={{ marginInline: 12 }}
+                      type="error"
+                    />
                   ) : (
                     <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
                       {chatConversations.isLoading
@@ -775,12 +844,18 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
               connectors={connectors}
               settings={settings}
               scripts={scripts}
-              chatConversations={chatConversations}
+              chatConversations={{
+                data: availableChatConversations,
+                error: chatConversations.error,
+                isError: chatConversations.isError,
+                isLoading: chatConversations.isLoading,
+              }}
               scopeId={scopeId}
               workflowStorageMode={workflowStorageMode}
               scriptsEnabled={scriptsEnabled}
               onOpenWorkflowInStudio={onOpenWorkflowInStudio}
               onOpenScriptInStudio={onOpenScriptInStudio}
+              onChatConversationDeleted={handleChatConversationDeleted}
             />
           )}
         </section>

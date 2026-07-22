@@ -1384,11 +1384,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
       document: mockWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
-    (studioApi.serializeYaml as jest.Mock).mockResolvedValueOnce({
-      document: mockWorkflowDocument,
-      findings: [],
-      yaml: "name: Serialized Workflow Alpha\nsteps:\n  - id: triage\n    type: llm_call\n",
-    });
+    let resolveSerialize: ((value: unknown) => void) | null = null;
+    (studioApi.serializeYaml as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSerialize = resolve;
+        }),
+    );
 
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
@@ -1397,23 +1399,35 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     clickYamlAction("Edit YAML");
 
+    expect(await screen.findByLabelText("Workflow YAML panel")).toBeTruthy();
+    expect(screen.queryByLabelText("Workflow YAML editor")).toBeNull();
+    expect(screen.getByRole("button", { name: "Apply to draft" })).toBeDisabled();
+    expect(studioApi.serializeYaml).toHaveBeenCalledWith(
+      expect.objectContaining({
+        availableStepTypes: expect.any(Array),
+        document: expect.objectContaining({
+          name: "Workflow Alpha",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ id: "triage", type: "llm_call" }),
+          ]),
+        }),
+      }),
+    );
+
+    await act(async () => {
+      resolveSerialize?.({
+        document: mockWorkflowDocument,
+        findings: [],
+        yaml: "name: Serialized Workflow Alpha\nsteps:\n  - id: triage\n    type: llm_call\n",
+      });
+    });
+
     const yamlView = await screen.findByLabelText("Workflow YAML editor");
     await waitFor(() => {
       const yamlValue = (yamlView as HTMLTextAreaElement).value;
       expect(yamlValue).toContain("Serialized Workflow Alpha");
       expect(yamlValue).toContain("id: triage");
       expect(yamlValue).not.toContain("Stale Workflow Alpha");
-      expect(studioApi.serializeYaml).toHaveBeenCalledWith(
-        expect.objectContaining({
-          availableStepTypes: expect.any(Array),
-          document: expect.objectContaining({
-            name: "Workflow Alpha",
-            steps: expect.arrayContaining([
-              expect.objectContaining({ id: "triage", type: "llm_call" }),
-            ]),
-          }),
-        }),
-      );
     });
     expect(yamlView.tagName).toBe("TEXTAREA");
     expect((yamlView as HTMLTextAreaElement).wrap).toBe("off");
@@ -4859,8 +4873,73 @@ describe("TeamMemberWorkflowStudioPage", () => {
         }),
       );
     });
+    await waitFor(() => {
+      expect(screen.queryByText("Unapplied")).toBeNull();
+      expect(applyButton).toBeDisabled();
+    });
+    fireEvent.change(yamlView, {
+      target: {
+        value: `${(yamlView as HTMLTextAreaElement).value}\n# local edit\n`,
+      },
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Unapplied")).toBeTruthy();
+      expect(applyButton).toBeEnabled();
+    });
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+  });
+
+  it("keeps Apply to draft enabled after a valid YAML apply failure", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    (studioApi.serializeYaml as jest.Mock).mockImplementation(
+      async ({ document }) => {
+        if (document.name === "Rejected apply") {
+          throw new Error("Apply serialization failed");
+        }
+
+        return {
+          document,
+          findings: [],
+          yaml: `name: ${document.name}\nsteps:\n${(document.steps ?? [])
+            .map((step: { id?: string; type?: string }) => `  - id: ${step.id}\n    type: ${step.type}`)
+            .join("\n")}`,
+        };
+      },
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await screen.findByLabelText("Workflow title");
+    clickYamlAction("Edit YAML");
+    const editor = await screen.findByLabelText("Workflow YAML editor");
+    const applyButton = screen.getByRole("button", { name: "Apply to draft" });
+    expect(applyButton).toBeDisabled();
+
+    fireEvent.change(editor, {
+      target: {
+        value:
+          "name: Rejected apply\nsteps:\n  - id: triage\n    type: llm_call\n",
+      },
+    });
+    await waitFor(() => {
+      expect(applyButton).toBeEnabled();
+    });
+
+    fireEvent.click(applyButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Apply serialization failed")).toBeTruthy();
+      expect(applyButton).toBeEnabled();
+    });
+    expect(editor).toHaveValue(
+      "name: Rejected apply\nsteps:\n  - id: triage\n    type: llm_call\n",
+    );
+    expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:0");
   });
 
   it("keeps invalid YAML in the buffer and preserves the current graph", async () => {
@@ -5164,7 +5243,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     const editor = await screen.findByLabelText("Workflow YAML editor");
     const applyButton = screen.getByRole("button", { name: "Apply to draft" });
     await waitFor(() => {
-      expect(applyButton).toBeEnabled();
+      expect(applyButton).toBeDisabled();
     });
 
     fireEvent.change(titleInput, {
@@ -5175,7 +5254,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect((editor as HTMLTextAreaElement).value).toContain(
         "name: Renamed member",
       );
-      expect(applyButton).toBeEnabled();
+      expect(applyButton).toBeDisabled();
       expect(
         screen.queryByText(
           "This YAML buffer is stale because the canvas or source draft changed.",

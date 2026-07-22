@@ -30,6 +30,8 @@ public sealed class RunScriptRuntimeCommandEnvelopeFactory
                 CorrelationId = context.CorrelationId ?? string.Empty,
                 ScopeId = command.ScopeId ?? string.Empty,
                 CompletionNotificationActorId = command.CompletionNotificationActorId ?? string.Empty,
+                CompletionNotificationDeliveryId = command.CompletionNotificationDeliveryId ?? string.Empty,
+                CompletionNotificationExpiresAtUnixMs = command.CompletionNotificationExpiresAtUnixMs,
             });
         envelope.Id = context.CommandId;
         envelope.EnsureRuntime().EnsureDeduplication().OperationId = context.CommandId;
