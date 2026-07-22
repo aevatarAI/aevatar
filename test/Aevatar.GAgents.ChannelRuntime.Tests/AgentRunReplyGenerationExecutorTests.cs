@@ -154,6 +154,41 @@ public sealed class AgentRunReplyGenerationExecutorTests
         provider.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task BuildLlmStepContinuation_WhenProviderCallsTool_ShouldExecuteExactFinalRequestToolBeforeContinuation()
+    {
+        var tool = new CountingTool("use_skill");
+        var provider = new ToolCallProvider(tool.Name);
+        var tools = new ToolManager();
+        tools.Register(tool);
+        var runtime = new ChatRuntime(
+            () => provider,
+            new ChatHistory(),
+            new ToolCallLoop(tools),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = tools.GetAll() });
+        var plan = new AgentRunReplyStepPlan(
+            runtime.CreateStepExecutor(turnCatalog: null),
+            new Dictionary<string, string>(),
+            LLMControlContext.Empty,
+            AgentToolExecutionContext.Empty,
+            InitialMessages: [],
+            MaxToolRounds: 1);
+        var executor = new AgentRunReplyGenerationExecutor(
+            Substitute.For<IActorDispatchPort>(),
+            new StaticStepPlanReplyGenerator(plan),
+            interactiveReplyCollector: null,
+            relayOptions: null,
+            NullLogger<AgentRunReplyGenerationExecutor>.Instance);
+        var workItem = BuildToolEnabledWorkItem();
+
+        var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+
+        continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
+            .Which.Name.Should().Be(tool.Name);
+        tool.ExecuteCount.Should().Be(1);
+    }
+
     private static AgentRunReplyGenerationExecutor CreateExecutor(
         RecordingProvider provider,
         IFileArtifactReadPort? fileArtifactReadPort = null)
@@ -219,6 +254,38 @@ public sealed class AgentRunReplyGenerationExecutorTests
             stepState);
     }
 
+    private static AgentRunReplyStepExecutionRequest BuildToolEnabledWorkItem()
+    {
+        var request = new NeedsLlmReplyEvent
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-1",
+            TargetActorId = "conversation-actor",
+            Activity = new ChatActivity
+            {
+                Id = "activity-1",
+                Content = new MessageContent { Text = "run" },
+            },
+        };
+        var stepState = new AgentRunReplyStepState
+        {
+            RunId = "run-1",
+            CorrelationId = "corr-1",
+            TargetActorId = "conversation-actor",
+            Attempt = 1,
+            NextStepIndex = 1,
+            MaxToolRounds = 1,
+        };
+        stepState.Messages.Add(AgentRunReplyStepMappers.ToProto(ChatMessage.User("run")));
+        return new AgentRunReplyStepExecutionRequest(
+            "run-1",
+            "channel-agent-run:run-1",
+            Attempt: 1,
+            StepIndex: 1,
+            request,
+            stepState);
+    }
+
     private sealed class RecordingProvider : ILLMProvider
     {
         public string Name => "recording-provider";
@@ -231,6 +298,41 @@ public sealed class AgentRunReplyGenerationExecutorTests
             Requests.Add(request);
             yield return new LLMStreamChunk { DeltaContent = "final" };
             await Task.Yield();
+        }
+    }
+
+    private sealed class ToolCallProvider(string toolName) : ILLMProvider
+    {
+        public string Name => "tool-call-provider";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-1",
+                    Name = toolName,
+                    ArgumentsJson = "{}",
+                },
+            };
+            await Task.Yield();
+        }
+    }
+
+    private sealed class CountingTool(string name) : IAgentTool
+    {
+        public int ExecuteCount { get; private set; }
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("{}");
         }
     }
 
