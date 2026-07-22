@@ -116,7 +116,7 @@ describe("chatHistoryApi", () => {
     (authFetch as jest.Mock).mockResolvedValue(
       jsonResponse({
         conversationId: "conversation-a",
-        sourceVersion: 3,
+        stateVersion: 3,
         status: "append_committed",
         turnId: "turn-a",
       })
@@ -126,12 +126,12 @@ describe("chatHistoryApi", () => {
       chatHistoryApi.recoverCreate("scope/a", "create/key")
     ).resolves.toEqual({
       conversationId: "conversation-a",
-      sourceVersion: 3,
+      stateVersion: 3,
       status: "append_committed",
       turnId: "turn-a",
     });
     expect(authFetch).toHaveBeenCalledWith(
-      "/api/scopes/scope%2Fa/chat-history/create-recoveries/create%2Fkey",
+      "/api/scopes/scope%2Fa/chat-history/create-recovery/create%2Fkey",
       {
         headers: { Accept: "application/json" },
         method: "GET",
@@ -140,7 +140,7 @@ describe("chatHistoryApi", () => {
     expect(() =>
       decodeChatCreateRecovery({
         conversationId: "conversation-a",
-        sourceVersion: -1,
+        stateVersion: -1,
         status: "reserved",
         turnId: "turn-a",
       })
