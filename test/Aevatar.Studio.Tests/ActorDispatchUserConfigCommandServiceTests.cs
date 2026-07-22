@@ -83,6 +83,36 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
         receipt.AckedAtUtc.Should().Be(ackedAt);
     }
 
+    [Fact]
+    public async Task UpdateAsync_ShouldMapOnlyPresentFieldsAndKeepResourceKindsDistinct()
+    {
+        var dispatch = RecordingDispatchPort.Accepting();
+        var service = CreateService(dispatch);
+        var selection = new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            "/api/v1/proxy/s/chrono-llm-public",
+            "us-alpha",
+            "chrono-llm-public");
+
+        await service.UpdateAsync(
+            UserConfigResourceKey.ForOwnerScope("binding-alpha"),
+            new UserConfigUpdate(DefaultModel: "gpt-5.5", LlmSelection: selection));
+        await service.UpdateAsync(
+            UserConfigResourceKey.ForChannelBinding("alpha"),
+            new UserConfigUpdate(DefaultModel: "claude-4"));
+
+        dispatch.Dispatches.Select(x => x.ActorId).Should().Equal(
+            "user-config-binding-alpha",
+            "channel-user-config-alpha");
+        var command = dispatch.Dispatches[0].Envelope.Payload.Unpack<UpdateUserConfigCommand>();
+        command.HasDefaultModel.Should().BeTrue();
+        command.HasRuntimeMode.Should().BeFalse();
+        command.LlmSelection.NyxIdUserServiceId.Should().Be("us-alpha");
+    }
+
+    private static ActorDispatchUserConfigCommandService CreateService(RecordingDispatchPort dispatch) =>
+        new(new RecordingBootstrap(), dispatch, new StubScopeResolver("scope-alpha"));
+
     private sealed class RecordingBootstrap : IStudioActorBootstrap
     {
         public List<string> EnsuredActorIds { get; } = [];
@@ -111,6 +141,14 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     private sealed class RecordingDispatchPort(DispatchAdmission admission) : IActorDispatchPort
     {
         public List<DispatchedCommand> Dispatches { get; } = [];
+
+        public static RecordingDispatchPort Accepting() =>
+            new(new DispatchAdmission(
+                Accepted: true,
+                CommandId: "command-alpha",
+                AckedAt: DateTimeOffset.Parse("2026-07-22T08:00:00Z"),
+                ActorId: "user-config-binding-alpha",
+                CorrelationId: "correlation-alpha"));
 
         public Task<DispatchAdmission> DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
         {

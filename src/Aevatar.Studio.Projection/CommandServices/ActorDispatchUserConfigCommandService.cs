@@ -13,7 +13,6 @@ namespace Aevatar.Studio.Projection.CommandServices;
 /// </summary>
 internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommandService
 {
-    private const string ActorIdPrefix = "user-config-";
     private const string DirectRoute = "aevatar.studio.projection.user-config";
 
     private readonly IStudioActorBootstrap _bootstrap;
@@ -32,6 +31,32 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
 
     public Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default) =>
         SaveAsync(_scopeResolver.Resolve()?.ScopeId ?? "default", config, ct);
+
+    public Task<UserConfigSaveReceipt> UpdateAsync(
+        UserConfigResourceKey resource,
+        UserConfigUpdate update,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+
+        var command = new UpdateUserConfigCommand();
+        if (update.DefaultModel is not null)
+            command.DefaultModel = update.DefaultModel;
+        if (update.LlmSelection is not null)
+            command.LlmSelection = MapSelection(update.LlmSelection);
+        if (update.RuntimeMode is not null)
+            command.RuntimeMode = update.RuntimeMode;
+        if (update.LocalRuntimeBaseUrl is not null)
+            command.LocalRuntimeBaseUrl = update.LocalRuntimeBaseUrl;
+        if (update.RemoteRuntimeBaseUrl is not null)
+            command.RemoteRuntimeBaseUrl = update.RemoteRuntimeBaseUrl;
+        if (update.GithubUsername is not null)
+            command.GithubUsername = update.GithubUsername;
+        if (update.MaxToolRounds.HasValue)
+            command.MaxToolRounds = update.MaxToolRounds.Value;
+
+        return DispatchAsync(resource, command, ct);
+    }
 
     public async Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default)
     {
@@ -71,9 +96,40 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private async Task<UserConfigSaveReceipt> DispatchAsync(string scopeId, IMessage payload, CancellationToken ct)
+    private static string BuildActorId(UserConfigResourceKey resource) => resource.Kind switch
     {
-        var actorId = ActorIdPrefix + NormalizeScopeId(scopeId);
+        UserConfigResourceKind.OwnerScope => $"user-config-{resource.Value}",
+        UserConfigResourceKind.ChannelBinding => $"channel-user-config-{resource.Value}",
+        _ => throw new ArgumentOutOfRangeException(nameof(resource)),
+    };
+
+    private static UserLlmSelection MapSelection(UserLlmSelectionValue selection) =>
+        new()
+        {
+            RouteKind = selection.Kind switch
+            {
+                UserLlmSelectionKind.Unspecified => UserLlmRouteKind.Unspecified,
+                UserLlmSelectionKind.Gateway => UserLlmRouteKind.Gateway,
+                UserLlmSelectionKind.NyxIdUserService => UserLlmRouteKind.NyxIdUserService,
+                _ => throw new ArgumentOutOfRangeException(nameof(selection)),
+            },
+            RouteValue = selection.RouteValue,
+            NyxIdUserServiceId = selection.NyxIdUserServiceId,
+            ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
+        };
+
+    private Task<UserConfigSaveReceipt> DispatchAsync(string scopeId, IMessage payload, CancellationToken ct) =>
+        DispatchAsync(
+            UserConfigResourceKey.ForOwnerScope(NormalizeScopeId(scopeId)),
+            payload,
+            ct);
+
+    private async Task<UserConfigSaveReceipt> DispatchAsync(
+        UserConfigResourceKey resource,
+        IMessage payload,
+        CancellationToken ct)
+    {
+        var actorId = BuildActorId(resource);
         // Refactor (iter56/cluster-910-projection-activation-cleanup):
         //   old=command-path pre-dispatch activation
         //   new=committed-state plan provider
