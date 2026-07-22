@@ -39,11 +39,10 @@ internal sealed class ListAevatarWorkflowsTool : IAgentTool
                 return WorkflowCatalogToolJson.Error("invalid_arguments", error);
 
             var workflows = await _catalog.ListWorkflowCatalogAsync(ct);
-            return WorkflowCatalogToolJson.Serialize(new
-            {
-                workflows,
-                count = workflows.Count,
-            });
+            return WorkflowCatalogToolJson.Serialize(
+                new WorkflowCatalogListJson(
+                    workflows.Select(WorkflowCatalogToolJson.ToJson).ToArray(),
+                    workflows.Count));
         }
         catch (OperationCanceledException)
         {
@@ -117,7 +116,7 @@ internal sealed class GetAevatarWorkflowTool : IAgentTool
                 ? WorkflowCatalogToolJson.Error(
                     "workflow_not_found",
                     $"Workflow '{workflowName}' was not found in the global runnable workflow catalog.")
-                : WorkflowCatalogToolJson.Serialize(detail);
+                : WorkflowCatalogToolJson.Serialize(WorkflowCatalogToolJson.ToJson(detail));
         }
         catch (OperationCanceledException)
         {
@@ -129,6 +128,73 @@ internal sealed class GetAevatarWorkflowTool : IAgentTool
         }
     }
 }
+
+internal sealed record WorkflowCatalogListJson(
+    IReadOnlyList<WorkflowCatalogItemJson> Workflows,
+    int Count);
+
+internal sealed record WorkflowCatalogItemJson(
+    string Name,
+    string Description,
+    string Category,
+    string Group,
+    string GroupLabel,
+    int SortOrder,
+    string Source,
+    string SourceLabel,
+    bool ShowInLibrary,
+    bool IsPrimitiveExample,
+    bool RequiresLlmProvider,
+    IReadOnlyList<string> Primitives,
+    long AuthorityStateVersion,
+    DateTimeOffset ProjectionWatermark,
+    string LastEventId);
+
+internal sealed record WorkflowCatalogDetailJson(
+    WorkflowCatalogItemJson Catalog,
+    string Yaml,
+    WorkflowCatalogDefinitionJson Definition,
+    IReadOnlyList<WorkflowCatalogEdgeJson> Edges);
+
+internal sealed record WorkflowCatalogDefinitionJson(
+    string Name,
+    string Description,
+    bool ClosedWorldMode,
+    IReadOnlyList<WorkflowCatalogRoleJson> Roles,
+    IReadOnlyList<WorkflowCatalogStepJson> Steps);
+
+internal sealed record WorkflowCatalogRoleJson(
+    string Id,
+    string Name,
+    string SystemPrompt,
+    string Provider,
+    string Model,
+    float? Temperature,
+    int? MaxTokens,
+    int? MaxToolRounds,
+    int? MaxHistoryMessages,
+    IReadOnlyList<string> EventModules,
+    string EventRoutes,
+    IReadOnlyList<string> Connectors);
+
+internal sealed record WorkflowCatalogStepJson(
+    string Id,
+    string Type,
+    string TargetRole,
+    IReadOnlyDictionary<string, string> Parameters,
+    string Next,
+    IReadOnlyDictionary<string, string> Branches,
+    IReadOnlyList<WorkflowCatalogChildStepJson> Children);
+
+internal sealed record WorkflowCatalogChildStepJson(
+    string Id,
+    string Type,
+    string TargetRole);
+
+internal sealed record WorkflowCatalogEdgeJson(
+    string From,
+    string To,
+    string Label);
 
 internal static class WorkflowCatalogToolJson
 {
@@ -202,6 +268,70 @@ internal static class WorkflowCatalogToolJson
 
     public static string Error(string code, string message) =>
         Serialize(new WorkflowCatalogToolErrorJson(new WorkflowCatalogToolErrorBody(code, message)));
+
+    public static WorkflowCatalogItemJson ToJson(WorkflowCatalogItem item) =>
+        new(
+            item.Name,
+            item.Description,
+            item.Category,
+            item.Group,
+            item.GroupLabel,
+            item.SortOrder,
+            item.Source,
+            item.SourceLabel,
+            item.ShowInLibrary,
+            item.IsPrimitiveExample,
+            item.RequiresLlmProvider,
+            item.Primitives.ToArray(),
+            item.AuthorityStateVersion,
+            item.ProjectionWatermark,
+            item.LastEventId);
+
+    public static WorkflowCatalogDetailJson ToJson(WorkflowCatalogItemDetail detail) =>
+        new(
+            ToJson(detail.Catalog),
+            detail.Yaml,
+            ToJson(detail.Definition),
+            detail.Edges.Select(ToJson).ToArray());
+
+    private static WorkflowCatalogDefinitionJson ToJson(WorkflowCatalogDefinition definition) =>
+        new(
+            definition.Name,
+            definition.Description,
+            definition.ClosedWorldMode,
+            definition.Roles.Select(ToJson).ToArray(),
+            definition.Steps.Select(ToJson).ToArray());
+
+    private static WorkflowCatalogRoleJson ToJson(WorkflowCatalogRole role) =>
+        new(
+            role.Id,
+            role.Name,
+            role.SystemPrompt,
+            role.Provider,
+            role.Model,
+            role.Temperature,
+            role.MaxTokens,
+            role.MaxToolRounds,
+            role.MaxHistoryMessages,
+            role.EventModules.ToArray(),
+            role.EventRoutes,
+            role.Connectors.ToArray());
+
+    private static WorkflowCatalogStepJson ToJson(WorkflowCatalogStep step) =>
+        new(
+            step.Id,
+            step.Type,
+            step.TargetRole,
+            new Dictionary<string, string>(step.Parameters, StringComparer.Ordinal),
+            step.Next,
+            new Dictionary<string, string>(step.Branches, StringComparer.Ordinal),
+            step.Children.Select(ToJson).ToArray());
+
+    private static WorkflowCatalogChildStepJson ToJson(WorkflowCatalogChildStep child) =>
+        new(child.Id, child.Type, child.TargetRole);
+
+    private static WorkflowCatalogEdgeJson ToJson(WorkflowCatalogEdge edge) =>
+        new(edge.From, edge.To, edge.Label);
 
     private sealed record WorkflowCatalogToolErrorJson(WorkflowCatalogToolErrorBody Error);
 

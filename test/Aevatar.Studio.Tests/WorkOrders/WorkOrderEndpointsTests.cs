@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
@@ -53,6 +54,43 @@ public sealed class WorkOrderEndpointsTests
         service.CreateRequest.Should().BeNull();
     }
 
+    [Fact]
+    public async Task HandleGetAsync_WhenWorkOrderIdIsMalformed_ShouldReturnBadRequest()
+    {
+        var service = new RecordingWorkOrderService
+        {
+            GetException = new ArgumentException("sensitive canonical identity details"),
+        };
+
+        var result = await WorkOrderEndpoints.HandleGetAsync(
+            CreateAuthenticatedContext("requester-1"),
+            ScopeId,
+            "malformed:work-order",
+            service,
+            CancellationToken.None);
+
+        AssertMalformedWorkOrderId(result);
+    }
+
+    [Fact]
+    public async Task HandleDispatchAsync_WhenWorkOrderIdIsMalformed_ShouldReturnBadRequest()
+    {
+        var service = new RecordingWorkOrderService
+        {
+            DispatchException = new ArgumentException("sensitive canonical identity details"),
+        };
+
+        var result = await WorkOrderEndpoints.HandleDispatchAsync(
+            CreateAuthenticatedContext("requester-1"),
+            ScopeId,
+            "malformed:work-order",
+            new DispatchWorkOrderRequest(ExpectedLifecycleVersion: 3),
+            service,
+            CancellationToken.None);
+
+        AssertMalformedWorkOrderId(result);
+    }
+
     private static CreateWorkOrderRequest CreateRequest() =>
         new(
             TeamId: "team-1",
@@ -86,11 +124,26 @@ public sealed class WorkOrderEndpointsTests
         };
     }
 
+    private static void AssertMalformedWorkOrderId(IResult result)
+    {
+        result.Should().BeAssignableTo<IStatusCodeHttpResult>()
+            .Which.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        var value = result.Should().BeAssignableTo<IValueHttpResult>().Which.Value;
+        var payload = JsonSerializer.SerializeToElement(value);
+        payload.GetProperty("code").GetString().Should().Be("INVALID_WORK_ORDER_ID");
+        payload.GetProperty("message").GetString().Should().Be("The WorkOrder identity is malformed.");
+        payload.ToString().Should().NotContain("sensitive canonical identity details");
+    }
+
     private sealed class RecordingWorkOrderService : IWorkOrderService
     {
         public CreateWorkOrderRequest? CreateRequest { get; private set; }
 
         public WorkOrderPrincipalContract? Requester { get; private set; }
+
+        public Exception? GetException { get; init; }
+
+        public Exception? DispatchException { get; init; }
 
         public Task<WorkOrderAcceptedReceipt> CreateAsync(
             string scopeId,
@@ -111,7 +164,9 @@ public sealed class WorkOrderEndpointsTests
             throw new NotSupportedException();
 
         public Task<WorkOrderCurrentStateResponse> GetAsync(string scopeId, string workOrderId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            GetException is null
+                ? throw new NotSupportedException()
+                : Task.FromException<WorkOrderCurrentStateResponse>(GetException);
 
         public Task<WorkOrderAcceptedReceipt> ReassignAsync(string scopeId, string workOrderId, ReassignWorkOrderRequest request, WorkOrderPrincipalContract requester, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -123,7 +178,9 @@ public sealed class WorkOrderEndpointsTests
             throw new NotSupportedException();
 
         public Task<WorkOrderAcceptedReceipt> DispatchAsync(string scopeId, string workOrderId, DispatchWorkOrderRequest request, WorkOrderPrincipalContract requester, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            DispatchException is null
+                ? throw new NotSupportedException()
+                : Task.FromException<WorkOrderAcceptedReceipt>(DispatchException);
 
         public Task<WorkOrderAcceptedReceipt> CancelAsync(string scopeId, string workOrderId, CancelWorkOrderRequest request, WorkOrderPrincipalContract requester, CancellationToken ct = default) =>
             throw new NotSupportedException();

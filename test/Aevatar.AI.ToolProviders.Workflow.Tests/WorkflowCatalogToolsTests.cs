@@ -1,12 +1,36 @@
 using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Aevatar.AI.ToolProviders.Workflow.Tests;
 
 public class WorkflowCatalogToolsTests
 {
+    [Fact]
+    public async Task AddWorkflowTools_ShouldResolveWorkflowCatalogSource()
+    {
+        var port = new RecordingWorkflowCatalogPort();
+        var services = new ServiceCollection();
+        services.AddWorkflowTools();
+
+        var descriptor = services.Should().ContainSingle(item =>
+                item.ServiceType == typeof(IAgentToolSource)
+                && item.ImplementationType == typeof(WorkflowCatalogAgentToolSource))
+            .Subject;
+        var source = ActivatorUtilities.CreateInstance(
+                new SingleServiceProvider(port),
+                descriptor.ImplementationType!)
+            .Should().BeOfType<WorkflowCatalogAgentToolSource>().Subject;
+
+        var tools = await source.DiscoverToolsAsync();
+        tools.Select(tool => tool.Name).Should().Equal(
+            "aevatar_list_workflows",
+            "aevatar_get_workflow");
+    }
+
     [Fact]
     public async Task Source_WithCatalogPort_ShouldDiscoverOnlyAevatarCatalogTools()
     {
@@ -47,6 +71,55 @@ public class WorkflowCatalogToolsTests
         workflow.GetProperty("projection_watermark").GetDateTimeOffset().Should().Be(ProjectionWatermark);
         workflow.GetProperty("last_event_id").GetString().Should().Be("event-7");
         port.Calls.Should().Equal("ListWorkflowCatalog");
+    }
+
+    [Fact]
+    public async Task WorkflowCatalogTools_ShouldForwardCallerCancellationToken()
+    {
+        var port = new RecordingWorkflowCatalogPort();
+        var tools = await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync();
+        using var callerCancellation = new CancellationTokenSource();
+        var callerToken = callerCancellation.Token;
+
+        await tools.Single(item => item.Name == "aevatar_list_workflows")
+            .ExecuteAsync("{}", callerToken);
+        await tools.Single(item => item.Name == "aevatar_get_workflow")
+            .ExecuteAsync("""{"workflow_name":"daily_digest"}""", callerToken);
+
+        port.CancellationTokens.Should().Equal(callerToken, callerToken);
+        port.CancellationTokens.Should().OnlyContain(token =>
+            token.CanBeCanceled && !token.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task ListWorkflows_ShouldExposeExactPropertySets()
+    {
+        AssertWireTypeExists("WorkflowCatalogListJson");
+        AssertWireTypeExists("WorkflowCatalogItemJson");
+        var port = new RecordingWorkflowCatalogPort();
+        var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
+            .Single(item => item.Name == "aevatar_list_workflows");
+
+        var output = await tool.ExecuteAsync("{}");
+
+        using var document = JsonDocument.Parse(output);
+        PropertyNames(document.RootElement).Should().Equal("workflows", "count");
+        PropertyNames(document.RootElement.GetProperty("workflows")[0]).Should().Equal(
+            "name",
+            "description",
+            "category",
+            "group",
+            "group_label",
+            "sort_order",
+            "source",
+            "source_label",
+            "show_in_library",
+            "is_primitive_example",
+            "requires_llm_provider",
+            "primitives",
+            "authority_state_version",
+            "projection_watermark",
+            "last_event_id");
     }
 
     [Fact]
@@ -96,6 +169,76 @@ public class WorkflowCatalogToolsTests
         root.GetProperty("edges")[0].GetProperty("from").GetString().Should().Be("collect");
         root.GetProperty("edges")[0].GetProperty("to").GetString().Should().Be("summarize");
         port.Calls.Should().Equal("GetWorkflowDetail:daily_digest");
+    }
+
+    [Fact]
+    public async Task GetWorkflow_ShouldExposeExactNestedPropertySets()
+    {
+        AssertWireTypeExists("WorkflowCatalogDetailJson");
+        AssertWireTypeExists("WorkflowCatalogDefinitionJson");
+        AssertWireTypeExists("WorkflowCatalogRoleJson");
+        AssertWireTypeExists("WorkflowCatalogStepJson");
+        AssertWireTypeExists("WorkflowCatalogChildStepJson");
+        AssertWireTypeExists("WorkflowCatalogEdgeJson");
+        var port = new RecordingWorkflowCatalogPort();
+        var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
+            .Single(item => item.Name == "aevatar_get_workflow");
+
+        var output = await tool.ExecuteAsync("""{"workflow_name":"daily_digest"}""");
+
+        using var document = JsonDocument.Parse(output);
+        var root = document.RootElement;
+        PropertyNames(root).Should().Equal("catalog", "yaml", "definition", "edges");
+        PropertyNames(root.GetProperty("catalog")).Should().Equal(
+            "name",
+            "description",
+            "category",
+            "group",
+            "group_label",
+            "sort_order",
+            "source",
+            "source_label",
+            "show_in_library",
+            "is_primitive_example",
+            "requires_llm_provider",
+            "primitives",
+            "authority_state_version",
+            "projection_watermark",
+            "last_event_id");
+
+        var definition = root.GetProperty("definition");
+        PropertyNames(definition).Should().Equal(
+            "name",
+            "description",
+            "closed_world_mode",
+            "roles",
+            "steps");
+        PropertyNames(definition.GetProperty("roles")[0]).Should().Equal(
+            "id",
+            "name",
+            "system_prompt",
+            "provider",
+            "model",
+            "temperature",
+            "max_tokens",
+            "max_tool_rounds",
+            "max_history_messages",
+            "event_modules",
+            "event_routes",
+            "connectors");
+        PropertyNames(definition.GetProperty("steps")[0]).Should().Equal(
+            "id",
+            "type",
+            "target_role",
+            "parameters",
+            "next",
+            "branches",
+            "children");
+        PropertyNames(definition.GetProperty("steps")[0].GetProperty("children")[0]).Should().Equal(
+            "id",
+            "type",
+            "target_role");
+        PropertyNames(root.GetProperty("edges")[0]).Should().Equal("from", "to", "label");
     }
 
     [Fact]
@@ -174,9 +317,19 @@ public class WorkflowCatalogToolsTests
             error.GetProperty("message").GetString().Should().Contain(messageFragment);
     }
 
+    private static IEnumerable<string> PropertyNames(JsonElement element) =>
+        element.EnumerateObject().Select(property => property.Name);
+
+    private static void AssertWireTypeExists(string typeName) =>
+        typeof(WorkflowCatalogAgentToolSource).Assembly.GetType(
+                $"Aevatar.AI.ToolProviders.Workflow.Tools.{typeName}")
+            .Should().NotBeNull();
+
     private sealed class RecordingWorkflowCatalogPort : IWorkflowCatalogPort
     {
         public List<string> Calls { get; } = [];
+
+        public List<CancellationToken> CancellationTokens { get; } = [];
 
         public IReadOnlyList<WorkflowCatalogItem> Catalog { get; init; } =
         [
@@ -230,6 +383,15 @@ public class WorkflowCatalogToolsTests
                         Id = "collect",
                         Type = "connector",
                         Next = "summarize",
+                        Children =
+                        [
+                            new WorkflowCatalogChildStep
+                            {
+                                Id = "collect-child",
+                                Type = "connector",
+                                TargetRole = "collector",
+                            },
+                        ],
                     },
                     new WorkflowCatalogStep
                     {
@@ -256,6 +418,7 @@ public class WorkflowCatalogToolsTests
             CancellationToken ct = default)
         {
             Calls.Add("ListWorkflowCatalog");
+            CancellationTokens.Add(ct);
             if (Failure is not null)
                 return Task.FromException<IReadOnlyList<WorkflowCatalogItem>>(Failure);
 
@@ -267,10 +430,17 @@ public class WorkflowCatalogToolsTests
             CancellationToken ct = default)
         {
             Calls.Add($"GetWorkflowDetail:{workflowName}");
+            CancellationTokens.Add(ct);
             if (Failure is not null)
                 return Task.FromException<WorkflowCatalogItemDetail?>(Failure);
 
             return Task.FromResult(Detail);
         }
+    }
+
+    private sealed class SingleServiceProvider(IWorkflowCatalogPort catalog) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) =>
+            serviceType == typeof(IWorkflowCatalogPort) ? catalog : null;
     }
 }
