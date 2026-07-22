@@ -123,6 +123,20 @@ public sealed class NyxIdApiAccessContractTests
     }
 
     [Fact]
+    public void ParseUserServices_ShouldReadPublishedUnderscoreIdIdentity()
+    {
+        const string response = """
+            {"services":[{"_id":"service-a","slug":"api-a","is_active":true,"credential_source":{"type":"personal"}}]}
+            """;
+
+        var result = NyxIdApiAccessResponseParser.ParseUserServices(response);
+
+        result.Succeeded.Should().BeTrue();
+        result.Value!.Services.Should().ContainSingle()
+            .Which.Id.Should().Be("service-a");
+    }
+
+    [Fact]
     public void ParseScopePlan_ShouldMapCompletePublishedContract()
     {
         var result = NyxIdApiAccessResponseParser.ParseScopePlan(ValidScopePlanJson());
@@ -201,7 +215,7 @@ public sealed class NyxIdApiAccessContractTests
         const string response = """
             {"services":[
               {"id":"service-a","slug":"api-a","is_active":true,"credential_source":{"type":"personal"}},
-              {"id":"service-a","slug":"api-b","is_active":true,"credential_source":{"type":"personal"}}
+              {"_id":"service-a","slug":"api-b","is_active":true,"credential_source":{"type":"personal"}}
             ]}
             """;
 
