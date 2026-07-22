@@ -377,16 +377,25 @@ public sealed class WorkOrderExecutionInfrastructureTests
         ?? throw new InvalidOperationException("GAgentBase.SetId was not found.");
 
     [Fact]
-    public void WorkOrderExecutionQueue_WhenFull_ShouldThrowWithoutBlocking()
+    public async Task WorkOrderExecutionQueue_WhenFull_ShouldThrowWithoutBlockingAndRetainClone()
     {
         var queue = new WorkOrderExecutionQueue(
             Options.Create(new WorkOrderExecutionWorkerOptions { QueueCapacity = 1 }));
-        queue.Enqueue(BuildExecutionRequest("work-order-1", "command-1"));
+        var original = BuildExecutionRequest("work-order-1", "command-1");
+        queue.Enqueue(original);
+        original.WorkOrderId = "mutated-after-enqueue";
 
-        var overflow = () => queue.Enqueue(BuildExecutionRequest("work-order-2", "command-2"));
+        var overflow = await Task.Run(() =>
+                Record.Exception(() => queue.Enqueue(BuildExecutionRequest("work-order-2", "command-2"))))
+            .WaitAsync(TimeSpan.FromSeconds(5));
 
-        overflow.Should().Throw<WorkOrderExecutionQueueFullException>()
-            .WithMessage("*work-order-2*command-2*");
+        overflow.Should().BeOfType<WorkOrderExecutionQueueFullException>()
+            .Which.Message.Should().Match("*work-order-2*command-2*");
+        await using var reader = queue.DequeueAllAsync().GetAsyncEnumerator();
+        (await reader.MoveNextAsync()).Should().BeTrue();
+        reader.Current.Should().NotBeSameAs(original);
+        reader.Current.WorkOrderId.Should().Be("work-order-1");
+        reader.Current.DispatchCommandId.Should().Be("command-1");
     }
 
     [Fact]
@@ -405,6 +414,8 @@ public sealed class WorkOrderExecutionInfrastructureTests
         call.ActorId.Should().Be(request.WorkOrderActorId);
         call.Envelope.Id.Should().Be("work-order-execution-result:work-order-1:command-1");
         call.Envelope.Propagation.CorrelationId.Should().Be(call.Envelope.Id);
+        call.Envelope.Route.PublisherActorId.Should().Be("studio.work-order-execution-worker");
+        call.Envelope.Route.GetTargetActorId().Should().Be(request.WorkOrderActorId);
         var continuation = call.Envelope.Payload.Unpack<WorkOrderExecutionAcceptedContinuation>();
         continuation.WorkOrderId.Should().Be(request.WorkOrderId);
         continuation.DispatchCommandId.Should().Be(request.DispatchCommandId);
@@ -487,6 +498,46 @@ public sealed class WorkOrderExecutionInfrastructureTests
         {
             blockedPort.Release.TrySetResult();
             await worker.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task WorkerDispose_AfterShutdownGrace_ShouldNotDisposeSemaphoreWhileExecutionIsInFlight()
+    {
+        var queue = new WorkOrderExecutionQueue(
+            Options.Create(new WorkOrderExecutionWorkerOptions { QueueCapacity = 1 }));
+        var blockedPort = new BlockingExecutionPort();
+        var dispatch = new RecordingActorDispatchPort();
+        var worker = new WorkOrderExecutionWorker(
+            queue,
+            new WorkOrderExecutionService(blockedPort, dispatch),
+            Options.Create(new WorkOrderExecutionWorkerOptions
+            {
+                MaxConcurrency = 1,
+                ShutdownDrainGraceSeconds = 0,
+            }),
+            NullLogger<WorkOrderExecutionWorker>.Instance);
+        await worker.StartAsync(CancellationToken.None);
+        queue.Enqueue(BuildExecutionRequest("work-order-1", "command-1"));
+
+        try
+        {
+            await blockedPort.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await worker.StopAsync(CancellationToken.None);
+            worker.Dispose();
+
+            var concurrency = (SemaphoreSlim)(typeof(WorkOrderExecutionWorker)
+                .GetField("_concurrency", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(worker)!);
+            var inspect = () => concurrency.Wait(0);
+
+            inspect.Should().NotThrow(
+                "late execution completion must be able to return its permit after shutdown grace");
+        }
+        finally
+        {
+            blockedPort.Release.TrySetResult();
+            await dispatch.Dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
     }
 
@@ -628,6 +679,8 @@ public sealed class WorkOrderExecutionInfrastructureTests
     {
         public List<DispatchCall> Calls { get; } = [];
         public Exception? DispatchException { get; init; }
+        public TaskCompletionSource Dispatched { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<DispatchAdmission> DispatchAsync(
             string actorId,
@@ -638,6 +691,7 @@ public sealed class WorkOrderExecutionInfrastructureTests
                 throw DispatchException;
 
             Calls.Add(new DispatchCall(actorId, envelope.Clone()));
+            Dispatched.TrySetResult();
             return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }

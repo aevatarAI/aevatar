@@ -14,6 +14,7 @@ public sealed class WorkOrderExecutionWorker : BackgroundService
     private readonly ILogger<WorkOrderExecutionWorker> _logger;
     private readonly SemaphoreSlim _concurrency;
     private readonly int _maxConcurrency;
+    private bool _shutdownDrainTimedOut;
 
     public WorkOrderExecutionWorker(
         IWorkOrderExecutionQueue queue,
@@ -79,6 +80,7 @@ public sealed class WorkOrderExecutionWorker : BackgroundService
         }
         catch (OperationCanceledException)
         {
+            _shutdownDrainTimedOut = true;
             _logger.LogWarning(
                 "WorkOrder execution worker shutdown grace ({GraceSeconds}s) elapsed with {Running} execution(s) still in flight; the WorkOrder watchdog remains authoritative.",
                 _options.ShutdownDrainGraceSeconds,
@@ -93,7 +95,8 @@ public sealed class WorkOrderExecutionWorker : BackgroundService
 
     public override void Dispose()
     {
-        _concurrency.Dispose();
+        if (!_shutdownDrainTimedOut)
+            _concurrency.Dispose();
         base.Dispose();
     }
 }
