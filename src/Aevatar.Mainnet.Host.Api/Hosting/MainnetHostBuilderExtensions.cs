@@ -1,7 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Infrastructure.OpenSandbox;
+using Aevatar.AI.Application.CodexExecution;
+using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -52,6 +53,7 @@ using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
+using Aevatar.Mainnet.Host.Api.ManagedCodex;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -293,7 +295,9 @@ public static class MainnetHostBuilderExtensions
         deviceEventOptions.EnsureNotSkippingHmacInProduction(builder.Environment.IsProduction());
         // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
-        builder.Services.AddOpenSandboxCodexExecution(builder.Configuration);
+        builder.Services.AddChronoSandboxCodexExecution(
+            builder.Configuration,
+            builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
         builder.Services.AddNyxIdTools(o =>
         {
             // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
@@ -317,7 +321,7 @@ public static class MainnetHostBuilderExtensions
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
-                $"{OpenSandboxCodexOptions.SectionName}:Enabled");
+                $"{ManagedCodexOptions.SectionName}:Enabled");
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
         });
@@ -424,6 +428,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
+        app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 
