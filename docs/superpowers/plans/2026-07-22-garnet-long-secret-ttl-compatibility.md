@@ -194,7 +194,7 @@ git commit -m "Fix Garnet long secret TTL encoding"
 - Consumes: Task 1's `MaximumRelativeExpiryTicks` boundary and existing millisecond `PTTL`/`ToExpiryMilliseconds` values.
 - Produces: compare-and-set Lua that uses `PSETEX` for supported millisecond TTLs and `SET ... EX` for longer effective TTLs while preserving the shorter existing backend expiry.
 
-- [ ] **Step 1: Add failing CAS contract and Garnet integration tests**
+- [ ] **Step 1: Add failing CAS contract, precision regression, and Garnet integration tests**
 
 Add these tests to `GarnetSecretKeyValueStoreExpirationTests`:
 
@@ -234,6 +234,38 @@ public async Task CompareSetAsync_LongRelativeTtl_ShouldCarrySecondsFallbackInto
     capturedValues![3].ToString().Should().Be(int.MaxValue.ToString());
 }
 
+[Fact]
+public async Task CompareSetAsync_HighSupportedTtlWithSubMillisecondTail_ShouldRoundUpRequestedMilliseconds()
+{
+    RedisValue[]? capturedValues = null;
+    var database = Substitute.For<IDatabase>();
+    database.ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Any<RedisKey[]>(),
+            Arg.Any<RedisValue[]>(),
+            Arg.Any<CommandFlags>())
+        .Returns(call =>
+        {
+            capturedValues = call.ArgAt<RedisValue[]>(2);
+            return Task.FromResult(RedisResult.Create((RedisValue)1));
+        });
+    var connection = Substitute.For<IGarnetSecretConnection>();
+    connection.GetDatabase(Arg.Any<int>()).Returns(database);
+    var store = new GarnetSecretKeyValueStore(connection, CreateOptions());
+    var expiry = TimeSpan.FromTicks(
+        ((long)int.MaxValue - 1) * TimeSpan.TicksPerSecond + 1);
+
+    var replaced = await store.CompareSetAsync(
+        "high-range-cas-ttl",
+        new byte[] { 0x01 },
+        new byte[] { 0x02 },
+        expiry);
+
+    replaced.Should().BeTrue();
+    capturedValues.Should().NotBeNull();
+    capturedValues![2].ToString().Should().Be("2147483646001");
+}
+
 [GarnetIntegrationFact]
 public async Task SetIfAbsentAndCompareSet_LongRelativeTtl_ShouldRemainNearNinetyDays()
 {
@@ -246,19 +278,21 @@ public async Task SetIfAbsentAndCompareSet_LongRelativeTtl_ShouldRemainNearNinet
     var key = $"{options.SecretVaultPrefix}:long-ttl:{Guid.NewGuid():N}";
     var original = new byte[] { 0x01 };
     var updated = new byte[] { 0x02 };
-    var initialTtl = TimeSpan.FromDays(60) + TimeSpan.FromMilliseconds(123);
-    var requestedTtl = TimeSpan.FromDays(90) + TimeSpan.FromMilliseconds(456);
+    var initialTtl = TimeSpan.FromDays(90) + TimeSpan.FromMilliseconds(123);
+    var requestedTtl = TimeSpan.FromDays(120) + TimeSpan.FromMilliseconds(456);
 
     try
     {
         (await store.SetIfAbsentAsync(key, original, initialTtl)).Should().BeTrue();
         var before = await connection.GetDatabase(options.Database).KeyTimeToLiveAsync(key);
         before.Should().NotBeNull();
+        before.Should().BeGreaterThan(TimeSpan.FromDays(89));
+        before.Should().BeLessThanOrEqualTo(initialTtl + TimeSpan.FromSeconds(1));
         (await store.CompareSetAsync(key, original, updated, requestedTtl)).Should().BeTrue();
 
         var after = await connection.GetDatabase(options.Database).KeyTimeToLiveAsync(key);
         after.Should().NotBeNull();
-        after.Should().BeGreaterThan(TimeSpan.FromDays(59));
+        after.Should().BeGreaterThan(TimeSpan.FromDays(89));
         after.Should().BeLessThanOrEqualTo(before!.Value + TimeSpan.FromSeconds(1));
     }
     finally
@@ -276,7 +310,7 @@ Run:
 dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo --filter "FullyQualifiedName~GarnetSecretKeyValueStoreExpirationTests"
 ```
 
-Expected: the CAS unit test fails because the current script has no `maximumRelativeMilliseconds` branch and passes only three Lua values. The Garnet integration test is skipped when `AEVATAR_TEST_GARNET_CONNECTION_STRING` is unavailable.
+Expected: the long-TTL CAS contract test fails because the current script has no `maximumRelativeMilliseconds` branch and passes only three Lua values. The high-range precision regression fails because `ARGV[3]` is `2147483646000` instead of the required ceiling `2147483646001`. The Garnet integration test is skipped when `AEVATAR_TEST_GARNET_CONNECTION_STRING` is unavailable.
 
 - [ ] **Step 3: Add the long-TTL Lua fallback**
 
@@ -322,7 +356,11 @@ private static long ToExpiryMilliseconds(TimeSpan expiry)
     if (expiry.Ticks > MaximumRelativeExpiryTicks)
         _ = ToGarnetCompatibleWholeSeconds(expiry);
 
-    return Math.Max(1, checked((long)Math.Ceiling(expiry.TotalMilliseconds)));
+    var wholeMilliseconds = expiry.Ticks / TimeSpan.TicksPerMillisecond;
+    if (expiry.Ticks % TimeSpan.TicksPerMillisecond != 0)
+        wholeMilliseconds = checked(wholeMilliseconds + 1);
+
+    return wholeMilliseconds;
 }
 ```
 
@@ -342,7 +380,7 @@ When a Garnet endpoint is available, also run:
 AEVATAR_TEST_GARNET_CONNECTION_STRING="localhost:6379,abortConnect=false" dotnet test test/Aevatar.Foundation.Runtime.Hosting.Tests/Aevatar.Foundation.Runtime.Hosting.Tests.csproj --nologo --filter "FullyQualifiedName~SetIfAbsentAndCompareSet_LongRelativeTtl"
 ```
 
-Expected: 1 passed, 0 failed, proving both `SET NX EX` and CAS `SET EX` behavior against Garnet.
+Expected: 1 passed, 0 failed, proving a near-90-day initial `SET NX EX` and preservation of that shorter existing TTL when CAS requests a supported 120-day TTL.
 
 - [ ] **Step 5: Commit Task 2**
 

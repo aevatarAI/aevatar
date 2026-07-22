@@ -162,6 +162,10 @@ public sealed class GarnetSecretKeyValueStore : IGarnetSecretKeyValueStore
         if (expiry.Ticks > MaximumRelativeExpiryTicks)
             _ = ToGarnetCompatibleWholeSeconds(expiry);
 
-        return Math.Max(1, checked((long)Math.Ceiling(expiry.TotalMilliseconds)));
+        var wholeMilliseconds = expiry.Ticks / TimeSpan.TicksPerMillisecond;
+        if (expiry.Ticks % TimeSpan.TicksPerMillisecond != 0)
+            wholeMilliseconds = checked(wholeMilliseconds + 1);
+
+        return wholeMilliseconds;
     }
 }

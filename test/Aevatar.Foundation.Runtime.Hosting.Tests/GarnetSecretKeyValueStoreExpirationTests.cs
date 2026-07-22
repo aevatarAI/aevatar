@@ -95,6 +95,24 @@ public sealed class GarnetSecretKeyValueStoreExpirationTests
     }
 
     [Fact]
+    public async Task CompareSetAsync_HighSupportedTtlWithSubMillisecondTail_ShouldRoundUpRequestedMilliseconds()
+    {
+        var (store, _, capture) = CreateCompareSetStore();
+        var expiry = TimeSpan.FromTicks(
+            ((long)int.MaxValue - 1) * TimeSpan.TicksPerSecond + 1);
+
+        var replaced = await store.CompareSetAsync(
+            "high-range-cas-ttl",
+            new byte[] { 0x01 },
+            new byte[] { 0x02 },
+            expiry);
+
+        replaced.Should().BeTrue();
+        capture.Values.Should().NotBeNull();
+        capture.Values![2].ToString().Should().Be("2147483646001");
+    }
+
+    [Fact]
     public async Task CompareSetAsync_NullExpiry_ShouldPassPersistentSentinelAndSetBranch()
     {
         var (store, _, capture) = CreateCompareSetStore();
@@ -146,19 +164,21 @@ public sealed class GarnetSecretKeyValueStoreExpirationTests
         var key = $"{options.SecretVaultPrefix}:long-ttl:{Guid.NewGuid():N}";
         var original = new byte[] { 0x01 };
         var updated = new byte[] { 0x02 };
-        var initialTtl = TimeSpan.FromDays(60) + TimeSpan.FromMilliseconds(123);
-        var requestedTtl = TimeSpan.FromDays(90) + TimeSpan.FromMilliseconds(456);
+        var initialTtl = TimeSpan.FromDays(90) + TimeSpan.FromMilliseconds(123);
+        var requestedTtl = TimeSpan.FromDays(120) + TimeSpan.FromMilliseconds(456);
 
         try
         {
             (await store.SetIfAbsentAsync(key, original, initialTtl)).Should().BeTrue();
             var before = await connection.GetDatabase(options.Database).KeyTimeToLiveAsync(key);
             before.Should().NotBeNull();
+            before.Should().BeGreaterThan(TimeSpan.FromDays(89));
+            before.Should().BeLessThanOrEqualTo(initialTtl + TimeSpan.FromSeconds(1));
             (await store.CompareSetAsync(key, original, updated, requestedTtl)).Should().BeTrue();
 
             var after = await connection.GetDatabase(options.Database).KeyTimeToLiveAsync(key);
             after.Should().NotBeNull();
-            after.Should().BeGreaterThan(TimeSpan.FromDays(59));
+            after.Should().BeGreaterThan(TimeSpan.FromDays(89));
             after.Should().BeLessThanOrEqualTo(before!.Value + TimeSpan.FromSeconds(1));
         }
         finally
