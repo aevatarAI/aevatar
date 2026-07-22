@@ -225,6 +225,44 @@ public sealed class AgentRunReplyGenerationExecutorTests
         registeredTool.ExecuteCount.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(AuthorizedToolStepMutation.RunId)]
+    [InlineData(AuthorizedToolStepMutation.CorrelationId)]
+    [InlineData(AuthorizedToolStepMutation.Attempt)]
+    [InlineData(AuthorizedToolStepMutation.StepIndex)]
+    [InlineData(AuthorizedToolStepMutation.ToolCallCount)]
+    [InlineData(AuthorizedToolStepMutation.ToolCallId)]
+    [InlineData(AuthorizedToolStepMutation.ToolName)]
+    [InlineData(AuthorizedToolStepMutation.Arguments)]
+    public async Task BuildToolStepContinuation_WhenAuthorizationIsTampered_ShouldRejectBeforeToolExecution(
+        AuthorizedToolStepMutation mutation)
+    {
+        var registeredTool = new CountingTool("use_skill");
+        var executor = CreateToolEnabledExecutor(
+            registeredTool,
+            new ToolCallProvider(registeredTool.Name));
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = MutateToolStepWorkItem(
+            BuildToolStepWorkItem(llmWorkItem, execution.Continuation),
+            mutation);
+
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep,
+            CancellationToken.None);
+
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        var result = continuation.ToolStepResult;
+        result.Should().NotBeNull();
+        result!.ResultMessages.Should().HaveCount(toolWorkItem.StepState.PendingToolCalls.Count);
+        result.ResultMessages.Should().OnlyContain(static message =>
+            message.Content.Contains("not found", StringComparison.Ordinal));
+        registeredTool.ExecuteCount.Should().Be(0);
+    }
+
     private static AgentRunReplyGenerationExecutor CreateExecutor(
         RecordingProvider provider,
         IFileArtifactReadPort? fileArtifactReadPort = null)
@@ -366,6 +404,55 @@ public sealed class AgentRunReplyGenerationExecutorTests
         };
     }
 
+    private static AgentRunReplyStepExecutionRequest MutateToolStepWorkItem(
+        AgentRunReplyStepExecutionRequest workItem,
+        AuthorizedToolStepMutation mutation)
+    {
+        if (mutation == AuthorizedToolStepMutation.RunId)
+            return workItem with { RunId = "run-tampered" };
+        if (mutation == AuthorizedToolStepMutation.CorrelationId)
+        {
+            var request = workItem.Request.Clone();
+            request.CorrelationId = "corr-tampered";
+            return workItem with { Request = request };
+        }
+        if (mutation == AuthorizedToolStepMutation.Attempt)
+            return workItem with { Attempt = workItem.Attempt + 1 };
+        if (mutation == AuthorizedToolStepMutation.StepIndex)
+            return workItem with { StepIndex = workItem.StepIndex + 1 };
+
+        var stepState = workItem.StepState.Clone();
+        if (mutation == AuthorizedToolStepMutation.ToolCallCount)
+        {
+            stepState.PendingToolCalls.Add(new AgentRunToolCall
+            {
+                Id = "call-2",
+                Name = "use_skill",
+                ArgumentsJson = "{}",
+            });
+        }
+        else
+        {
+            var toolCall = stepState.PendingToolCalls.Should().ContainSingle().Subject;
+            switch (mutation)
+            {
+                case AuthorizedToolStepMutation.ToolCallId:
+                    toolCall.Id = "call-tampered";
+                    break;
+                case AuthorizedToolStepMutation.ToolName:
+                    toolCall.Name = "tampered_tool";
+                    break;
+                case AuthorizedToolStepMutation.Arguments:
+                    toolCall.ArgumentsJson = "{\"tampered\":true}";
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+            }
+        }
+
+        return workItem with { StepState = stepState };
+    }
+
     private sealed class RecordingProvider : ILLMProvider
     {
         public string Name => "recording-provider";
@@ -440,6 +527,18 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    public enum AuthorizedToolStepMutation
+    {
+        RunId,
+        CorrelationId,
+        Attempt,
+        StepIndex,
+        ToolCallCount,
+        ToolCallId,
+        ToolName,
+        Arguments,
     }
 
     private sealed class StaticStepPlanReplyGenerator(AgentRunReplyStepPlan plan) : IAgentRunStepConversationReplyGenerator

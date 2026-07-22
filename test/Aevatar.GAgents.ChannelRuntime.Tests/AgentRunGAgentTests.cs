@@ -1090,6 +1090,89 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_WhenLlmContinuationIsReplayed_ShouldClearMatchingCapability()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var runtime = CreateCapabilityTestAgent(executor, publisher);
+
+        await runtime.HandleNextLlmStepAsync(BuildCapabilityLlmStepRequest());
+        var llmContinuation = publisher.Published.OfType<AgentRunNextLlmStepRequestedEvent>()
+            .Should().ContainSingle().Subject;
+        await runtime.HandleNextLlmStepAsync(llmContinuation);
+        var toolRequest = publisher.Published.OfType<AgentRunNextToolStepRequestedEvent>()
+            .Should().ContainSingle().Subject;
+
+        await runtime.HandleNextLlmStepAsync(llmContinuation.Clone());
+        await runtime.HandleNextToolStepAsync(toolRequest);
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.ToolExecutionCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleNextToolStepAsync_WhenToolRequestArrivesBeforeLlmResult_ShouldClearMatchingCapability()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var runtime = CreateCapabilityTestAgent(executor, publisher);
+
+        await runtime.HandleNextLlmStepAsync(BuildCapabilityLlmStepRequest());
+        var llmContinuation = publisher.Published.OfType<AgentRunNextLlmStepRequestedEvent>()
+            .Should().ContainSingle().Subject;
+        var earlyToolRequest = BuildCapabilityToolStepRequest(llmContinuation);
+
+        await runtime.HandleNextToolStepAsync(earlyToolRequest);
+        await runtime.HandleNextLlmStepAsync(llmContinuation);
+        var reconciledToolRequest = publisher.Published.OfType<AgentRunNextToolStepRequestedEvent>()
+            .Should().ContainSingle().Subject;
+        await runtime.HandleNextToolStepAsync(reconciledToolRequest);
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.ToolExecutionCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleNextToolStepAsync_AfterActorRestart_ShouldRejectWhenCapabilityIsMissing()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var restartedRuntime = CreateCapabilityTestAgent(executor, publisher, nextStepIndex: 2);
+        restartedRuntime.State.GenerationStep!.PendingToolCalls.Add(
+            CapabilityTrackingReplyGenerationExecutor.ToolCall.Clone());
+        var toolRequest = BuildCapabilityToolStepRequest(
+            runId: restartedRuntime.State.RunId,
+            correlationId: restartedRuntime.State.CorrelationId,
+            stepIndex: 2);
+
+        await restartedRuntime.HandleNextToolStepAsync(toolRequest);
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(false);
+        executor.ToolExecutionCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task HandleNextToolStepAsync_WhenRequestIsReplayed_ShouldConsumeCapabilityOnlyOnce()
+    {
+        var executor = new CapabilityTrackingReplyGenerationExecutor();
+        var publisher = new RecordingSelfEventPublisher();
+        var runtime = CreateCapabilityTestAgent(executor, publisher);
+
+        await runtime.HandleNextLlmStepAsync(BuildCapabilityLlmStepRequest());
+        var llmContinuation = publisher.Published.OfType<AgentRunNextLlmStepRequestedEvent>()
+            .Should().ContainSingle().Subject;
+        await runtime.HandleNextLlmStepAsync(llmContinuation);
+        var toolRequest = publisher.Published.OfType<AgentRunNextToolStepRequestedEvent>()
+            .Should().ContainSingle().Subject;
+
+        await runtime.HandleNextToolStepAsync(toolRequest);
+        await runtime.HandleNextToolStepAsync(toolRequest.Clone());
+
+        executor.ToolStepAuthorizationPresence.Should().Equal(true, false);
+        executor.ToolExecutionCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task HandleReplyGenerationTimedOutAsync_ObsoleteCallback_DoesNotFailRunOrDropConversation()
     {
         var actor = Substitute.For<IActor>();
@@ -3513,6 +3596,82 @@ public sealed class AgentRunGAgentTests
         return agent;
     }
 
+    private static AgentRunGAgent CreateCapabilityTestAgent(
+        CapabilityTrackingReplyGenerationExecutor executor,
+        RecordingSelfEventPublisher publisher,
+        int nextStepIndex = 1)
+    {
+        var runtime = CreateRunAgentWithExecutor(
+            new DispatchingActorRuntime(),
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions(),
+            publisher);
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-capability",
+            CorrelationId = "corr-capability",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-capability",
+                CorrelationId = "corr-capability",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = nextStepIndex,
+                MaxToolRounds = 4,
+            },
+        });
+        return runtime;
+    }
+
+    private static AgentRunNextLlmStepRequestedEvent BuildCapabilityLlmStepRequest() =>
+        new()
+        {
+            RunId = "run-capability",
+            CorrelationId = "corr-capability",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 1,
+            Request = new NeedsLlmReplyEvent
+            {
+                RunId = "run-capability",
+                CorrelationId = "corr-capability",
+                TargetActorId = "actor-1",
+                Activity = BuildRelayActivity(),
+            },
+        };
+
+    private static AgentRunNextToolStepRequestedEvent BuildCapabilityToolStepRequest(
+        AgentRunNextLlmStepRequestedEvent llmContinuation) =>
+        BuildCapabilityToolStepRequest(
+            llmContinuation.RunId,
+            llmContinuation.CorrelationId,
+            llmContinuation.StepIndex,
+            llmContinuation.Request);
+
+    private static AgentRunNextToolStepRequestedEvent BuildCapabilityToolStepRequest(
+        string runId,
+        string correlationId,
+        int stepIndex,
+        NeedsLlmReplyEvent? request = null) =>
+        new()
+        {
+            RunId = runId,
+            CorrelationId = correlationId,
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = stepIndex,
+            Request = request?.Clone() ?? new NeedsLlmReplyEvent
+            {
+                RunId = runId,
+                CorrelationId = correlationId,
+                TargetActorId = "actor-1",
+                Activity = BuildRelayActivity(),
+            },
+        };
+
     private static void AttachScheduler(AgentRunGAgent agent, RecordingCallbackScheduler scheduler)
     {
         agent.Services = new ServiceCollection()
@@ -3836,6 +3995,103 @@ public sealed class AgentRunGAgentTests
         public void CompleteLlm() => _llmRelease.TrySetResult();
 
         public void CompleteTool() => _toolRelease.TrySetResult();
+    }
+
+    private sealed class CapabilityTrackingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
+    {
+        public static AgentRunToolCall ToolCall { get; } = new()
+        {
+            Id = "call-capability",
+            Name = "use_skill",
+            ArgumentsJson = "{}",
+        };
+
+        public int ToolExecutionCount { get; private set; }
+
+        public List<bool> ToolStepAuthorizationPresence { get; } = [];
+
+        public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
+            AgentRunReplyGenerationExecutionRequest request,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
+            AgentRunReplyStepExecutionRequest request,
+            CancellationToken ct)
+        {
+            var result = new AgentRunLlmStepResult();
+            result.ToolCalls.Add(ToolCall.Clone());
+            var continuation = new AgentRunNextLlmStepRequestedEvent
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                StepIndex = request.StepIndex + 1,
+                Request = request.Request.Clone(),
+                LlmStepResult = result,
+            };
+            var authorizedToolStep = new AgentRunAuthorizedToolStep(
+                request.RunId,
+                request.Request.CorrelationId,
+                request.Attempt,
+                continuation.StepIndex,
+                [ToolCall],
+                _ =>
+                {
+                    ToolExecutionCount++;
+                    return Task.FromResult(new AgentRunToolStepResult { AdvanceRound = true });
+                });
+            return Task.FromResult(new AgentRunLlmStepExecution(continuation, authorizedToolStep));
+        }
+
+        public async Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
+            AgentRunReplyStepExecutionRequest request,
+            AgentRunAuthorizedToolStep? authorizedToolStep,
+            CancellationToken ct)
+        {
+            ToolStepAuthorizationPresence.Add(authorizedToolStep is not null);
+            var result = authorizedToolStep?.Matches(request) == true
+                ? await authorizedToolStep.ExecuteAsync(ct)
+                : new AgentRunToolStepResult { AdvanceRound = true };
+            return new AgentRunNextToolStepRequestedEvent
+            {
+                RunId = request.RunId,
+                CorrelationId = request.Request.CorrelationId,
+                TargetActorId = request.Request.TargetActorId,
+                Attempt = request.Attempt,
+                StepIndex = request.StepIndex + 1,
+                Request = request.Request.Clone(),
+                ToolStepResult = result,
+            };
+        }
+    }
+
+    private sealed class RecordingSelfEventPublisher : IEventPublisher
+    {
+        public List<IMessage> Published { get; } = [];
+
+        public Task PublishAsync<T>(
+            T e,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken c = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage
+        {
+            audience.Should().Be(TopologyAudience.Self);
+            Published.Add(e);
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<T>(
+            string targetActorId,
+            T e,
+            CancellationToken c = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where T : IMessage =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingReplyGenerationExecutor : IAgentRunReplyGenerationExecutorPort
