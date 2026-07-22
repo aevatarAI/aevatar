@@ -1178,6 +1178,48 @@ public class ToolCallLoopTests
         lastAssistant.ReasoningContent.Should().Be("summary-thinking");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenFinalNoToolsCallContainsDsml_ShouldRejectToolAndNotExecuteAgain()
+    {
+        var finalDsml =
+            "Final search.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">final</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-initial", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = finalDsml },
+            new LLMResponse { Content = "summary" },
+        ]);
+        var executions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            executions++;
+            return "ok";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        var result = await new ToolCallLoop(tools).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 1,
+            CancellationToken.None);
+
+        result.Should().Be("summary");
+        executions.Should().Be(1);
+        messages.Where(message => message.Role == "tool").Should().SatisfyRespectively(
+            initialResult => initialResult.Content.Should().Be("ok"),
+            rejectedFinalResult => rejectedFinalResult.Content.Should()
+                .Contain("not found"));
+        provider.Requests.Should().HaveCount(3);
+        provider.Requests[1].Tools.Should().BeNull();
+        provider.Requests[2].Tools.Should().BeNull();
+    }
+
     [Theory]
     [InlineData("base64")]
     [InlineData("data")]

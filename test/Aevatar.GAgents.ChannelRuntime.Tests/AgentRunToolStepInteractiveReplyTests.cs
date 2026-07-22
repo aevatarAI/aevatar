@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -34,7 +33,7 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         var collector = new AsyncLocalInteractiveReplyCollector();
         var tool = new ReplyWithInteractionTool(collector);
         var executor = CreateExecutor(collector, tool);
-        var workItem = await BuildToolStepWorkItemAsync(executor, relay: true);
+        var workItem = BuildToolStepWorkItem(relay: true, tool);
 
         var continuation = await executor.BuildToolStepContinuationAsync(workItem, CancellationToken.None);
 
@@ -52,7 +51,7 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         var collector = new AsyncLocalInteractiveReplyCollector();
         var tool = new ReplyWithInteractionTool(collector);
         var executor = CreateExecutor(collector, tool);
-        var workItem = await BuildToolStepWorkItemAsync(executor, relay: false);
+        var workItem = BuildToolStepWorkItem(relay: false, tool);
 
         var continuation = await executor.BuildToolStepContinuationAsync(workItem, CancellationToken.None);
 
@@ -84,9 +83,8 @@ public sealed class AgentRunToolStepInteractiveReplyTests
 
     private static ChatRuntimeStepExecutor CreateStepExecutor(ToolManager tools)
     {
-        var provider = new InteractiveReplyToolCallProvider();
         var runtime = new ChatRuntime(
-            providerFactory: () => provider,
+            providerFactory: static () => throw new InvalidOperationException("Tool step must not invoke the LLM provider."),
             history: new Aevatar.AI.Core.Chat.ChatHistory(),
             toolLoop: new ToolCallLoop(tools),
             hooks: null,
@@ -94,9 +92,7 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         return runtime.CreateStepExecutor(turnCatalog: null);
     }
 
-    private static async Task<AgentRunReplyStepExecutionRequest> BuildToolStepWorkItemAsync(
-        AgentRunReplyGenerationExecutor executor,
-        bool relay)
+    private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(bool relay, IAgentTool tool)
     {
         var activity = new ChatActivity
         {
@@ -127,50 +123,25 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             CorrelationId = "corr-1",
             TargetActorId = "conversation-actor",
             Attempt = 1,
-            NextStepIndex = 1,
+            NextStepIndex = 2,
             MaxToolRounds = 4,
-        };
-        var llmWorkItem = new AgentRunReplyStepExecutionRequest(
-            "run-1",
-            "channel-agent-run:run-1",
-            Attempt: 1,
-            StepIndex: 1,
-            request,
-            stepState);
-        var llmContinuation = await executor.BuildLlmStepContinuationAsync(
-            llmWorkItem,
-            CancellationToken.None);
-        var toolStepState = stepState.Clone();
-        toolStepState.PendingToolCalls.AddRange(
-            llmContinuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
-        toolStepState.AuthorizedTools.AddRange(
-            llmContinuation.LlmStepResult.AuthorizedTools.Select(static tool => tool.Clone()));
-        return llmWorkItem with
-        {
-            StepIndex = 2,
-            StepState = toolStepState,
-        };
-    }
-
-    private sealed class InteractiveReplyToolCallProvider : ILLMProvider
-    {
-        public string Name => "interactive-reply-tool-call-provider";
-
-        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-            LLMRequest request,
-            [EnumeratorCancellation] CancellationToken ct = default)
-        {
-            yield return new LLMStreamChunk
+            PendingToolCalls =
             {
-                DeltaToolCall = new ToolCall
+                new AgentRunToolCall
                 {
                     Id = "call-1",
                     Name = "reply_with_interaction",
                     ArgumentsJson = ReplyArgumentsJson,
                 },
-            };
-            await Task.Yield();
-        }
+            },
+        };
+        return new AgentRunReplyStepExecutionRequest(
+            "run-1",
+            "channel-agent-run:run-1",
+            Attempt: 1,
+            StepIndex: 2,
+            request,
+            stepState);
     }
 
     private sealed class StaticStepPlanReplyGenerator(AgentRunReplyStepPlan plan) : IAgentRunStepConversationReplyGenerator
