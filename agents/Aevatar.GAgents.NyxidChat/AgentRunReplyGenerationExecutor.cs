@@ -318,10 +318,25 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
         if (AgentRunReplyStepMappers.ToProto(llmResult.Usage) is { } usage)
             result.Usage = usage;
-        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
-            result.OutboundIntent = outboundIntent.Clone();
         if (effectiveToolCalls is { Count: > 0 })
+        {
             result.ToolCalls.AddRange(effectiveToolCalls.Select(AgentRunReplyStepMappers.ToProto));
+            var toolResults = await plan.StepExecutor.ExecuteAuthorizedToolStepAsync(
+                    effectiveToolCalls,
+                    llmResult.AuthorizedTools,
+                    llmResult.AuthorizedToolContext,
+                    ct)
+                .ConfigureAwait(false);
+            result.ToolStepResult = BuildToolStepResult(toolResults);
+        }
+
+        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
+        {
+            if (result.ToolStepResult is not null)
+                result.ToolStepResult.OutboundIntent = outboundIntent.Clone();
+            else
+                result.OutboundIntent = outboundIntent.Clone();
+        }
 
         return new AgentRunNextLlmStepRequestedEvent
         {
@@ -391,31 +406,35 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         var request = workItem.Request.Clone();
-        var generator = RequireStepGenerator();
-        var stepControl = AgentRunReplyStepMappers.LlmControlFromProto(workItem.StepState);
-        var planToolContext = AgentRunReplyStepMappers.ToolContextFromProto(workItem.StepState);
-        (stepControl, planToolContext) = await ReSupplyRuntimeCredentialsAsync(request, stepControl, planToolContext, ct)
-            .ConfigureAwait(false);
-        var plan = await generator.BuildStepPlanAsync(
-                request.Activity!,
-                AgentRunReplyStepMappers.ToDictionary(workItem.StepState.ExternalMetadata),
-                stepControl,
-                planToolContext,
-                priorHistory: null,
-                attachmentContext: null,
-                forceDisableTools: false,
-                ct)
-            .ConfigureAwait(false);
         var toolCalls = workItem.StepState.PendingToolCalls.Select(AgentRunReplyStepMappers.FromProto).ToArray();
-        // Interactive reply tools (reply_with_interaction) execute here, during the tool
-        // step — not during the LLM step that emitted the tool calls. The AsyncLocal
-        // collector scope does not survive the actor continuation hop between steps, so
-        // the tool step must open its own scope for relay turns and return the captured
-        // intent as a typed fact on the step result.
-        using var interactiveScope = TryBeginInteractiveScope(request);
-        var results = await plan.StepExecutor.ExecuteToolStepAsync(toolCalls, plan.Metadata, plan.ToolContext, ct)
-            .ConfigureAwait(false);
+        var deniedTools = new ToolManager();
+        var deniedResults = new List<ToolExecutionResult>(toolCalls.Length);
+        foreach (var toolCall in toolCalls)
+        {
+            var (denial, _) = await deniedTools.ExecuteToolCallRawAsync(toolCall, ct).ConfigureAwait(false);
+            deniedResults.Add(new ToolExecutionResult(
+                toolCall.Id,
+                toolCall.Name,
+                denial,
+                IsError: true));
+        }
+        var toolStepResult = BuildToolStepResult(deniedResults);
 
+        return new AgentRunNextToolStepRequestedEvent
+        {
+            RunId = workItem.RunId,
+            CorrelationId = request.CorrelationId,
+            TargetActorId = request.TargetActorId,
+            Attempt = workItem.Attempt,
+            StepIndex = workItem.StepIndex + 1,
+            Request = request.Clone(),
+            ToolStepResult = toolStepResult,
+        };
+    }
+
+    private static AgentRunToolStepResult BuildToolStepResult(
+        IReadOnlyList<ToolExecutionResult> results)
+    {
         var toolStepResult = new AgentRunToolStepResult
         {
             AdvanceRound = true,
@@ -428,27 +447,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 toolStepResult.ToolReceipts.Add(toolResult.Receipt.Clone());
         }
 
-        if (TryTakeOutboundIntent(generator) is { } outboundIntent)
-            toolStepResult.OutboundIntent = outboundIntent.Clone();
-
-        // Defense-in-depth complement to the Kafka transport fix (commit f2c2319e7):
-        // bound the tool-result payload before it enters the
-        // AgentRunNextToolStepRequestedEvent command envelope, so an oversized
-        // aggregate (e.g. large multi-source JSON) degrades to a truncated-but-useful
-        // reply instead of failing the whole run with an opaque ProduceException once
-        // the serialized envelope exceeds the broker's max.message.bytes.
         ToolResultPayloadBounds.BoundResultMessages(toolStepResult.ResultMessages);
-
-        return new AgentRunNextToolStepRequestedEvent
-        {
-            RunId = workItem.RunId,
-            CorrelationId = request.CorrelationId,
-            TargetActorId = request.TargetActorId,
-            Attempt = workItem.Attempt,
-            StepIndex = workItem.StepIndex + 1,
-            Request = request.Clone(),
-            ToolStepResult = toolStepResult,
-        };
+        return toolStepResult;
     }
 
     private IAgentRunStepConversationReplyGenerator RequireStepGenerator() =>

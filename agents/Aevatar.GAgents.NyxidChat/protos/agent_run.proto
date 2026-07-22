@@ -241,6 +241,10 @@ message AgentRunLlmStepResult {
   string finish_reason = 6;
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 7;
   bool has_streamed_text_content = 8;
+  // Tool results produced in the same executor call as this LLM result. The
+  // executor uses the exact final-request tool objects before crossing the
+  // actor continuation boundary; only these typed business results cross it.
+  AgentRunToolStepResult tool_step_result = 9;
 }
 
 // Typed tool IO facts returned by the executor. The run actor owns round

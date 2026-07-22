@@ -892,6 +892,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         ArgumentNullException.ThrowIfNull(command);
         var hasResult = command.LlmStepResult is not null;
+        var completedToolStep = command.LlmStepResult?.ToolStepResult is not null;
         if (hasResult)
         {
             if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
@@ -911,7 +912,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (stepState is null)
             return;
 
-        if (ShouldCompleteAfterLlmStep(stepState, hasResult))
+        if (!completedToolStep && ShouldCompleteAfterLlmStep(stepState, hasResult))
         {
             if (hasResult && ShouldRecoverEmptyLlmStep(stepState))
             {
@@ -1066,6 +1067,9 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             if (!string.IsNullOrEmpty(result.Content) || result.ToolCalls.Count > 0)
                 next.AppendedHistory.Add(AgentRunReplyStepMappers.ToConversationHistoryEntry(message));
         }
+
+        if (result.ToolStepResult is not null)
+            next = ApplyToolStepResult(next, result.ToolStepResult, completedStepIndex + 1);
 
         return next;
     }

@@ -167,6 +167,86 @@ public sealed class AgentRunGAgentTests
     }
 
     [Fact]
+    public async Task HandleNextLlmStepAsync_WithInlineToolResult_ShouldApplyBothResultsAndDispatchNextLlmStep()
+    {
+        var actorRuntime = new DispatchingActorRuntime();
+        var executor = new PausedReplyGenerationExecutor();
+        var runtime = CreateRunAgentWithExecutor(
+            actorRuntime,
+            executor,
+            new Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions());
+        SetState(runtime, new AgentRunGAgentState
+        {
+            RunId = "run-inline-tool",
+            CorrelationId = "corr-inline-tool",
+            TargetActorId = "actor-1",
+            Status = AgentRunStatus.ReplyGenerationRequested,
+            GenerationAttempt = 1,
+            GenerationStep = new AgentRunReplyStepState
+            {
+                RunId = "run-inline-tool",
+                CorrelationId = "corr-inline-tool",
+                TargetActorId = "actor-1",
+                Attempt = 1,
+                NextStepIndex = 1,
+                MaxToolRounds = 4,
+            },
+        });
+
+        await runtime.HandleNextLlmStepAsync(new AgentRunNextLlmStepRequestedEvent
+        {
+            RunId = "run-inline-tool",
+            CorrelationId = "corr-inline-tool",
+            TargetActorId = "actor-1",
+            Attempt = 1,
+            StepIndex = 2,
+            Request = new NeedsLlmReplyEvent
+            {
+                CorrelationId = "corr-inline-tool",
+                RunId = "run-inline-tool",
+                TargetActorId = "actor-1",
+                RegistrationId = "reg-1",
+                Activity = BuildRelayActivity(),
+            },
+            LlmStepResult = new AgentRunLlmStepResult
+            {
+                ToolCalls =
+                {
+                    new AgentRunToolCall
+                    {
+                        Id = "call-1",
+                        Name = "use_skill",
+                        ArgumentsJson = "{}",
+                    },
+                },
+                ToolStepResult = new AgentRunToolStepResult
+                {
+                    AdvanceRound = true,
+                    ResultMessages =
+                    {
+                        new AgentRunChatMessage
+                        {
+                            Role = "tool",
+                            ToolCallId = "call-1",
+                            Content = "{}",
+                        },
+                    },
+                },
+            },
+        });
+
+        var step = runtime.State.GenerationStep.Should().NotBeNull().And.Subject;
+        step.NextStepIndex.Should().Be(3);
+        step.Round.Should().Be(1);
+        step.PendingToolCalls.Should().BeEmpty();
+        step.Messages.Should().Contain(message => message.Role == "assistant" && message.ToolCalls.Count == 1);
+        step.Messages.Should().Contain(message => message.Role == "tool" && message.ToolCallId == "call-1");
+        executor.ToolStepExecutions.Should().BeEmpty();
+        executor.LlmStepExecutions.Should().ContainSingle()
+            .Which.StepIndex.Should().Be(3);
+    }
+
+    [Fact]
     public async Task HandleNextLlmStepAsync_ReasoningOnlyEmptyStep_RetriesOnceKeepingToolsInsteadOfFailing()
     {
         // Regression for the prod incident where a reasoning model spent the whole
@@ -3654,6 +3734,8 @@ public sealed class AgentRunGAgentTests
 
         public List<AgentRunReplyStepExecutionRequest> LlmStepExecutions { get; } = [];
 
+        public List<AgentRunReplyStepExecutionRequest> ToolStepExecutions { get; } = [];
+
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
             CancellationToken ct)
@@ -3679,8 +3761,15 @@ public sealed class AgentRunGAgentTests
             return Task.CompletedTask;
         }
 
-        public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
-            Task.CompletedTask;
+        public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct)
+        {
+            ToolStepExecutions.Add(request with
+            {
+                Request = request.Request.Clone(),
+                StepState = request.StepState.Clone(),
+            });
+            return Task.CompletedTask;
+        }
 
         public Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
             AgentRunReplyStepExecutionRequest request,
