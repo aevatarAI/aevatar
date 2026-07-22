@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 
 namespace Aevatar.GAgentService.Abstractions.AgentProfiles;
 
@@ -218,12 +219,20 @@ public static class AgentProfileDeterminism
             UserInvocable = package.UserInvocable,
         };
         normalized.DeclaredToolNames.Add(NormalizeDistinctStrings(package.DeclaredToolNames));
-        normalized.Workflows.Add(package.Workflows
-            .Select(NormalizeWorkflowAsset)
-            .OrderBy(static workflow => workflow.WorkflowId, StringComparer.Ordinal));
-        normalized.Scripts.Add(package.Scripts
-            .Select(NormalizeScriptAsset)
-            .OrderBy(static script => script.ScriptId, StringComparer.Ordinal));
+        normalized.Workflows.Add(NormalizeIdentityEntries(
+            package.Workflows,
+            NormalizeWorkflowAsset,
+            static workflow => workflow.WorkflowId,
+            "CONFLICTING_WORKFLOW_ID",
+            "Workflow entries sharing an id must be structurally identical.",
+            "workflow_id"));
+        normalized.Scripts.Add(NormalizeIdentityEntries(
+            package.Scripts,
+            NormalizeScriptAsset,
+            static script => script.ScriptId,
+            "CONFLICTING_SCRIPT_ID",
+            "Script entries sharing an id must be structurally identical.",
+            "script_id"));
         normalized.References.Add(NormalizeNamedAssets(package.References));
         normalized.Assets.Add(NormalizeNamedAssets(package.Assets));
         return normalized;
@@ -232,20 +241,8 @@ public static class AgentProfileDeterminism
     public static SealedAgentProfileSkill NormalizeSealedSkill(SealedAgentProfileSkill skill)
     {
         ArgumentNullException.ThrowIfNull(skill);
-        if (skill.ExactReference is null || skill.Package is null)
-        {
-            throw ValidationException(
-                "INVALID_SEALED_SKILL",
-                "Sealed skill requires an exact reference and resolved package.",
-                "skill");
-        }
-
-        return new SealedAgentProfileSkill
-        {
-            ExactReference = NormalizeExactSkillReference(skill.ExactReference),
-            Package = NormalizeResolvedSkillPackage(skill.Package),
-            ContentSha256 = skill.ContentSha256,
-        };
+        ThrowIfInvalid(AgentProfilePolicies.ValidateSealedSkill(skill));
+        return NormalizeSealedSkillCore(skill);
     }
 
     public static SealedAgentProfileSkillBinding NormalizeSealedSkillBinding(
@@ -301,7 +298,8 @@ public static class AgentProfileDeterminism
 
     public static ByteString ComputeSealedSkillSha256(SealedAgentProfileSkill skill)
     {
-        var canonical = NormalizeSealedSkill(skill);
+        ThrowIfInvalid(AgentProfilePolicies.ValidateSealedSkillIdentity(skill));
+        var canonical = NormalizeSealedSkillCore(skill);
         canonical.ContentSha256 = ByteString.Empty;
         return Sha256(canonical);
     }
@@ -325,22 +323,68 @@ public static class AgentProfileDeterminism
         AgentProfilePublishedSnapshot snapshot) =>
         ComputePublishedSnapshotSha256(snapshot);
 
-    public static ByteString ComputeInputSha256(
-        string operationKind,
-        IMessage typedTarget,
-        IMessage semanticPayload)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(operationKind);
-        ArgumentNullException.ThrowIfNull(typedTarget);
-        ArgumentNullException.ThrowIfNull(semanticPayload);
+    public static ByteString ComputeCreateAgentProfileInputSha256(
+        AgentProfileIdentity target,
+        AgentProfileContent initialContent) =>
+        ComputeOperationInputSha256(
+            "create-agent-profile",
+            CreateAgentProfileCommand.Descriptor,
+            target,
+            new CreateAgentProfileCommand
+            {
+                InitialContent = NormalizeContent(initialContent),
+            });
 
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, "aevatar.agent-profile.input.v1");
-        Append(hash, operationKind);
-        Append(hash, SerializeDeterministically(typedTarget));
-        Append(hash, SerializeDeterministically(semanticPayload));
-        return ByteString.CopyFrom(hash.GetHashAndReset());
+    public static ByteString ComputeUpdateAgentProfileDraftInputSha256(
+        AgentProfileIdentity target,
+        AgentProfileContent content) =>
+        ComputeOperationInputSha256(
+            "update-agent-profile-draft",
+            UpdateAgentProfileDraftCommand.Descriptor,
+            target,
+            new UpdateAgentProfileDraftCommand
+            {
+                Content = NormalizeContent(content),
+            });
+
+    public static ByteString ComputeUpsertAgentProfileSkillBindingInputSha256(
+        AgentProfileIdentity target,
+        AgentProfileSkillBinding binding) =>
+        ComputeOperationInputSha256(
+            "upsert-agent-profile-skill-binding",
+            UpsertAgentProfileSkillBindingCommand.Descriptor,
+            target,
+            new UpsertAgentProfileSkillBindingCommand
+            {
+                Binding = NormalizeSkillBinding(binding),
+            });
+
+    public static ByteString ComputeRemoveAgentProfileSkillBindingInputSha256(
+        AgentProfileIdentity target,
+        string bindingId)
+    {
+        ThrowIfInvalid(AgentProfilePolicies.ValidateBindingId(bindingId));
+        return ComputeOperationInputSha256(
+            "remove-agent-profile-skill-binding",
+            RemoveAgentProfileSkillBindingCommand.Descriptor,
+            target,
+            new RemoveAgentProfileSkillBindingCommand
+            {
+                BindingId = NormalizeText(bindingId),
+            });
     }
+
+    public static ByteString ComputePublishAgentProfileInputSha256(
+        AgentProfileIdentity target,
+        AgentProfilePublishedSnapshot snapshot) =>
+        ComputeOperationInputSha256(
+            "publish-agent-profile",
+            PublishAgentProfileCommand.Descriptor,
+            target,
+            new PublishAgentProfileCommand
+            {
+                Snapshot = NormalizePublishedSnapshot(snapshot),
+            });
 
     public static ByteString Sha256(IMessage message)
     {
@@ -409,6 +453,28 @@ public static class AgentProfileDeterminism
         return hash.GetHashAndReset();
     }
 
+    private static ByteString ComputeOperationInputSha256(
+        string operationKind,
+        MessageDescriptor operationDescriptor,
+        AgentProfileIdentity target,
+        IMessage semanticPayload)
+    {
+        ArgumentNullException.ThrowIfNull(operationDescriptor);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(semanticPayload);
+
+        var normalizedTarget = NormalizeIdentity(target);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Append(hash, "aevatar.agent-profile.operation-input.v1");
+        Append(hash, operationKind);
+        Append(hash, operationDescriptor.FullName);
+        Append(hash, AgentProfileIdentity.Descriptor.FullName);
+        Append(hash, SerializeDeterministically(normalizedTarget));
+        Append(hash, semanticPayload.Descriptor.FullName);
+        Append(hash, SerializeDeterministically(semanticPayload));
+        return ByteString.CopyFrom(hash.GetHashAndReset());
+    }
+
     private static void Append(IncrementalHash hash, string value) =>
         Append(hash, Encoding.UTF8.GetBytes(value));
 
@@ -446,25 +512,49 @@ public static class AgentProfileDeterminism
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-    private static IReadOnlyList<AgentProfileNamedTextAsset> NormalizeNamedAssets(
-        IEnumerable<AgentProfileNamedTextAsset> assets)
-    {
-        var normalized = assets
-            .Select(NormalizeNamedTextAsset)
-            .OrderBy(static asset => asset.Path, StringComparer.Ordinal)
-            .ToArray();
-        var duplicate = normalized
-            .GroupBy(static asset => asset.Path, StringComparer.Ordinal)
-            .FirstOrDefault(static group => group.Count() > 1);
-        if (duplicate is not null)
+    private static SealedAgentProfileSkill NormalizeSealedSkillCore(SealedAgentProfileSkill skill) =>
+        new()
         {
-            throw ValidationException(
-                "DUPLICATE_ASSET_PATH",
-                "Named text asset paths must be unique.",
-                duplicate.Key);
+            ExactReference = NormalizeExactSkillReference(skill.ExactReference),
+            Package = NormalizeResolvedSkillPackage(skill.Package),
+            ContentSha256 = skill.ContentSha256,
+        };
+
+    private static IReadOnlyList<AgentProfileNamedTextAsset> NormalizeNamedAssets(
+        IEnumerable<AgentProfileNamedTextAsset> assets) =>
+        NormalizeIdentityEntries(
+            assets,
+            NormalizeNamedTextAsset,
+            static asset => asset.Path,
+            "CONFLICTING_ASSET_PATH",
+            "Named text assets sharing a path must be structurally identical.",
+            "path");
+
+    private static IReadOnlyList<T> NormalizeIdentityEntries<T>(
+        IEnumerable<T> values,
+        Func<T, T> normalize,
+        Func<T, string> identity,
+        string conflictCode,
+        string conflictMessage,
+        string conflictPath)
+        where T : class
+    {
+        var entries = new SortedDictionary<string, T>(StringComparer.Ordinal);
+        foreach (var value in values)
+        {
+            var normalized = normalize(value);
+            var key = identity(normalized);
+            if (!entries.TryGetValue(key, out var existing))
+            {
+                entries.Add(key, normalized);
+                continue;
+            }
+
+            if (!EqualityComparer<T>.Default.Equals(existing, normalized))
+                throw ValidationException(conflictCode, conflictMessage, conflictPath);
         }
 
-        return normalized;
+        return entries.Values.ToArray();
     }
 
     private static string NormalizeText(string? value) =>

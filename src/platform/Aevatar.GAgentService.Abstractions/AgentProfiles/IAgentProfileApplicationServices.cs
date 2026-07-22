@@ -4,7 +4,16 @@ public sealed record AgentProfileCallerContext(
     AgentProfileUserOwnerIdentity Owner,
     string ScopeId,
     string? Username,
-    string? NyxIdAccessToken);
+    string? NyxIdAccessToken)
+{
+    private AgentProfileUserOwnerIdentity _owner = Owner.Clone();
+
+    public AgentProfileUserOwnerIdentity Owner
+    {
+        get => _owner.Clone();
+        init => _owner = value.Clone();
+    }
+}
 
 public sealed record AgentProfileAcceptedReceipt(
     bool Accepted,

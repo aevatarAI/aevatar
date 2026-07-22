@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -213,6 +214,118 @@ public static class AgentProfilePolicies
         return diagnostics;
     }
 
+    public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateBindingId(string? bindingId)
+    {
+        if (IsBoundedOpaqueIdentifier(bindingId, IdentifierMaxBytes))
+            return [];
+
+        return
+        [
+            Diagnostic(
+                "INVALID_BINDING_ID",
+                "Binding id is required and must be bounded.",
+                "binding_id"),
+        ];
+    }
+
+    public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateSealedSkill(
+        SealedAgentProfileSkill? skill)
+    {
+        var diagnostics = ValidateSealedSkillIdentity(skill).ToList();
+        if (skill is null || diagnostics.Count > 0)
+            return diagnostics;
+
+        if (skill.ContentSha256.Length != SHA256.HashSizeInBytes)
+        {
+            diagnostics.Add(Diagnostic(
+                "SEALED_SKILL_CONTENT_SHA256_MISMATCH",
+                "Sealed skill content digest is invalid.",
+                "content_sha256"));
+            return diagnostics;
+        }
+
+        try
+        {
+            var expected = AgentProfileDeterminism.ComputeSealedSkillSha256(skill);
+            if (!CryptographicOperations.FixedTimeEquals(expected.Span, skill.ContentSha256.Span))
+            {
+                diagnostics.Add(Diagnostic(
+                    "SEALED_SKILL_CONTENT_SHA256_MISMATCH",
+                    "Sealed skill content digest is invalid.",
+                    "content_sha256"));
+            }
+        }
+        catch (AgentProfileContractValidationException exception)
+        {
+            diagnostics.AddRange(exception.Diagnostics.Select(static diagnostic => diagnostic.Clone()));
+        }
+
+        return diagnostics;
+    }
+
+    internal static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateSealedSkillIdentity(
+        SealedAgentProfileSkill? skill)
+    {
+        if (skill is null)
+            return [Diagnostic("MISSING_SEALED_SKILL", "Sealed skill is required.", "skill")];
+
+        var diagnostics = new List<AgentProfileSafeDiagnostic>();
+        diagnostics.AddRange(ValidateExactSkillReference(skill.ExactReference));
+        if (skill.Package is null)
+        {
+            diagnostics.Add(Diagnostic(
+                "MISSING_RESOLVED_SKILL_PACKAGE",
+                "Sealed skill package is required.",
+                "package"));
+            return diagnostics;
+        }
+
+        diagnostics.AddRange(ValidateExactSkillReference(new ExactOrnnSkillReference
+        {
+            SkillGuid = skill.Package.SkillGuid,
+            LiteralVersion = skill.Package.LiteralVersion,
+            ExpectedName = skill.Package.CanonicalName,
+            ExpectedPublisherId = skill.Package.PublisherId,
+        }).Select(static diagnostic => PrefixPath(diagnostic, "package")));
+        if (string.IsNullOrWhiteSpace(skill.Package.UpstreamSkillHash) ||
+            HasBoundaryWhitespace(skill.Package.UpstreamSkillHash))
+        {
+            diagnostics.Add(Diagnostic(
+                "MISSING_UPSTREAM_SKILL_HASH",
+                "Resolved skill package requires an upstream content hash.",
+                "package.upstream_skill_hash"));
+        }
+
+        if (skill.ExactReference is null)
+            return diagnostics;
+
+        AddOrdinalMismatch(
+            diagnostics,
+            skill.ExactReference.SkillGuid,
+            skill.Package.SkillGuid,
+            "SEALED_SKILL_GUID_MISMATCH",
+            "package.skill_guid");
+        AddOrdinalMismatch(
+            diagnostics,
+            skill.ExactReference.LiteralVersion,
+            skill.Package.LiteralVersion,
+            "SEALED_SKILL_LITERAL_VERSION_MISMATCH",
+            "package.literal_version");
+        AddOrdinalMismatch(
+            diagnostics,
+            skill.ExactReference.ExpectedName,
+            skill.Package.CanonicalName,
+            "SEALED_SKILL_CANONICAL_NAME_MISMATCH",
+            "package.canonical_name");
+        AddOrdinalMismatch(
+            diagnostics,
+            skill.ExactReference.ExpectedPublisherId,
+            skill.Package.PublisherId,
+            "SEALED_SKILL_PUBLISHER_ID_MISMATCH",
+            "package.publisher_id");
+        return diagnostics;
+    }
+
     public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateContent(
         AgentProfileContent? content)
     {
@@ -257,7 +370,7 @@ public static class AgentProfilePolicies
         {
             var binding = content.SkillBindings[index];
             var path = $"skill_bindings[{index}]";
-            if (!IsBoundedOpaqueIdentifier(binding.BindingId, IdentifierMaxBytes))
+            if (ValidateBindingId(binding.BindingId).Count > 0)
             {
                 diagnostics.Add(Diagnostic(
                     "INVALID_BINDING_ID",
@@ -344,14 +457,8 @@ public static class AgentProfilePolicies
                     "skill_bindings.activation_mode"));
             }
 
-            diagnostics.AddRange(ValidateExactSkillReference(binding.Skill?.ExactReference));
-            if (binding.Skill?.Package is null)
-            {
-                diagnostics.Add(Diagnostic(
-                    "MISSING_RESOLVED_SKILL_PACKAGE",
-                    "Sealed skill package is required.",
-                    "skill_bindings.skill.package"));
-            }
+            diagnostics.AddRange(ValidateSealedSkill(binding.Skill)
+                .Select(static diagnostic => PrefixPath(diagnostic, "skill_bindings.skill")));
         }
 
         return diagnostics;
@@ -502,6 +609,17 @@ public static class AgentProfilePolicies
                 ? prefix
                 : $"{prefix}.{diagnostic.Path}",
         };
+
+    private static void AddOrdinalMismatch(
+        ICollection<AgentProfileSafeDiagnostic> diagnostics,
+        string expected,
+        string actual,
+        string code,
+        string path)
+    {
+        if (!string.Equals(expected, actual, StringComparison.Ordinal))
+            diagnostics.Add(Diagnostic(code, "Sealed skill identity does not match its exact reference.", path));
+    }
 
     private static AgentProfileSafeDiagnostic Diagnostic(
         string code,

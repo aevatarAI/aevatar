@@ -1,6 +1,7 @@
 using System.Text;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.Reflection;
 
 namespace Aevatar.GAgentService.Tests.Abstractions;
@@ -126,6 +127,80 @@ public sealed class AgentProfileContractsTests
     }
 
     [Fact]
+    public void NormalizeResolvedSkillPackage_ShouldDeduplicateAndSortIdenticalNormalizedIdentityEntries()
+    {
+        var package = SealedSkill("publisher-alpha", []).Package;
+        package.Workflows.Add([
+            Workflow("workflow-\u00e9", "zeta\r\nline", "alpha"),
+            Workflow("workflow-e\u0301", "alpha", "zeta\nline"),
+            Workflow("workflow-alpha", "alpha"),
+        ]);
+        package.Scripts.Add([
+            Script("script-\u00e9", "Console.WriteLine(\"alpha\");\r\n"),
+            Script("script-e\u0301", "Console.WriteLine(\"alpha\");\n"),
+            Script("script-alpha", "return;"),
+        ]);
+        package.Assets.Add([
+            new AgentProfileNamedTextAsset { Path = "docs/\u00e9.txt", Content = "alpha\r\nline" },
+            new AgentProfileNamedTextAsset { Path = "docs/e\u0301.txt", Content = "alpha\nline" },
+            new AgentProfileNamedTextAsset { Path = "docs/alpha.txt", Content = "alpha" },
+        ]);
+
+        var normalized = AgentProfileDeterminism.NormalizeResolvedSkillPackage(package);
+
+        normalized.Workflows.Select(static workflow => workflow.WorkflowId)
+            .Should().Equal("workflow-alpha", "workflow-\u00e9");
+        normalized.Scripts.Select(static script => script.ScriptId)
+            .Should().Equal("script-alpha", "script-\u00e9");
+        normalized.Assets.Select(static asset => asset.Path)
+            .Should().Equal("docs/alpha.txt", "docs/\u00e9.txt");
+    }
+
+    [Fact]
+    public void NormalizeResolvedSkillPackage_ShouldRejectConflictingNormalizedWorkflowIds()
+    {
+        var package = SealedSkill("publisher-alpha", []).Package;
+        package.Workflows.Add([
+            Workflow("workflow-\u00e9", "alpha"),
+            Workflow("workflow-e\u0301", "beta"),
+        ]);
+
+        var act = () => AgentProfileDeterminism.NormalizeResolvedSkillPackage(package);
+
+        act.Should().Throw<AgentProfileContractValidationException>()
+            .Which.Diagnostics.Should().ContainSingle(x => x.Code == "CONFLICTING_WORKFLOW_ID");
+    }
+
+    [Fact]
+    public void NormalizeResolvedSkillPackage_ShouldRejectConflictingNormalizedScriptIds()
+    {
+        var package = SealedSkill("publisher-alpha", []).Package;
+        package.Scripts.Add([
+            Script("script-\u00e9", "return 1;"),
+            Script("script-e\u0301", "return 2;"),
+        ]);
+
+        var act = () => AgentProfileDeterminism.NormalizeResolvedSkillPackage(package);
+
+        act.Should().Throw<AgentProfileContractValidationException>()
+            .Which.Diagnostics.Should().ContainSingle(x => x.Code == "CONFLICTING_SCRIPT_ID");
+    }
+
+    [Fact]
+    public void NormalizeResolvedSkillPackage_ShouldRejectConflictingNormalizedAssetPaths()
+    {
+        var package = SealedSkill("publisher-alpha", [
+            new AgentProfileNamedTextAsset { Path = "docs/\u00e9.txt", Content = "alpha" },
+            new AgentProfileNamedTextAsset { Path = "docs/e\u0301.txt", Content = "beta" },
+        ]).Package;
+
+        var act = () => AgentProfileDeterminism.NormalizeResolvedSkillPackage(package);
+
+        act.Should().Throw<AgentProfileContractValidationException>()
+            .Which.Diagnostics.Should().ContainSingle(x => x.Code == "CONFLICTING_ASSET_PATH");
+    }
+
+    [Fact]
     public void ComputeSealedSkillSha256_ShouldBindExpectedPublisherIdentity()
     {
         var first = SealedSkill("publisher-alpha", []);
@@ -133,6 +208,49 @@ public sealed class AgentProfileContractsTests
 
         AgentProfileDeterminism.ComputeSealedSkillSha256(first)
             .Should().NotEqual(AgentProfileDeterminism.ComputeSealedSkillSha256(second));
+    }
+
+    [Fact]
+    public void ValidateSealedSkill_ShouldAcceptMatchingIdentityAndDigest()
+    {
+        AgentProfilePolicies.ValidateSealedSkill(ValidSealedSkill())
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ValidateSealedSkill_ShouldRejectReferencePackageIdentityMismatches()
+    {
+        var cases = new (Action<SealedAgentProfileSkill> Mutate, string Code)[]
+        {
+            (skill => skill.Package.SkillGuid = "3d05bf2e-88ee-4f76-9998-728ba2f9db10",
+                "SEALED_SKILL_GUID_MISMATCH"),
+            (skill => skill.Package.LiteralVersion = "1.5",
+                "SEALED_SKILL_LITERAL_VERSION_MISMATCH"),
+            (skill => skill.Package.CanonicalName = "another-skill",
+                "SEALED_SKILL_CANONICAL_NAME_MISMATCH"),
+            (skill => skill.Package.PublisherId = "publisher-beta",
+                "SEALED_SKILL_PUBLISHER_ID_MISMATCH"),
+        };
+
+        foreach (var (mutate, code) in cases)
+        {
+            var skill = ValidSealedSkill();
+            mutate(skill);
+
+            AgentProfilePolicies.ValidateSealedSkill(skill)
+                .Should().Contain(diagnostic => diagnostic.Code == code);
+        }
+    }
+
+    [Fact]
+    public void ValidateSealedSkill_ShouldRejectTamperedContentDigest()
+    {
+        var skill = ValidSealedSkill();
+        skill.Package.Instructions = "Tampered instructions";
+
+        AgentProfilePolicies.ValidateSealedSkill(skill)
+            .Should().Contain(diagnostic =>
+                diagnostic.Code == "SEALED_SKILL_CONTENT_SHA256_MISMATCH");
     }
 
     [Fact]
@@ -147,6 +265,98 @@ public sealed class AgentProfileContractsTests
             .Should().NotEqual(AgentProfileDeterminism.ComputeDraftSha256(secondContent));
         AgentProfileDeterminism.ComputePublishedSnapshotSha256(firstSnapshot)
             .Should().Equal(AgentProfileDeterminism.ComputePublishedSnapshotSha256(secondSnapshot));
+    }
+
+    [Fact]
+    public void OperationInputSha256_ShouldNormalizeSemanticPayloadInternally()
+    {
+        var target = ProfileIdentity();
+        var first = Content(
+            purpose: "Control devices.\r\nUse exact state.",
+            instructions: "First line.\r\nSecond line.",
+            toolNames: ["zeta", "alpha", "alpha"]);
+        var second = Content(
+            purpose: "Control devices.\nUse exact state.",
+            instructions: "First line.\nSecond line.",
+            toolNames: ["alpha", "zeta"]);
+
+        AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(target, first)
+            .Should().Equal(
+                AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(target, second));
+    }
+
+    [Fact]
+    public void OperationInputSha256_ShouldSeparateTargetAndOperationMessageType()
+    {
+        var content = Content("Purpose", "Instructions", ["alpha"]);
+        var target = ProfileIdentity("prof-alpha");
+        var otherTarget = ProfileIdentity("prof-beta");
+
+        var update = AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
+            target,
+            content);
+
+        update.Should().NotEqual(
+            AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(otherTarget, content));
+        update.Should().NotEqual(
+            AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(target, content));
+    }
+
+    [Fact]
+    public void OperationInputSha256_ShouldExcludeConcurrencyAndTransportFacts()
+    {
+        var target = ProfileIdentity();
+        var content = Content("Purpose", "Instructions", ["alpha"]);
+        var first = new UpdateAgentProfileDraftCommand
+        {
+            Identity = target.Clone(),
+            Content = content.Clone(),
+            ExpectedAuthorityStateVersion = 7,
+            Operation = Operation("op-alpha", "cmd-alpha", "corr-alpha", 0x11),
+        };
+        var second = new UpdateAgentProfileDraftCommand
+        {
+            Identity = target.Clone(),
+            Content = content.Clone(),
+            ExpectedAuthorityStateVersion = 99,
+            Operation = Operation("op-beta", "cmd-beta", "corr-beta", 0x22),
+        };
+
+        AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
+                first.Identity,
+                first.Content)
+            .Should().Equal(
+                AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
+                    second.Identity,
+                    second.Content));
+    }
+
+    [Fact]
+    public void OperationInputSha256_ShouldExposeOnlyOperationSpecificTypedMethods()
+    {
+        typeof(AgentProfileDeterminism).GetMethod("ComputeInputSha256")
+            .Should().BeNull();
+
+        var signatures = typeof(AgentProfileDeterminism)
+            .GetMethods()
+            .Where(static method => method.Name.EndsWith("InputSha256", StringComparison.Ordinal))
+            .ToDictionary(
+                static method => method.Name,
+                static method => method.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
+
+        signatures.Should().BeEquivalentTo(new Dictionary<string, Type[]>
+        {
+            ["ComputeCreateAgentProfileInputSha256"] =
+                [typeof(AgentProfileIdentity), typeof(AgentProfileContent)],
+            ["ComputeUpdateAgentProfileDraftInputSha256"] =
+                [typeof(AgentProfileIdentity), typeof(AgentProfileContent)],
+            ["ComputeUpsertAgentProfileSkillBindingInputSha256"] =
+                [typeof(AgentProfileIdentity), typeof(AgentProfileSkillBinding)],
+            ["ComputeRemoveAgentProfileSkillBindingInputSha256"] =
+                [typeof(AgentProfileIdentity), typeof(string)],
+            ["ComputePublishAgentProfileInputSha256"] =
+                [typeof(AgentProfileIdentity), typeof(AgentProfilePublishedSnapshot)],
+        });
     }
 
     [Fact]
@@ -199,6 +409,162 @@ public sealed class AgentProfileContractsTests
     }
 
     [Fact]
+    public void ProtobufBearingValueRecords_ShouldCloneConstructorInputs()
+    {
+        var owner = UserOwner("subject-alpha");
+        var policy = new AgentProfileToolPolicy { Mode = AgentProfileToolPolicyMode.ExplicitAllowlist };
+        policy.ToolNames.Add("alpha");
+        var exactReference = ExactReference();
+        var diagnostic = new AgentProfileSafeDiagnostic { Code = "VALIDATION_ALPHA" };
+        var diagnostics = new List<AgentProfileSafeDiagnostic> { diagnostic };
+        var resolution = new AgentProfileSkillResolutionSummary(
+            "bind-beta",
+            exactReference,
+            ByteString.CopyFrom([0x11]));
+        var resolutions = new List<AgentProfileSkillResolutionSummary> { resolution };
+        var identity = ProfileIdentity();
+        var draft = Content("Purpose", "Instructions", ["alpha"]);
+        var mutation = new AgentProfileMutationOutcome
+        {
+            Operation = Operation("op-alpha", "cmd-alpha", "corr-alpha", 0x11),
+        };
+        var reference = identity.Reference.Clone();
+        var publishedSummary = new AgentProfilePublishedSummary
+        {
+            Reference = reference.Clone(),
+            DisplayName = "Home assistant",
+        };
+        var published = PublishedSnapshot(draft);
+
+        var caller = new AgentProfileCallerContext(owner, "scope-gamma", "eanzhao", "token-alpha");
+        var create = new CreateAgentProfileRequest(
+            "xiaomi-home-assistant", null, "Home assistant", "Purpose", "Instructions", policy);
+        var update = new UpdateAgentProfileDraftRequest(
+            "Home assistant", "Purpose", "Instructions", policy);
+        var upsert = new UpsertAgentProfileSkillBindingRequest(
+            AgentProfileSkillActivationMode.Routed, exactReference);
+        var report = new AgentProfileValidationReport(
+            true, 3, ByteString.CopyFrom([0x22]), diagnostics, resolutions);
+        var namespaceEntry = new AgentProfileNamespaceEntrySnapshot(
+            4, "evt-4", "prof-alpha", reference, identity.Owner, "scope-gamma",
+            AgentProfileProvisioningStatus.Active, publishedSummary);
+        var management = new AgentProfileManagementSnapshot(
+            5, "evt-5", identity, draft, 3, ByteString.CopyFrom([0x33]),
+            2, ByteString.CopyFrom([0x44]), ByteString.CopyFrom([0x55]), mutation);
+        var execution = new AgentProfileExecutionSnapshot(6, "evt-6", published);
+        var discovery = new AgentProfileDiscoverySnapshot(
+            reference, "Home assistant", "Purpose", 2, true);
+        var exception = new AgentProfileContractValidationException(diagnostics);
+
+        owner.SubjectId = "mutated-owner";
+        policy.ToolNames[0] = "mutated-tool";
+        exactReference.ExpectedName = "mutated-skill";
+        diagnostic.Code = "MUTATED_DIAGNOSTIC";
+        diagnostics.Clear();
+        resolutions.Clear();
+        identity.ProfileId = "mutated-profile";
+        draft.DisplayName = "Mutated draft";
+        mutation.Operation.CommandId = "mutated-command";
+        reference.ProfileSlug = "mutated-slug";
+        publishedSummary.DisplayName = "Mutated summary";
+        published.DisplayName = "Mutated published";
+
+        caller.Owner.SubjectId.Should().Be("subject-alpha");
+        create.ToolPolicy.ToolNames.Should().Equal("alpha");
+        update.ToolPolicy.ToolNames.Should().Equal("alpha");
+        upsert.Skill.ExpectedName.Should().Be("xiaomi-home-control");
+        resolution.ExactReference.ExpectedName.Should().Be("xiaomi-home-control");
+        report.Diagnostics.Should().ContainSingle(x => x.Code == "VALIDATION_ALPHA");
+        report.ResolvedSkills.Should().ContainSingle();
+        namespaceEntry.Reference.ProfileSlug.Should().Be("xiaomi-home-assistant");
+        namespaceEntry.Owner.User.SubjectId.Should().Be("subject-alpha");
+        namespaceEntry.PublishedSummary!.DisplayName.Should().Be("Home assistant");
+        management.Identity.ProfileId.Should().Be("prof-alpha");
+        management.Draft.DisplayName.Should().Be("Home assistant");
+        management.LastMutation!.Operation.CommandId.Should().Be("cmd-alpha");
+        execution.Snapshot.DisplayName.Should().Be("Home assistant");
+        discovery.Reference.ProfileSlug.Should().Be("xiaomi-home-assistant");
+        exception.Diagnostics.Should().ContainSingle(x => x.Code == "VALIDATION_ALPHA");
+    }
+
+    [Fact]
+    public void ProtobufBearingValueRecords_ShouldCloneValuesOnEveryAccess()
+    {
+        var policy = new AgentProfileToolPolicy { Mode = AgentProfileToolPolicyMode.ExplicitAllowlist };
+        policy.ToolNames.Add("alpha");
+        var exactReference = ExactReference();
+        var diagnostic = new AgentProfileSafeDiagnostic { Code = "VALIDATION_ALPHA" };
+        var resolution = new AgentProfileSkillResolutionSummary(
+            "bind-beta", exactReference, ByteString.CopyFrom([0x11]));
+        var identity = ProfileIdentity();
+        var draft = Content("Purpose", "Instructions", ["alpha"]);
+        var mutation = new AgentProfileMutationOutcome
+        {
+            Operation = Operation("op-alpha", "cmd-alpha", "corr-alpha", 0x11),
+        };
+        var summary = new AgentProfilePublishedSummary
+        {
+            Reference = identity.Reference.Clone(),
+            DisplayName = "Home assistant",
+        };
+
+        var caller = new AgentProfileCallerContext(
+            UserOwner("subject-alpha"), "scope-gamma", "eanzhao", "token-alpha");
+        var create = new CreateAgentProfileRequest(
+            "xiaomi-home-assistant", null, "Home assistant", "Purpose", "Instructions", policy);
+        var update = new UpdateAgentProfileDraftRequest(
+            "Home assistant", "Purpose", "Instructions", policy);
+        var upsert = new UpsertAgentProfileSkillBindingRequest(
+            AgentProfileSkillActivationMode.Routed, exactReference);
+        var report = new AgentProfileValidationReport(
+            true, 3, ByteString.CopyFrom([0x22]), [diagnostic], [resolution]);
+        var namespaceEntry = new AgentProfileNamespaceEntrySnapshot(
+            4, "evt-4", "prof-alpha", identity.Reference, identity.Owner, "scope-gamma",
+            AgentProfileProvisioningStatus.Active, summary);
+        var management = new AgentProfileManagementSnapshot(
+            5, "evt-5", identity, draft, 3, ByteString.CopyFrom([0x33]),
+            2, ByteString.CopyFrom([0x44]), ByteString.CopyFrom([0x55]), mutation);
+        var execution = new AgentProfileExecutionSnapshot(6, "evt-6", PublishedSnapshot(draft));
+        var discovery = new AgentProfileDiscoverySnapshot(
+            identity.Reference, "Home assistant", "Purpose", 2, true);
+        var exception = new AgentProfileContractValidationException([diagnostic]);
+
+        caller.Owner.SubjectId = "returned-owner";
+        create.ToolPolicy.ToolNames[0] = "returned-create-tool";
+        update.ToolPolicy.ToolNames[0] = "returned-update-tool";
+        upsert.Skill.ExpectedName = "returned-upsert-skill";
+        resolution.ExactReference.ExpectedName = "returned-resolution-skill";
+        report.Diagnostics[0].Code = "RETURNED_DIAGNOSTIC";
+        report.ResolvedSkills[0].ExactReference.ExpectedName = "returned-report-skill";
+        namespaceEntry.Reference.ProfileSlug = "returned-namespace-slug";
+        namespaceEntry.Owner.User.SubjectId = "returned-namespace-owner";
+        namespaceEntry.PublishedSummary!.DisplayName = "Returned summary";
+        management.Identity.ProfileId = "returned-profile";
+        management.Draft.DisplayName = "Returned draft";
+        management.LastMutation!.Operation.CommandId = "returned-command";
+        execution.Snapshot.DisplayName = "Returned published";
+        discovery.Reference.ProfileSlug = "returned-discovery-slug";
+        exception.Diagnostics[0].Code = "RETURNED_EXCEPTION";
+
+        caller.Owner.SubjectId.Should().Be("subject-alpha");
+        create.ToolPolicy.ToolNames.Should().Equal("alpha");
+        update.ToolPolicy.ToolNames.Should().Equal("alpha");
+        upsert.Skill.ExpectedName.Should().Be("xiaomi-home-control");
+        resolution.ExactReference.ExpectedName.Should().Be("xiaomi-home-control");
+        report.Diagnostics.Should().ContainSingle(x => x.Code == "VALIDATION_ALPHA");
+        report.ResolvedSkills[0].ExactReference.ExpectedName.Should().Be("xiaomi-home-control");
+        namespaceEntry.Reference.ProfileSlug.Should().Be("xiaomi-home-assistant");
+        namespaceEntry.Owner.User.SubjectId.Should().Be("subject-alpha");
+        namespaceEntry.PublishedSummary!.DisplayName.Should().Be("Home assistant");
+        management.Identity.ProfileId.Should().Be("prof-alpha");
+        management.Draft.DisplayName.Should().Be("Home assistant");
+        management.LastMutation!.Operation.CommandId.Should().Be("cmd-alpha");
+        execution.Snapshot.DisplayName.Should().Be("Home assistant");
+        discovery.Reference.ProfileSlug.Should().Be("xiaomi-home-assistant");
+        exception.Diagnostics.Should().ContainSingle(x => x.Code == "VALIDATION_ALPHA");
+    }
+
+    [Fact]
     public void SealedAndPublishedMessages_ShouldExposeNoCredentialOrGenericBagFields()
     {
         var forbidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -236,6 +602,34 @@ public sealed class AgentProfileContractsTests
         SubjectId = subjectId,
     };
 
+    private static AgentProfileIdentity ProfileIdentity(string profileId = "prof-alpha") => new()
+    {
+        ProfileId = profileId,
+        Owner = new AgentProfileOwnerIdentity
+        {
+            User = UserOwner("subject-alpha"),
+        },
+        OwningScopeId = "scope-gamma",
+        Reference = new AgentProfileReference
+        {
+            OwnerHandle = "eanzhao",
+            ProfileSlug = "xiaomi-home-assistant",
+        },
+    };
+
+    private static AgentProfileOperationFact Operation(
+        string operationId,
+        string commandId,
+        string correlationId,
+        byte digestByte) =>
+        new()
+        {
+            OperationId = operationId,
+            CommandId = commandId,
+            CorrelationId = correlationId,
+            InputSha256 = ByteString.CopyFrom(Enumerable.Repeat(digestByte, 32).ToArray()),
+        };
+
     private static AgentProfileContent Content(
         string purpose,
         string instructions,
@@ -253,6 +647,30 @@ public sealed class AgentProfileContractsTests
         };
         content.ToolPolicy.ToolNames.Add(toolNames);
         return content;
+    }
+
+    private static AgentProfileWorkflowAsset Workflow(
+        string workflowId,
+        params string[] workflowYamls)
+    {
+        var workflow = new AgentProfileWorkflowAsset { WorkflowId = workflowId };
+        workflow.WorkflowYamls.Add(workflowYamls);
+        return workflow;
+    }
+
+    private static AgentProfileScriptAsset Script(string scriptId, string source)
+    {
+        var script = new AgentProfileScriptAsset
+        {
+            ScriptId = scriptId,
+            EntryBehaviorTypeName = "Example.EntryBehavior",
+        };
+        script.SourceFiles.Add(new AgentProfileNamedTextAsset
+        {
+            Path = "main.cs",
+            Content = source,
+        });
+        return script;
     }
 
     private static SealedAgentProfileSkill SealedSkill(
@@ -283,24 +701,18 @@ public sealed class AgentProfileContractsTests
         return skill;
     }
 
+    private static SealedAgentProfileSkill ValidSealedSkill()
+    {
+        var skill = SealedSkill("publisher-alpha", []);
+        skill.ContentSha256 = AgentProfileDeterminism.ComputeSealedSkillSha256(skill);
+        return skill;
+    }
+
     private static AgentProfilePublishedSnapshot PublishedSnapshot(AgentProfileContent content)
     {
         var snapshot = new AgentProfilePublishedSnapshot
         {
-            Identity = new AgentProfileIdentity
-            {
-                ProfileId = "prof-alpha",
-                Owner = new AgentProfileOwnerIdentity
-                {
-                    User = UserOwner("subject-alpha"),
-                },
-                OwningScopeId = "scope-gamma",
-                Reference = new AgentProfileReference
-                {
-                    OwnerHandle = "eanzhao",
-                    ProfileSlug = "xiaomi-home-assistant",
-                },
-            },
+            Identity = ProfileIdentity(),
             DisplayName = content.DisplayName,
             Purpose = content.Purpose,
             Instructions = content.Instructions,

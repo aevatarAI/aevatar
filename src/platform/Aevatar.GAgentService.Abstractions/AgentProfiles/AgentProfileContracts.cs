@@ -9,23 +9,58 @@ public sealed record CreateAgentProfileRequest(
     string DisplayName,
     string Purpose,
     string Instructions,
-    AgentProfileToolPolicy ToolPolicy);
+    AgentProfileToolPolicy ToolPolicy)
+{
+    private AgentProfileToolPolicy _toolPolicy = ToolPolicy.Clone();
+
+    public AgentProfileToolPolicy ToolPolicy
+    {
+        get => _toolPolicy.Clone();
+        init => _toolPolicy = value.Clone();
+    }
+}
 
 public sealed record UpdateAgentProfileDraftRequest(
     string DisplayName,
     string Purpose,
     string Instructions,
-    AgentProfileToolPolicy ToolPolicy);
+    AgentProfileToolPolicy ToolPolicy)
+{
+    private AgentProfileToolPolicy _toolPolicy = ToolPolicy.Clone();
+
+    public AgentProfileToolPolicy ToolPolicy
+    {
+        get => _toolPolicy.Clone();
+        init => _toolPolicy = value.Clone();
+    }
+}
 
 public sealed record UpsertAgentProfileSkillBindingRequest(
     AgentProfileSkillActivationMode ActivationMode,
-    ExactOrnnSkillReference Skill);
+    ExactOrnnSkillReference Skill)
+{
+    private ExactOrnnSkillReference _skill = Skill.Clone();
+
+    public ExactOrnnSkillReference Skill
+    {
+        get => _skill.Clone();
+        init => _skill = value.Clone();
+    }
+}
 
 public sealed record AgentProfileSkillResolutionSummary(
     string BindingId,
     ExactOrnnSkillReference ExactReference,
     ByteString ContentSha256)
 {
+    private ExactOrnnSkillReference _exactReference = ExactReference.Clone();
+
+    public ExactOrnnSkillReference ExactReference
+    {
+        get => _exactReference.Clone();
+        init => _exactReference = value.Clone();
+    }
+
     public AgentProfileSkillResolutionSummary DeepClone() =>
         this with { ExactReference = ExactReference.Clone() };
 }
@@ -37,6 +72,23 @@ public sealed record AgentProfileValidationReport(
     IReadOnlyList<AgentProfileSafeDiagnostic> Diagnostics,
     IReadOnlyList<AgentProfileSkillResolutionSummary> ResolvedSkills)
 {
+    private IReadOnlyList<AgentProfileSafeDiagnostic> _diagnostics =
+        Diagnostics.Select(static diagnostic => diagnostic.Clone()).ToArray();
+    private IReadOnlyList<AgentProfileSkillResolutionSummary> _resolvedSkills =
+        ResolvedSkills.Select(static skill => skill.DeepClone()).ToArray();
+
+    public IReadOnlyList<AgentProfileSafeDiagnostic> Diagnostics
+    {
+        get => _diagnostics.Select(static diagnostic => diagnostic.Clone()).ToArray();
+        init => _diagnostics = value.Select(static diagnostic => diagnostic.Clone()).ToArray();
+    }
+
+    public IReadOnlyList<AgentProfileSkillResolutionSummary> ResolvedSkills
+    {
+        get => _resolvedSkills.Select(static skill => skill.DeepClone()).ToArray();
+        init => _resolvedSkills = value.Select(static skill => skill.DeepClone()).ToArray();
+    }
+
     public AgentProfileValidationReport DeepClone() =>
         this with
         {
@@ -55,6 +107,28 @@ public sealed record AgentProfileNamespaceEntrySnapshot(
     AgentProfileProvisioningStatus Status,
     AgentProfilePublishedSummary? PublishedSummary)
 {
+    private AgentProfileReference _reference = Reference.Clone();
+    private AgentProfileOwnerIdentity _owner = Owner.Clone();
+    private AgentProfilePublishedSummary? _publishedSummary = PublishedSummary?.Clone();
+
+    public AgentProfileReference Reference
+    {
+        get => _reference.Clone();
+        init => _reference = value.Clone();
+    }
+
+    public AgentProfileOwnerIdentity Owner
+    {
+        get => _owner.Clone();
+        init => _owner = value.Clone();
+    }
+
+    public AgentProfilePublishedSummary? PublishedSummary
+    {
+        get => _publishedSummary?.Clone();
+        init => _publishedSummary = value?.Clone();
+    }
+
     public AgentProfileNamespaceEntrySnapshot DeepClone() =>
         this with
         {
@@ -76,6 +150,28 @@ public sealed record AgentProfileManagementSnapshot(
     ByteString PublishedSourceDraftSha256,
     AgentProfileMutationOutcome? LastMutation)
 {
+    private AgentProfileIdentity _identity = Identity.Clone();
+    private AgentProfileContent _draft = Draft.Clone();
+    private AgentProfileMutationOutcome? _lastMutation = LastMutation?.Clone();
+
+    public AgentProfileIdentity Identity
+    {
+        get => _identity.Clone();
+        init => _identity = value.Clone();
+    }
+
+    public AgentProfileContent Draft
+    {
+        get => _draft.Clone();
+        init => _draft = value.Clone();
+    }
+
+    public AgentProfileMutationOutcome? LastMutation
+    {
+        get => _lastMutation?.Clone();
+        init => _lastMutation = value?.Clone();
+    }
+
     public string ProfileId => Identity.ProfileId;
 
     public AgentProfileManagementSnapshot DeepClone() =>
@@ -92,6 +188,14 @@ public sealed record AgentProfileExecutionSnapshot(
     string LastEventId,
     AgentProfilePublishedSnapshot Snapshot)
 {
+    private AgentProfilePublishedSnapshot _snapshot = Snapshot.Clone();
+
+    public AgentProfilePublishedSnapshot Snapshot
+    {
+        get => _snapshot.Clone();
+        init => _snapshot = value.Clone();
+    }
+
     public string ProfileId => Snapshot.Identity?.ProfileId ?? string.Empty;
 
     public AgentProfileExecutionSnapshot DeepClone() =>
@@ -105,6 +209,14 @@ public sealed record AgentProfileDiscoverySnapshot(
     long PublishedRevision,
     bool Available)
 {
+    private AgentProfileReference _reference = Reference.Clone();
+
+    public AgentProfileReference Reference
+    {
+        get => _reference.Clone();
+        init => _reference = value.Clone();
+    }
+
     public AgentProfileDiscoverySnapshot DeepClone() =>
         this with { Reference = Reference.Clone() };
 }
@@ -170,14 +282,17 @@ public sealed class ExactOrnnSkillResolutionResult
 
 public sealed class AgentProfileContractValidationException : ArgumentException
 {
+    private readonly IReadOnlyList<AgentProfileSafeDiagnostic> _diagnostics;
+
     public AgentProfileContractValidationException(
         IReadOnlyList<AgentProfileSafeDiagnostic> diagnostics)
         : base(diagnostics.Count == 0
             ? "Agent Profile contract validation failed."
             : diagnostics[0].Code)
     {
-        Diagnostics = diagnostics.Select(static diagnostic => diagnostic.Clone()).ToArray();
+        _diagnostics = diagnostics.Select(static diagnostic => diagnostic.Clone()).ToArray();
     }
 
-    public IReadOnlyList<AgentProfileSafeDiagnostic> Diagnostics { get; }
+    public IReadOnlyList<AgentProfileSafeDiagnostic> Diagnostics =>
+        _diagnostics.Select(static diagnostic => diagnostic.Clone()).ToArray();
 }
