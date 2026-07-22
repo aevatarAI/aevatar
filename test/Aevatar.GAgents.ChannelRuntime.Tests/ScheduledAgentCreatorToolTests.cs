@@ -1525,6 +1525,7 @@ public sealed class ScheduledAgentCreatorToolTests
 
         public Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
             string scopeId,
+            AuthenticatedAuthorizationOwnerContext? ownerContext = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

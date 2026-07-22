@@ -222,6 +222,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
+                BindingId = "binding-alpha",
             });
     }
 
@@ -273,6 +274,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
+                BindingId = "binding-alpha",
             });
         materializer.BearerToken.Should().Be("issued-bearer-alpha");
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;

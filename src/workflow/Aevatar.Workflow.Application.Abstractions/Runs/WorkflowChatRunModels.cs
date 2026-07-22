@@ -62,7 +62,8 @@ public sealed record WorkflowCallerNyxIdAuthority(
     string Platform,
     string Tenant,
     string ExternalUserId,
-    string Scope);
+    string Scope,
+    string? BindingId = null);
 
 public sealed record WorkflowCallerCredential(
     string? BearerToken = null,

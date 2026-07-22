@@ -167,6 +167,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 Tenant = Normalize(authority.Tenant),
                 ExternalUserId = externalUserId,
                 Scope = scope,
+                BindingId = Normalize(authority.BindingId),
             };
         }
 

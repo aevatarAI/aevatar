@@ -856,6 +856,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
                 revisionId = "rev-chat",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -869,14 +870,47 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.RevisionId.Should().Be("rev-chat");
         invocation.Auth.Should().NotBeNull();
-        invocation.Auth!.ScopeOwnerNyxId.Should().NotBeNull();
-        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
-        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            "owner-user-1"));
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId.Should().BeNull();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         host.CredentialExchange.ScopeOwnerSources.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowServiceInvocationAndOmittedAuth_ShouldReturnBadRequest()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
     }
 
     [Fact]
@@ -1226,6 +1260,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 endpointId = "chat",
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadJson = """{"prompt":"json prompt"}""",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -1273,6 +1308,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 endpointId = "chat",
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadJson = """{"prompt":"json prompt"}""",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -1313,6 +1349,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
                 revisionId = "rev-chat",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -1344,6 +1381,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 endpointId = "chat",
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadJson = """{"prompt":"json prompt"}""",
+                auth = SenderNyxIdAuth(),
             },
         });
         var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
@@ -1450,6 +1488,20 @@ public sealed class ScheduledDispatchEndpointsTests
                 Auth = auth,
             },
         };
+
+    private static object SenderNyxIdAuth() => new
+    {
+        senderNyxId = new
+        {
+            subject = new
+            {
+                platform = "nyxid",
+                tenant = "tenant-1",
+                externalUserId = "user-42",
+            },
+            scope = "proxy",
+        },
+    };
 
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,

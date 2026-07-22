@@ -470,6 +470,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             Tenant = source.Tenant?.Trim() ?? string.Empty,
             ExternalUserId = externalUserId,
             Scope = scope,
+            BindingId = source.BindingId?.Trim() ?? string.Empty,
         };
     }
 
