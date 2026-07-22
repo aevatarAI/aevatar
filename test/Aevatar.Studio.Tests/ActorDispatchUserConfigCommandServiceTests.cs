@@ -110,6 +110,19 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
         command.LlmSelection.NyxIdUserServiceId.Should().Be("us-alpha");
     }
 
+    [Fact]
+    public async Task UpdateAsync_ShouldRejectUnknownResourceKind()
+    {
+        var dispatch = RecordingDispatchPort.Accepting();
+        var service = CreateService(dispatch);
+        var resource = new UserConfigResourceKey((UserConfigResourceKind)99, "unknown-alpha");
+
+        var act = () => service.UpdateAsync(resource, new UserConfigUpdate(DefaultModel: "gpt-5.5"));
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        dispatch.Dispatches.Should().BeEmpty();
+    }
+
     private static ActorDispatchUserConfigCommandService CreateService(RecordingDispatchPort dispatch) =>
         new(new RecordingBootstrap(), dispatch, new StubScopeResolver("scope-alpha"));
 

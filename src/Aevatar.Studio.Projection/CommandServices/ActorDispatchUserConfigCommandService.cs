@@ -96,13 +96,6 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private static string BuildActorId(UserConfigResourceKey resource) => resource.Kind switch
-    {
-        UserConfigResourceKind.OwnerScope => $"user-config-{resource.Value}",
-        UserConfigResourceKind.ChannelBinding => $"channel-user-config-{resource.Value}",
-        _ => throw new ArgumentOutOfRangeException(nameof(resource)),
-    };
-
     private static UserLlmSelection MapSelection(UserLlmSelectionValue selection) =>
         new()
         {
@@ -129,7 +122,7 @@ internal sealed class ActorDispatchUserConfigCommandService : IUserConfigCommand
         IMessage payload,
         CancellationToken ct)
     {
-        var actorId = BuildActorId(resource);
+        var actorId = UserConfigActorIdMapper.Build(resource);
         // Refactor (iter56/cluster-910-projection-activation-cleanup):
         //   old=command-path pre-dispatch activation
         //   new=committed-state plan provider
