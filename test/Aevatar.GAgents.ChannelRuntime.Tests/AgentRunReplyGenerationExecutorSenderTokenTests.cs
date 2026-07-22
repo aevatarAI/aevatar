@@ -314,7 +314,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/incoming");
         generator.CapturedLlmControl.MaxToolRoundsOverride.Should().Be(3);
         AgentRunReplyStepMappers.LlmControlFromProto(state).Should().Be(generator.CapturedLlmControl);
-        await userConfigQueryPort.DidNotReceiveWithAnyArgs().GetAsync(default!, default);
+        await userConfigQueryPort.DidNotReceive().GetAsync(
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>());
     }
 
     private static AgentRunReplyGenerationExecutor CreateExecutor(
