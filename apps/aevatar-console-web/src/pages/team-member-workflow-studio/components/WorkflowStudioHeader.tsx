@@ -778,8 +778,8 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
             invokePlaceholderReason ??
             (canOpenInvoke
               ? t(
-                  'teamMemberWorkflowStudio.header.openInvoke',
-                  'Open invoke surface',
+                  'teamMemberWorkflowStudio.header.invoke.open',
+                  'Open the published member invoke workbench.',
                 )
               : undefined)
           }
@@ -974,8 +974,8 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
             publishedRunsPlaceholderReason ??
             (canOpenPublishedRuns
               ? t(
-                  'teamMemberWorkflowStudio.header.openPublishedRuns',
-                  'Open published runs',
+                  'teamMemberWorkflowStudio.header.publishedRuns.open',
+                  'View runs from the published member service.',
                 )
               : undefined)
           }

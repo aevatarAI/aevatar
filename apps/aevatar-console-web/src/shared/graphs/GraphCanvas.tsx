@@ -33,6 +33,7 @@ import {
   getStudioGraphCategory,
   type StudioGraphNodeData,
 } from '@/shared/studio/graph';
+import { t } from '@/shared/i18n/messages';
 
 type GraphCanvasProps = {
   autoFitKey?: string;
@@ -350,6 +351,14 @@ function StudioWorkflowNode({
         : executionStatus === 'waiting'
           ? '#FEF3C7'
           : '#DBEAFE';
+  const branchCountLabel =
+    data.branchCount === 1
+      ? t('teamMemberWorkflowStudio.graph.branchCount.one', '1 branch')
+      : t(
+          'teamMemberWorkflowStudio.graph.branchCount.other',
+          '{count} branches',
+          { count: data.branchCount },
+        );
 
   return (
     <div
@@ -385,9 +394,7 @@ function StudioWorkflowNode({
             </span>
             {data.branchCount > 0 ? (
               <span className="studio-workflow-node__branch-count">
-                {data.branchCount === 1
-                  ? '1 branch'
-                  : `${data.branchCount} branches`}
+                {branchCountLabel}
               </span>
             ) : null}
           </div>
@@ -407,7 +414,9 @@ function StudioWorkflowNode({
       <div className="studio-workflow-node__body">
         {data.targetRole ? (
           <div className="studio-workflow-node__meta">
-            <span className="studio-workflow-node__meta-label">Role</span>
+            <span className="studio-workflow-node__meta-label">
+              {t('teamMemberWorkflowStudio.graph.role', 'Role')}
+            </span>
             <span
               className="studio-workflow-node__meta-value"
               title={data.targetRole}
