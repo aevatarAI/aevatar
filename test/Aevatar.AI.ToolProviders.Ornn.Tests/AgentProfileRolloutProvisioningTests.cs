@@ -7,6 +7,10 @@ using Google.Protobuf;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
+[CollectionDefinition("Agent profile rollout environment", DisableParallelization = true)]
+public sealed class AgentProfileRolloutEnvironmentCollection;
+
+[Collection("Agent profile rollout environment")]
 public sealed class AgentProfileRolloutProvisioningTests
 {
     [Fact]
@@ -50,6 +54,38 @@ public sealed class AgentProfileRolloutProvisioningTests
         AgentProfileSnapshotCodec.Verify(shadow).Should().BeTrue();
         AgentProfileSnapshotCodec.Verify(enforced).Should().BeTrue();
         shadow.ToString().Should().NotContain("latest").And.NotContain("placeholder");
+    }
+
+    [Fact]
+    public async Task Provision_should_use_GrpcTools_protoc_when_no_global_compiler_exists()
+    {
+        using var releaseInput = new TemporaryDirectory();
+        using var output = new TemporaryDirectory();
+        using var emptyPath = new TemporaryDirectory();
+        var gateway = FakeGateway.Valid();
+        var commands = new AgentProfileRolloutCommands(gateway);
+        var releaseSpecPath = await WriteReleaseFixtureAsync(releaseInput);
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalProtoc = Environment.GetEnvironmentVariable("PROTOC");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", emptyPath.Path);
+            Environment.SetEnvironmentVariable("PROTOC", null);
+
+            var exitCode = await commands.ProvisionAsync(
+                "access-token",
+                releaseSpecPath,
+                output.Path,
+                CancellationToken.None);
+
+            exitCode.Should().Be(0);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Environment.SetEnvironmentVariable("PROTOC", originalProtoc);
+        }
     }
 
     [Fact]

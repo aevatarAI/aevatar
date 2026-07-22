@@ -795,7 +795,7 @@ internal static class ReviewedReleaseTextProto
             throw new FileNotFoundException("Deployment proto was not copied next to the rollout tool.", protoPath);
         var startInfo = new ProcessStartInfo
         {
-            FileName = Environment.GetEnvironmentVariable("PROTOC") ?? "protoc",
+            FileName = ResolveProtocPath(),
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -814,5 +814,16 @@ internal static class ReviewedReleaseTextProto
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"Invalid reviewed release textproto: {error.Trim()}");
         return ReviewedAgentProfileRelease.Parser.ParseFrom(output.ToArray());
+    }
+
+    private static string ResolveProtocPath()
+    {
+        var configuredPath = Environment.GetEnvironmentVariable("PROTOC");
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+            return configuredPath;
+
+        var executableName = OperatingSystem.IsWindows() ? "protoc.exe" : "protoc";
+        var bundledPath = Path.Combine(AppContext.BaseDirectory, executableName);
+        return File.Exists(bundledPath) ? bundledPath : executableName;
     }
 }

@@ -38,4 +38,23 @@
           Link="protos\Protos\voice_presence.proto"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="IncludeAgentProfileRolloutProtoc"
+          BeforeTargets="_GetCopyToOutputDirectoryItemsFromThisProject"
+          DependsOnTargets="Protobuf_ResolvePlatform">
+    <ItemGroup>
+      <_AgentProfileRolloutProtoc Include="$(Protobuf_PackagedToolsPath)/$(Protobuf_ToolsOs)_$(Protobuf_ToolsCpu)/protoc"
+                                  Condition="'$(Protobuf_ToolsOs)' != 'windows'" />
+      <_AgentProfileRolloutProtoc Include="$(Protobuf_PackagedToolsPath)\$(Protobuf_ToolsOs)_$(Protobuf_ToolsCpu)\protoc.exe"
+                                  Condition="'$(Protobuf_ToolsOs)' == 'windows'" />
+      <_AgentProfileRolloutStandardProto Include="$(Protobuf_StandardImportsPath)/google/protobuf/**/*.proto" />
+      <ContentWithTargetPath Include="@(_AgentProfileRolloutProtoc)"
+                             TargetPath="$([System.IO.Path]::GetFileName('%(_AgentProfileRolloutProtoc.Identity)'))"
+                             CopyToOutputDirectory="PreserveNewest"
+                             CopyToPublishDirectory="PreserveNewest" />
+      <ContentWithTargetPath Include="@(_AgentProfileRolloutStandardProto)"
+                             TargetPath="protos/google/protobuf/%(_AgentProfileRolloutStandardProto.RecursiveDir)%(_AgentProfileRolloutStandardProto.Filename)%(_AgentProfileRolloutStandardProto.Extension)"
+                             CopyToOutputDirectory="PreserveNewest"
+                             CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 </Project>
