@@ -150,6 +150,26 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
             WorkflowChatConversationIntent.Continue("conversation-existing"));
     }
 
+    [Fact]
+    public void Normalize_ShouldMapConversationMinimumStateVersionToContinueIntent()
+    {
+        var input = new HttpChatInput
+        {
+            Prompt = "team01",
+            Conversation = new ChatConversationInput
+            {
+                ConversationId = " conversation-alpha ",
+                MinimumStateVersion = 7,
+            },
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.ChatConversation.Should().BeEquivalentTo(
+            WorkflowChatConversationIntent.Continue("conversation-alpha", minimumStateVersion: 7));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]

@@ -259,7 +259,9 @@ internal static class ChatRunRequestNormalizer
             return new ConversationNormalizationResult(null, WorkflowChatRunStartError.InvalidConversationId);
 
         return new ConversationNormalizationResult(
-            WorkflowChatConversationIntent.Continue(conversationId),
+            WorkflowChatConversationIntent.Continue(
+                conversationId,
+                source.MinimumStateVersion),
             WorkflowChatRunStartError.None);
     }
 

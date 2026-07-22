@@ -94,7 +94,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         command.TurnId.Should().Be(result.ChatContext.TurnId);
         command.CreateConversationIfMissing.Should().BeFalse();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-existing"));
+            .Which.Should().Be(("scope-alpha", "conversation-existing", null));
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         runtime.CreatedActors.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-missing"));
+            .Which.Should().Be(("scope-alpha", "conversation-missing", null));
     }
 
     [Fact]
@@ -133,7 +133,27 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         runtime.CreatedActors.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-deleted"));
+            .Which.Should().Be(("scope-alpha", "conversation-deleted", null));
+    }
+
+    [Fact]
+    public async Task ReserveAsync_ShouldReturnUnavailable_WhenContinuationReadModelIsNotReady()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var admissionReader = new RecordingChatConversationContinuationAdmissionReader();
+        admissionReader.SeedNotReadyConversation("scope-alpha", "conversation-stale");
+        var port = CreatePort(runtime, dispatch, admissionReader);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-stale", minimumStateVersion: 7)));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
+        runtime.CreatedActors.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+        admissionReader.Calls.Should().ContainSingle()
+            .Which.Should().Be(("scope-alpha", "conversation-stale", 7L));
     }
 
     [Fact]
@@ -162,7 +182,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         command.CreateConversationIfMissing.Should().BeFalse();
         runtime.GetCalls.Should().BeEmpty();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-proxy"));
+            .Which.Should().Be(("scope-alpha", "conversation-proxy", null));
     }
 
     [Fact]
@@ -291,8 +311,9 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         : IChatConversationContinuationAdmissionReader
     {
         private readonly HashSet<(string ScopeId, string ConversationId)> _continuableConversations = [];
+        private readonly HashSet<(string ScopeId, string ConversationId)> _notReadyConversations = [];
 
-        public List<(string ScopeId, string ConversationId)> Calls { get; } = [];
+        public List<(string ScopeId, string ConversationId, long? MinimumStateVersion)> Calls { get; } = [];
 
         public void SeedExistingConversation(string scopeId, string conversationId) =>
             _continuableConversations.Add((scopeId, conversationId));
@@ -300,13 +321,20 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         public void SeedDeletedConversation(string scopeId, string conversationId) =>
             _continuableConversations.Remove((scopeId, conversationId));
 
+        public void SeedNotReadyConversation(string scopeId, string conversationId) =>
+            _notReadyConversations.Add((scopeId, conversationId));
+
         public Task<ChatConversationContinuationAdmission> GetContinuationAsync(
             string scopeId,
             string conversationId,
+            long? minimumStateVersion = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Calls.Add((scopeId, conversationId));
+            Calls.Add((scopeId, conversationId, minimumStateVersion));
+            if (_notReadyConversations.Contains((scopeId, conversationId)))
+                return Task.FromResult(ChatConversationContinuationAdmission.NotReady());
+
             if (!_continuableConversations.Contains((scopeId, conversationId)))
                 return Task.FromResult(ChatConversationContinuationAdmission.NotFound());
 

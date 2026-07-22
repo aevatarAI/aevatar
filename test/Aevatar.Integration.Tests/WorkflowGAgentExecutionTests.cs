@@ -177,6 +177,39 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRunGAgent_ShouldRenderTypedConversationEnvelope_WhenConversationContextHasNoMessages()
+        {
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime);
+            agent.EventPublisher = publisher;
+            await agent.BindWorkflowRunDefinitionAsync(
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-1");
+
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "team01",
+                SessionId = "s1",
+                ConversationContext = new WorkflowConversationContext
+                {
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-alpha",
+                    StateVersion = 7,
+                    MaxMessageCount = 24,
+                },
+            });
+
+            var start = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+            start.Input.Should().Contain("<conversation_context>");
+            start.Input.Should().Contain("</conversation_context>");
+            start.Input.Should().Contain("<current_user_message>\nteam01\n</current_user_message>");
+            start.Input.Should().NotBe("team01");
+        }
+
+        [Fact]
         public async Task WorkflowRunGAgent_WhenRebindingDefinition_ShouldResetExecutionStateAndDestroyOldChildren()
         {
             var publisher = new RecordingEventPublisher();

@@ -20,6 +20,7 @@ internal sealed class ProjectionChatConversationContinuationAdmissionReader
     public async Task<ChatConversationContinuationAdmission> GetContinuationAsync(
         string scopeId,
         string conversationId,
+        long? minimumStateVersion = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(scopeId) || string.IsNullOrWhiteSpace(conversationId))
@@ -27,6 +28,9 @@ internal sealed class ProjectionChatConversationContinuationAdmissionReader
 
         var normalizedScopeId = scopeId.Trim();
         var normalizedConversationId = conversationId.Trim();
+        var requiredStateVersion = minimumStateVersion is > 0
+            ? minimumStateVersion.Value
+            : 0;
         var actorIds = new[]
         {
             ChatHistoryActorIds.Conversation(normalizedScopeId, normalizedConversationId),
@@ -41,7 +45,13 @@ internal sealed class ProjectionChatConversationContinuationAdmissionReader
                 string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
                 string.Equals(document.ConversationId, normalizedConversationId, StringComparison.Ordinal))
             {
-                return ChatConversationContinuationAdmission.Found(ToExecutionContext(document));
+                if (document.StateVersion < requiredStateVersion)
+                    return ChatConversationContinuationAdmission.NotReady();
+
+                var context = ToExecutionContext(document);
+                return context.Messages.Count > 0
+                    ? ChatConversationContinuationAdmission.Found(context)
+                    : ChatConversationContinuationAdmission.NotReady();
             }
         }
 

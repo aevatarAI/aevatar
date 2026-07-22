@@ -395,6 +395,43 @@ public sealed class WorkflowChatRunInteractionServiceTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldPassConversationMinimumStateVersionToReservation_WhenContinuingConversation()
+    {
+        var actorResolver = new RecordingActorResolver
+        {
+            Results =
+            {
+                new WorkflowActorResolutionResult(
+                    new WorkflowRunCreationReceipt("run-1", "definition-1", ["definition-1", "run-1"]),
+                    "direct",
+                    WorkflowChatRunStartError.None),
+            },
+        };
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "team01",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-existing",
+                    minimumStateVersion: 7)),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeTrue();
+        deliveryPort.Reservations.Should().ContainSingle()
+            .Which.Conversation.MinimumStateVersion.Should().Be(7);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldNotReserveChatHistoryDelivery_WhenConversationIntentIsNone()
     {
         var actorResolver = new RecordingActorResolver

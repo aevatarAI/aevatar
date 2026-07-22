@@ -72,6 +72,78 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
     }
 
     [Fact]
+    public async Task GetContinuationAsync_ShouldReturnNotReady_WhenReadModelIsBelowMinimumStateVersion()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-alpha", "conversation-alpha");
+        var documentReader = new RecordingConversationDocumentReader();
+        documentReader.Seed(new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-alpha",
+            ConversationId = "conversation-alpha",
+            Deleted = false,
+            StateVersion = 4,
+            Turns =
+            {
+                new ChatConversationTurnDocument
+                {
+                    TurnId = "turn-1",
+                    Sequence = 1,
+                    UserText = "Create a workflow that generates fund analysis reports.",
+                    AssistantText = "Choose a Team: team01 or team02.",
+                },
+            },
+        });
+        var admissionReader = new ProjectionChatConversationContinuationAdmissionReader(documentReader);
+
+        var admission = await admissionReader.GetContinuationAsync(
+            "scope-alpha",
+            "conversation-alpha",
+            minimumStateVersion: 5);
+
+        admission.CanContinue.Should().BeFalse();
+        admission.Failure.Should().Be(ChatConversationContinuationAdmissionFailure.ReadModelNotReady);
+        admission.ConversationContext.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetContinuationAsync_ShouldReturnNotReady_WhenReadModelHasNoUsableContextMessages()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-alpha", "conversation-alpha");
+        var documentReader = new RecordingConversationDocumentReader();
+        documentReader.Seed(new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-alpha",
+            ConversationId = "conversation-alpha",
+            Deleted = false,
+            StateVersion = 5,
+            Turns =
+            {
+                new ChatConversationTurnDocument
+                {
+                    TurnId = "turn-1",
+                    Sequence = 1,
+                    UserText = " ",
+                    AssistantText = "",
+                },
+            },
+        });
+        var admissionReader = new ProjectionChatConversationContinuationAdmissionReader(documentReader);
+
+        var admission = await admissionReader.GetContinuationAsync(
+            "scope-alpha",
+            "conversation-alpha",
+            minimumStateVersion: 1);
+
+        admission.CanContinue.Should().BeFalse();
+        admission.Failure.Should().Be(ChatConversationContinuationAdmissionFailure.ReadModelNotReady);
+        admission.ConversationContext.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetContinuationAsync_ShouldReturnNotFound_WhenConversationDocumentIsDeleted()
     {
         var actorId = ChatHistoryActorIds.Conversation("scope-alpha", "conversation-deleted");

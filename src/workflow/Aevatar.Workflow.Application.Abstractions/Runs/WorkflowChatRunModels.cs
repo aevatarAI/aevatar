@@ -109,7 +109,8 @@ public enum WorkflowChatConversationIntentKind
 
 public sealed record WorkflowChatConversationIntent(
     WorkflowChatConversationIntentKind Intent,
-    string? ConversationId = null)
+    string? ConversationId = null,
+    long? MinimumStateVersion = null)
 {
     public static WorkflowChatConversationIntent None() =>
         new(WorkflowChatConversationIntentKind.None);
@@ -117,8 +118,13 @@ public sealed record WorkflowChatConversationIntent(
     public static WorkflowChatConversationIntent Create() =>
         new(WorkflowChatConversationIntentKind.Create);
 
-    public static WorkflowChatConversationIntent Continue(string conversationId) =>
-        new(WorkflowChatConversationIntentKind.Continue, conversationId);
+    public static WorkflowChatConversationIntent Continue(
+        string conversationId,
+        long? minimumStateVersion = null) =>
+        new(
+            WorkflowChatConversationIntentKind.Continue,
+            conversationId,
+            minimumStateVersion is > 0 ? minimumStateVersion : null);
 }
 
 public sealed record WorkflowCompletionNotificationTarget(

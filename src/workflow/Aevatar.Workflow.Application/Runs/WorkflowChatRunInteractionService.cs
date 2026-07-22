@@ -322,7 +322,9 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
                 : conversation.ConversationId.Trim();
             return conversationId == null
                 ? null
-                : WorkflowChatConversationIntent.Continue(conversationId);
+                : WorkflowChatConversationIntent.Continue(
+                    conversationId,
+                    conversation.MinimumStateVersion);
         }
 
         return null;

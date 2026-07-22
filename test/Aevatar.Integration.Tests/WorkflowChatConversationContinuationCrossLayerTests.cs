@@ -98,6 +98,17 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
         alphaInput.Should().NotContain("Other conversation prior prompt.");
         alphaInput.Should().NotContain("Beta scoped prior prompt.");
 
+        var staleAlpha = await ExecuteContinuationAsync(
+            deliveryPort,
+            "scope-alpha",
+            "conversation-alpha",
+            "team01",
+            minimumStateVersion: 2);
+
+        staleAlpha.Result.Succeeded.Should().BeFalse();
+        staleAlpha.Result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+        staleAlpha.DispatchedRequest.Should().BeNull();
+
         var sameScopeOtherConversation = await ExecuteContinuationAsync(
             deliveryPort,
             "scope-alpha",
@@ -221,7 +232,8 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
         IWorkflowChatHistoryTerminalDeliveryPort deliveryPort,
         string scopeId,
         string conversationId,
-        string prompt)
+        string prompt,
+        long? minimumStateVersion = null)
     {
         var inner = new RecordingWorkflowInteractionService();
         var service = new WorkflowChatRunInteractionService(
@@ -237,7 +249,9 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
                 prompt,
                 WorkflowChatSource.CatalogWorkflow("direct"),
                 ScopeId: scopeId,
-                ChatConversation: WorkflowChatConversationIntent.Continue(conversationId)),
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    conversationId,
+                    minimumStateVersion)),
             static (_, _) => ValueTask.CompletedTask);
 
         return new ContinuationExecution(result, inner.Requests.SingleOrDefault());

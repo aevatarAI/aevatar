@@ -689,8 +689,7 @@ public sealed class WorkflowRunGAgent
             return seedInput ?? string.Empty;
         }
 
-        if (request.ConversationContext != null &&
-            request.ConversationContext.Messages.Count > 0)
+        if (request.ConversationContext != null)
         {
             return RenderConversationExecutionInput(request.ConversationContext, request.Prompt);
         }
