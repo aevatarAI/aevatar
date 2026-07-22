@@ -6,7 +6,8 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Application.Studio.Services;
@@ -43,11 +44,11 @@ namespace Aevatar.Studio.Application.Studio.Services;
 ///
 /// Two invariants keep the non-blocking flow from leaking resources:
 /// <list type="bullet">
-///   <item><b>Validate before provisioning.</b> The workflow YAML is parsed
-///   synchronously with the same <see cref="IWorkflowDefinitionParser"/> the bind
-///   pipeline uses. Invalid YAML throws with the parser's error message and
-///   provisions NOTHING — no member, no schedule — so an authoring agent can
-///   repair the YAML and retry without leaving garbage behind.</item>
+///   <item><b>Admit before provisioning.</b> The unified external-capability
+///   admission service parses the workflow and evaluates readiness before any
+///   mutation. Invalid or non-ready workflows provision NOTHING — no member, no
+///   schedule — so an authoring agent can repair the YAML and retry without
+///   leaving garbage behind.</item>
 ///   <item><b>Retries converge.</b> One (scope, display name) pair owns exactly
 ///   one member, one workflow id, and one schedule inside one target Team: the
 ///   member id is derived deterministically from that ownership tuple (an
@@ -73,19 +74,19 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
 
     private readonly IStudioMemberService _memberService;
     private readonly IScheduledDispatchApplicationService _scheduleService;
-    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
     private readonly TimeProvider _timeProvider;
 
     public StudioWorkflowProvisioningService(
         IStudioMemberService memberService,
         IScheduledDispatchApplicationService scheduleService,
-        IWorkflowDefinitionParser workflowDefinitionParser,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         TimeProvider? timeProvider = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
         _scheduleService = scheduleService ?? throw new ArgumentNullException(nameof(scheduleService));
-        _workflowDefinitionParser = workflowDefinitionParser
-            ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _capabilityAdmissionService = capabilityAdmissionService
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -102,15 +103,37 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var displayName = NormalizeRequired(request.DisplayName, nameof(request.DisplayName));
         var workflowYaml = NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
 
-        // 0. Validate the YAML with the same parser the bind pipeline runs, BEFORE
-        //    any resource exists. Invalid YAML must provision nothing; the parser's
-        //    error message goes back to the caller so it can repair and retry.
-        var parseResult = await _workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
-        if (!parseResult.Succeeded)
-        {
-            throw new InvalidOperationException(
-                $"workflow_yaml is not a valid workflow definition: {parseResult.Error}");
-        }
+        var suppliedAdmission = request.CapabilityAdmission;
+        var executionMode = ShouldSchedule(request)
+            ? ExternalCapabilityExecutionMode.Durable
+            : ExternalCapabilityExecutionMode.Interactive;
+        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    workflowYaml,
+                    new Dictionary<string, string>(),
+                    "studio_workflow_provisioning",
+                    executionMode),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    normalizedScopeId,
+                    suppliedAdmission?.CallerId ?? string.Empty,
+                    suppliedAdmission?.NyxIdCallerBearerToken,
+                    suppliedAdmission?.NyxIdOrganizationBearerToken),
+                workflowYaml,
+                new Dictionary<string, string>(),
+                "studio_workflow_provisioning",
+                executionMode),
+                ct);
+        var trustedAdmission = new WorkflowCapabilityAdmissionContext(
+            suppliedAdmission?.CallerId ?? string.Empty,
+            suppliedAdmission?.NyxIdCallerBearerToken,
+            suppliedAdmission?.NyxIdOrganizationBearerToken,
+            executionMode,
+            capabilityAdmissionPlan);
 
         var subjectRef = BuildSenderNyxIdCredentialSource(callerCredential);
 
@@ -139,7 +162,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             new UpdateStudioMemberBindingRequest(
                 Workflow: new StudioMemberWorkflowBindingSpec(
                     WorkflowId: $"workflow-{provisionKey}",
-                    WorkflowYamls: [workflowYaml])),
+                    WorkflowYamls: [workflowYaml])
+                {
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                })
+            {
+                CapabilityAdmission = trustedAdmission,
+            },
             ct);
 
         // 3. Create the scheduled-dispatch that produces the run. The Workflow kind

@@ -16,6 +16,8 @@ public sealed class NyxIdRelayPromptConfigurationTests
         section.Should().Contain("ornn_search_skills");
         section.Should().Contain("typed tools above do not cover");
         section.Should().Contain("api-lark-bot");
+        section.Should().Contain("exact user_service_id and slug snapshot");
+        section.Should().NotContain("against the `api-lark-bot` slug");
     }
 
     [Fact]

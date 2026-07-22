@@ -540,7 +540,8 @@ public sealed class ChatRuntime
                             var toolMsg = ToolCallLoop.BuildToolResultMessage(
                                 result.CallId,
                                 result.ToolName,
-                                ToolExecutionResultHistory.ResolveSafeContent(result));
+                                ToolExecutionResultHistory.ResolveSafeContent(result),
+                                result.Receipt);
                             messages.Add(toolMsg);
                             pendingHistoryMessages.Add(toolMsg);
                             if (IsAuthorizationRequired(result))
@@ -641,7 +642,8 @@ public sealed class ChatRuntime
                 var toolMsg = ToolCallLoop.BuildToolResultMessage(
                     result.CallId,
                     result.ToolName,
-                    ToolExecutionResultHistory.ResolveSafeContent(result));
+                    ToolExecutionResultHistory.ResolveSafeContent(result),
+                    result.Receipt);
                 messages.Add(toolMsg);
                 pendingHistoryMessages.Add(toolMsg);
                 if (IsAuthorizationRequired(result))
@@ -719,7 +721,8 @@ public sealed class ChatRuntime
                     var toolMsg = ToolCallLoop.BuildToolResultMessage(
                         result.CallId,
                         result.ToolName,
-                        ToolExecutionResultHistory.ResolveSafeContent(result));
+                        ToolExecutionResultHistory.ResolveSafeContent(result),
+                        result.Receipt);
                     messages.Add(toolMsg);
                     pendingHistoryMessages.Add(toolMsg);
                     if (IsAuthorizationRequired(result))

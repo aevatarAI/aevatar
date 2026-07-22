@@ -287,6 +287,7 @@ message NyxIdAuthorizationRequiredEvent {
   optional string resource_uri = 3;
   string reason_code = 4;
   string safe_message = 5;
+  optional string user_service_id = 6;
 }
 
 message AgentToolReceipt {

@@ -50,6 +50,7 @@ public static class NyxIdLoginFinalizationEndpoints
                 "nyxid_authorization_catalog",
                 EndpointAuditTargetResolvers.Static("nyxid_authorization_catalog", "current-owner"))
             .Produces<NyxIdAuthorizationCatalogRefreshResponse>(StatusCodes.Status200OK)
+            .Produces<NyxIdAuthorizationCatalogRefreshResponse>(StatusCodes.Status202Accepted)
             .Produces(StatusCodes.Status401Unauthorized)
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status503ServiceUnavailable);
@@ -58,6 +59,7 @@ public static class NyxIdLoginFinalizationEndpoints
     internal static async Task<IResult> HandleAuthorizationCatalogRefreshAsync(
         HttpContext http,
         [FromServices] INyxIdAuthorizationCatalogRefreshPort catalogRefresh,
+        [FromServices] INyxIdAuthorizationCatalogVisibilityPort catalogVisibilityPort,
         CancellationToken ct = default)
     {
         var subject = http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
@@ -81,24 +83,64 @@ public static class NyxIdLoginFinalizationEndpoints
             }, statusCode: StatusCodes.Status401Unauthorized);
         }
 
-        var result = await catalogRefresh
-            .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
-            .ConfigureAwait(false);
-        var response = new NyxIdAuthorizationCatalogRefreshResponse(
-            result.Success,
-            ToCatalogRefreshStatus(result.Status),
-            result.FailureCode);
-        return result.Status switch
+        try
         {
-            NyxIdAuthorizationCatalogRefreshStatus.Observed => Results.Ok(response),
-            NyxIdAuthorizationCatalogRefreshStatus.AccessDenied => Results.Json(
-                response,
-                statusCode: StatusCodes.Status403Forbidden),
-            NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => Results.Json(
-                response,
-                statusCode: StatusCodes.Status403Forbidden),
-            _ => Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable),
-        };
+            var result = await catalogRefresh
+                .RefreshPersonalAsync(subject.Trim(), bearerToken, ct)
+                .ConfigureAwait(false);
+            var owner = PersonalCatalogOwner(subject);
+            var visibility = result.Success
+                ? await catalogVisibilityPort.ResolveAsync(owner, result.StateVersion, ct).ConfigureAwait(false)
+                : new NyxIdAuthorizationCatalogVisibilityResult(
+                    NyxIdAuthorizationCatalogVisibilityStatus.Unspecified,
+                    0,
+                    0,
+                    string.Empty);
+            var response = new NyxIdAuthorizationCatalogRefreshResponse(
+                visibility.Ready,
+                ToCatalogRefreshStatus(result.Status),
+                result.FailureCode,
+                ToCatalogVisibilityStatus(visibility.Status),
+                visibility.FailureCode,
+                visibility.RequiredStateVersion,
+                visibility.VisibleStateVersion);
+            return result.Status switch
+            {
+                NyxIdAuthorizationCatalogRefreshStatus.Observed when visibility.Ready => Results.Ok(response),
+                NyxIdAuthorizationCatalogRefreshStatus.Observed when visibility.ProjectionPending => Results.Json(
+                    response,
+                    statusCode: StatusCodes.Status202Accepted),
+                NyxIdAuthorizationCatalogRefreshStatus.AccessDenied => Results.Json(
+                    response,
+                    statusCode: StatusCodes.Status403Forbidden),
+                NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => Results.Json(
+                    response,
+                    statusCode: StatusCodes.Status403Forbidden),
+                _ => Results.Json(response, statusCode: StatusCodes.Status503ServiceUnavailable),
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            var loggerFactory = http.RequestServices.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
+            loggerFactory?.CreateLogger(typeof(NyxIdLoginFinalizationEndpoints).FullName!)
+                .LogWarning(
+                    "Failed to refresh the NyxID authorization catalog for owner kind {OwnerKind}.",
+                    AuthorizationOwnerKind.Personal);
+            return Results.Json(
+                new NyxIdAuthorizationCatalogRefreshResponse(
+                    Ready: false,
+                    RefreshStatus: "failed",
+                    RefreshFailureCode: "nyxid_catalog_refresh_failed",
+                    VisibilityStatus: "not_evaluated",
+                    VisibilityFailureCode: string.Empty,
+                    RequiredStateVersion: 0,
+                    VisibleStateVersion: 0),
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     internal static async Task<IResult> HandleConfigAsync(
@@ -134,6 +176,7 @@ public static class NyxIdLoginFinalizationEndpoints
         [FromServices] ICommandDispatchService<ReplaceBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingReplaceDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         [FromServices] INyxIdAuthorizationCatalogRefreshPort? catalogRefreshLifecycle = null,
+        [FromServices] INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -223,7 +266,14 @@ public static class NyxIdLoginFinalizationEndpoints
                 if (sameBindingProbe != IssuedBindingProbeResult.Usable)
                     return BuildIssuedBindingProbeError(sameBindingProbe);
 
-                return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, logger, ct);
+                return await CompleteLoginAsync(
+                    exchange,
+                    user,
+                    false,
+                    catalogRefreshLifecycle,
+                    catalogVisibilityPort,
+                    logger,
+                    ct);
             }
 
             var replacementReason = "studio_service_access_review";
@@ -233,7 +283,14 @@ public static class NyxIdLoginFinalizationEndpoints
                 if (probeResult == ExistingBindingProbeResult.Usable)
                 {
                     await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-                    return await CompleteLoginAsync(exchange, user, false, catalogRefreshLifecycle, logger, ct);
+                    return await CompleteLoginAsync(
+                        exchange,
+                        user,
+                        false,
+                        catalogRefreshLifecycle,
+                        catalogVisibilityPort,
+                        logger,
+                        ct);
                 }
 
                 if (probeResult == ExistingBindingProbeResult.Unavailable)
@@ -280,7 +337,14 @@ public static class NyxIdLoginFinalizationEndpoints
                 }, statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, logger, ct);
+            return await CompleteLoginAsync(
+                exchange,
+                user,
+                true,
+                catalogRefreshLifecycle,
+                catalogVisibilityPort,
+                logger,
+                ct);
         }
 
         var newBindingProbe = await ProbeIssuedBindingAsync(
@@ -312,7 +376,14 @@ public static class NyxIdLoginFinalizationEndpoints
             }, statusCode: StatusCodes.Status503ServiceUnavailable);
         }
 
-        return await CompleteLoginAsync(exchange, user, true, catalogRefreshLifecycle, logger, ct);
+        return await CompleteLoginAsync(
+            exchange,
+            user,
+            true,
+            catalogRefreshLifecycle,
+            catalogVisibilityPort,
+            logger,
+            ct);
     }
 
     private static async Task<IResult> CompleteLoginAsync(
@@ -320,6 +391,7 @@ public static class NyxIdLoginFinalizationEndpoints
         NyxIdFinalizedUserInfo user,
         bool bindingDispatchAccepted,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshLifecycle,
+        INyxIdAuthorizationCatalogVisibilityPort? catalogVisibilityPort,
         ILogger logger,
         CancellationToken ct)
     {
@@ -352,7 +424,47 @@ public static class NyxIdLoginFinalizationEndpoints
             }
         }
 
-        return Results.Ok(BuildResponse(exchange, user, bindingDispatchAccepted, catalogRefresh));
+        var visibility = new NyxIdAuthorizationCatalogVisibilityResult(
+            NyxIdAuthorizationCatalogVisibilityStatus.Unspecified,
+            0,
+            0,
+            string.Empty);
+        if (catalogRefresh.Success)
+        {
+            if (catalogVisibilityPort == null)
+            {
+                visibility = NyxIdAuthorizationCatalogVisibilityResult.Unavailable(catalogRefresh.StateVersion);
+            }
+            else
+            {
+                try
+                {
+                    visibility = await catalogVisibilityPort.ResolveAsync(
+                            PersonalCatalogOwner(user.Sub),
+                            catalogRefresh.StateVersion,
+                            ct)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(
+                        ex,
+                        "NyxID login completed while authorization catalog visibility could not be read.");
+                    visibility = NyxIdAuthorizationCatalogVisibilityResult.Unavailable(catalogRefresh.StateVersion);
+                }
+            }
+        }
+
+        return Results.Ok(BuildResponse(
+            exchange,
+            user,
+            bindingDispatchAccepted,
+            catalogRefresh,
+            visibility));
     }
 
     private enum ExistingBindingProbeResult
@@ -571,7 +683,8 @@ public static class NyxIdLoginFinalizationEndpoints
         BrokerAuthorizationCodeResult exchange,
         NyxIdFinalizedUserInfo user,
         bool bindingDispatchAccepted,
-        NyxIdAuthorizationCatalogRefreshResult catalogRefresh) =>
+        NyxIdAuthorizationCatalogRefreshResult catalogRefresh,
+        NyxIdAuthorizationCatalogVisibilityResult catalogVisibility) =>
         new(
             Tokens: new NyxIdFinalizedTokenSet(
                 AccessToken: exchange.AccessToken ?? string.Empty,
@@ -582,9 +695,20 @@ public static class NyxIdLoginFinalizationEndpoints
                 Scope: exchange.Scope),
             User: user,
             BindingDispatchAccepted: bindingDispatchAccepted,
-            AuthorizationCatalogReady: catalogRefresh.Success,
-            AuthorizationCatalogStatus: ToCatalogRefreshStatus(catalogRefresh.Status),
-            AuthorizationCatalogFailureCode: catalogRefresh.FailureCode);
+            AuthorizationCatalogReady: catalogVisibility.Ready,
+            AuthorizationCatalogRefreshStatus: ToCatalogRefreshStatus(catalogRefresh.Status),
+            AuthorizationCatalogRefreshFailureCode: catalogRefresh.FailureCode,
+            AuthorizationCatalogVisibilityStatus: ToCatalogVisibilityStatus(catalogVisibility.Status),
+            AuthorizationCatalogVisibilityFailureCode: catalogVisibility.FailureCode,
+            AuthorizationCatalogRequiredStateVersion: catalogVisibility.RequiredStateVersion,
+            AuthorizationCatalogVisibleStateVersion: catalogVisibility.VisibleStateVersion);
+
+    private static AuthorizationOwnerIdentity PersonalCatalogOwner(string ownerSubject) => new()
+    {
+        Authority = NyxIdAuthorizationAuthorities.NyxId,
+        OwnerKind = AuthorizationOwnerKind.Personal,
+        OwnerSubject = ownerSubject.Trim(),
+    };
 
     private static string ToCatalogRefreshStatus(NyxIdAuthorizationCatalogRefreshStatus status) => status switch
     {
@@ -594,9 +718,22 @@ public static class NyxIdLoginFinalizationEndpoints
         NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut => "observation_timed_out",
         NyxIdAuthorizationCatalogRefreshStatus.OwnerNotSupported => "owner_not_supported",
         NyxIdAuthorizationCatalogRefreshStatus.CatalogUnstable => "catalog_unstable",
-        NyxIdAuthorizationCatalogRefreshStatus.PublishedContractMissing => "published_contract_missing",
+        NyxIdAuthorizationCatalogRefreshStatus.Superseded => "superseded",
         _ => "not_configured",
     };
+
+    private static string ToCatalogVisibilityStatus(NyxIdAuthorizationCatalogVisibilityStatus status) => status switch
+    {
+        NyxIdAuthorizationCatalogVisibilityStatus.Ready => "ready",
+        NyxIdAuthorizationCatalogVisibilityStatus.ProjectionPending => "projection_pending",
+        NyxIdAuthorizationCatalogVisibilityStatus.OwnerMismatch => "owner_mismatch",
+        NyxIdAuthorizationCatalogVisibilityStatus.Invalidated => "invalidated",
+        NyxIdAuthorizationCatalogVisibilityStatus.Stale => "stale",
+        NyxIdAuthorizationCatalogVisibilityStatus.Invalid => "invalid",
+        NyxIdAuthorizationCatalogVisibilityStatus.Unavailable => "unavailable",
+        _ => "not_evaluated",
+    };
+
 
     private static string? ResolveRequestBearerToken(HttpContext http)
     {
@@ -713,8 +850,12 @@ public sealed record NyxIdLoginConfigurationResponse(
 
 public sealed record NyxIdAuthorizationCatalogRefreshResponse(
     bool Ready,
-    string Status,
-    string FailureCode);
+    string RefreshStatus,
+    string RefreshFailureCode,
+    string VisibilityStatus,
+    string VisibilityFailureCode,
+    long RequiredStateVersion = 0,
+    long VisibleStateVersion = 0);
 
 public sealed record NyxIdLoginFinalizationRequest
 {
@@ -729,8 +870,12 @@ public sealed record NyxIdLoginFinalizationResponse(
     NyxIdFinalizedUserInfo User,
     bool BindingDispatchAccepted,
     bool AuthorizationCatalogReady,
-    string AuthorizationCatalogStatus,
-    string AuthorizationCatalogFailureCode);
+    string AuthorizationCatalogRefreshStatus,
+    string AuthorizationCatalogRefreshFailureCode,
+    string AuthorizationCatalogVisibilityStatus,
+    string AuthorizationCatalogVisibilityFailureCode,
+    long AuthorizationCatalogRequiredStateVersion = 0,
+    long AuthorizationCatalogVisibleStateVersion = 0);
 
 public sealed record NyxIdFinalizedTokenSet(
     string AccessToken,

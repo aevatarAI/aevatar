@@ -129,7 +129,9 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
                 preferredActorId,
                 plan.WorkflowName,
                 plan.WorkflowYaml,
-                plan.InlineWorkflowYamls),
+                plan.InlineWorkflowYamls,
+                SourceKind: "service_revision",
+                CapabilityAdmissionPlan: plan.CapabilityAdmissionPlan?.Clone()),
             preferredActorId,
             ct);
 

@@ -1,6 +1,7 @@
 namespace Aevatar.GAgents.Scheduled;
 
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.Workflow.Abstractions;
 
 public interface IScheduledAgentApiKeyIssuer
 {
@@ -53,8 +54,9 @@ public sealed record ScheduledAgentApiKeyLookupResult(
 
 public sealed record ScheduledAgentServiceRequirements(
     string PrimaryOutboundSlug,
+    string PrimaryOutboundUserServiceId,
     string? FailureNotificationSlug,
-    IReadOnlyList<string> RequiredServiceSlugs,
+    IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredNyxServices,
     bool RequiresOrnnService = true);
 
 public sealed record ScheduledAgentApiKeyRevokeResult(

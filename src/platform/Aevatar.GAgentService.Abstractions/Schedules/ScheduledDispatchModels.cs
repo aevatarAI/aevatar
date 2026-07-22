@@ -87,10 +87,7 @@ public sealed record ScheduledInvocationAuthorizationFact(
     DateTimeOffset ExpiresAt,
     bool ServiceGrantsNotRequired,
     ScheduledInvocationAuthorizationDisclosure Disclosure,
-    ScheduledInvocationAuthorizationAuthority Authority)
-{
-    public IReadOnlyList<ScheduledInvocationAuthorizationNodeGrant> NodeGrants { get; init; } = [];
-}
+    ScheduledInvocationAuthorizationAuthority Authority);
 
 public sealed record ScheduledInvocationAuthorizationOwner(
     string Authority,
@@ -101,15 +98,6 @@ public sealed record ScheduledInvocationAuthorizationServiceGrant(
     string ServiceId,
     IReadOnlyList<string> NodeIds,
     bool NodeGrantsNotRequired);
-
-public sealed record ScheduledInvocationAuthorizationNodeGrant(
-    string UserServiceId,
-    string NodeId,
-    string DisplayName,
-    string Role,
-    string EdgeKind,
-    string BindingId,
-    int RoutePriority);
 
 public sealed record ScheduledInvocationAuthorizationDisclosure(
     bool DedicatedToSchedule,
@@ -126,8 +114,10 @@ public sealed record ScheduledInvocationAuthorizationAuthority(
     long CatalogStateVersion,
     DateTimeOffset CatalogObservedAt,
     DateTimeOffset CatalogFreshUntil,
-    string CatalogExternalRevision,
-    string CatalogContentDigest);
+    string CatalogContentDigest,
+    string CatalogContractVersion,
+    string CatalogPolicyVersion,
+    DateTimeOffset CatalogEvaluatedAt);
 
 public sealed record ScheduledServiceInvocationNyxIdSubjectRef(
     string Platform,

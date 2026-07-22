@@ -59,6 +59,7 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
             Caller: callerCredential)
         {
             TeamId = request.TeamId,
+            CapabilityAdmission = request.CapabilityAdmission,
         };
 
         var response = await _provisioningService.ProvisionAsync(

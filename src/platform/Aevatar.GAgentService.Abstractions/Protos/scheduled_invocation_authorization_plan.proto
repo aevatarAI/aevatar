@@ -45,9 +45,12 @@ enum ScheduledInvocationAuthorizationFailureCode {
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SERVICE_AMBIGUOUS = 7;
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_SERVICE_ACCESS_DENIED = 8;
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NODE_GRANT_MISSING = 9;
-  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NODE_ROLE_INVALID = 10;
+  reserved 10;
+  reserved "SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_NODE_ROLE_INVALID";
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_UNKNOWN_ENUM = 11;
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_AUTHORIZATION_PLAN_CHANGED = 12;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_DURABLE_AUTHORIZATION_UNAVAILABLE = 13;
+  SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_CATALOG_PROJECTION_PENDING = 14;
 }
 
 message StudioMemberInvocationTarget {
@@ -82,16 +85,9 @@ message NyxIdServiceGrant {
   string user_service_id = 1;
   string service_slug = 2;
   string display_name = 3;
-}
-
-message NyxIdNodeGrant {
-  string user_service_id = 1;
-  string node_id = 2;
-  string display_name = 3;
-  NyxIdNodeRole role = 4;
-  NyxIdNodeEdgeKind edge_kind = 5;
-  string binding_id = 6;
-  int32 route_priority = 7;
+  AuthorizationOwnerIdentity resource_owner = 4;
+  AuthorizationGrantRequirement node_grant_requirement = 5;
+  repeated string node_ids = 6;
 }
 
 message AuthorizationSourceStamp {
@@ -102,11 +98,16 @@ message AuthorizationSourceStamp {
 }
 
 message NyxIdCatalogAuthorityStamp {
+  reserved 4;
+  reserved "external_revision";
+
   int64 actor_state_version = 1;
   google.protobuf.Timestamp observed_at = 2;
   google.protobuf.Timestamp fresh_until = 3;
-  string external_revision = 4;
   string content_digest = 5;
+  string contract_version = 6;
+  string policy_version = 7;
+  google.protobuf.Timestamp evaluated_at = 8;
 }
 
 message ScheduledInvocationCredentialPolicy {
@@ -120,16 +121,19 @@ message ScheduledInvocationCredentialPolicy {
 }
 
 message ScheduledInvocationAuthorizationPlan {
+  reserved 5;
+  reserved "nyx_id_node_grants";
+
   string schema_version = 1;
   ScheduledInvocationTarget invocation_target = 2;
   AuthorizationOwnerIdentity owner = 3;
   repeated NyxIdServiceGrant nyx_id_service_grants = 4;
-  repeated NyxIdNodeGrant nyx_id_node_grants = 5;
   ScheduledInvocationCredentialPolicy credential_policy = 6;
   repeated AuthorizationSourceStamp source_stamps = 7;
   NyxIdCatalogAuthorityStamp catalog_authority = 8;
   repeated ScheduledInvocationDisclosure disclosures = 9;
   string permission_digest = 10;
+  AuthorizationOwnerIdentity authenticated_actor = 11;
 }
 
 message ScheduledInvocationAuthorizationConfirmation {

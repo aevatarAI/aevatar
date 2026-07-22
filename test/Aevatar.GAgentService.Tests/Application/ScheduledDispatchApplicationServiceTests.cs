@@ -1136,6 +1136,69 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchActorPort_ShouldPersistPerServiceAuthorizationGrants()
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var authorizationFact = new ScheduledInvocationAuthorizationFact(
+            "digest-alpha",
+            "policy-v1",
+            new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "owner-alpha"),
+            [new ScheduledInvocationAuthorizationServiceGrant("svc-alpha", ["node-alpha", "node-beta"], false)],
+            "proxy",
+            now.AddHours(1),
+            ServiceGrantsNotRequired: false,
+            new ScheduledInvocationAuthorizationDisclosure(true, true, false, true, true),
+            new ScheduledInvocationAuthorizationAuthority(
+                1,
+                2,
+                3,
+                4,
+                5,
+                now.AddMinutes(-1),
+                now.AddMinutes(30),
+                "catalog-digest-alpha",
+                "scope-plan-contract/v1",
+                "scope-plan-policy/v1",
+                now.AddMinutes(-2)));
+        var configuration = CreateServiceInvocationConfiguration(
+            "schedule-authorization-fact",
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+        configuration = configuration with
+        {
+            Target = configuration.Target with
+            {
+                ServiceInvocation = configuration.Target.ServiceInvocation! with
+                {
+                    AuthorizationFact = authorizationFact,
+                },
+            },
+        };
+        var prepared = await new ScheduledDispatchTargetPreparationService()
+            .PrepareAsync(configuration, "cmd-auth", "corr-auth");
+        var dispatchPort = new RecordingActorDispatchPort();
+        var port = new ScheduledDispatchActorPort(new RecordingActorRuntime(), dispatchPort);
+
+        var actorId = await port.EnsureScheduleActorAsync(configuration.ScheduleId);
+        await port.DispatchCreateAsync(actorId, configuration, prepared);
+
+        var command = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
+            .Unpack<ScheduledDispatchCreateCommand>();
+        var stateFact = command.Target.ServiceInvocation.AuthorizationFact;
+        stateFact.ServiceGrants.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new ScheduledInvocationAuthorizationServiceGrantState
+            {
+                ServiceId = "svc-alpha",
+                NodeIds = { "node-alpha", "node-beta" },
+                NodeGrantsNotRequired = false,
+            });
+        stateFact.Authority.CatalogContentDigest.Should().Be("catalog-digest-alpha");
+        stateFact.Authority.CatalogContractVersion.Should().Be("scope-plan-contract/v1");
+        stateFact.Authority.CatalogPolicyVersion.Should().Be("scope-plan-policy/v1");
+        stateFact.Authority.CatalogEvaluatedAt.ToDateTimeOffset().Should().Be(now.AddMinutes(-2));
+    }
+
+    [Fact]
     public async Task ScheduledDispatchActorPort_ShouldPersistScopeOwnerNyxIdAuth()
     {
         var dispatchPort = new RecordingActorDispatchPort();

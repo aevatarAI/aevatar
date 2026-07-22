@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
@@ -94,6 +95,8 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
         var request = new StudioMemberWorkflowBindingRequest(scopeId, memberId, workflowYaml)
         {
             WorkflowId = Normalize(args.WorkflowId),
+            CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
+                ExternalCapabilityExecutionMode.Interactive),
         };
 
         try

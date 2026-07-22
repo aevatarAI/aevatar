@@ -104,6 +104,8 @@ public class NyxIdServiceApiHintsTests
         hint.Should().Contain("20 endpoints");
         hint.Should().Contain("... and 15 more");
         hint.Should().Contain("nyxid_proxy");
+        hint.Should().Contain("exact user_service_id and slug");
+        hint.Should().NotContain("service slug for uncovered endpoints");
     }
 
     [Fact]

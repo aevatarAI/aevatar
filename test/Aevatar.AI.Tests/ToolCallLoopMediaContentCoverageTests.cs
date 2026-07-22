@@ -107,6 +107,6 @@ public class ToolCallLoopMediaContentCoverageTests
     private static ChatMessage InvokeBuildToolResultMessage(string callId, string toolName, string toolResult)
     {
         var method = typeof(ToolCallLoop).GetMethod("BuildToolResultMessage", BindingFlags.Static | BindingFlags.Public);
-        return (ChatMessage)method!.Invoke(null, [callId, toolName, toolResult])!;
+        return (ChatMessage)method!.Invoke(null, [callId, toolName, toolResult, null])!;
     }
 }

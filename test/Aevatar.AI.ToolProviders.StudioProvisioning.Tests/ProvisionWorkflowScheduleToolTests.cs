@@ -2,11 +2,13 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -752,6 +754,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
         bindingPort.LastRequest.MemberId.Should().Be("member-alpha");
         bindingPort.LastRequest.WorkflowYaml.Should().Contain("name: team_workflow");
         bindingPort.LastRequest.WorkflowId.Should().Be("workflow-alpha");
+        bindingPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
+        bindingPort.LastRequest.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        bindingPort.LastRequest.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        bindingPort.LastRequest.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
+        bindingPort.LastRequest.CapabilityAdmission.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
@@ -1270,6 +1278,12 @@ public sealed class ProvisionWorkflowScheduleToolTests
         request.RunImmediately.Should().BeFalse();
         // Caller identity is taken from the tool execution context (W1-threaded), not arguments.
         request.CallerSubjectExternalUserId.Should().Be("owner-1");
+        request.CapabilityAdmission.Should().NotBeNull();
+        request.CapabilityAdmission!.CallerId.Should().Be("owner-1");
+        request.CapabilityAdmission.NyxIdCallerBearerToken.Should().Be("access-token-1");
+        request.CapabilityAdmission.NyxIdOrganizationBearerToken.Should().Be("org-token");
+        request.CapabilityAdmission.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
 
         // Result surfaces the schedule + Observatory link.
         using var document = JsonDocument.Parse(output);

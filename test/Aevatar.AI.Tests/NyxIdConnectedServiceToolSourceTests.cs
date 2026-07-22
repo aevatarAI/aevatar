@@ -356,6 +356,7 @@ public class NyxIdConnectedServiceToolSourceTests
         receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
         receipt.AuthorizationRequired.Should().NotBeNull();
         receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-shop");
+        receipt.AuthorizationRequired.UserServiceId.Should().Be("svc-1");
         receipt.AuthorizationRequired.ResourceUri.Should().Be("/orders/o-1");
         receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_UNAUTHORIZED");
         receipt.AuthorizationRequired.SafeMessage.Should().NotBeNullOrWhiteSpace();
@@ -448,6 +449,55 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Single(r => r.RelativePath == "api-user/ping").Token.Should().Be("user-token");
         handler.ProxyRequests.Single(r => r.RelativePath == "api-org/ping").Token.Should().Be("org-token",
             "an org-only service must be proxied with the org token, matching NyxIdProxyTool visibility");
+    }
+
+    [Fact]
+    public async Task DiscoverToolsAsync_DuplicateSlug_PreservesExactInstancesAndRoutesByServiceId()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = """
+            {
+              "keys": [
+                {
+                  "id": "us-home-alpha",
+                  "slug": "home-assistant",
+                  "catalog_service_slug": "home-assistant",
+                  "connected": true,
+                  "is_active": true,
+                  "status": "active"
+                },
+                {
+                  "id": "us-home-beta",
+                  "slug": "home-assistant",
+                  "catalog_service_slug": "home-assistant",
+                  "connected": true,
+                  "is_active": true,
+                  "status": "active"
+                }
+              ]
+            }
+            """;
+        handler.CatalogByToken["user-token"] = """
+            { "entries": [{ "slug": "home-assistant", "name": "Home Assistant" }] }
+            """;
+        handler.SpecsByServiceId["us-home-alpha"] = SpecWithPing("list_devices");
+        handler.SpecsByServiceId["us-home-beta"] = SpecWithPing("list_devices");
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().HaveCount(2);
+        tools.Select(static tool => tool.Name).Should().OnlyHaveUniqueItems();
+        tools.Should().OnlyContain(static tool => tool.Description.Contains("home-assistant", StringComparison.Ordinal));
+
+        foreach (var tool in tools)
+            await tool.ExecuteAsync("{}");
+
+        handler.ProxyRequests.Should().HaveCount(2);
+        handler.ProxyRequests.Select(static request => request.Query).Should()
+            .Contain(query => query.Contains("_nyxid_via=us-home-alpha", StringComparison.Ordinal))
+            .And.Contain(query => query.Contains("_nyxid_via=us-home-beta", StringComparison.Ordinal));
     }
 
     private static string SpecWithPing(string operationId) => $$"""

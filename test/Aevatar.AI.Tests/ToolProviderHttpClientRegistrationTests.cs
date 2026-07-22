@@ -6,6 +6,8 @@ using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -64,6 +66,8 @@ public sealed class ToolProviderHttpClientRegistrationTests
     public async Task AddNyxIdTools_ResolvesToolSourceWithoutDeletedCatalogServices()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IExternalWorkflowCapabilityReadinessPort>(
+            new StubExternalWorkflowCapabilityReadinessPort(ServiceRegistrationRequired()));
 
         services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
 
@@ -91,21 +95,115 @@ public sealed class ToolProviderHttpClientRegistrationTests
     [Fact]
     public async Task NyxIdRequireServiceTool_ShouldCreateDeterministicAuthorizationReceipt()
     {
-        var tool = new NyxIdRequireServiceTool();
+        var readiness = new StubExternalWorkflowCapabilityReadinessPort(ServiceRegistrationRequired());
+        var services = new ServiceCollection();
+        services.AddSingleton<IExternalWorkflowCapabilityReadinessPort>(readiness);
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var tool = (await source.DiscoverToolsAsync()).Single(candidate => candidate.Name == "nyxid_require_service");
         const string arguments =
             """{"service_slug":"api-github","service_label":"GitHub","resource_uri":"/repos/private?token=bearer-secret"}""";
 
-        var result = await tool.ExecuteAsync(arguments);
-        var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
 
-        receipt.Should().NotBeNull();
-        receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
-        receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
-        receipt.AuthorizationRequired.ServiceLabel.Should().Be("GitHub");
-        receipt.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
-        receipt.AuthorizationRequired.ReasonCode.Should().Be("NYXID_SERVICE_NOT_CONNECTED");
-        receipt.AuthorizationRequired.SafeMessage.Should().Be("Connect api-github to continue.");
-        receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("token=");
+            readiness.Request.Should().NotBeNull();
+            readiness.Request!.Capability.NyxIdUserService.UserServiceId.Should().BeEmpty();
+            readiness.Request.Capability.NyxIdUserService.ServiceSlugSnapshot.Should().Be("api-github");
+            readiness.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+            receipt.Should().NotBeNull();
+            receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+            receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-github");
+            receipt.AuthorizationRequired.ServiceLabel.Should().Be("GitHub");
+            receipt.AuthorizationRequired.ResourceUri.Should().Be("/repos/private");
+            receipt.AuthorizationRequired.ReasonCode.Should().Be("USER_SERVICE_NOT_VISIBLE");
+            receipt.AuthorizationRequired.SafeMessage.Should().Be("No caller-visible NyxID UserService matches the requested service.");
+            receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("token=");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    [Fact]
+    public async Task NyxIdRequireServiceTool_ShouldNotFabricateAuthorization_WhenReadinessSourceIsStale()
+    {
+        var readiness = new StubExternalWorkflowCapabilityReadinessPort(SourceStale());
+        var services = new ServiceCollection();
+        services.AddSingleton<IExternalWorkflowCapabilityReadinessPort>(readiness);
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IAgentToolSource>().OfType<NyxIdAgentToolSource>().Single();
+        var tool = (await source.DiscoverToolsAsync()).Single(candidate => candidate.Name == "nyxid_require_service");
+        const string arguments = """{"service_slug":"api-github"}""";
+
+        var previous = AgentToolRequestContext.Current;
+        AgentToolRequestContext.Current = CapabilityContext();
+        try
+        {
+            var result = await tool.ExecuteAsync(arguments);
+            var receipt = tool.CreateResultReceipt("call-1", tool.Name, arguments, result);
+
+            readiness.Request.Should().NotBeNull();
+            result.Should().Contain("NYXID_SOURCE_UNAVAILABLE");
+            receipt.Should().BeNull();
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = previous;
+        }
+    }
+
+    private static AgentToolExecutionContext CapabilityContext() =>
+        AgentToolExecutionContext.Empty with
+        {
+            Caller = new AgentToolCallerContext(
+                "scope-alpha",
+                "caller-alpha",
+                null,
+                "scope-alpha"),
+            Credentials = new AgentToolCredentials(
+                "runtime-caller-credential",
+                "runtime-organization-credential",
+                null),
+        };
+
+    private static ExternalCapabilityReadiness ServiceRegistrationRequired()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = readiness.Status,
+            Code = "USER_SERVICE_NOT_VISIBLE",
+            SafeMessage = "No caller-visible NyxID UserService matches the requested service.",
+        });
+        return readiness;
+    }
+
+    private static ExternalCapabilityReadiness SourceStale()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.SourceStale,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = readiness.Status,
+            Code = "NYXID_SOURCE_UNAVAILABLE",
+            SafeMessage = "NyxID service capability facts are currently unavailable.",
+        });
+        return readiness;
     }
 
     [Fact]
@@ -309,5 +407,20 @@ file sealed class ManagedCodexPortStub : ICodexExecutionPort
     {
         await Task.CompletedTask;
         yield break;
+    }
+}
+
+file sealed class StubExternalWorkflowCapabilityReadinessPort(ExternalCapabilityReadiness result) :
+    IExternalWorkflowCapabilityReadinessPort
+{
+    public InspectExternalWorkflowCapabilityReadinessRequest? Request { get; private set; }
+
+    public Task<ExternalCapabilityReadiness> InspectAsync(
+        InspectExternalWorkflowCapabilityReadinessRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Request = request;
+        return Task.FromResult(result.Clone());
     }
 }

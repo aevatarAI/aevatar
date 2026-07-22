@@ -23,7 +23,7 @@
     <ProjectReference Include="..\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Scripting.Hosting\Aevatar.Scripting.Hosting.csproj" />
     <ProjectReference Include="..\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
-    <ProjectReference Include="..\platform\Aevatar.GAgentService.Infrastructure\Aevatar.GAgentService.Infrastructure.csproj" />
+    <ProjectReference Include="..\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Abstractions\Aevatar.GAgents.Channel.Abstractions.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Channel.Identity.Abstractions\Aevatar.GAgents.Channel.Identity.Abstractions.csproj" />

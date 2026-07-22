@@ -117,6 +117,7 @@ NyxID proxy responses are classified only from the structured HTTP status, `erro
   "custom": {
     "name": "nyxid.authorization.required",
     "payload": {
+      "userServiceId": "us-github-alpha",
       "serviceSlug": "api-github",
       "serviceLabel": "GitHub",
       "resourceUri": "/repos/private",

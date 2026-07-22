@@ -119,6 +119,7 @@ internal sealed class NyxIdChatSseWriter
                 name = "nyxid.authorization.required",
                 payload = new
                 {
+                    userServiceId = blocker.HasUserServiceId ? blocker.UserServiceId : null,
                     serviceSlug = blocker.ServiceSlug,
                     serviceLabel = blocker.HasServiceLabel ? blocker.ServiceLabel : null,
                     resourceUri = blocker.HasResourceUri ? blocker.ResourceUri : null,

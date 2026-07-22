@@ -27,6 +27,6 @@
               AdditionalImportDirs="..\..\Aevatar.Foundation.Abstractions;..\Aevatar.GAgentService.Abstractions\Protos" />
     <Protobuf Include="Schedules/Authorization/nyxid_authorization_catalog_state.proto"
               GrpcServices="None"
-              AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
+              AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos;..\..\workflow\Aevatar.Workflow.Abstractions" />
   </ItemGroup>
 </Project>

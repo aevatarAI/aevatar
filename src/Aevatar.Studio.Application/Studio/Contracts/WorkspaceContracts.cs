@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Domain.Studio.Models;
 
 namespace Aevatar.Studio.Application.Studio.Contracts;
@@ -75,4 +77,8 @@ public sealed record SaveWorkflowDraftRequest(
     string WorkflowName,
     string? FileName,
     string Yaml,
-    WorkflowLayoutDocument? Layout = null);
+    WorkflowLayoutDocument? Layout = null)
+{
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+}

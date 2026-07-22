@@ -101,7 +101,8 @@ public sealed class StudioMemberServiceCreateImplementationRefTests
             new InertTeamQueryPort(),
             new ThrowingServiceLifecycleQueryPort(),
             new ThrowingScopeBindingReadinessQueryPort(),
-            new ThrowingServiceCommandPort());
+            new ThrowingServiceCommandPort(),
+            new StudioWorkflowCapabilityAdmissionTestService());
 
     private sealed class RecordingMemberCommandPort : IStudioMemberCommandPort
     {

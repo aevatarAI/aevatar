@@ -47,6 +47,27 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<ICommandDispatchPipeline<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchPipeline<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<ChannelBotRegisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchService<ChannelBotRegisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
         services.TryAddSingleton<ICommandDispatchService<ChannelBotUnregisterCommand, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>, DefaultCommandDispatchService<ChannelBotUnregisterCommand, ChannelBotRegistrationCommandTarget, ChannelRegistrationCommandAcceptedReceipt, ChannelRegistrationCommandStartError>>();
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairRequestCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairPrepareCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairCompleteCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        AddRegistrationCommand<ChannelBotWorkflowResultDeliveryRepairFailCommand>(
+            services,
+            static serviceProvider => serviceProvider.GetRequiredService<ChannelBotRegistrationCommandEnvelopeFactory>());
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairCommandPort,
+            ChannelWorkflowResultDeliveryRepairCommandPort>();
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairNyxPort,
+            ChannelWorkflowResultDeliveryRepairNyxPort>();
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairService,
+            ChannelWorkflowResultDeliveryRepairService>();
         services.TryAddSingleton<INyxLarkProvisioningService, NyxLarkProvisioningService>();
         services.TryAddSingleton<INyxTelegramProvisioningService, NyxTelegramProvisioningService>();
         services.TryAddSingleton<INyxChannelBotDeprovisioningService, NyxChannelBotDeprovisioningService>();
@@ -67,5 +88,39 @@ public static class NyxIdRelayChannelServiceCollectionExtensions
         services.TryAddSingleton<IInteractiveReplyDispatcher, NyxIdRelayInteractiveReplyDispatcher>();
 
         return services;
+    }
+
+    private static void AddRegistrationCommand<TCommand>(
+        IServiceCollection services,
+        Func<IServiceProvider, ICommandEnvelopeFactory<TCommand>> envelopeFactory)
+    {
+        services.TryAddSingleton<
+            ICommandTargetResolver<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandStartError>,
+            ChannelBotRegistrationCommandTargetResolver<TCommand>>();
+        services.TryAddSingleton(envelopeFactory);
+        services.TryAddSingleton<
+            ICommandDispatchPipeline<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>,
+            DefaultCommandDispatchPipeline<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>>();
+        services.TryAddSingleton<
+            ICommandDispatchService<
+                TCommand,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>,
+            DefaultCommandDispatchService<
+                TCommand,
+                ChannelBotRegistrationCommandTarget,
+                ChannelRegistrationCommandAcceptedReceipt,
+                ChannelRegistrationCommandStartError>>();
     }
 }

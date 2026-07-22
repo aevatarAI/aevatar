@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -26,12 +27,10 @@ public static class ServiceCollectionExtensions
         // Refactor (iter10/cluster-019):
         // Old: singleton tool clients constructed or pinned raw HttpClient instances.
         // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
-        var options = new NyxIdToolOptions();
-        configure(options);
-        services.RemoveAll<NyxIdToolOptions>();
-        services.AddSingleton(options);
-        services.AddHttpClient<NyxIdApiClient>();
-        services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
+        services.AddNyxIdApiAccess(configure);
+        services.TryAddEnumerable(ServiceDescriptor.Transient<
+            IExternalWorkflowCapabilitySource,
+            NyxIdExternalWorkflowCapabilitySource>());
         services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
         services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
         services.Replace(ServiceDescriptor.Singleton<
@@ -53,6 +52,83 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<IRemoteToolApprovalPort, NyxIdRemoteToolApprovalPort>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers only reusable NyxID REST access. Singleton consumers should depend on
+    /// <see cref="INyxIdApiClientFactory"/> and create a client for each operation.
+    /// </summary>
+    public static IServiceCollection AddNyxIdApiAccess(
+        this IServiceCollection services,
+        Action<NyxIdToolOptions>? configure = null) =>
+        AddNyxIdApiAccessCore(services, null, configure);
+
+    /// <summary>
+    /// Registers reusable NyxID REST access and resolves the API base independently from
+    /// the browser/OIDC authority when the canonical API base setting is present.
+    /// </summary>
+    public static IServiceCollection AddNyxIdApiAccess(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        Action<NyxIdToolOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return AddNyxIdApiAccessCore(services, configuration, configure);
+    }
+
+    private static IServiceCollection AddNyxIdApiAccessCore(
+        IServiceCollection services,
+        IConfiguration? configuration,
+        Action<NyxIdToolOptions>? configure)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        var options = services
+            .Where(static descriptor => descriptor.ServiceType == typeof(NyxIdToolOptions))
+            .Select(static descriptor => descriptor.ImplementationInstance)
+            .OfType<NyxIdToolOptions>()
+            .LastOrDefault() ?? new NyxIdToolOptions();
+        services.RemoveAll<NyxIdToolOptions>();
+        services.AddSingleton(options);
+
+        var configuredBaseUrl = FirstConfiguredValue(
+            configuration,
+            "Aevatar:NyxId:ApiBaseUrl",
+            "Aevatar:NyxId:Authority",
+            "Cli:App:NyxId:Authority",
+            "Aevatar:Authentication:Authority");
+        if (configuredBaseUrl is not null)
+            options.BaseUrl = configuredBaseUrl;
+        configure?.Invoke(options);
+
+        if (!services.Any(static descriptor =>
+                descriptor.ServiceType == typeof(NyxIdApiAccessRegistrationMarker)))
+        {
+            services.AddHttpClient<NyxIdApiClient>();
+            services.AddSingleton<NyxIdApiAccessRegistrationMarker>();
+        }
+        services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
+        return services;
+    }
+
+    private static string? FirstConfiguredValue(
+        IConfiguration? configuration,
+        params string[] keys)
+    {
+        if (configuration is null)
+            return null;
+
+        foreach (var key in keys)
+        {
+            var value = configuration[key];
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+
+        return null;
+    }
+
+    private sealed class NyxIdApiAccessRegistrationMarker
+    {
     }
 
     // Registers the NyxID-backed current-user resolver behind the aevatar admin authorization seam.
