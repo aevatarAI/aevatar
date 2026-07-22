@@ -310,7 +310,8 @@ public sealed record WorkflowChatRunAcceptedReceipt(
 public sealed record WorkflowChatContext(
     string ScopeId,
     string ConversationId,
-    string TurnId);
+    string TurnId,
+    long StateVersion = 0);
 
 public sealed record WorkflowChatInteractionAcceptedReceipt(
     WorkflowChatRunAcceptedReceipt Run,

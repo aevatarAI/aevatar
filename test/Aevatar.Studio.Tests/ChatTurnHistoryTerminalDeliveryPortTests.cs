@@ -77,14 +77,15 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         var port = CreatePort(runtime, dispatch, admissionReader);
 
         var result = await port.ReserveAsync(
-            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-existing")));
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-existing", minimumStateVersion: 7)));
 
         result.Succeeded.Should().BeTrue();
         result.ChatContext.Should().BeEquivalentTo(
             new WorkflowChatContext(
                 "scope-alpha",
                 "conversation-existing",
-                result.ChatContext!.TurnId));
+                result.ChatContext!.TurnId,
+                7));
         result.ChatContext!.TurnId.Should().NotBeNullOrWhiteSpace();
         result.ChatContext.TurnId.Should().NotBe("turn-from-client");
         result.ConversationContext.Should().NotBeNull();
@@ -94,7 +95,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         command.TurnId.Should().Be(result.ChatContext.TurnId);
         command.CreateConversationIfMissing.Should().BeFalse();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-existing", null));
+            .Which.Should().Be(("scope-alpha", "conversation-existing", 7L));
     }
 
     [Fact]
@@ -106,14 +107,14 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         var port = CreatePort(runtime, dispatch, admissionReader);
 
         var result = await port.ReserveAsync(
-            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-missing")));
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-missing", minimumStateVersion: 7)));
 
         result.Succeeded.Should().BeFalse();
         result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
         runtime.CreatedActors.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-missing", null));
+            .Which.Should().Be(("scope-alpha", "conversation-missing", 7L));
     }
 
     [Fact]
@@ -126,14 +127,14 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         var port = CreatePort(runtime, dispatch, admissionReader);
 
         var result = await port.ReserveAsync(
-            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-deleted")));
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-deleted", minimumStateVersion: 7)));
 
         result.Succeeded.Should().BeFalse();
         result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
         runtime.CreatedActors.Should().BeEmpty();
         dispatch.Calls.Should().BeEmpty();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-deleted", null));
+            .Which.Should().Be(("scope-alpha", "conversation-deleted", 7L));
     }
 
     [Fact]
@@ -157,6 +158,25 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
     }
 
     [Fact]
+    public async Task ReserveAsync_ShouldReturnUnavailable_WhenContinuationStateVersionIsMissing()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var admissionReader = new RecordingChatConversationContinuationAdmissionReader();
+        admissionReader.SeedExistingConversation("scope-alpha", "conversation-existing");
+        var port = CreatePort(runtime, dispatch, admissionReader);
+
+        var result = await port.ReserveAsync(
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-existing")));
+
+        result.Succeeded.Should().BeFalse();
+        result.Failure.Should().Be(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
+        runtime.CreatedActors.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+        admissionReader.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ReserveAsync_ShouldContinueExistingConversation_WhenRuntimeExposesOnlyProxyAgent()
     {
         var runtime = new RecordingActorRuntime();
@@ -167,7 +187,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         var port = CreatePort(runtime, dispatch, admissionReader);
 
         var result = await port.ReserveAsync(
-            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-proxy")));
+            ReservationRequest(WorkflowChatConversationIntent.Continue("conversation-proxy", minimumStateVersion: 7)));
 
         result.Succeeded.Should().BeTrue();
         result.ChatContext.Should().NotBeNull();
@@ -182,7 +202,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         command.CreateConversationIfMissing.Should().BeFalse();
         runtime.GetCalls.Should().BeEmpty();
         admissionReader.Calls.Should().ContainSingle()
-            .Which.Should().Be(("scope-alpha", "conversation-proxy", null));
+            .Which.Should().Be(("scope-alpha", "conversation-proxy", 7L));
     }
 
     [Fact]
@@ -313,7 +333,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         private readonly HashSet<(string ScopeId, string ConversationId)> _continuableConversations = [];
         private readonly HashSet<(string ScopeId, string ConversationId)> _notReadyConversations = [];
 
-        public List<(string ScopeId, string ConversationId, long? MinimumStateVersion)> Calls { get; } = [];
+        public List<(string ScopeId, string ConversationId, long MinimumStateVersion)> Calls { get; } = [];
 
         public void SeedExistingConversation(string scopeId, string conversationId) =>
             _continuableConversations.Add((scopeId, conversationId));
@@ -327,7 +347,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         public Task<ChatConversationContinuationAdmission> GetContinuationAsync(
             string scopeId,
             string conversationId,
-            long? minimumStateVersion = null,
+            long minimumStateVersion,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
@@ -342,7 +362,7 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
                 new WorkflowConversationExecutionContext(
                     scopeId,
                     conversationId,
-                    1,
+                    minimumStateVersion,
                     [
                         new WorkflowConversationExecutionMessage(
                             1,

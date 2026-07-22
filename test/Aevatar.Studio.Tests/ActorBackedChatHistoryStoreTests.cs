@@ -42,6 +42,7 @@ public sealed class ActorBackedChatHistoryStoreTests
                     ActorId = actor.Id,
                     ScopeId = "scope-a",
                     ConversationId = "conversation-a",
+                    StateVersion = 7,
                     Turns =
                     {
                         new ChatConversationTurnDocument
@@ -101,6 +102,7 @@ public sealed class ActorBackedChatHistoryStoreTests
 
         var messagesResult = await store.GetMessagesAsync("scope-a", "conversation-a");
         messagesResult.Status.Should().Be(ChatHistoryConversationResultStatus.Found);
+        messagesResult.StateVersion.Should().Be(7);
         var messages = messagesResult.Messages;
         messages.Should().HaveCount(2);
         messages.Should().OnlyContain(message => message.TurnId == "turn-blocked");

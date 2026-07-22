@@ -59,7 +59,9 @@ import { t } from "@/shared/i18n/messages";
 type ConversationState = {
   id: string;
   messages: ChatMessage[];
+  serverConversationId?: string;
   status: LocalChatStatus;
+  stateVersion?: number;
   target?: ChatStudioTarget;
   title: string;
   usage?: ChatUsageSummary;
@@ -230,40 +232,10 @@ function shouldAskForConfirmation(content: string): boolean {
   );
 }
 
-function composePromptWithHistory(
-  messages: readonly ChatMessage[],
-  currentPrompt: string
-): string {
-  const priorMessages = messages
-    .filter(
-      (message) =>
-        message.status !== "streaming" &&
-        (message.role === "user" || message.role === "assistant") &&
-        message.content.trim()
-    )
-    .slice(-10);
-
-  if (priorMessages.length === 0) {
-    return currentPrompt;
-  }
-
-  const transcript = priorMessages
-    .map(
-      (message) =>
-        `${message.role === "user" ? "User" : "Assistant"}: ${message.content.trim()}`
-    )
-    .join("\n")
-    .slice(-6000);
-
-  return [
-    "Use the previous transcript only to keep context. Do not repeat it unless needed.",
-    "<conversation_history>",
-    transcript,
-    "</conversation_history>",
-    "",
-    "Latest user message:",
-    currentPrompt,
-  ].join("\n");
+function normalizeStateVersion(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined;
 }
 
 function resolveStudioJump(target: ChatStudioTarget | undefined): StudioJump | null {
@@ -454,6 +426,8 @@ const ChatPage: React.FC = () => {
         scopeId,
         serviceId: "chat",
         serviceKind: "chat",
+        serverConversationId: conversation.serverConversationId,
+        stateVersion: normalizeStateVersion(conversation.stateVersion),
         status: conversation.status,
         target: conversation.target,
         title: conversation.title,
@@ -493,7 +467,9 @@ const ChatPage: React.FC = () => {
       const restoredConversation: ConversationState = {
         id: conversationId,
         messages,
+        serverConversationId: meta?.serverConversationId,
         status: meta?.status || "draft",
+        stateVersion: normalizeStateVersion(meta?.stateVersion),
         target: meta?.target,
         title: meta?.title || t("pages.chat.index.newChat", "New chat"),
         usage: meta?.usage,
@@ -625,10 +601,19 @@ const ChatPage: React.FC = () => {
         status: nextStatus,
         title,
       };
-      const promptWithHistory = composePromptWithHistory(
-        conversation.messages,
-        trimmedInput
-      );
+      const serverConversationId =
+        conversation.serverConversationId?.trim() || undefined;
+      const sourceStateVersion = normalizeStateVersion(conversation.stateVersion);
+      const conversationInput = serverConversationId
+        ? {
+            conversationId: serverConversationId,
+            ...(sourceStateVersion
+              ? { minimumStateVersion: sourceStateVersion }
+              : {}),
+          }
+        : {
+            conversationId: null,
+          };
       const rawFrames: unknown[] = [];
       const accumulator = createRuntimeEventAccumulator();
       let streamingConversation = startedConversation;
@@ -649,7 +634,9 @@ const ChatPage: React.FC = () => {
       try {
         const response = await startChatStream(
           {
-            prompt: promptWithHistory,
+            commandId: serverConversationId ? undefined : conversation.id,
+            conversation: conversationInput,
+            prompt: trimmedInput,
             scopeId,
             sessionId: conversation.id,
           },
@@ -701,6 +688,23 @@ const ChatPage: React.FC = () => {
         }
 
         const artifacts = extractChatStreamArtifacts(rawFrames);
+        let finalServerConversationId =
+          artifacts.chatContext?.conversationId || conversation.serverConversationId;
+        let finalStateVersion =
+          normalizeStateVersion(artifacts.chatContext?.stateVersion) ??
+          normalizeStateVersion(conversation.stateVersion);
+        if (finalServerConversationId && !finalStateVersion) {
+          try {
+            const serverRecord = await chatHistoryApi.loadServerConversation(
+              scopeId,
+              finalServerConversationId
+            );
+            finalStateVersion =
+              normalizeStateVersion(serverRecord?.stateVersion) ?? finalStateVersion;
+          } catch {
+            finalStateVersion = undefined;
+          }
+        }
         const finalAssistantStatus: ChatMessage["status"] = accumulator.errorText
           ? "error"
           : "complete";
@@ -727,7 +731,9 @@ const ChatPage: React.FC = () => {
                 }
               : message
           ),
+          serverConversationId: finalServerConversationId,
           status: finalStatus,
+          stateVersion: finalStateVersion,
           target: finalTarget,
           usage: finalUsage,
         };

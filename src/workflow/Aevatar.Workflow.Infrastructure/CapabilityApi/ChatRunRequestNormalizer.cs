@@ -257,6 +257,8 @@ internal static class ChatRunRequestNormalizer
         var conversationId = NormalizeOptional(source.ConversationId);
         if (conversationId == null)
             return new ConversationNormalizationResult(null, WorkflowChatRunStartError.InvalidConversationId);
+        if (source.MinimumStateVersion is not > 0)
+            return new ConversationNormalizationResult(null, WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
 
         return new ConversationNormalizationResult(
             WorkflowChatConversationIntent.Continue(

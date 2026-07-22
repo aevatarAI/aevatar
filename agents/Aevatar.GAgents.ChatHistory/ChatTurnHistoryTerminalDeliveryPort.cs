@@ -96,7 +96,11 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
             ExistingReservation: deliveryActorExists);
         return WorkflowChatHistoryTerminalDeliveryReservationResult.Success(
             reservation,
-            new WorkflowChatContext(scopeId, conversationResolution.ConversationId, turnId),
+            new WorkflowChatContext(
+                scopeId,
+                conversationResolution.ConversationId,
+                turnId,
+                conversationResolution.ConversationContext?.StateVersion ?? 0),
             conversationResolution.ConversationContext);
     }
 
@@ -128,12 +132,14 @@ public sealed class ChatTurnHistoryTerminalDeliveryPort : IWorkflowChatHistoryTe
     {
         if (string.IsNullOrWhiteSpace(conversationId))
             return ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
+        if (minimumStateVersion is not > 0)
+            return ConversationIdentityResolution.Failed(WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
 
         var normalizedConversationId = conversationId.Trim();
         var admission = await _continuationAdmissionReader.GetContinuationAsync(
                 scopeId,
                 normalizedConversationId,
-                minimumStateVersion,
+                minimumStateVersion.Value,
                 ct)
             .ConfigureAwait(false);
         if (admission.CanContinue && admission.ConversationContext != null)

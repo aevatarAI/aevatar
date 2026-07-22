@@ -30,6 +30,6 @@ public interface IChatConversationContinuationAdmissionReader
     Task<ChatConversationContinuationAdmission> GetContinuationAsync(
         string scopeId,
         string conversationId,
-        long? minimumStateVersion = null,
+        long minimumStateVersion,
         CancellationToken ct = default);
 }

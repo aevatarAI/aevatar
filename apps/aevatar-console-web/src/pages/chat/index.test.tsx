@@ -259,6 +259,70 @@ describe("ChatPage MVP", () => {
     expect(await screen.findByRole("button", { name: "Open Workflow Studio" })).toBeTruthy();
   });
 
+  it("continues with backend conversation watermark instead of a client transcript", async () => {
+    (authFetch as jest.Mock)
+      .mockResolvedValueOnce(
+        createSseResponse([
+          {
+            custom: {
+              name: "aevatar.chat.context",
+              payload: {
+                fields: {
+                  conversationId: {
+                    stringValue: "conversation-alpha",
+                  },
+                  scopeId: {
+                    stringValue: "scope-a",
+                  },
+                  stateVersion: {
+                    numberValue: 7,
+                  },
+                  turnId: {
+                    stringValue: "turn-alpha-1",
+                  },
+                },
+              },
+            },
+          },
+          {
+            runFinished: {
+              result: {
+                output: "Choose a Team: team01 or team02.",
+              },
+            },
+          },
+        ])
+      )
+      .mockResolvedValueOnce(
+        createSseResponse([
+          {
+            runFinished: {
+              result: {
+                output: "Continuing with team01.",
+              },
+            },
+          },
+        ])
+      );
+
+    renderWithQueryClient(<ChatPage />);
+    await sendPrompt("Create a workflow that generates fund analysis reports");
+    await screen.findByText("Choose a Team: team01 or team02.");
+    await sendPrompt("team01");
+
+    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(2));
+    const firstBody = JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body);
+    const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
+    expect(firstBody.conversation).toEqual({ conversationId: null });
+    expect(firstBody.commandId).toBeTruthy();
+    expect(secondBody.prompt).toBe("team01");
+    expect(secondBody.prompt).not.toContain("<conversation_history>");
+    expect(secondBody.conversation).toEqual({
+      conversationId: "conversation-alpha",
+      minimumStateVersion: 7,
+    });
+  });
+
   it("opens Workflow Studio only when structured identifiers are returned", async () => {
     (authFetch as jest.Mock).mockResolvedValueOnce(
       createSseResponse([

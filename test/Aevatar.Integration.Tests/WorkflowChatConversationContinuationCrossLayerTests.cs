@@ -79,7 +79,8 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
             deliveryPort,
             "scope-alpha",
             "conversation-alpha",
-            "team01");
+            "team01",
+            minimumStateVersion: 1);
 
         alpha.Result.Succeeded.Should().BeTrue();
         alpha.DispatchedRequest.Should().NotBeNull();
@@ -113,7 +114,8 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
             deliveryPort,
             "scope-alpha",
             "conversation-other",
-            "team01");
+            "team01",
+            minimumStateVersion: 1);
 
         sameScopeOtherConversation.Result.Succeeded.Should().BeTrue();
         var sameScopeOtherInput = await RenderWorkflowInputAsync(sameScopeOtherConversation.DispatchedRequest!);
@@ -125,7 +127,8 @@ public sealed class WorkflowChatConversationContinuationCrossLayerTests : Workfl
             deliveryPort,
             "scope-beta",
             "conversation-alpha",
-            "team01");
+            "team01",
+            minimumStateVersion: 1);
 
         otherScopeSameConversationId.Result.Succeeded.Should().BeTrue();
         var otherScopeInput = await RenderWorkflowInputAsync(otherScopeSameConversationId.DispatchedRequest!);

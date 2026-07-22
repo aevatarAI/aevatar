@@ -1112,7 +1112,7 @@ public sealed class ChatEndpointsInternalTests
                 capturedCommand = command;
                 var accepted = new WorkflowChatInteractionAcceptedReceipt(
                     new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"),
-                    new WorkflowChatContext("trusted-scope", "generated-conversation", "generated-turn"));
+                    new WorkflowChatContext("trusted-scope", "generated-conversation", "generated-turn", 7));
                 if (onAcceptedAsync != null)
                     await onAcceptedAsync(accepted, ct);
                 return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
@@ -1152,6 +1152,8 @@ public sealed class ChatEndpointsInternalTests
         runContextIndex.Should().BeGreaterThan(chatContextIndex);
         body.Should().Contain("generated-conversation");
         body.Should().Contain("generated-turn");
+        body.Should().Contain("stateVersion");
+        body.Should().Contain("7");
     }
 
     [Fact]

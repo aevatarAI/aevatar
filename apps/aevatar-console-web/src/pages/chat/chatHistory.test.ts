@@ -39,6 +39,8 @@ describe("chatHistory", () => {
       scopeId: "scope-a",
       serviceId: "support",
       serviceKind: "service",
+      serverConversationId: "conversation-server-2",
+      stateVersion: 9,
       status: "completed_with_studio_target",
       target: {
         memberId: "member-a",
@@ -84,6 +86,8 @@ describe("chatHistory", () => {
       firstId,
     ]);
     expect(listConversationMetas("scope-a")[0]).toMatchObject({
+      serverConversationId: "conversation-server-2",
+      stateVersion: 9,
       status: "completed_with_studio_target",
       target: {
         memberId: "member-a",

@@ -2,11 +2,16 @@ import type { AGUIEvent } from "@aevatar-react-sdk/types";
 import { normalizeBackendSseFrame } from "@/shared/agui/sseFrameNormalizer";
 import { readResponseError } from "@/shared/api/http/error";
 import { authFetch } from "@/shared/auth/fetch";
-import type { ChatStudioTarget, ChatUsageSummary } from "./chatTypes";
+import type { ChatContext, ChatStudioTarget, ChatUsageSummary } from "./chatTypes";
 
 type JsonRecord = Record<string, unknown>;
 
 export type ChatStreamRequest = {
+  commandId?: string;
+  conversation?: {
+    conversationId: string | null;
+    minimumStateVersion?: number;
+  };
   prompt: string;
   scopeId?: string;
   sessionId: string;
@@ -157,6 +162,36 @@ function mergeTarget(
   };
 }
 
+function normalizeStateVersion(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeConversationRequest(
+  conversation: ChatStreamRequest["conversation"] | undefined
+): ChatStreamRequest["conversation"] | undefined {
+  if (!conversation) {
+    return undefined;
+  }
+
+  const conversationId =
+    conversation.conversationId === null
+      ? null
+      : conversation.conversationId.trim();
+  if (conversationId !== null && !conversationId) {
+    return undefined;
+  }
+
+  return compactObject({
+    conversationId,
+    minimumStateVersion:
+      conversationId === null
+        ? undefined
+        : normalizeStateVersion(conversation.minimumStateVersion),
+  });
+}
+
 function unpackAnyPayload(value: unknown): JsonRecord | undefined {
   const record = asRecord(value);
   if (!record) {
@@ -189,10 +224,33 @@ function unpackAnyPayload(value: unknown): JsonRecord | undefined {
   return unpacked;
 }
 
+function normalizeChatContext(record: JsonRecord | undefined): ChatContext | null {
+  if (!record) {
+    return null;
+  }
+
+  const conversationId = readString(record, "conversationId", "conversation_id");
+  const scopeId = readString(record, "scopeId", "scope_id");
+  const turnId = readString(record, "turnId", "turn_id");
+  const stateVersion = readNumber(record, "stateVersion", "state_version");
+  if (!conversationId || !scopeId || !turnId || stateVersion === undefined) {
+    return null;
+  }
+
+  return {
+    conversationId,
+    scopeId,
+    stateVersion: Math.max(0, Math.trunc(stateVersion)),
+    turnId,
+  };
+}
+
 export function extractChatStreamArtifacts(frames: readonly unknown[]): {
+  chatContext?: ChatContext;
   target?: ChatStudioTarget;
   usage?: ChatUsageSummary;
 } {
+  let chatContext: ChatContext | undefined;
   let target: ChatStudioTarget | undefined;
   let usage: ChatUsageSummary | undefined;
 
@@ -213,6 +271,11 @@ export function extractChatStreamArtifacts(frames: readonly unknown[]): {
     const custom = asRecord(frame.custom);
     const customPayload =
       unpackAnyPayload(custom?.payload) ?? asRecord(custom?.payload);
+    const customName = readString(custom, "name");
+    if (customName === "aevatar.chat.context") {
+      chatContext = normalizeChatContext(customPayload) ?? chatContext;
+      continue;
+    }
     usage = mergeUsage(usage, normalizeUsage(asRecord(customPayload?.usage)));
     target = mergeTarget(target, normalizeTarget(customPayload));
 
@@ -221,7 +284,7 @@ export function extractChatStreamArtifacts(frames: readonly unknown[]): {
     target = mergeTarget(target, normalizeTarget(rawObserved));
   }
 
-  return { target, usage };
+  return compactObject({ chatContext, target, usage });
 }
 
 export async function startChatStream(
@@ -235,6 +298,8 @@ export async function startChatStream(
         scopeId: request.scopeId?.trim() || undefined,
         sessionId: request.sessionId.trim(),
         workflow: "studio",
+        commandId: request.commandId?.trim() || undefined,
+        conversation: normalizeConversationRequest(request.conversation),
       })
     ),
     headers: {

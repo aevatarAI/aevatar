@@ -160,6 +160,7 @@ message WorkflowChatContextPayload {
   string scope_id = 1;
   string conversation_id = 2;
   string turn_id = 3;
+  int64 state_version = 4;
 }
 
 message WorkflowStepRequestCustomPayload {

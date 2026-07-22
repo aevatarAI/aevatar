@@ -300,7 +300,8 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             new WorkflowChatContext(
                 normalizedScopeId,
                 recovery.ConversationId.Trim(),
-                recovery.TurnId.Trim()));
+                recovery.TurnId.Trim(),
+                recovery.StateVersion));
 
         return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
             .Success(
@@ -385,6 +386,12 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
     {
         if (!_projectionPort.ProjectionEnabled)
             return WorkflowChatRunStartError.ProjectionDisabled;
+        if (request.ChatConversation is { Intent: WorkflowChatConversationIntentKind.Continue } conversation &&
+            !string.IsNullOrWhiteSpace(conversation.ConversationId) &&
+            conversation.MinimumStateVersion is not > 0)
+        {
+            return WorkflowChatRunStartError.ChatHistoryReservationUnavailable;
+        }
 
         return Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens
             .ParseOptional(request.CallerCredential?.BearerToken)

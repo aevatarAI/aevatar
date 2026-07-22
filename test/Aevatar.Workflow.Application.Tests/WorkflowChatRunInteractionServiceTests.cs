@@ -189,7 +189,7 @@ public sealed class WorkflowChatRunInteractionServiceTests
         result.Receipt!.Run.ActorId.Should().Be("run-stable");
         result.Receipt.Run.CommandId.Should().Be("create-command-1");
         result.Receipt.ChatContext.Should().BeEquivalentTo(
-            new WorkflowChatContext("scope-a", "conversation-stable", "turn-stable"));
+            new WorkflowChatContext("scope-a", "conversation-stable", "turn-stable", 2));
         actorResolver.Requests.Should().BeEmpty();
         inner.Requests.Should().BeEmpty();
         recovery.Requests.Should().ContainSingle().Which.Should().Be(("scope-a", "create-command-1"));
@@ -325,15 +325,18 @@ public sealed class WorkflowChatRunInteractionServiceTests
                 "next turn",
                 WorkflowChatSource.CatalogWorkflow("direct"),
                 ScopeId: "scope-a",
-                ChatConversation: WorkflowChatConversationIntent.Continue("conversation-existing")),
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-existing",
+                    minimumStateVersion: 7)),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
         deliveryPort.Reservations.Should().ContainSingle();
         deliveryPort.Reservations[0].Conversation.Intent.Should().Be(WorkflowChatConversationIntentKind.Continue);
         deliveryPort.Reservations[0].Conversation.ConversationId.Should().Be("conversation-existing");
+        deliveryPort.Reservations[0].Conversation.MinimumStateVersion.Should().Be(7);
         result.Receipt!.ChatContext.Should().BeEquivalentTo(
-            new WorkflowChatContext("scope-a", "conversation-existing", "generated-turn"));
+            new WorkflowChatContext("scope-a", "conversation-existing", "generated-turn", 7));
     }
 
     [Fact]
@@ -384,7 +387,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
                 "team01",
                 WorkflowChatSource.CatalogWorkflow("direct"),
                 ScopeId: "scope-a",
-                ChatConversation: WorkflowChatConversationIntent.Continue("conversation-existing")),
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-existing",
+                    minimumStateVersion: 3)),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
@@ -429,6 +434,34 @@ public sealed class WorkflowChatRunInteractionServiceTests
         result.Succeeded.Should().BeTrue();
         deliveryPort.Reservations.Should().ContainSingle()
             .Which.Conversation.MinimumStateVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldFailBeforeResolvingActor_WhenContinuationStateVersionIsMissing()
+    {
+        var actorResolver = new RecordingActorResolver();
+        var deliveryPort = new RecordingChatHistoryTerminalDeliveryPort();
+        var inner = new RecordingInteractionService();
+        var service = CreateService(
+            actorResolver,
+            new RecordingProjectionPort(),
+            new RecordingRunProvisioningPort(),
+            inner,
+            chatHistoryTerminalDeliveryPort: deliveryPort);
+
+        var result = await service.ExecuteAsync(
+            new WorkflowChatRunRequest(
+                "team01",
+                WorkflowChatSource.CatalogWorkflow("direct"),
+                ScopeId: "scope-a",
+                ChatConversation: WorkflowChatConversationIntent.Continue("conversation-existing")),
+            static (_, _) => ValueTask.CompletedTask);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
+        actorResolver.Requests.Should().BeEmpty();
+        deliveryPort.Reservations.Should().BeEmpty();
+        inner.Requests.Should().BeEmpty();
     }
 
     [Fact]
@@ -657,7 +690,9 @@ public sealed class WorkflowChatRunInteractionServiceTests
                 "execution prompt",
                 WorkflowChatSource.CatalogWorkflow("direct"),
                 ScopeId: "scope-a",
-                ChatConversation: WorkflowChatConversationIntent.Continue("conversation-missing")),
+                ChatConversation: WorkflowChatConversationIntent.Continue(
+                    "conversation-missing",
+                    minimumStateVersion: 7)),
             static (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeFalse();
@@ -1307,7 +1342,8 @@ public sealed class WorkflowChatRunInteractionServiceTests
                 new WorkflowChatContext(
                     request.ScopeId,
                     conversationId,
-                    "generated-turn"),
+                    "generated-turn",
+                    request.Conversation.MinimumStateVersion ?? 0),
                 ConversationContext));
         }
 

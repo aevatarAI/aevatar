@@ -84,6 +84,8 @@ export function listConversations(scopeId: string): LocalChatConversation[] {
     .map((item) => ({
       ...item,
       messages: Array.isArray(item.messages) ? item.messages : [],
+      serverConversationId: item.serverConversationId?.trim() || undefined,
+      stateVersion: normalizeStateVersion(item.stateVersion),
       status: normalizeStatus(item.status),
     }))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -284,6 +286,12 @@ function normalizeStatus(status: LocalChatStatus | undefined): LocalChatStatus {
   }
 }
 
+function normalizeStateVersion(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
 function toConversationMeta(
   conversation: LocalChatConversation
 ): ConversationMeta {
@@ -294,6 +302,8 @@ function toConversationMeta(
     scopeId: conversation.scopeId,
     serviceId: "chat",
     serviceKind: "chat",
+    serverConversationId: conversation.serverConversationId?.trim() || undefined,
+    stateVersion: normalizeStateVersion(conversation.stateVersion),
     status: normalizeStatus(conversation.status),
     target: conversation.target,
     title: conversation.title,
@@ -312,7 +322,9 @@ function fromMeta(
     id: meta.id,
     messages,
     scopeId,
+    serverConversationId: meta.serverConversationId?.trim() || undefined,
     status: normalizeStatus(meta.status),
+    stateVersion: normalizeStateVersion(meta.stateVersion),
     target: meta.target,
     title: meta.title,
     updatedAt: meta.updatedAt,

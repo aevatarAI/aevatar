@@ -37,7 +37,8 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
 
         var admission = await admissionReader.GetContinuationAsync(
             " scope-alpha ",
-            " conversation-alpha ");
+            " conversation-alpha ",
+            minimumStateVersion: 5);
 
         admission.CanContinue.Should().BeTrue();
         admission.ConversationContext.Should().NotBeNull();
@@ -62,7 +63,8 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
 
         var admission = await admissionReader.GetContinuationAsync(
             "scope-alpha",
-            "conversation-missing");
+            "conversation-missing",
+            minimumStateVersion: 1);
 
         admission.CanContinue.Should().BeFalse();
         admission.ConversationContext.Should().BeNull();
@@ -101,6 +103,42 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
             "scope-alpha",
             "conversation-alpha",
             minimumStateVersion: 5);
+
+        admission.CanContinue.Should().BeFalse();
+        admission.Failure.Should().Be(ChatConversationContinuationAdmissionFailure.ReadModelNotReady);
+        admission.ConversationContext.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetContinuationAsync_ShouldReturnNotReady_WhenMinimumStateVersionIsNotPositive()
+    {
+        var actorId = ChatHistoryActorIds.Conversation("scope-alpha", "conversation-alpha");
+        var documentReader = new RecordingConversationDocumentReader();
+        documentReader.Seed(new ChatConversationCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            ScopeId = "scope-alpha",
+            ConversationId = "conversation-alpha",
+            Deleted = false,
+            StateVersion = 5,
+            Turns =
+            {
+                new ChatConversationTurnDocument
+                {
+                    TurnId = "turn-1",
+                    Sequence = 1,
+                    UserText = "Create a workflow that generates fund analysis reports.",
+                    AssistantText = "Choose a Team: team01 or team02.",
+                },
+            },
+        });
+        var admissionReader = new ProjectionChatConversationContinuationAdmissionReader(documentReader);
+
+        var admission = await admissionReader.GetContinuationAsync(
+            "scope-alpha",
+            "conversation-alpha",
+            minimumStateVersion: 0);
 
         admission.CanContinue.Should().BeFalse();
         admission.Failure.Should().Be(ChatConversationContinuationAdmissionFailure.ReadModelNotReady);
@@ -160,7 +198,8 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
 
         var admission = await admissionReader.GetContinuationAsync(
             "scope-alpha",
-            "conversation-deleted");
+            "conversation-deleted",
+            minimumStateVersion: 1);
 
         admission.CanContinue.Should().BeFalse();
         admission.ConversationContext.Should().BeNull();
@@ -187,7 +226,8 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
 
         var admission = await admissionReader.GetContinuationAsync(
             "scope-alpha",
-            "conversation-alpha");
+            "conversation-alpha",
+            minimumStateVersion: 1);
 
         admission.CanContinue.Should().BeFalse();
         admission.ConversationContext.Should().BeNull();
@@ -222,7 +262,8 @@ public sealed class ProjectionChatConversationContinuationAdmissionReaderTests
 
         var admission = await admissionReader.GetContinuationAsync(
             "scope-alpha",
-            "conversation-alpha");
+            "conversation-alpha",
+            minimumStateVersion: 15);
 
         admission.CanContinue.Should().BeTrue();
         admission.ConversationContext.Should().NotBeNull();

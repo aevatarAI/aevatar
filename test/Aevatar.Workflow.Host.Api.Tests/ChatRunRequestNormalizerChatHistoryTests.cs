@@ -128,7 +128,7 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
     }
 
     [Fact]
-    public void Normalize_ShouldMapConversationIdToContinueIntent()
+    public void Normalize_ShouldReturnUnavailable_WhenContinuationStateVersionIsMissing()
     {
         var input = JsonSerializer.Deserialize<HttpChatInput>(
             """
@@ -145,9 +145,8 @@ public sealed class ChatRunRequestNormalizerChatHistoryTests
             input,
             trustedScopeId: "trusted-scope");
 
-        result.Succeeded.Should().BeTrue();
-        result.Request!.ChatConversation.Should().BeEquivalentTo(
-            WorkflowChatConversationIntent.Continue("conversation-existing"));
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
     }
 
     [Fact]
