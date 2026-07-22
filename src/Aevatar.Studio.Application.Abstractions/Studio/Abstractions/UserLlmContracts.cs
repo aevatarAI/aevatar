@@ -100,6 +100,16 @@ public sealed record UserLlmOptionsView(
 /// Routable LLM option used by channel selection flows and internal preference resolution,
 /// not by the Console Settings endpoint contract.
 /// </summary>
+public enum UserLlmIdentityAuthority
+{
+    Unspecified = 0,
+    NyxIdUserServicesInventory = 1,
+}
+
+public sealed record UserLlmServiceIdentity(
+    UserLlmIdentityAuthority Authority,
+    string NyxIdUserServiceId);
+
 public sealed record UserLlmOption(
     string ServiceId,
     string ServiceSlug,
@@ -110,7 +120,8 @@ public sealed record UserLlmOption(
     string Status,
     string Source,
     bool Allowed,
-    string? Description);
+    string? Description,
+    UserLlmServiceIdentity? Identity = null);
 
 public sealed record UserLlmSetupHint(
     string SetupUrl,
@@ -144,7 +155,8 @@ public sealed record NyxIdLlmService(
     string Status,
     string Source,
     bool Allowed,
-    string? Description);
+    string? Description,
+    UserLlmServiceIdentity? Identity = null);
 
 public sealed record NyxIdLlmServicesResult(
     IReadOnlyList<NyxIdLlmService> Services,
