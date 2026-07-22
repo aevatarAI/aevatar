@@ -77,7 +77,9 @@ The JSON body contains only:
 }
 ```
 
-The interactive workflow bearer is not used for the chrono request. Under the validated P0 UserService policy, NyxID validates the agent key without forwarding it and injects a five-minute `llm:proxy` delegation token for chrono-sandbox. For P0, chrono-sandbox validates that token before sandbox creation and passes it to the one-shot Codex process only as request-local `NYXID_LLM_TOKEN` through execd's native environment map. Chrono-sandbox owns OpenSandbox, the immutable runner image, Codex provider configuration, resource and egress limits, output bounds, cancellation, and cleanup.
+The interactive workflow bearer is not used for the chrono request. Under the validated UserService policy, NyxID validates the agent key without forwarding it and injects a five-minute `llm:proxy` delegation token for chrono-sandbox. Chrono-sandbox validates that token before sandbox creation and passes it to the one-shot Codex process only as request-local `NYXID_LLM_TOKEN` through execd's native environment map. Per ADR-0044 (#2921), direct injection of this short-lived token is the decided credential model: there is no sandbox-side credential vault, no placeholder substitution, and no TLS-intercepting credential proxy. Chrono-sandbox owns OpenSandbox, the immutable runner image, Codex provider configuration, resource limits, output bounds, cancellation, and cleanup.
+
+The managed runtime is a gVisor tenant. The runner executes Codex with its inner sandbox disabled; escape isolation is the gVisor boundary, and there is no fail-closed Landlock preflight. Egress scoping is an IP-level Kubernetes NetworkPolicy owned by operations — coarser than an FQDN allow-list because the NyxID gateway sits behind a shared CDN range — with no egress sidecar. The sandbox create call requests no `networkPolicy` and no `credentialProxy`.
 
 Aevatar parses only the fixed terminal response containing success, bounded output, exit code, elapsed milliseconds, and a diagnostic ID. Proxy errors and malformed chrono responses map to stable typed failures. Raw upstream bodies and infrastructure exception text are never returned or logged.
 
@@ -102,10 +104,12 @@ The global `Enabled` option is the kill switch. It blocks managed execution, pro
 
 ## Ownership
 
-Aevatar owns workflow semantics, the per-user credential actor/projection, Vault storage, lifecycle endpoints, and the fixed NyxID proxy call. NyxID owns agent-key policy enforcement and delegation-token injection. Chrono-sandbox owns OpenSandbox and the runner execution boundary. Operations deploys and configures NyxID/chrono-sandbox but never receives users' agent keys.
+Aevatar owns workflow semantics, the per-user credential actor/projection, Vault storage, lifecycle endpoints, and the fixed NyxID proxy call. NyxID owns agent-key policy enforcement and delegation-token injection. Chrono-sandbox owns OpenSandbox and the runner execution boundary. Operations owns the gVisor tenant and its egress NetworkPolicy, deploys and configures NyxID/chrono-sandbox, but never receives users' agent keys.
 
 The immutable runner image remains built from `containers/codex-runner`, but it is consumed by chrono-sandbox rather than directly by Aevatar. Production rollout requirements are maintained in `docs/operations/2026-07-16-managed-codex-exec-rollout.md`.
 
 ## Deferred security boundary
 
-This internal-only design intentionally uses a persistent per-user invocation key and trusts mutable NyxID forwarding policy. Issue #2899 replaces the key with a short-lived caller capability, adds immutable or request-level caller-credential non-forwarding, and moves the delegated LLM token behind the sandbox credential boundary without changing workflow arguments.
+This internal-only design intentionally uses a persistent per-user invocation key and trusts mutable NyxID forwarding policy. Issue #2899's remaining scope replaces the key with a short-lived caller capability and adds immutable or request-level caller-credential non-forwarding, without changing workflow arguments.
+
+The delegation token deliberately lives in the sandbox environment for the run (ADR-0044, #2921). It is single-user, gateway-scoped, and expires in five minutes, so a fully compromised sandbox yields at most that user's LLM quota for that window. The formerly planned OpenSandbox Credential Vault substitution is rejected, not deferred: satisfying it forces the weaker-isolation runc runtime.

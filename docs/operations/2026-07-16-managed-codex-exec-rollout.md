@@ -8,7 +8,7 @@ Aevatar owns the typed tool contract, per-user credential actor/projection, `ISe
 
 NyxID owns agent-key scope enforcement and the five-minute `llm:proxy` delegation token injected into calls to `chrono-sandbox`.
 
-Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner image, fixed Codex command/profile, request-local delegation-token environment mapping, egress policy, resource limits, output bounds, cancellation, cleanup, and live execution proof. Operations deploys and configures NyxID and chrono-sandbox; it does not receive or store users' agent keys.
+Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner image, fixed Codex command, request-local delegation-token environment mapping, resource limits, output bounds, cancellation, cleanup, and live execution proof. Operations owns the gVisor tenant and its IP-level egress NetworkPolicy (ADR-0044), deploys and configures NyxID and chrono-sandbox, and does not receive or store users' agent keys.
 
 ## Operations prerequisites
 
@@ -20,8 +20,9 @@ Before enabling Aevatar, operations must confirm:
 - each canary user directly owns an active `chrono-sandbox` UserService
 - each canary user has a usable `chrono-llm-public` route
 - chrono-sandbox can pull the approved `containers/codex-runner` image digest
+- runner pods are scheduled under the `gvisor` RuntimeClass with Codex's inner sandbox disabled per ADR-0044; there is no Landlock preflight, and the sandbox create call requests no `networkPolicy` and no `credentialProxy`
 - chrono-sandbox validates the injected token before sandbox creation and passes it only as request-local `NYXID_LLM_TOKEN` through execd's native environment map
-- its OpenSandbox runtime has the required kernel, egress, quota, timeout, and cleanup controls
+- its OpenSandbox runtime has the required quota, PID, timeout, and cleanup controls, and operations has applied the IP-level egress NetworkPolicy for the codex tenant (coarser than an FQDN allow-list; the NyxID gateway sits behind a shared CDN range)
 - a chrono-owned end-to-end smoke returns exact `CODEX_EXEC_READY` and proves sandbox cleanup
 
 The runner image itself must contain no provider, NyxID, OpenSandbox control-plane, or user credential. The P0 delegation token must not be written to a shell wrapper, profile, workspace, persisted session, logs, or result. Aevatar no longer needs an OpenSandbox endpoint or API key.
