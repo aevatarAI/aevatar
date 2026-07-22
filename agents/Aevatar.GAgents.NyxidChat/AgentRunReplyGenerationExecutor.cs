@@ -774,7 +774,9 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
 
         try
         {
-            var config = await _userConfigQueryPort.GetAsync(scopeId, ct).ConfigureAwait(false);
+            var config = await _userConfigQueryPort
+                .GetAsync(UserConfigResourceKey.ForOwnerScope(scopeId), ct)
+                .ConfigureAwait(false);
             control = control with
             {
                 ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)

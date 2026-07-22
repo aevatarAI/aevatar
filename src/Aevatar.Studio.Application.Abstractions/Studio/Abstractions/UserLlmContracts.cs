@@ -4,7 +4,7 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// Internal write-use-case command shared by Console Settings and channel /model selection.
 /// </summary>
 public sealed record SaveUserLlmPreferenceCommand(
-    string? ServiceId = null,
+    string? UserServiceId = null,
     string? RouteValue = null,
     string? Model = null,
     string? PresetId = null,
@@ -13,6 +13,9 @@ public sealed record SaveUserLlmPreferenceCommand(
 public sealed record UserLlmSettingsView(
     string SavedRoute,
     string SavedRouteLabel,
+    string SavedRouteKind,
+    string? SavedUserServiceId,
+    string? SavedServiceSlug,
     string EffectiveRoute,
     string EffectiveRouteLabel,
     bool RouteFallbackActive,
@@ -31,7 +34,7 @@ public sealed record UserLlmRouteOption(
     string Status,
     bool Allowed,
     bool Ready,
-    string? ServiceId,
+    string? UserServiceId,
     string? ServiceSlug,
     string? Description);
 
@@ -111,7 +114,6 @@ public sealed record UserLlmServiceIdentity(
     string NyxIdUserServiceId);
 
 public sealed record UserLlmOption(
-    string ServiceId,
     string ServiceSlug,
     string DisplayName,
     string RouteValue,
@@ -136,7 +138,7 @@ public sealed record UserLlmPreset(
 public abstract record UserLlmPresetActivation;
 
 public sealed record UseExistingService(
-    string ServiceId,
+    string UserServiceId,
     string RouteValue,
     string? DefaultModel)
     : UserLlmPresetActivation;
@@ -146,7 +148,7 @@ public sealed record ProvisionThenUse(
     : UserLlmPresetActivation;
 
 public sealed record NyxIdLlmService(
-    string UserServiceId,
+    string? CatalogEntryId,
     string ServiceSlug,
     string DisplayName,
     string RouteValue,
@@ -184,13 +186,13 @@ public interface IUserLlmPreferenceService
 public interface IChannelUserLlmPreferencePort
 {
     Task<UserConfigSaveReceipt> SaveAsync(
-        string scopeId,
+        string bindingId,
         string? bearerToken,
         SaveUserLlmPreferenceCommand command,
         CancellationToken ct);
 
     Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-        string scopeId,
+        string bindingId,
         UserLlmOption option,
         string? model,
         bool preserveCurrentModelWhenMissing,

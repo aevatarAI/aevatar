@@ -252,7 +252,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>("owner-scope-1"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("owner-scope-1", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("owner-scope-1"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new StudioConfig(
                 DefaultModel: " owner-model ",
                 PreferredLlmRoute: " /api/v1/proxy/s/owner ",
@@ -315,7 +317,7 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.MaxToolRoundsOverride.Should().Be(3);
         AgentRunReplyStepMappers.LlmControlFromProto(state).Should().Be(generator.CapturedLlmControl);
         await userConfigQueryPort.DidNotReceive().GetAsync(
-            Arg.Any<string>(),
+            Arg.Any<UserConfigResourceKey>(),
             Arg.Any<CancellationToken>());
     }
 

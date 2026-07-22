@@ -74,7 +74,9 @@ public sealed class StudioOwnerLLMServiceIdentityResolver(
     private static string ResolveSingleServiceId(IEnumerable<NyxIdLlmService> services)
     {
         var serviceIds = services
-            .Select(static service => NormalizeOptional(service.UserServiceId))
+            .Where(static service =>
+                service.Identity?.Authority == UserLlmIdentityAuthority.NyxIdUserServicesInventory)
+            .Select(static service => NormalizeOptional(service.Identity?.NyxIdUserServiceId))
             .Where(static serviceId => serviceId != null)
             .Distinct(StringComparer.Ordinal)
             .ToArray();

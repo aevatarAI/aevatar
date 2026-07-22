@@ -32,16 +32,14 @@ public sealed class DefaultUserLlmSelectionService : IUserLlmSelectionService
 
     public async Task SetByServiceAsync(
         UserLlmSelectionContext context,
-        string serviceId,
+        string userServiceId,
         string? modelOverride,
         CancellationToken ct)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(serviceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
 
         var view = await _optionsService.GetOptionsAsync(ToQuery(context), ct).ConfigureAwait(false);
-        var option = UserLlmPreferenceWriteCore.FindOption(view.Available, serviceId.Trim());
-        if (option is null)
-            throw new InvalidOperationException($"LLM service '{serviceId}' is not available for this user.");
+        var option = UserLlmPreferenceWriteCore.RequireInventoryOption(view.Available, userServiceId);
 
         await SaveSelectedOptionAsync(
             context,

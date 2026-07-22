@@ -35,7 +35,7 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         var catalog = await _catalogClient.GetServicesAsync(query, accessToken, ct).ConfigureAwait(false);
         var available = catalog.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray();
         var currentConfig = await ResolveCurrentConfigAsync(query, ct).ConfigureAwait(false);
-        var current = ResolveCurrentOption(currentConfig?.PreferredLlmRoute, available);
+        var current = ResolveCurrentOption(currentConfig, available);
         var setupHint = available.Length == 0 ? catalog.SetupHint : null;
 
         return new UserLlmOptionsView(current, available, setupHint)
@@ -71,7 +71,9 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         StudioUserConfig config;
         try
         {
-            config = await queryPort.GetAsync(query.BindingId.Value.Trim(), ct).ConfigureAwait(false);
+            config = await queryPort
+                .GetAsync(UserConfigResourceKey.ForChannelBinding(query.BindingId.Value), ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -90,10 +92,23 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
     }
 
     private static UserLlmOption? ResolveCurrentOption(
-        string? routeValue,
+        StudioUserConfig? config,
         IReadOnlyList<UserLlmOption> available)
     {
-        var route = UserConfigLlmRoute.Normalize(routeValue);
+        var savedUserServiceId = config?.LlmSelection?.Kind == UserLlmSelectionKind.NyxIdUserService
+            ? config.LlmSelection.NyxIdUserServiceId
+            : null;
+        if (!string.IsNullOrWhiteSpace(savedUserServiceId))
+        {
+            return available.FirstOrDefault(option =>
+                option.Identity is
+                {
+                    Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                } identity &&
+                string.Equals(identity.NyxIdUserServiceId, savedUserServiceId, StringComparison.Ordinal));
+        }
+
+        var route = UserConfigLlmRoute.Normalize(config?.PreferredLlmRoute);
         if (string.IsNullOrWhiteSpace(route))
             return null;
 

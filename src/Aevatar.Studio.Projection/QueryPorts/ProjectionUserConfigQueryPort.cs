@@ -37,9 +37,6 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             UserConfigResourceKey.ForOwnerScope(_scopeResolver.Resolve()?.ScopeId ?? "default"),
             ct);
 
-    public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
-        GetAsync(UserConfigResourceKey.ForOwnerScope(NormalizeScopeId(scopeId)), ct);
-
     public async Task<UserConfig> GetAsync(
         UserConfigResourceKey resource,
         CancellationToken ct = default)
@@ -98,9 +95,6 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             selection.NyxIdUserServiceId,
             selection.ServiceSlugSnapshot);
     }
-
-    private static string NormalizeScopeId(string? scopeId) =>
-        string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
 
     private static string? NormalizeOptional(string? value)
     {

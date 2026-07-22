@@ -88,7 +88,7 @@ public sealed class NyxIdLlmServiceCatalogClientTests
             "still reports the legacy connections store as not connected");
         chrono.Status.Should().Be("ready");
         chrono.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
-        chrono.UserServiceId.Should().Be("us-chrono");
+        chrono.CatalogEntryId.Should().NotBe("us-chrono");
         chrono.Identity.Should().Be(new UserLlmServiceIdentity(
             UserLlmIdentityAuthority.NyxIdUserServicesInventory,
             "us-chrono"));
