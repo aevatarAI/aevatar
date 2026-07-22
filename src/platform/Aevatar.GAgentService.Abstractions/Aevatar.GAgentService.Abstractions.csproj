@@ -28,6 +28,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Protobuf Include="Protos/AgentProfiles/agent_profiles.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_endpoint.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_definition.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_artifact.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="$(MSBuildProjectDirectory)/../../workflow/Aevatar.Workflow.Abstractions" />

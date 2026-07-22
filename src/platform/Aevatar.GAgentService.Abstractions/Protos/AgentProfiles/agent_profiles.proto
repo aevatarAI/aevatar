@@ -1,0 +1,333 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.agentprofiles;
+
+option csharp_namespace = "Aevatar.GAgentService.Abstractions.AgentProfiles";
+
+message AgentProfileReference {
+  string owner_handle = 1;
+  string profile_slug = 2;
+}
+
+message AgentProfileUserOwnerIdentity {
+  string identity_provider = 1;
+  string subject_id = 2;
+}
+
+message AgentProfileSystemOwnerIdentity {
+  string platform_id = 1;
+}
+
+message AgentProfileOwnerIdentity {
+  oneof owner {
+    AgentProfileUserOwnerIdentity user = 1;
+    AgentProfileSystemOwnerIdentity system = 2;
+  }
+}
+
+message AgentProfileIdentity {
+  string profile_id = 1;
+  AgentProfileOwnerIdentity owner = 2;
+  string owning_scope_id = 3;
+  AgentProfileReference reference = 4;
+}
+
+enum AgentProfileSkillActivationMode {
+  AGENT_PROFILE_SKILL_ACTIVATION_MODE_UNSPECIFIED = 0;
+  AGENT_PROFILE_SKILL_ACTIVATION_MODE_ALWAYS = 1;
+  AGENT_PROFILE_SKILL_ACTIVATION_MODE_ROUTED = 2;
+  AGENT_PROFILE_SKILL_ACTIVATION_MODE_DEFAULT_FOR_UNMATCHED_TURN = 3;
+}
+
+message ExactOrnnSkillReference {
+  string skill_guid = 1;
+  string literal_version = 2;
+  string expected_name = 3;
+  string expected_publisher_id = 4;
+}
+
+message AgentProfileSkillBinding {
+  string binding_id = 1;
+  AgentProfileSkillActivationMode activation_mode = 2;
+  ExactOrnnSkillReference skill = 3;
+}
+
+enum AgentProfileToolPolicyMode {
+  AGENT_PROFILE_TOOL_POLICY_MODE_UNSPECIFIED = 0;
+  AGENT_PROFILE_TOOL_POLICY_MODE_INHERIT_ROUTE_MAXIMUM = 1;
+  AGENT_PROFILE_TOOL_POLICY_MODE_EXPLICIT_ALLOWLIST = 2;
+}
+
+message AgentProfileToolPolicy {
+  AgentProfileToolPolicyMode mode = 1;
+  repeated string tool_names = 2;
+  repeated string tool_set_refs = 3;
+}
+
+message AgentProfileContent {
+  string display_name = 1;
+  string purpose = 2;
+  string instructions = 3;
+  repeated AgentProfileSkillBinding skill_bindings = 4;
+  AgentProfileToolPolicy tool_policy = 5;
+}
+
+message AgentProfileNamedTextAsset {
+  string path = 1;
+  string content = 2;
+}
+
+message AgentProfileWorkflowAsset {
+  string workflow_id = 1;
+  repeated string workflow_yamls = 2;
+}
+
+message AgentProfileScriptAsset {
+  string script_id = 1;
+  repeated AgentProfileNamedTextAsset source_files = 2;
+  repeated AgentProfileNamedTextAsset proto_files = 3;
+  string entry_behavior_type_name = 4;
+}
+
+message ResolvedOrnnSkillPackage {
+  string skill_guid = 1;
+  string literal_version = 2;
+  string canonical_name = 3;
+  string publisher_id = 4;
+  string upstream_skill_hash = 5;
+  string description = 6;
+  string instructions = 7;
+  string arguments = 8;
+  string when_to_use = 9;
+  bool model_invocable = 10;
+  bool user_invocable = 11;
+  repeated string declared_tool_names = 12;
+  repeated AgentProfileWorkflowAsset workflows = 13;
+  repeated AgentProfileScriptAsset scripts = 14;
+  repeated AgentProfileNamedTextAsset references = 15;
+  repeated AgentProfileNamedTextAsset assets = 16;
+}
+
+message SealedAgentProfileSkill {
+  ExactOrnnSkillReference exact_reference = 1;
+  ResolvedOrnnSkillPackage package = 2;
+  bytes content_sha256 = 3;
+}
+
+message SealedAgentProfileSkillBinding {
+  string binding_id = 1;
+  AgentProfileSkillActivationMode activation_mode = 2;
+  SealedAgentProfileSkill skill = 3;
+}
+
+message AgentProfilePublishedSnapshot {
+  AgentProfileIdentity identity = 1;
+  string display_name = 2;
+  string purpose = 3;
+  string instructions = 4;
+  AgentProfileToolPolicy tool_policy = 5;
+  repeated SealedAgentProfileSkillBinding skill_bindings = 6;
+  int64 published_revision = 7;
+  bytes source_draft_sha256 = 8;
+  bytes snapshot_sha256 = 9;
+}
+
+message AgentProfileSafeDiagnostic {
+  string code = 1;
+  string message = 2;
+  string path = 3;
+}
+
+message AgentProfileOperationFact {
+  string operation_id = 1;
+  bytes input_sha256 = 2;
+  string command_id = 3;
+  string correlation_id = 4;
+}
+
+enum AgentProfileMutationStatus {
+  AGENT_PROFILE_MUTATION_STATUS_UNSPECIFIED = 0;
+  AGENT_PROFILE_MUTATION_STATUS_APPLIED = 1;
+  AGENT_PROFILE_MUTATION_STATUS_NO_CHANGE = 2;
+  AGENT_PROFILE_MUTATION_STATUS_REJECTED = 3;
+}
+
+message AgentProfileMutationOutcome {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileMutationStatus status = 2;
+  AgentProfileSafeDiagnostic diagnostic = 3;
+  int64 draft_revision = 4;
+  bytes draft_sha256 = 5;
+  int64 published_revision = 6;
+  bytes published_snapshot_sha256 = 7;
+}
+
+enum AgentProfileProvisioningStatus {
+  AGENT_PROFILE_PROVISIONING_STATUS_UNSPECIFIED = 0;
+  AGENT_PROFILE_PROVISIONING_STATUS_PROVISIONING = 1;
+  AGENT_PROFILE_PROVISIONING_STATUS_ACTIVE = 2;
+  AGENT_PROFILE_PROVISIONING_STATUS_FAILED = 3;
+}
+
+message AgentProfilePublishedSummary {
+  AgentProfileReference reference = 1;
+  string display_name = 2;
+  string purpose = 3;
+  int64 published_revision = 4;
+  bytes snapshot_sha256 = 5;
+}
+
+message CreateAgentProfileCommand {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileContent initial_content = 3;
+  string profile_actor_id = 4;
+}
+
+message InitializeAgentProfileCommand {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileContent initial_content = 3;
+  string namespace_actor_id = 4;
+}
+
+message AgentProfileInitializedContinuation {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  string profile_actor_id = 3;
+  int64 draft_revision = 4;
+  bytes draft_sha256 = 5;
+}
+
+message AgentProfileInitializationRejectedContinuation {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  string profile_actor_id = 3;
+  AgentProfileSafeDiagnostic diagnostic = 4;
+}
+
+message UpdateAgentProfileDraftCommand {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  int64 expected_authority_state_version = 3;
+  AgentProfileContent content = 4;
+}
+
+message UpsertAgentProfileSkillBindingCommand {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  int64 expected_authority_state_version = 3;
+  AgentProfileSkillBinding binding = 4;
+}
+
+message RemoveAgentProfileSkillBindingCommand {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  int64 expected_authority_state_version = 3;
+  string binding_id = 4;
+}
+
+message PublishAgentProfileCommand {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  int64 expected_authority_state_version = 3;
+  int64 expected_draft_revision = 4;
+  bytes expected_draft_sha256 = 5;
+  AgentProfilePublishedSnapshot snapshot = 6;
+}
+
+message ObserveAgentProfilePublishedSummaryCommand {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfilePublishedSummary summary = 3;
+}
+
+message AgentProfileProvisioningStartedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileContent initial_content = 3;
+  string profile_actor_id = 4;
+}
+
+message AgentProfileProvisioningCompletedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  string profile_actor_id = 3;
+}
+
+message AgentProfileProvisioningFailedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  string profile_actor_id = 3;
+  AgentProfileSafeDiagnostic diagnostic = 4;
+}
+
+message AgentProfilePublishedSummaryObservedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfilePublishedSummary summary = 3;
+}
+
+message AgentProfileInitializedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileContent initial_content = 3;
+  int64 draft_revision = 4;
+  bytes draft_sha256 = 5;
+  string namespace_actor_id = 6;
+}
+
+message AgentProfileDraftUpdatedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileContent content = 3;
+  int64 draft_revision = 4;
+  bytes draft_sha256 = 5;
+  AgentProfileMutationOutcome outcome = 6;
+}
+
+message AgentProfileSkillBindingUpsertedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileSkillBinding binding = 3;
+  AgentProfileContent content = 4;
+  int64 draft_revision = 5;
+  bytes draft_sha256 = 6;
+  AgentProfileMutationOutcome outcome = 7;
+}
+
+message AgentProfileSkillBindingRemovedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  string binding_id = 3;
+  AgentProfileContent content = 4;
+  int64 draft_revision = 5;
+  bytes draft_sha256 = 6;
+  AgentProfileMutationOutcome outcome = 7;
+}
+
+message AgentProfilePublishedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfilePublishedSnapshot snapshot = 3;
+  AgentProfileMutationOutcome outcome = 4;
+}
+
+message AgentProfilePublishNoChangeEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfilePublishedSummary summary = 3;
+  AgentProfileMutationOutcome outcome = 4;
+}
+
+message AgentProfileMutationNoChangeEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileMutationOutcome outcome = 3;
+}
+
+message AgentProfileMutationRejectedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  AgentProfileMutationOutcome outcome = 3;
+}
