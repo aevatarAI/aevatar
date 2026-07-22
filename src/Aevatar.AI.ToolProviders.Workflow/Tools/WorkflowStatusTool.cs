@@ -29,8 +29,8 @@ public sealed class WorkflowStatusTool : IAgentTool
     public string Description =>
         "Query the status of a workflow execution. " +
         "Shows completion status, steps, role replies, and timeline events. " +
-        "Use 'list' action to see available workflows, or provide a workflow_run_id " +
-        "to get a specific run's status.";
+        "Use 'list' action to see available workflows, 'catalog' for definitions, " +
+        "or provide a workflow_run_id to get a specific run's status.";
 
     // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):
     //   Old pattern: Workflow artifact/report/graph query surfaces still sit under actor inspection and actor-query enablement, even after documents were renamed as artifacts/exports.
@@ -41,12 +41,16 @@ public sealed class WorkflowStatusTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["status", "list", "timeline"],
-              "description": "Action: 'status' (default) run report, 'list' available workflows, 'timeline' execution timeline"
+              "enum": ["status", "list", "catalog", "detail", "timeline"],
+              "description": "Action: 'status' (default) run report, 'list' available workflows, 'catalog' definitions, 'detail' specific definition, 'timeline' execution timeline"
             },
             "workflow_run_id": {
               "type": "string",
               "description": "Workflow run ID (required for 'status' and 'timeline')"
+            },
+            "workflow_name": {
+              "type": "string",
+              "description": "Workflow name for 'detail' action"
             },
             "take": {
               "type": "integer",
@@ -73,10 +77,11 @@ public sealed class WorkflowStatusTool : IAgentTool
 
             return action switch
             {
-                "status" => await GetStatusAsync(args, ct),
                 "list" => ListWorkflows(),
+                "catalog" => await ListCatalogAsync(ct),
+                "detail" => await GetDetailAsync(args, ct),
                 "timeline" => await GetTimelineAsync(args, ct),
-                _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
+                _ => await GetStatusAsync(args, ct),
             };
         }
         catch (OperationCanceledException) { throw; }
@@ -90,6 +95,36 @@ public sealed class WorkflowStatusTool : IAgentTool
     {
         var workflows = _queryService.ListWorkflows();
         return JsonSerializer.Serialize(new { workflows, count = workflows.Count }, s_json);
+    }
+
+    private async Task<string> ListCatalogAsync(CancellationToken ct)
+    {
+        var catalog = await _queryService.ListWorkflowCatalogAsync(ct);
+        var items = catalog.Select(c => new
+        {
+            name = c.Name, description = c.Description, category = c.Category,
+            group = c.Group, source = c.Source, requires_llm = c.RequiresLlmProvider,
+        }).ToArray();
+        return JsonSerializer.Serialize(new { workflows = items, count = items.Length }, s_json);
+    }
+
+    private async Task<string> GetDetailAsync(ToolArgs args, CancellationToken ct)
+    {
+        var name = args.Str("workflow_name");
+        if (string.IsNullOrWhiteSpace(name))
+            return """{"error":"'workflow_name' is required for 'detail' action"}""";
+
+        var detail = await _queryService.GetWorkflowDetailAsync(name, ct);
+        if (detail == null)
+            return JsonSerializer.Serialize(new { error = $"Workflow '{name}' not found" });
+
+        return JsonSerializer.Serialize(new
+        {
+            name = detail.Catalog.Name, description = detail.Catalog.Description,
+            roles = detail.Definition.Roles.Select(r => new { id = r.Id, name = r.Name, provider = r.Provider, model = r.Model }).ToArray(),
+            steps = detail.Definition.Steps.Select(s => new { id = s.Id, type = s.Type, target_role = s.TargetRole, next = s.Next }).ToArray(),
+            edges = detail.Edges.Select(e => new { from = e.From, to = e.To, label = e.Label }).ToArray(),
+        }, s_json);
     }
 
     // Refactor (iter105/cluster-105-workflow-artifact-query-still-actor-shaped):

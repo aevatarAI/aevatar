@@ -195,9 +195,10 @@
 ### 2.5 Workflow 能力从执行到定义管理同时扩展
 
 - Workflow 侧除了已有运行时与 projection 改造，还新增了 definition 管理相关能力：
+  - `workflow_list_defs`
+  - `workflow_read_def`
   - `workflow_create_def`
   - `workflow_update_def`
-- Chat no longer exposes `workflow_list_defs`, `workflow_read_def`, or the `binding_bind.workflow_name` fallback: the local filesystem adapter has no caller scope, ownership grant, or explicit public-template visibility contract, so global names and YAML are denied by default.
 - 新增本地 workflow definition command adapter 与 YAML validator，说明 workflow 定义已不再只停留在执行期，而开始具备"编辑、校验、存取"的闭环。
 - `WorkflowExecutionKernel`、`ForEachModule`、`MapReduceModule`、`ParallelFanOutModule`、`BackpressureHelper` 等改动表明：
   - 并行 fan-out / map-reduce 的背压与幂等控制被加强

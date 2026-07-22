@@ -24,6 +24,47 @@ public sealed class LocalWorkflowDefinitionCommandAdapter : IWorkflowDefinitionC
         Directory.CreateDirectory(_workflowsDirectory);
     }
 
+    public Task<IReadOnlyList<WorkflowDefinitionSummary>> ListDefinitionsAsync(CancellationToken ct = default)
+    {
+        var results = new List<WorkflowDefinitionSummary>();
+        if (!Directory.Exists(_workflowsDirectory))
+            return Task.FromResult<IReadOnlyList<WorkflowDefinitionSummary>>(results);
+
+        foreach (var file in Directory.EnumerateFiles(_workflowsDirectory, "*.yaml"))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var yaml = File.ReadAllText(file);
+                var validation = _validator.Validate(yaml);
+                var name = validation.NormalizedName ?? Path.GetFileNameWithoutExtension(file);
+                results.Add(new WorkflowDefinitionSummary(
+                    name,
+                    validation.Description,
+                    validation.StepCount,
+                    validation.RoleCount,
+                    ComputeRevisionId(yaml)));
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to parse workflow file {File}", file);
+            }
+        }
+        return Task.FromResult<IReadOnlyList<WorkflowDefinitionSummary>>(results);
+    }
+
+    public Task<WorkflowDefinitionSnapshot?> GetDefinitionAsync(string workflowName, CancellationToken ct = default)
+    {
+        var path = ResolvePath(workflowName);
+        if (!File.Exists(path))
+            return Task.FromResult<WorkflowDefinitionSnapshot?>(null);
+
+        var yaml = File.ReadAllText(path);
+        var lastModified = File.GetLastWriteTimeUtc(path);
+        return Task.FromResult<WorkflowDefinitionSnapshot?>(
+            new WorkflowDefinitionSnapshot(workflowName, yaml, ComputeRevisionId(yaml), lastModified));
+    }
+
     public Task<WorkflowDefinitionCommandResult> CreateAsync(string workflowName, string yaml, CancellationToken ct = default)
     {
         var path = ResolvePath(workflowName);

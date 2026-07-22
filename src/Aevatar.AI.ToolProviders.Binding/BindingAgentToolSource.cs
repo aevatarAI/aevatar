@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.Binding.Ports;
 using Aevatar.AI.ToolProviders.Binding.Tools;
+using Aevatar.AI.ToolProviders.Workflow.Ports;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -19,6 +20,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
     private readonly IScopeBindingCommandPort? _commandPort;
     private readonly IScopeBindingQueryAdapter? _queryAdapter;
     private readonly IScopeBindingUnbindAdapter? _unbindAdapter;
+    private readonly IWorkflowDefinitionCommandAdapter? _definitionAdapter;
     private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
     private readonly IScopeWorkflowQueryPort? _scopeWorkflowQueryPort;
     private readonly ILogger _logger;
@@ -28,6 +30,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         IScopeBindingCommandPort? commandPort = null,
         IScopeBindingQueryAdapter? queryAdapter = null,
         IScopeBindingUnbindAdapter? unbindAdapter = null,
+        IWorkflowDefinitionCommandAdapter? definitionAdapter = null,
         IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null,
         IScopeWorkflowQueryPort? scopeWorkflowQueryPort = null,
         ILogger<BindingAgentToolSource>? logger = null)
@@ -36,6 +39,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
         _commandPort = commandPort;
         _queryAdapter = queryAdapter;
         _unbindAdapter = unbindAdapter;
+        _definitionAdapter = definitionAdapter;
         _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort;
         _logger = logger ?? NullLogger<BindingAgentToolSource>.Instance;
@@ -61,7 +65,7 @@ public sealed class BindingAgentToolSource : IAgentToolSource
 
         // Bind (requires command port)
         if (_commandPort != null)
-            tools.Add(new BindingBindTool(_commandPort));
+            tools.Add(new BindingBindTool(_commandPort, _definitionAdapter));
 
         // Unbind (requires unbind adapter)
         if (_unbindAdapter != null)
