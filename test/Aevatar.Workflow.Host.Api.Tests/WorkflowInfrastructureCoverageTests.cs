@@ -1223,6 +1223,7 @@ public sealed class WorkflowInfrastructureCoverageTests
                 workflow.AuthorityStateVersion == 7);
             var primitiveNames = document.Primitives.Select(primitive => primitive.Name).ToList();
             primitiveNames.Should().Contain("connector_call");
+            primitiveNames.Should().Contain("http_request");
             primitiveNames.Should().Contain("llm_call");
             primitiveNames.Should().Contain("tool_call");
             document.Primitives.Should().Contain(primitive =>

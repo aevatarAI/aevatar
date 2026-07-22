@@ -45,6 +45,42 @@ describe('studio document helpers', () => {
     );
   });
 
+  it('inserts http_request with direct HTTP defaults and no role binding', () => {
+    const document: StudioWorkflowDocument = {
+      name: 'workspace-demo',
+      roles: [{ id: 'assistant' }],
+      steps: [],
+    };
+
+    const result = insertStepByType(document, 'http_request', {
+      targetRoleId: 'assistant',
+    });
+
+    expect(result.nodeId).toBe('step:http_request_step');
+    expect(result.document.steps?.[0]).toEqual(
+      expect.objectContaining({
+        id: 'http_request_step',
+        type: 'http_request',
+        originalType: 'http_request',
+        targetRole: null,
+        parameters: {
+          authentication: { scheme: 'bearer', secret_ref: '' },
+          body: '',
+          body_mode: 'none',
+          headers: {},
+          max_request_bytes: '65536',
+          max_response_bytes: '65536',
+          method: 'GET',
+          on_error: 'fail',
+          query: {},
+          retry: '0',
+          timeout_ms: '30000',
+          url: '',
+        },
+      }),
+    );
+  });
+
   it('updates role fields and rewrites step role bindings', () => {
     const document: StudioWorkflowDocument = {
       name: 'workspace-demo',

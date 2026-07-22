@@ -218,19 +218,19 @@ public class WorkflowParserConfigurationTests
               - id: s_http_get
                 type: http_get
                 parameters:
-                  connector: demo_http
+                  url: https://api.example.com/get
               - id: s_http_post
                 type: http_post
                 parameters:
-                  connector: demo_http
+                  url: https://api.example.com/post
               - id: s_http_put
                 type: http_put
                 parameters:
-                  connector: demo_http
+                  url: https://api.example.com/put
               - id: s_http_delete
                 type: http_delete
                 parameters:
-                  connector: demo_http
+                  url: https://api.example.com/delete
               - id: s_cli
                 type: cli_call
                 parameters:
@@ -252,14 +252,23 @@ public class WorkflowParserConfigurationTests
 
         var workflow = new WorkflowParser().Parse(yaml);
 
-        workflow.Steps.First(s => s.Id == "s_http_get").Type.Should().Be("connector_call");
-        workflow.Steps.First(s => s.Id == "s_http_get").Parameters["method"].Should().Be("GET");
-        workflow.Steps.First(s => s.Id == "s_http_post").Type.Should().Be("connector_call");
-        workflow.Steps.First(s => s.Id == "s_http_post").Parameters["method"].Should().Be("POST");
-        workflow.Steps.First(s => s.Id == "s_http_put").Type.Should().Be("connector_call");
-        workflow.Steps.First(s => s.Id == "s_http_put").Parameters["method"].Should().Be("PUT");
-        workflow.Steps.First(s => s.Id == "s_http_delete").Type.Should().Be("connector_call");
-        workflow.Steps.First(s => s.Id == "s_http_delete").Parameters["method"].Should().Be("DELETE");
+        var httpGet = workflow.Steps.First(s => s.Id == "s_http_get");
+        httpGet.Type.Should().Be("http_request");
+        httpGet.Parameters["method"].Should().Be("GET");
+        httpGet.HttpRequestOptions.Should().NotBeNull();
+        httpGet.HttpRequestOptions!.Url.Should().Be("https://api.example.com/get");
+
+        var httpPost = workflow.Steps.First(s => s.Id == "s_http_post");
+        httpPost.Type.Should().Be("http_request");
+        httpPost.Parameters["method"].Should().Be("POST");
+
+        var httpPut = workflow.Steps.First(s => s.Id == "s_http_put");
+        httpPut.Type.Should().Be("http_request");
+        httpPut.Parameters["method"].Should().Be("PUT");
+
+        var httpDelete = workflow.Steps.First(s => s.Id == "s_http_delete");
+        httpDelete.Type.Should().Be("http_request");
+        httpDelete.Parameters["method"].Should().Be("DELETE");
 
         workflow.Steps.First(s => s.Id == "s_cli").Type.Should().Be("connector_call");
 

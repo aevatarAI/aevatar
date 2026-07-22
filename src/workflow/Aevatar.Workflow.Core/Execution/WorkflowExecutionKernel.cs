@@ -1913,6 +1913,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
         ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
         ApplyConnectorApprovalOptions(request, step.ConnectorApprovalOptions, state);
+        ApplyHttpRequestOptions(request, step.HttpRequestOptions, state);
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
@@ -2025,6 +2026,46 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     ? "workflow-step-required-approval"
                     : EvaluateOption(options.PolicyReason, state),
             };
+    }
+
+    private void ApplyHttpRequestOptions(
+        StepRequestEvent request,
+        HttpRequestOptionsDefinition? options,
+        WorkflowExecutionKernelState state)
+    {
+        if (options == null)
+            return;
+
+        var payload = new WorkflowHttpRequestOptions
+        {
+            Method = EvaluateOption(options.Method, state),
+            Url = EvaluateOption(options.Url, state),
+            BodyMode = EvaluateOption(options.BodyMode, state),
+            Body = EvaluateOption(options.Body, state),
+            TimeoutMs = options.TimeoutMs,
+            MaxRequestBytes = options.MaxRequestBytes,
+            MaxResponseBytes = options.MaxResponseBytes,
+            MaxRedirects = options.MaxRedirects,
+            AllowInsecureHttp = options.AllowInsecureHttp,
+        };
+
+        foreach (var (key, value) in options.Query)
+            payload.Query[EvaluateOption(key, state)] = EvaluateOption(value, state);
+        foreach (var (key, value) in options.Headers)
+            payload.Headers[EvaluateOption(key, state)] = EvaluateOption(value, state);
+
+        if (options.Authentication != null)
+        {
+            payload.Authentication = new WorkflowHttpRequestAuthentication
+            {
+                Scheme = EvaluateOption(options.Authentication.Scheme, state),
+                SecretRef = EvaluateOption(options.Authentication.SecretRef, state),
+                HeaderName = EvaluateOption(options.Authentication.HeaderName, state),
+                HeaderValuePrefix = EvaluateOption(options.Authentication.HeaderValuePrefix, state),
+            };
+        }
+
+        (request.StepParameters ??= new WorkflowStepParameters()).HttpRequest = payload;
     }
 
     private static string NormalizeOptionToken(string? value) =>

@@ -95,7 +95,7 @@ steps:
 
 Runtime semantics:
 
-- `tool_call`, `connector_call`, and `secure_connector_call` are the v1.1 side-effecting primitive set. When one declares `compensation`, dispatch first records a `PROVISIONAL` ledger entry before the external side-effect boundary.
+- `tool_call`, `http_request`, `connector_call`, and `secure_connector_call` are the v1.1 side-effecting primitive set. When one declares `compensation`, dispatch first records a `PROVISIONAL` ledger entry before the external side-effect boundary.
 - A successful completion confirms a matching provisional entry as `CONFIRMED` and fills captured output. If no dispatch event exists, legacy success still appends one `CONFIRMED` entry.
 - A callee-confirmed failure removes the matching provisional entry. Timeout, force-fail, or stop-to-failure paths set `failure_outcome = OUTCOME_UNCERTAIN`, keep the provisional entry, and let compensation treat undoing a not-applied side effect as a safe no-op.
 - If a later terminal failure occurs while the ledger is non-empty, compensation runs in reverse ledger order over both `PROVISIONAL` and `CONFIRMED` entries.
@@ -674,9 +674,60 @@ steps:
 
 ## 6. Integration 原语
 
-### `connector_call`（别名：`bridge_call`、`cli_call`、`mcp_call`、`http_get`、`http_post`、`http_put`、`http_delete`）
+### `http_request` (aliases: `http_get`, `http_post`, `http_put`, `http_delete`)
 
-- 作用：调用外部 connector（HTTP/CLI/MCP 等），支持重试和降级策略。
+- Purpose: send one direct outbound HTTP request from the workflow without looking up a named connector in `IConnectorRegistry`.
+- Common parameters: `method`, `url`, `query`, `headers`, `body_mode`, `body`, `authentication`, `timeout_ms`, `max_request_bytes`, `max_response_bytes`, `max_redirects`, `retry`, `on_error`.
+- Stable control semantics are typed as `WorkflowHttpRequestOptions` and `WorkflowHttpRequestAuthentication`, then carried through `WorkflowStepParameters.http_request`. They are not inferred from a generic connector name or arbitrary response JSON.
+- `http_request` side effects are at-least-once. The workflow actor uses the logical run id + step id + logical attempt to resolve and persist the typed `idempotency_key`; pending replay and physical retry reuse that key and the executor sends it as `Idempotency-Key` when non-empty. This key is for callee-side dedup only; the workflow engine does not promise exactly-once.
+- Authentication must use `authentication.secret_ref` or compatible `credential_ref` input names. Raw secret values and raw `Authorization` headers are rejected before dispatch. The raw secret is resolved through `ICredentialProvider` only at execution time, and secret-derived values are redacted from output, error text, annotations, read models, traces, and UI-visible metadata.
+- Supported authentication schemes are `bearer`, `header`, and `secret_ref_header`. `bearer` produces an HTTP `Authorization: Bearer <secret>` header inside the executor boundary; `header` and `secret_ref_header` require `authentication.header_name` and may use `authentication.header_value_prefix`.
+- HTTPS is required by default. `allow_insecure_http` is a development-only override and does not allow private network destinations.
+- The shared outbound HTTP executor validates every target and redirect before dispatch, disables automatic redirects, enforces a bounded redirect count, and validates DNS again at the socket connection boundary to defend against rebinding. It rejects loopback, link-local, multicast, cloud metadata style, private, and carrier-grade NAT destinations unless explicitly allowed by a named connector boundary, and applies timeout plus maximum request and response byte limits.
+- Failure semantics are explicit: DNS resolution failure, blocked egress target, redirect policy denial, authentication failure, timeout, non-success HTTP status, invalid URL, and response-size overflow all fail the step unless `on_error: continue` is set.
+- Direct `http_request` and named HTTP connectors share the same hardened `IOutboundHttpRequestExecutor`. The authoring models differ: `http_request` owns the concrete URL/method/options in workflow YAML, while a named HTTP connector owns reusable base URL, path allowlists, and centralized governance in `connectors.json` or a future Team Connector catalog.
+- Ergonomic aliases normalize to `http_request`:
+  - `http_get`: adds `method=GET` if the method is absent.
+  - `http_post`: adds `method=POST` if the method is absent.
+  - `http_put`: adds `method=PUT` if the method is absent.
+  - `http_delete`: adds `method=DELETE` if the method is absent.
+
+```yaml
+steps:
+  - id: fetch_snapshot
+    type: http_request
+    parameters:
+      method: GET
+      url: "https://api.example.com/q1000"
+      query:
+        source: "dashboard"
+      headers:
+        X-Api-Version: "1"
+      authentication:
+        scheme: bearer
+        secret_ref: q1000_bridge_token
+      timeout_ms: "20000"
+      max_request_bytes: "65536"
+      max_response_bytes: "65536"
+      max_redirects: "2"
+    retry:
+      max_attempts: 3
+      backoff: exponential
+      delay_ms: 1000
+```
+
+```yaml
+steps:
+  - id: get_health
+    type: http_get
+    parameters:
+      url: "https://api.example.com/healthz"
+      timeout_ms: "5000"
+```
+
+### `connector_call`（别名：`bridge_call`、`cli_call`、`mcp_call`）
+
+- 作用：调用外部 named connector（HTTP/CLI/MCP/host_callback 等），支持重试、命名治理、角色 allowlist 和降级策略。
 - 常用参数：`connector`、`operation`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
 - `connector_call` / `secure_connector_call` side effect 是 at-least-once。workflow actor 按 logical run id + step id + logical attempt 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 connector request。connector physical retry / pending replay 复用同一个 key；HTTP connector 会在 key 非空时发送 `Idempotency-Key` header，其他 connector 可按自身边界使用或忽略。该 key 不提供 engine-side dedup 或 exactly-once。
 - `approval.policy: required` enables actor-owned durable approval coordination before connector dispatch. The step must provide `approval.service_ref`, `approval.node_id`, `approval.http_verb`, `approval.resource`, `approval.permission_scope`, `approval.expiration_seconds`, and a stable `idempotency_key`. `approval.status_check_interval_seconds` defaults to 2.
@@ -684,10 +735,10 @@ steps:
 - Approval state survives restart through actor state plus durable self callbacks. NyxID submission or status uncertainty fails closed; an indeterminate submission is not retried because NyxID creates a unique request for each submission.
 - Approved execution revalidates the remote binding, action, digest, caller authority, scope, node, service, permission scope, and effective expiry immediately before dispatch. HTTP approvals also require the approved verb/resource to match the concrete connector method/path. Dispatch replay and connector retries reuse the same physical `idempotency_key`; approval success and connector success remain separate persisted facts.
 - The Actor persists a dispatch acknowledgement and keeps the exact pending `StepCompletedEvent` as protected Protobuf until publication succeeds. Restart recovery can therefore redispatch an unacknowledged invocation or republish an acknowledged external result without copying response content into audit facts or public read models.
-- Ergonomic 说明（统一归一化到 `connector_call`）：
-  - `http_get`/`http_post`/`http_put`/`http_delete`：自动补 `method=GET/POST/PUT/DELETE`（若未显式提供）。
-  - `mcp_call`：若只写 `tool` 且未写 `operation/action`，会自动补 `operation=<tool>`。
-  - `cli_call`：仅语义别名，不改变执行语义。
+- Ergonomic aliases:
+  - `mcp_call`: normalizes to `connector_call`; when only `tool` is present and `operation/action` is absent, parsing adds `operation=<tool>`.
+  - `cli_call`: normalizes to `connector_call`; execution still uses a named connector.
+  - `bridge_call`: normalizes to `connector_call`.
 
 ```yaml
 steps:
@@ -700,16 +751,6 @@ steps:
       retry: "2"
       timeout_ms: "10000"
       on_error: "continue"
-```
-
-```yaml
-steps:
-  - id: get_health
-    type: http_get
-    target_role: coordinator
-    parameters:
-      connector: "internal_http"
-      path: "/healthz"
 ```
 
 ```yaml

@@ -171,6 +171,7 @@ public sealed class WorkflowDocumentNormalizerTests
             Steps = [new StepModel { Id = "s1", Type = "http_get" }],
         };
         var result = _normalizer.NormalizeForExport(doc);
+        result.Steps[0].Type.Should().Be("http_request");
         result.Steps[0].Parameters.Should().ContainKey("method");
         result.Steps[0].Parameters["method"]!.ToWorkflowScalarString().Should().Be("GET");
     }

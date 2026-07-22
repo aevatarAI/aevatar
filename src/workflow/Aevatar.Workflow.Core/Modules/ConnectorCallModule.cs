@@ -2,12 +2,15 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.Connectors;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Abstractions.Credentials;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -23,15 +26,21 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
     private readonly IWorkflowConnectorResolver _connectorResolver;
     private readonly IWorkflowCallerAccessTokenProvider? _callerAccessTokenProvider;
     private readonly IRemoteToolApprovalPort? _remoteToolApprovalPort;
+    private readonly IOutboundHttpRequestExecutor? _outboundHttpRequestExecutor;
+    private readonly ICredentialProvider? _credentialProvider;
 
     public ConnectorCallModule(
         IWorkflowConnectorResolver connectorResolver,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null,
-        IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+        IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+        IOutboundHttpRequestExecutor? outboundHttpRequestExecutor = null,
+        ICredentialProvider? credentialProvider = null)
     {
         _connectorResolver = connectorResolver ?? throw new ArgumentNullException(nameof(connectorResolver));
         _callerAccessTokenProvider = callerAccessTokenProvider;
         _remoteToolApprovalPort = remoteToolApprovalPort;
+        _outboundHttpRequestExecutor = outboundHttpRequestExecutor;
+        _credentialProvider = credentialProvider;
     }
 
     public string Name => "connector_call";
@@ -117,9 +126,17 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         var request = envelope.Payload.Unpack<StepRequestEvent>();
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType);
         var isSecureStep = string.Equals(canonicalStepType, "secure_connector_call", StringComparison.OrdinalIgnoreCase);
+        var isHttpRequestStep = string.Equals(canonicalStepType, "http_request", StringComparison.OrdinalIgnoreCase);
         if (!string.Equals(canonicalStepType, "connector_call", StringComparison.OrdinalIgnoreCase) &&
-            !isSecureStep)
+            !isSecureStep &&
+            !isHttpRequestStep)
         {
+            return;
+        }
+
+        if (isHttpRequestStep)
+        {
+            await HandleHttpRequestAsync(envelope, request, ctx, ct);
             return;
         }
 
@@ -210,6 +227,63 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             isSecureStep,
             ctx,
             ct);
+    }
+
+    private async Task HandleHttpRequestAsync(
+        EventEnvelope envelope,
+        StepRequestEvent request,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var httpRequest = request.StepParameters?.HttpRequest;
+        if (httpRequest == null)
+        {
+            await PublishFailureAsync(ctx, request, "http_request missing typed parameters", ct);
+            return;
+        }
+
+        if (ContainsRawAuthorizationHeader(httpRequest.Headers))
+        {
+            await PublishFailureAsync(ctx, request, "http_request authentication must use authentication.secret_ref", ct);
+            return;
+        }
+
+        var retry = ParseBoundedInt(request.Parameters.GetValueOrDefault("retry", "0"), 0, 5, 0);
+        var timeoutMs = ParseBoundedInt(
+            httpRequest.TimeoutMs > 0 ? httpRequest.TimeoutMs.ToString() : request.Parameters.GetValueOrDefault("timeout_ms", "30000"),
+            100,
+            300_000,
+            30_000);
+        var attempts = Math.Max(1, retry + 1);
+        var runId = string.IsNullOrEmpty(request.RunId)
+            ? envelope.Propagation?.CorrelationId ?? string.Empty
+            : request.RunId;
+        var onErrorContinue = string.Equals(
+            request.Parameters.GetValueOrDefault("on_error", "fail"),
+            "continue",
+            StringComparison.OrdinalIgnoreCase);
+        var normalizedHttpRequest = httpRequest.Clone();
+        normalizedHttpRequest.TimeoutMs = timeoutMs;
+        var connector = new HttpRequestWorkflowConnector(
+            ResolveOutboundHttpRequestExecutor(ctx),
+            ResolveCredentialProvider(ctx),
+            normalizedHttpRequest);
+        await StartAttemptAsync(
+            envelope,
+            request,
+            runId,
+            "http_request",
+            BuildHttpRequestOperation(httpRequest),
+            connector,
+            attempt: 1,
+            attempts,
+            timeoutMs,
+            onErrorContinue,
+            isSecureStep: false,
+            ctx,
+            ct,
+            stepType: "http_request",
+            httpRequest: normalizedHttpRequest);
     }
 
     private async Task HandleTimeoutFiredAsync(
@@ -319,7 +393,12 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 "ConnectorCall: step={StepId} connector={Connector} attempt={Attempt}/{Attempts} failed: {Error}",
                 pending.StepId, pending.ConnectorName, pending.Attempt, pending.Attempts, errorText);
             var nextRequest = BuildRetryStepRequest(pending);
-            var connector = await _connectorResolver.ResolveAsync(ctx, pending.ConnectorName, ct);
+            var connector = string.Equals(pending.StepType, "http_request", StringComparison.OrdinalIgnoreCase)
+                ? new HttpRequestWorkflowConnector(
+                    ResolveOutboundHttpRequestExecutor(ctx),
+                    ResolveCredentialProvider(ctx),
+                    pending.HttpRequest?.Clone() ?? new WorkflowHttpRequestOptions())
+                : await _connectorResolver.ResolveAsync(ctx, pending.ConnectorName, ct);
             if (connector == null)
             {
                 await PublishPendingCompletionAsync(
@@ -347,7 +426,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                 pending.OnErrorContinue,
                 pending.SecureStep,
                 ctx,
-                ct);
+                ct,
+                stepType: pending.StepType,
+                httpRequest: pending.HttpRequest);
             return;
         }
 
@@ -376,7 +457,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         bool isSecureStep,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
-        string approvalActionId = "")
+        string approvalActionId = "",
+        string stepType = "",
+        WorkflowHttpRequestOptions? httpRequest = null)
     {
         var pending = await RegisterPendingAsync(
             envelope,
@@ -392,7 +475,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             isSecureStep,
             ctx,
             ct,
-            approvalActionId);
+            approvalActionId,
+            stepType,
+            httpRequest);
         var requestMetadata = new Dictionary<string, string>(StringComparer.Ordinal);
         WorkflowRequestMetadataRuntimeContextAccess.CopyRequestMetadata(ctx, requestMetadata);
         var connectorRequest = new ConnectorRequest
@@ -457,7 +542,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         bool isSecureStep,
         IWorkflowExecutionContext ctx,
         CancellationToken ct,
-        string approvalActionId = "")
+        string approvalActionId = "",
+        string stepType = "",
+        WorkflowHttpRequestOptions? httpRequest = null)
     {
         var operationId = BuildOperationId(runId, request.StepId, attempt, request.ExecutionId, ResolveOriginEnvelopeId(envelope));
         var callbackId = RuntimeCallbackKeyComposer.BuildCallbackId(
@@ -485,6 +572,10 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             IdempotencyKey = request.IdempotencyKey ?? string.Empty,
             ApprovalActionId = approvalActionId,
             RequestDispatched = false,
+            StepType = string.IsNullOrWhiteSpace(stepType)
+                ? WorkflowPrimitiveCatalog.ToCanonicalType(request.StepType)
+                : stepType,
+            HttpRequest = httpRequest?.Clone(),
         };
         if (string.IsNullOrWhiteSpace(approvalActionId))
         {
@@ -607,7 +698,9 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         var request = new StepRequestEvent
         {
             StepId = pending.StepId,
-            StepType = pending.SecureStep ? "secure_connector_call" : "connector_call",
+            StepType = string.IsNullOrWhiteSpace(pending.StepType)
+                ? (pending.SecureStep ? "secure_connector_call" : "connector_call")
+                : pending.StepType,
             RunId = pending.RunId,
             Input = pending.Input,
             ExecutionId = pending.ExecutionId,
@@ -615,7 +708,194 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         };
         foreach (var (key, value) in pending.Parameters)
             request.Parameters[key] = value;
+        if (string.Equals(pending.StepType, "http_request", StringComparison.OrdinalIgnoreCase) &&
+            pending.HttpRequest != null)
+        {
+            request.StepParameters = new WorkflowStepParameters
+            {
+                HttpRequest = pending.HttpRequest.Clone(),
+            };
+        }
         return request;
+    }
+
+    private ICredentialProvider? ResolveCredentialProvider(IWorkflowExecutionContext ctx) =>
+        _credentialProvider ?? ctx.Services.GetService<ICredentialProvider>();
+
+    private IOutboundHttpRequestExecutor ResolveOutboundHttpRequestExecutor(IWorkflowExecutionContext ctx) =>
+        _outboundHttpRequestExecutor ??
+        ctx.Services.GetService<IOutboundHttpRequestExecutor>() ??
+        new DefaultOutboundHttpRequestExecutor();
+
+    private static bool ContainsRawAuthorizationHeader(IEnumerable<KeyValuePair<string, string>> headers) =>
+        headers.Any(pair => string.Equals(pair.Key, "Authorization", StringComparison.OrdinalIgnoreCase));
+
+    private static string BuildHttpRequestOperation(WorkflowHttpRequestOptions options)
+    {
+        var method = string.IsNullOrWhiteSpace(options.Method) ? "GET" : options.Method.Trim().ToUpperInvariant();
+        if (!Uri.TryCreate(options.Url?.Trim(), UriKind.Absolute, out var uri))
+            return method;
+
+        return $"{method} {uri.GetLeftPart(UriPartial.Path)}";
+    }
+
+    private sealed class HttpRequestWorkflowConnector(
+        IOutboundHttpRequestExecutor executor,
+        ICredentialProvider? credentialProvider,
+        WorkflowHttpRequestOptions options) : IConnector
+    {
+        public string Name => "http_request";
+
+        public string Type => "http";
+
+        public async Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            var headers = CopyHeadersWithoutContentType(options.Headers, out var contentType);
+            if (ContainsRawAuthorizationHeader(headers))
+                return Failure("http_request authentication must use authentication.secret_ref");
+
+            var authorization = string.Empty;
+            var redactions = new List<string>();
+            var authResult = await ApplyAuthenticationAsync(headers, redactions, ct);
+            if (!authResult.Success)
+                return Failure(authResult.Error);
+            authorization = authResult.Authorization;
+
+            var response = await executor.ExecuteAsync(new OutboundHttpRequest
+            {
+                Method = options.Method,
+                Url = options.Url,
+                Query = options.Query.ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal),
+                Headers = headers,
+                Authorization = authorization,
+                IdempotencyKey = request.IdempotencyKey,
+                Body = ResolveBody(request.Payload),
+                ContentType = contentType,
+                TimeoutMs = options.TimeoutMs,
+                MaxRequestBytes = options.MaxRequestBytes,
+                MaxResponseBytes = options.MaxResponseBytes,
+                MaxRedirects = options.MaxRedirects,
+                AllowInsecureHttp = options.AllowInsecureHttp,
+                AllowPrivateNetwork = false,
+            }, ct);
+
+            return new ConnectorResponse
+            {
+                Success = response.Success,
+                Output = RedactSecrets(response.Output, redactions),
+                Error = RedactSecrets(response.Error, redactions),
+                Metadata = response.Metadata.ToDictionary(
+                    kv => kv.Key,
+                    kv => RedactSecrets(kv.Value, redactions),
+                    StringComparer.Ordinal),
+            };
+        }
+
+        private async Task<(bool Success, string Authorization, string Error)> ApplyAuthenticationAsync(
+            IDictionary<string, string> headers,
+            List<string> redactions,
+            CancellationToken ct)
+        {
+            var authentication = options.Authentication;
+            if (authentication == null ||
+                string.IsNullOrWhiteSpace(authentication.Scheme) &&
+                string.IsNullOrWhiteSpace(authentication.SecretRef))
+            {
+                return (true, string.Empty, string.Empty);
+            }
+
+            var scheme = string.IsNullOrWhiteSpace(authentication.Scheme)
+                ? "bearer"
+                : authentication.Scheme.Trim().ToLowerInvariant();
+            if (string.Equals(scheme, "none", StringComparison.Ordinal))
+                return (true, string.Empty, string.Empty);
+
+            if (string.IsNullOrWhiteSpace(authentication.SecretRef))
+                return (false, string.Empty, "http_request authentication requires authentication.secret_ref");
+            if (credentialProvider == null)
+                return (false, string.Empty, "http_request credential provider is unavailable");
+
+            var secret = await credentialProvider.ResolveAsync(authentication.SecretRef.Trim(), ct);
+            if (string.IsNullOrEmpty(secret))
+                return (false, string.Empty, "http_request authentication secret_ref could not be resolved");
+
+            redactions.Add(secret);
+            return scheme switch
+            {
+                "bearer" => (true, $"Bearer {secret}", string.Empty),
+                "header" or "secret_ref_header" => ApplyHeaderAuthentication(headers, authentication, secret),
+                _ => (false, string.Empty, $"unsupported http_request authentication scheme '{authentication.Scheme}'"),
+            };
+        }
+
+        private static (bool Success, string Authorization, string Error) ApplyHeaderAuthentication(
+            IDictionary<string, string> headers,
+            WorkflowHttpRequestAuthentication authentication,
+            string secret)
+        {
+            if (string.IsNullOrWhiteSpace(authentication.HeaderName))
+                return (false, string.Empty, "http_request header authentication requires authentication.header_name");
+
+            headers[authentication.HeaderName.Trim()] = string.Concat(
+                authentication.HeaderValuePrefix ?? string.Empty,
+                secret);
+            return (true, string.Empty, string.Empty);
+        }
+
+        private string ResolveBody(string inheritedPayload)
+        {
+            var mode = options.BodyMode?.Trim();
+            if (string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase))
+                return string.Empty;
+            if (string.Equals(mode, "input", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(mode, "inherit", StringComparison.OrdinalIgnoreCase))
+            {
+                return inheritedPayload ?? string.Empty;
+            }
+
+            return options.Body ?? string.Empty;
+        }
+
+        private static Dictionary<string, string> CopyHeadersWithoutContentType(
+            IEnumerable<KeyValuePair<string, string>> source,
+            out string contentType)
+        {
+            contentType = string.Empty;
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, value) in source)
+            {
+                if (string.IsNullOrWhiteSpace(key))
+                    continue;
+
+                if (string.Equals(key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                {
+                    contentType = value ?? string.Empty;
+                    continue;
+                }
+
+                headers[key.Trim()] = value ?? string.Empty;
+            }
+
+            return headers;
+        }
+
+        private static ConnectorResponse Failure(string error) =>
+            new()
+            {
+                Success = false,
+                Error = error,
+            };
+
+        private static string RedactSecrets(string value, IReadOnlyCollection<string> secrets)
+        {
+            if (string.IsNullOrEmpty(value) || secrets.Count == 0)
+                return value ?? string.Empty;
+
+            var redacted = value;
+            foreach (var secret in secrets.Where(secret => !string.IsNullOrEmpty(secret)))
+                redacted = redacted.Replace(secret, "[redacted]", StringComparison.Ordinal);
+            return redacted;
+        }
     }
 
     private static double ParseDuration(WorkflowConnectorAttemptCompletedEvent evt)

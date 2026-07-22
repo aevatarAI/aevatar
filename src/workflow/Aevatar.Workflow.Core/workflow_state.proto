@@ -623,6 +623,8 @@ message PendingConnectorCallState
   string idempotency_key = 17;
   string approval_action_id = 18;
   bool request_dispatched = 19;
+  string step_type = 20;
+  aevatar.workflow.WorkflowHttpRequestOptions http_request = 21;
 }
 
 message ConnectorCallProtectedParameter

@@ -268,6 +268,7 @@ roles:
 | **引擎** | N/A | `WorkflowExecutionKernel` | 按步骤顺序派发，收到完成事件后推进下一步或结束 |
 | **执行** | `llm_call` | `LLMCallModule` | 向目标 RoleGAgent 发 `ChatRequestEvent`，等回复转 `StepCompletedEvent` |
 | | `tool_call` | `ToolCallModule` | 调用已注册的 Agent 工具（MCP/Skills） |
+| | `http_request` | `ConnectorCallModule` | 执行 workflow-owned direct HTTP request，不要求 named connector lookup |
 | | `connector_call` | `ConnectorCallModule` | 按名称调用配置好的 HTTP/CLI/MCP/host_callback connector |
 | **并行** | `parallel` | `ParallelFanOutModule` | 拆 N 个子步骤并行发给不同 role，收齐后合并，可选触发 typed vote agreement |
 | **共识** | `vote` | `VoteAgreementModule` | 基于 typed candidate/rule/decision 做结构化 agreement 判定（`vote_consensus` 为别名） |
@@ -339,7 +340,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
   │
   ├── 对应模块处理 StepRequestEvent
   │     ├── LLMCallModule: 转 ChatRequestEvent → SendTo RoleGAgent → 等 TextMessageEndEvent → StepCompletedEvent
-  │     ├── ConnectorCallModule: 查 registry → 执行 connector → StepCompletedEvent
+  │     ├── ConnectorCallModule: `http_request` 走 typed direct HTTP；`connector_call` 查 registry → 执行 connector → StepCompletedEvent
   │     ├── ParallelFanOutModule: 拆子步骤 → 收齐合并 → 可选投票 → StepCompletedEvent
   │     └── ...其他模块同理
   │
@@ -360,7 +361,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, source? }
 
 ### Saga 补偿生命周期
 
-Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静态校验阶段会解析该目标，引用不存在的补偿步骤会被拒绝。运行时中，`tool_call`、`connector_call`、`secure_connector_call` 这三个 side-effecting primitive 在 dispatch 前会由 `WorkflowRunGAgent` 持久化 `CompensableStepDispatchedEvent`，先写入 `PROVISIONAL` ledger 项；其他 primitive 即使声明 compensation，也只在成功完成后按 legacy 路径写入 `CONFIRMED` ledger 项。`compensable_ledger` 归 `WorkflowRunGAgent` 持有，是 run actor 的权威状态。
+Workflow step 可以通过 `compensation` 声明一个已存在的 step id。静态校验阶段会解析该目标，引用不存在的补偿步骤会被拒绝。运行时中，`tool_call`、`http_request`、`connector_call`、`secure_connector_call` 这些 side-effecting primitive 在 dispatch 前会由 `WorkflowRunGAgent` 持久化 `CompensableStepDispatchedEvent`，先写入 `PROVISIONAL` ledger 项；其他 primitive 即使声明 compensation，也只在成功完成后按 legacy 路径写入 `CONFIRMED` ledger 项。`compensable_ledger` 归 `WorkflowRunGAgent` 持有，是 run actor 的权威状态。
 
 成功完成会把匹配的 `PROVISIONAL` ledger 项确认成 `CONFIRMED` 并补齐 captured output；没有 provisional 项的 legacy success 仍追加一条 `CONFIRMED` ledger。失败完成通过 typed `WorkflowStepFailureOutcome` 对账：`CALLEE_CONFIRMED`（含默认 `UNSPECIFIED`）删除匹配 provisional，表示 callee 已确认没有可补偿副作用；`OUTCOME_UNCERTAIN` 保留 provisional，timeout / force-fail / stop-to-failure 这类中断按“副作用可能已发生”处理。
 
@@ -497,9 +498,37 @@ services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyE
 
 ---
 
-## 六、Connector 机制
+## 六、Integration execution
 
-`connector_call` 把外部能力（HTTP / CLI / MCP）收敛到统一契约：
+`http_request` and named HTTP connectors share one hardened outbound HTTP executor, but their authoring contracts are intentionally different:
+
+- `http_request` is direct workflow-owned HTTP. The workflow stores typed URL, method, query, headers, body mode, authentication secret reference, timeout, redirect, request limit, and response limit fields in `WorkflowStepParameters.http_request`; it does not read `parameters.connector` and does not require host-local `connectors.json`.
+- `connector_call` is named connector lookup. The workflow stores a connector name plus operation parameters, then resolves the connector from `IConnectorRegistry` for reuse, role authorization, and centralized policy.
+
+### HTTP Request primitive
+
+`http_request` is handled by `ConnectorCallModule` through a small in-module adapter over `IOutboundHttpRequestExecutor`:
+
+| Component | Location |
+|-----------|----------|
+| Typed options | `Aevatar.Workflow.Abstractions/workflow_execution_messages.proto` (`WorkflowHttpRequestOptions`) |
+| Dispatch state | `Aevatar.Workflow.Core/workflow_state.proto` (`PendingConnectorCallState.http_request`) |
+| Runtime module | `Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs` |
+| HTTP executor contract | `Aevatar.Foundation.Abstractions/Connectors/OutboundHttpContracts.cs` |
+| Hardened executor | `Aevatar.Foundation.Core/Connectors/DefaultOutboundHttpRequestExecutor.cs` |
+
+Security and execution rules:
+
+- Raw `Authorization` headers in `headers` fail before dispatch. Authentication must use `authentication.secret_ref`.
+- `ICredentialProvider` resolves the secret only while the step is executing; raw secret material is not copied into YAML, actor state, read models, traces, annotations, or UI output.
+- The executor requires HTTPS unless the step explicitly sets development-only `allow_insecure_http`.
+- The executor rejects request bodies over `max_request_bytes` before dispatch and rejects response bodies over `max_response_bytes` while reading the response stream.
+- Direct HTTP disallows private-network destinations. The executor validates each target and redirect with DNS resolution, blocks loopback, link-local, multicast, private, carrier-grade NAT, and metadata-service style destinations, and enforces timeout, redirect, request-size, and response-size bounds.
+- Retry preserves the canonical step type `http_request` and the typed request options in `PendingConnectorCallState`; replay does not fall back to a named connector lookup.
+
+### Named connector mechanism
+
+`connector_call` 把命名外部能力（HTTP / CLI / MCP）收敛到统一契约：
 
 | 组件 | 位置 |
 |------|------|
@@ -510,9 +539,11 @@ services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyE
 
 ### 安全策略
 
-HTTP 和 CLI connector 都采用白名单：
+HTTP 和 CLI named connector 都采用白名单：
 - **HTTP**：`allowedMethods`、`allowedPaths`、`allowedInputKeys`
 - **CLI**：`allowedOperations`、`allowedInputKeys`
+
+Named HTTP connectors delegate transport to the same `IOutboundHttpRequestExecutor` used by direct `http_request`, after applying their own base URL, method/path allowlists, input-key policy, default headers, and connector-scoped authentication.
 
 ### 角色级授权
 

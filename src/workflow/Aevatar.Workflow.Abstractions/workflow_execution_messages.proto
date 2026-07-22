@@ -485,6 +485,31 @@ message WorkflowStepParameters
   WorkflowHumanApprovalOptions human_approval = 9;
   WorkflowExternalApprovalWaitOptions external_approval = 10;
   WorkflowConnectorApprovalOptions connector_approval = 11;
+  WorkflowHttpRequestOptions http_request = 12;
+}
+
+message WorkflowHttpRequestAuthentication
+{
+  string scheme = 1;
+  string secret_ref = 2;
+  string header_name = 3;
+  string header_value_prefix = 4;
+}
+
+message WorkflowHttpRequestOptions
+{
+  string method = 1;
+  string url = 2;
+  map<string, string> query = 3;
+  map<string, string> headers = 4;
+  string body_mode = 5;
+  string body = 6;
+  WorkflowHttpRequestAuthentication authentication = 7;
+  int32 timeout_ms = 8;
+  int32 max_response_bytes = 9;
+  int32 max_redirects = 10;
+  bool allow_insecure_http = 11;
+  int32 max_request_bytes = 12;
 }
 message StepRequestEvent
 {

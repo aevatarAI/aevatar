@@ -2,6 +2,7 @@ using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.EventSourcing;
+using Aevatar.Foundation.Core.Connectors;
 using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Execution;
@@ -28,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventModuleFactory<IWorkflowExecutionContext>, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
         services.TryAddSingleton<IWorkflowConnectorResolver, RegistryBackedWorkflowConnectorResolver>();
+        services.TryAddSingleton<IOutboundHttpRequestExecutor>(_ => new DefaultOutboundHttpRequestExecutor());
         services.TryAddSingleton<WorkflowStepTargetAgentResolver>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,

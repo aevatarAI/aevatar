@@ -18,6 +18,7 @@ owner: eanzhao
 - `IConnector` / `IConnectorRegistry` 是统一外部调用契约，定义在 `Aevatar.Foundation.Abstractions`。
 - Connector 的定义是中心化配置（`~/.aevatar/connectors.json`）。
 - Workflow 里通过 `type: connector_call` + `parameters.connector` 使用命名 Connector。
+- Direct workflow HTTP uses `type: http_request`; it does not read `parameters.connector`, does not consume `connectors.json`, and does not require `IConnectorRegistry`.
 - 角色（role）里的 `connectors` 是授权白名单，不是连接定义本身。
 
 简化链路：
@@ -116,6 +117,8 @@ Builder 当前行为：
 
 ## 3. Workflow/Agent 如何使用 Connector
 
+This section describes named connectors. Use `http_request` when one workflow owns the exact URL, method, headers, body, limits, and `authentication.secret_ref`. Use a named HTTP connector when the integration should be reusable, centrally governed, role-allowlisted, or constrained by connector-level base URL and path policy. Both paths delegate HTTP transport to `IOutboundHttpRequestExecutor`.
+
 ## 3.1 Workflow YAML 角色授权
 
 在 workflow `roles` 中：
@@ -140,7 +143,7 @@ roles:
 
 ## 3.2 connector_call 执行主链路
 
-`ConnectorCallModule` 处理 `StepRequestEvent`（`step_type == connector_call`）：
+`ConnectorCallModule` 处理 named connector `StepRequestEvent`（`step_type == connector_call` or `secure_connector_call`）：
 
 1. 读取参数：
    - `connector`（或 `connector_name`）必填
@@ -151,17 +154,23 @@ roles:
 4. 构造 `ConnectorRequest` 并调用 `IConnector.ExecuteAsync()`；
 5. 根据结果发布 `StepCompletedEvent`。
 
-Ergonomic 别名（解析期归一化到 `connector_call`）：
+Ergonomic aliases:
 
-- `http_get` / `http_post` / `http_put` / `http_delete`
-  - 归一化后仍是 `connector_call`
-  - 若未显式指定 `method`，会自动补 `GET/POST/PUT/DELETE`
 - `mcp_call`
-  - 归一化后仍是 `connector_call`
+  - Normalizes to `connector_call`.
   - 仅写 `tool` 且未写 `operation/action` 时，会自动补 `operation=<tool>`
 - `cli_call`
-  - 归一化后仍是 `connector_call`
+  - Normalizes to `connector_call`.
   - 不改变执行语义（仍通过命名 connector 调用）
+- `bridge_call`
+  - Normalizes to `connector_call`.
+
+HTTP convenience aliases are not named connector aliases anymore:
+
+- `http_get` / `http_post` / `http_put` / `http_delete`
+  - Normalize to `http_request`.
+  - Add `method=GET/POST/PUT/DELETE` if no method is explicitly configured.
+  - Require direct HTTP fields such as `url`; they do not require `parameters.connector`.
 
 容错语义：
 
@@ -233,13 +242,14 @@ Actor audit facts. Recovery then revokes both protected request and completion m
 
 ### HTTP Connector
 
-- 方法默认 `POST`，可由参数 `method` 覆盖；
+- Named HTTP Connector 方法默认 `POST`，可由参数 `method` 覆盖；
 - 路径优先 `operation`，其次参数 `path`；
 - 必须通过 `allowedMethods/allowedPaths` 白名单；
 - 强制校验目标 URL 不能逃逸 `baseUrl` 的 scheme/host/port；
 - 可用 `allowedInputKeys` 校验 payload JSON key；
 - 返回 HTTP 状态和耗时元数据。
 - `defaultHeaders` 只用于非 secret 静态 header。secret-bearing header 必须使用 `auth.type=secret_ref_header`，避免 raw secret 被复制进 connector config、workflow 参数、annotations、read model 或通用 bag。
+- Named HTTP Connector and direct `http_request` share the same hardened outbound transport executor. The connector adds reusable base URL, path, method, input-key, and connector credential policy before delegating transport, where request and response byte limits are enforced.
 
 `secret_ref_header` 配置形状：
 

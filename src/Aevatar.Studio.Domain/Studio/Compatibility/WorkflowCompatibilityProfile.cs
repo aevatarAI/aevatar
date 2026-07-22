@@ -102,7 +102,7 @@ public sealed class WorkflowCompatibilityProfile
     }
 
     public bool ShouldMirrorTimeoutMsToParameters(string? canonicalType) =>
-        ToCanonicalType(canonicalType) is "wait_signal" or "connector_call" or "llm_call" or "human_input" or "human_approval";
+        ToCanonicalType(canonicalType) is "wait_signal" or "http_request" or "connector_call" or "llm_call" or "human_input" or "human_approval";
 
     public string FormatRootFields() => WorkflowYamlRootSchema.FormatAuthorableRootFields();
 
@@ -163,6 +163,7 @@ public sealed class WorkflowCompatibilityProfile
             "workflow_call",
             "dynamic_workflow",
             "vote",
+            "http_request",
             "connector_call",
             "emit",
             "human_input",
@@ -223,10 +224,10 @@ public sealed class WorkflowCompatibilityProfile
                     ["bridge_call"] = "connector_call",
                     ["cli_call"] = "connector_call",
                     ["mcp_call"] = "connector_call",
-                    ["http_get"] = "connector_call",
-                    ["http_post"] = "connector_call",
-                    ["http_put"] = "connector_call",
-                    ["http_delete"] = "connector_call",
+                    ["http_get"] = "http_request",
+                    ["http_post"] = "http_request",
+                    ["http_put"] = "http_request",
+                    ["http_delete"] = "http_request",
                     ["vote_consensus"] = "vote",
                 }),
             CanonicalStepTypes = canonicalTypes,

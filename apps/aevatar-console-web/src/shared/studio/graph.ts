@@ -126,7 +126,7 @@ export const STUDIO_GRAPH_CATEGORIES: readonly StudioGraphPrimitiveCategory[] = 
     key: 'integration',
     label: 'Integration',
     color: '#10B981',
-    items: ['connector_call', 'emit'],
+    items: ['connector_call', 'http_request', 'emit'],
   },
   {
     key: 'human',
@@ -166,6 +166,7 @@ const STUDIO_STEP_TYPE_LABELS: Record<string, string> = {
   guard: 'Guard',
   human_approval: 'Human approval',
   human_input: 'Human input',
+  http_request: 'HTTP Request',
   llm_call: 'LLM call',
   map_reduce: 'Map reduce',
   parallel: 'Parallel',

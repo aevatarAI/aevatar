@@ -195,6 +195,7 @@ public sealed class WorkflowParser
             HumanApprovalOptions = MapHumanApprovalOptions(canonicalType, parameters),
             ExternalApprovalOptions = MapExternalApprovalOptions(canonicalType, parameters),
             ConnectorApprovalOptions = MapConnectorApprovalOptions(canonicalType, parameters),
+            HttpRequestOptions = MapHttpRequestOptions(canonicalType, parameters),
             Next = s.Next,
             Compensation = NormalizeText(s.Compensation),
             Children = s.Children?.Select(MapStep).ToList(),
@@ -952,7 +953,7 @@ public sealed class WorkflowParser
     }
 
     private static bool ShouldLiftTimeoutMsToParameter(string canonicalType) =>
-        canonicalType is "wait_signal" or "connector_call" or "secure_connector_call" or "llm_call" or "human_input" or "secure_input" or "human_approval";
+        canonicalType is "wait_signal" or "http_request" or "connector_call" or "secure_connector_call" or "llm_call" or "human_input" or "secure_input" or "human_approval";
 
     private static void LiftTransformOperationParameters(
         string canonicalType,
@@ -1094,6 +1095,156 @@ public sealed class WorkflowParser
             PolicyReason = GetParameter(parameters, "approval.policy_reason", "approval_policy_reason").Trim(),
         };
     }
+
+    private static HttpRequestOptionsDefinition? MapHttpRequestOptions(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (!string.Equals(canonicalType, "http_request", StringComparison.Ordinal))
+            return null;
+
+        var authentication = MapHttpRequestAuthentication(parameters);
+        return new HttpRequestOptionsDefinition
+        {
+            Method = GetParameter(parameters, "method").Trim(),
+            Url = GetParameter(parameters, "url").Trim(),
+            Query = ReadStringMapParameter(parameters, "query", "query.", StringComparer.Ordinal),
+            Headers = ReadStringMapParameter(parameters, "headers", "header.", StringComparer.OrdinalIgnoreCase),
+            BodyMode = GetParameter(parameters, "body_mode", "stdin_mode").Trim(),
+            Body = GetParameter(parameters, "body", "payload", "stdin_value"),
+            Authentication = authentication,
+            TimeoutMs = ParseNonNegativeInt(GetParameter(parameters, "timeout_ms")),
+            MaxRequestBytes = ParseNonNegativeInt(GetParameter(parameters, "max_request_bytes")),
+            MaxResponseBytes = ParseNonNegativeInt(GetParameter(parameters, "max_response_bytes")),
+            MaxRedirects = ParseNonNegativeInt(GetParameter(parameters, "max_redirects")),
+            AllowInsecureHttp = ParseBool(GetParameter(parameters, "allow_insecure_http")),
+        };
+    }
+
+    private static HttpRequestAuthenticationDefinition? MapHttpRequestAuthentication(
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        var auth = ReadObjectParameter(parameters, "authentication", "auth");
+        var scheme = ReadObjectString(auth, "scheme");
+        var secretRef = ReadObjectString(auth, "secret_ref", "secretRef", "credential_ref", "credentialRef");
+        var headerName = ReadObjectString(auth, "header_name", "headerName");
+        var headerValuePrefix = ReadObjectString(auth, "header_value_prefix", "headerValuePrefix");
+
+        scheme = FirstNonWhiteSpace(scheme, GetParameter(parameters, "authentication.scheme", "auth.scheme", "auth_scheme"));
+        secretRef = FirstNonWhiteSpace(
+            secretRef,
+            GetParameter(
+                parameters,
+                "authentication.secret_ref",
+                "auth.secret_ref",
+                "credential_ref",
+                "secret_ref"));
+        headerName = FirstNonWhiteSpace(
+            headerName,
+            GetParameter(parameters, "authentication.header_name", "auth.header_name", "auth_header_name"));
+        headerValuePrefix = FirstNonWhiteSpace(
+            headerValuePrefix,
+            GetParameter(
+                parameters,
+                "authentication.header_value_prefix",
+                "auth.header_value_prefix",
+                "auth_header_value_prefix"));
+
+        if (string.IsNullOrWhiteSpace(scheme) &&
+            string.IsNullOrWhiteSpace(secretRef) &&
+            string.IsNullOrWhiteSpace(headerName) &&
+            string.IsNullOrWhiteSpace(headerValuePrefix))
+        {
+            return null;
+        }
+
+        return new HttpRequestAuthenticationDefinition
+        {
+            Scheme = scheme.Trim(),
+            SecretRef = secretRef.Trim(),
+            HeaderName = headerName.Trim(),
+            HeaderValuePrefix = headerValuePrefix,
+        };
+    }
+
+    private static Dictionary<string, string> ReadStringMapParameter(
+        IReadOnlyDictionary<string, string> parameters,
+        string mapKey,
+        string prefix,
+        StringComparer comparer)
+    {
+        var values = new Dictionary<string, string>(comparer);
+        var map = ReadObjectParameter(parameters, mapKey);
+        foreach (var (key, value) in map)
+        {
+            if (!string.IsNullOrWhiteSpace(key))
+                values[key.Trim()] = value;
+        }
+
+        foreach (var (key, value) in parameters)
+        {
+            if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var mapEntryKey = key[prefix.Length..].Trim();
+            if (!string.IsNullOrWhiteSpace(mapEntryKey))
+                values[mapEntryKey] = value;
+        }
+
+        return values;
+    }
+
+    private static Dictionary<string, string> ReadObjectParameter(
+        IReadOnlyDictionary<string, string> parameters,
+        params string[] keys)
+    {
+        var raw = GetParameter(parameters, keys);
+        if (string.IsNullOrWhiteSpace(raw))
+            return [];
+
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return [];
+
+            var values = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+                values[property.Name] = JsonElementToString(property.Value);
+            return values;
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static string ReadObjectString(
+        IReadOnlyDictionary<string, string> values,
+        params string[] keys) =>
+        GetParameter(values, keys).Trim();
+
+    private static string FirstNonWhiteSpace(params string[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return string.Empty;
+    }
+
+    private static string JsonElementToString(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString() ?? string.Empty,
+            JsonValueKind.Number => element.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null => string.Empty,
+            _ => element.GetRawText(),
+        };
 
     private static int ParseNonNegativeInt(string? value) =>
         int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0

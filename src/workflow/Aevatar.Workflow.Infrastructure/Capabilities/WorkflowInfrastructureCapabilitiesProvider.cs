@@ -32,6 +32,23 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
             ["secure_connector_call"] = new(
                 "Invokes an external connector with secure payload handling.",
                 ConnectorParameterDescriptors()),
+            ["http_request"] = new(
+                "Sends a direct outbound HTTP request with typed URL, method, body, limits, and secret-backed authentication.",
+                [
+                    new PrimitiveParameterDescriptor("method", "string", true, "HTTP method.", DefaultValue: "GET", EnumValuesInput: ["GET", "POST", "PUT", "PATCH", "DELETE"]),
+                    new PrimitiveParameterDescriptor("url", "string", true, "Absolute HTTPS URL."),
+                    new PrimitiveParameterDescriptor("query", "object", false, "Query parameters appended to the URL."),
+                    new PrimitiveParameterDescriptor("headers", "object", false, "Non-authorization request headers."),
+                    new PrimitiveParameterDescriptor("body_mode", "string", false, "Body source: none, raw, or input.", DefaultValue: "none", EnumValuesInput: ["none", "raw", "input"]),
+                    new PrimitiveParameterDescriptor("body", "string", false, "Raw request body when body_mode is raw."),
+                    new PrimitiveParameterDescriptor("authentication", "object", false, "Authentication object containing scheme and secret_ref."),
+                    new PrimitiveParameterDescriptor("timeout_ms", "int", false, "Request timeout in milliseconds.", DefaultValue: "30000"),
+                    new PrimitiveParameterDescriptor("max_request_bytes", "int", false, "Maximum request body bytes.", DefaultValue: "65536"),
+                    new PrimitiveParameterDescriptor("max_response_bytes", "int", false, "Maximum response body bytes.", DefaultValue: "65536"),
+                    new PrimitiveParameterDescriptor("max_redirects", "int", false, "Maximum validated redirects.", DefaultValue: "3"),
+                    new PrimitiveParameterDescriptor("retry", "int", false, "Retry count for failed attempts.", DefaultValue: "0"),
+                    new PrimitiveParameterDescriptor("on_error", "string", false, "Failure behavior.", DefaultValue: "fail", EnumValuesInput: ["fail", "continue"]),
+                ]),
             ["llm_call"] = new(
                 "Runs an LLM role step and returns generated output.",
                 [
@@ -252,7 +269,7 @@ internal sealed class WorkflowInfrastructureCapabilitiesProvider : IWorkflowCapa
             "guard" or "conditional" or "switch" or "while" or "delay" or "wait_signal" or "checkpoint" or "workflow_loop" or "workflow_yaml_validate" => "control",
             "foreach" or "parallel" or "race" or "map_reduce" or "workflow_call" or "vote" or "dynamic_workflow" or "self_reschedule" => "composition",
             "llm_call" or "tool_call" or "evaluate" or "reflect" => "ai",
-            "connector_call" or "secure_connector_call" or "emit" => "integration",
+            "connector_call" or "secure_connector_call" or "http_request" or "emit" => "integration",
             "human_input" or "human_approval" or "secure_input" => "human",
             _ => "general",
         };

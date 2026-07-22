@@ -29,10 +29,10 @@ public static class WorkflowPrimitiveCatalog
             ["bridge_call"] = "connector_call",
             ["cli_call"] = "connector_call",
             ["mcp_call"] = "connector_call",
-            ["http_get"] = "connector_call",
-            ["http_post"] = "connector_call",
-            ["http_put"] = "connector_call",
-            ["http_delete"] = "connector_call",
+            ["http_get"] = "http_request",
+            ["http_post"] = "http_request",
+            ["http_put"] = "http_request",
+            ["http_delete"] = "http_request",
             ["secure_connector"] = "secure_connector_call",
             ["secret_input"] = "secure_input",
             ["vote_consensus"] = "vote",
@@ -49,7 +49,7 @@ public static class WorkflowPrimitiveCatalog
 
     private static readonly string[] CapabilityPrimitives =
     [
-        "llm_call", "tool_call", "connector_call", "secure_connector_call",
+        "llm_call", "tool_call", "http_request", "connector_call", "secure_connector_call",
         "evaluate", "reflect", "human_input", "secure_input",
         "human_approval", "wait_signal", "emit", "parallel", "race",
         "map_reduce", "vote", "foreach", "dynamic_workflow", "lease",
@@ -114,6 +114,7 @@ public static class WorkflowPrimitiveCatalog
         var canonical = ToCanonicalType(stepType);
         // Saga v1.1 provisions only the current external-dispatch primitives; future primitives can opt in explicitly.
         return string.Equals(canonical, "tool_call", StringComparison.Ordinal) ||
+               string.Equals(canonical, "http_request", StringComparison.Ordinal) ||
                string.Equals(canonical, "connector_call", StringComparison.Ordinal) ||
                string.Equals(canonical, "secure_connector_call", StringComparison.Ordinal);
     }

@@ -35,6 +35,8 @@
 
 Connector 是框架提供的**命名外部调用抽象**：在认知工作流（Cognitive Workflow）中，用统一契约调用外部能力，而不必在 YAML 里写死 URL、命令或 MCP 细节。
 
+This README documents named connectors loaded from `connectors.json`. Direct one-off workflow HTTP is modeled separately as `type: http_request`; it stores typed request options in workflow YAML, resolves `authentication.secret_ref` only at execution time, and does not consume `connectors.json` or `IConnectorRegistry`.
+
 - **使用场景**：由带 role 的 workflow（如 MAKER 分析）在某个步骤里按「名称」调用外部服务或本地命令。
 - **谁消费**：工作流步骤类型 `connector_call`。步骤里通过 `parameters.connector` 指定已配置的 connector 名称，运行时从 `IConnectorRegistry` 解析并执行。
 - **支持类型**：`http`（HTTP 接口）、`cli`（本地可执行命令）、`mcp`（MCP 服务器工具调用）。每种类型有独立的策略字段（如 baseUrl、command、allowedTools 等），用于安全与行为控制。
