@@ -2,77 +2,47 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserLlmPreferenceWriteCore
 {
-    public static UserConfig Reset(UserConfig current)
+    public static UserLlmOption RequireInventoryOption(
+        IReadOnlyList<UserLlmOption> options,
+        string userServiceId)
     {
-        ArgumentNullException.ThrowIfNull(current);
-        return current with
-        {
-            DefaultModel = string.Empty,
-            PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
-        };
+        ArgumentNullException.ThrowIfNull(options);
+        var id = userServiceId.Trim();
+        var matches = options.Where(option =>
+            option.Identity is
+            {
+                Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            } identity &&
+            string.Equals(identity.NyxIdUserServiceId, id, StringComparison.Ordinal)).ToArray();
+        return matches.Length == 1
+            ? matches[0]
+            : throw new InvalidOperationException($"LLM user service '{id}' is not selectable.");
     }
 
-    public static UserConfig MergeGatewayRoute(UserConfig current, string? model)
-    {
-        ArgumentNullException.ThrowIfNull(current);
-        return current with
-        {
-            PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
-            DefaultModel = NormalizeOptional(model) ?? current.DefaultModel,
-        };
-    }
+    public static UserLlmSelectionValue BuildGatewaySelection() => new(
+        UserLlmSelectionKind.Gateway,
+        UserConfigLlmRouteDefaults.Gateway,
+        string.Empty,
+        string.Empty);
 
-    public static UserConfig MergeSelectedOption(
-        UserConfig current,
-        UserLlmOption option,
-        string? model,
-        bool preserveCurrentModelWhenMissing)
+    public static UserLlmSelectionValue BuildInventorySelection(UserLlmOption option)
     {
-        ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(option);
         EnsureSelectable(option);
-
-        var resolvedDefaultModel = NormalizeModelForRoute(NormalizeOptional(model), option) ??
-                                   option.DefaultModel ??
-                                   (preserveCurrentModelWhenMissing ? current.DefaultModel : string.Empty);
-        return current with
+        var identity = option.Identity;
+        if (identity is not { Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory } ||
+            string.IsNullOrWhiteSpace(identity.NyxIdUserServiceId))
         {
-            PreferredLlmRoute = UserConfigLlmRoute.Normalize(option.RouteValue),
-            DefaultModel = resolvedDefaultModel,
-        };
-    }
+            throw new InvalidOperationException("LLM selection requires a NyxID inventory identity.");
+        }
 
-    public static UserConfig MergeRawModel(UserConfig current, string model)
-    {
-        ArgumentNullException.ThrowIfNull(current);
-        var normalized = model.Trim();
-        return string.IsNullOrWhiteSpace(normalized)
-            ? current with { DefaultModel = string.Empty }
-            : current with { DefaultModel = normalized };
-    }
-
-    public static UserLlmOption? FindOption(IReadOnlyList<UserLlmOption> options, string requested)
-    {
-        var normalized = requested.Trim();
-        var directMatches = options
-            .Where(option => string.Equals(option.ServiceId, normalized, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        var keyMatches = options
-            .Where(option => IsSameOption(option, normalized))
-            .ToArray();
-        var relatedMatches = directMatches.Length == 0
-            ? Array.Empty<UserLlmOption>()
-            : options
-                .Where(option => directMatches.Any(direct => ShareOptionKey(option, direct)))
-                .ToArray();
-        var matches = directMatches
-            .Concat(keyMatches)
-            .Concat(relatedMatches)
-            .Distinct()
-            .ToArray();
-
-        return ChoosePreferredOption(matches.Where(IsSelectable)) ??
-               ChoosePreferredOption(matches);
+        var slug = NormalizeOptional(option.ServiceSlug) ??
+                   throw new InvalidOperationException("LLM selection requires a service slug.");
+        return new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            $"/api/v1/proxy/s/{slug}",
+            identity.NyxIdUserServiceId.Trim(),
+            slug);
     }
 
     public static UserLlmOption? ChoosePreferredOption(IEnumerable<UserLlmOption> options)
@@ -113,33 +83,28 @@ public static class UserLlmPreferenceWriteCore
 
     public static string? NormalizeModelForRoute(string? model, UserLlmOption option)
     {
-        if (model is null)
+        var normalized = NormalizeOptional(model);
+        if (normalized is null)
             return null;
 
-        if (UserConfigLlmModel.TryParseRouteModel(model) is { } prefixed &&
-            IsSameOption(option, prefixed.RouteSlug))
+        if (UserConfigLlmModel.TryParseRouteModel(normalized) is not { } prefixed)
+            return normalized;
+
+        if (!string.Equals(option.ServiceSlug, prefixed.RouteSlug, StringComparison.OrdinalIgnoreCase))
         {
-            return prefixed.Model;
+            throw new InvalidOperationException(
+                $"LLM model route '{prefixed.RouteSlug}' does not match the selected user service.");
         }
 
-        return model;
+        return prefixed.Model;
     }
 
+    // Legacy read compatibility only. Authoritative writes use RequireInventoryOption.
     public static bool IsSameOption(UserLlmOption option, string requested) =>
-        string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(option.Identity?.NyxIdUserServiceId, requested, StringComparison.Ordinal) ||
         string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(option.RouteValue, UserConfigLlmRoute.Normalize(requested), StringComparison.OrdinalIgnoreCase);
-
-    private static bool ShareOptionKey(UserLlmOption left, UserLlmOption right) =>
-        EqualIfPresent(left.ServiceId, right.ServiceId) ||
-        EqualIfPresent(left.ServiceSlug, right.ServiceSlug) ||
-        EqualIfPresent(left.RouteValue, right.RouteValue);
-
-    private static bool EqualIfPresent(string? left, string? right) =>
-        !string.IsNullOrWhiteSpace(left) &&
-        !string.IsNullOrWhiteSpace(right) &&
-        string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static int OptionSelectabilityRank(UserLlmOption option)
     {

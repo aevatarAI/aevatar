@@ -52,7 +52,7 @@ public sealed class UserConfigControllerSettingsTests
         payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/openai-work");
         payload.DefaultModel.Should().Be("gpt-5.4");
         payload.RouteOptions.Should().Contain(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway);
-        payload.RouteOptions.Should().Contain(option => option.ServiceId == "us-openai" && option.Ready);
+        payload.RouteOptions.Should().Contain(option => option.UserServiceId == "us-openai" && option.Ready);
         payload.ModelGroupsByRoute.Should()
             .Contain(group => group.RouteValue == "/api/v1/proxy/s/openai-work" && group.Models.Contains("gpt-5.4"));
         httpHandler.Requests.Select(request => request.Path)
@@ -285,7 +285,7 @@ public sealed class UserConfigControllerSettingsTests
                 option.Status == UserLlmRouteStatus.Ready &&
                 option.Allowed &&
                 option.Ready &&
-                option.ServiceId == "us-openai");
+                option.UserServiceId == "us-openai");
         payload.Capabilities.CanSave.Should().BeTrue();
     }
 
@@ -437,7 +437,7 @@ public sealed class UserConfigControllerSettingsTests
         var chrono = payload.RouteOptions.Should()
             .ContainSingle(option => option.ServiceSlug == "chrono-llm")
             .Subject;
-        chrono.ServiceId.Should().Be("us-chrono");
+        chrono.UserServiceId.Should().Be("us-chrono");
         chrono.Source.Should().Be(UserLlmRouteSource.UserService);
         chrono.Ready.Should().BeTrue();
         payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
@@ -581,7 +581,7 @@ public sealed class UserConfigControllerSettingsTests
     }
 
     [Fact]
-    public async Task SaveLlmSettings_WithGatewayRoute_ShouldPersistEmptyRoute()
+    public async Task SaveLlmSettings_WithGatewayRoute_ShouldPersistCanonicalSelectionWithoutRead()
     {
         var commandService = new RecordingUserConfigCommandService();
         var queryPort = new StubUserConfigQueryPort(new UserConfig("old-model", "/api/v1/proxy/s/old"));
@@ -599,11 +599,29 @@ public sealed class UserConfigControllerSettingsTests
         var payload = accepted.Value.Should().BeOfType<UserConfigSaveReceiptResponse>().Subject;
         payload.Accepted.Should().BeTrue();
         payload.AckStage.Should().Be(UserConfigCommandAckStage.Accepted);
-        commandService.Saved.Should().ContainSingle()
-            .Which.Should().Match<UserConfig>(config =>
-                config.PreferredLlmRoute == UserConfigLlmRouteDefaults.Gateway &&
-                config.DefaultModel == "gpt-5.4");
-        queryPort.ReadCount.Should().Be(1);
+        var update = commandService.Updates.Should().ContainSingle().Which.Update;
+        update.LlmSelection.Should().Be(UserLlmPreferenceWriteCore.BuildGatewaySelection());
+        update.DefaultModel.Should().Be("gpt-5.4");
+        queryPort.ReadCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Save_WithRoutePrefixedDefaultModel_ShouldReturnBadRequest()
+    {
+        var commandService = new RecordingUserConfigCommandService();
+        var controller = CreateController(
+            current: new UserConfig(string.Empty),
+            commandService: commandService,
+            httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
+            bearerToken: "user-token-1");
+
+        var response = await controller.Save(
+            new UserConfigController.SaveUserConfigRequest(
+                DefaultModel: "chrono-llm-public/gpt-5.5"),
+            CancellationToken.None);
+
+        response.Result.Should().BeOfType<BadRequestObjectResult>();
+        commandService.Updates.Should().BeEmpty();
     }
 
     [Fact]
@@ -641,7 +659,7 @@ public sealed class UserConfigControllerSettingsTests
     }
 
     [Fact]
-    public async Task SaveLlmSettings_WhenRouteValueIsMissing_ShouldReturnBadRequest()
+    public async Task SaveLlmSettings_WhenCommandIsEmpty_ShouldReturnBadRequest()
     {
         var controller = CreateController(
             current: new UserConfig(string.Empty),
@@ -649,7 +667,7 @@ public sealed class UserConfigControllerSettingsTests
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsRequest(RouteValue: null, Model: "gpt-5.4"),
+            new SaveUserLlmSettingsRequest(),
             CancellationToken.None);
 
         response.Result.Should().BeOfType<BadRequestObjectResult>();
@@ -722,7 +740,8 @@ public sealed class UserConfigControllerSettingsTests
         var configService = new UserConfigService(
             queryPort,
             commandService,
-            new UserLlmPreferenceWriter(queryPort, commandService, catalogPort));
+            new UserLlmPreferenceWriter(commandService, catalogPort),
+            new StubScopeResolver("scope-alpha"));
         var controller = new UserConfigController(
             configService,
             settingsService,
@@ -795,7 +814,7 @@ public sealed class UserConfigControllerSettingsTests
             return Task.FromResult(config);
         }
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default)
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default)
         {
             ReadCount++;
             return Task.FromResult(config);
@@ -804,12 +823,15 @@ public sealed class UserConfigControllerSettingsTests
 
     private sealed class RecordingUserConfigCommandService : IUserConfigCommandService
     {
-        public List<UserConfig> Saved { get; } = [];
+        public List<(UserConfigResourceKey Resource, UserConfigUpdate Update)> Updates { get; } = [];
         public UserConfigSaveReceipt? NextReceipt { get; init; }
 
-        public Task<UserConfigSaveReceipt> SaveAsync(UserConfig config, CancellationToken ct = default)
+        public Task<UserConfigSaveReceipt> UpdateAsync(
+            UserConfigResourceKey resource,
+            UserConfigUpdate update,
+            CancellationToken ct = default)
         {
-            Saved.Add(config);
+            Updates.Add((resource, update));
             return Task.FromResult(NextReceipt ?? new UserConfigSaveReceipt(
                 Accepted: true,
                 CommandId: "command-1",
@@ -818,18 +840,13 @@ public sealed class UserConfigControllerSettingsTests
                 CorrelationId: "command-1",
                 AckedAtUtc: DateTimeOffset.UtcNow));
         }
+    }
 
-        public Task<UserConfigSaveReceipt> SaveAsync(string scopeId, UserConfig config, CancellationToken ct = default) =>
-            SaveAsync(config, ct);
+    private sealed class StubScopeResolver(string scopeId) : IAppScopeResolver
+    {
+        public AppScopeContext? Resolve(HttpContext? httpContext = null) => new(scopeId, "test");
 
-        public Task<UserConfigSaveReceipt> SaveGithubUsernameAsync(string scopeId, string githubUsername, CancellationToken ct = default) =>
-            Task.FromResult(new UserConfigSaveReceipt(
-                Accepted: true,
-                CommandId: "command-github",
-                AckStage: UserConfigCommandAckStage.Accepted,
-                ActorId: "user-config-default",
-                CorrelationId: "command-github",
-                AckedAtUtc: DateTimeOffset.UtcNow));
+        public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
     }
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory

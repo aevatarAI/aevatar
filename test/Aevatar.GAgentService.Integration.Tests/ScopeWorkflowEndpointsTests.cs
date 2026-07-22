@@ -1038,14 +1038,14 @@ public sealed class ScopeWorkflowEndpointsTests
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) => GetAsync(ct);
     }
 
     private sealed class ThrowingUserConfigStore : IUserConfigQueryPort
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => throw new HttpRequestException("config backend unavailable");
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) => GetAsync(ct);
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) => GetAsync(ct);
     }
 
     private sealed class FakeServiceCommandPort : IServiceCommandPort

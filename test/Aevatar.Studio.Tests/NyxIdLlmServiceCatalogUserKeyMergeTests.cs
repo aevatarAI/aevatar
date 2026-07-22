@@ -76,7 +76,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
     }
 
     private static NyxIdLlmService NotConnectedProxyService(string slug = "chrono-llm") => new(
-        UserServiceId: "svc-catalog-id",
+        CatalogEntryId: "svc-catalog-id",
         ServiceSlug: slug,
         DisplayName: "Chrono LLM",
         RouteValue: $"/api/v1/proxy/s/{slug}",
@@ -91,7 +91,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
         new(services, null);
 
     private static NyxIdLlmService Diagnostic(string diagnosticId, string slug) => new(
-        UserServiceId: diagnosticId,
+        CatalogEntryId: diagnosticId,
         ServiceSlug: slug,
         DisplayName: "Chrono LLM",
         RouteValue: $"/api/v1/proxy/s/{slug}",
@@ -151,7 +151,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
         var service = merged.Services.Should().ContainSingle().Subject;
         service.Allowed.Should().BeTrue();
         service.Status.Should().Be("ready");
-        service.UserServiceId.Should().Be("key-1");
+        service.CatalogEntryId.Should().Be("key-1");
         service.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
         service.Source.Should().Be(NyxIdLlmProviderSource.UserService);
     }
@@ -182,7 +182,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
         var service = merged.Services.Should().ContainSingle().Subject;
         service.ServiceSlug.Should().Be("chrono-llm");
         service.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm");
-        service.UserServiceId.Should().Be("key-1");
+        service.CatalogEntryId.Should().Be("key-1");
     }
 
     [Fact]
@@ -263,7 +263,7 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
 
         var service = merged.Services.Should().ContainSingle().Subject;
         service.Source.Should().Be(NyxIdLlmProviderSource.UserService);
-        service.UserServiceId.Should().Be("key-1");
+        service.CatalogEntryId.Should().Be("key-1");
     }
 
     [Fact]

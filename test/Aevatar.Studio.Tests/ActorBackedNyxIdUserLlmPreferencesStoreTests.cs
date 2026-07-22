@@ -38,8 +38,5 @@ public sealed class ActorBackedNyxIdUserLlmPreferencesStoreTests
 
         public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
             throw new NotSupportedException();
-
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
-            throw new NotSupportedException();
     }
 }

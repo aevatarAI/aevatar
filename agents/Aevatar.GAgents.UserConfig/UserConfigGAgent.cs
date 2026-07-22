@@ -20,13 +20,6 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
 
     public static string ProjectionKind => "user-config";
 
-
-    [EventHandler(EndpointName = "updateConfig")]
-    public async Task HandleConfigUpdated(UserConfigUpdatedEvent evt)
-    {
-        await PersistDomainEventAsync(evt);
-    }
-
     [EventHandler(EndpointName = "updateConfigDelta")]
     public async Task HandleUpdateConfig(UpdateUserConfigCommand command)
     {

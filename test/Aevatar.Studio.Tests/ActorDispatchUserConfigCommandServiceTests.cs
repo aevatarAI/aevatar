@@ -10,7 +10,7 @@ namespace Aevatar.Studio.Tests;
 public sealed class ActorDispatchUserConfigCommandServiceTests
 {
     [Fact]
-    public async Task SaveAsync_ShouldMapDispatchAdmissionReceiptAndEnvelope()
+    public async Task UpdateAsync_ShouldMapDispatchAdmissionReceiptAndEnvelope()
     {
         var ackedAt = new DateTimeOffset(2026, 5, 26, 10, 30, 0, TimeSpan.Zero);
         var bootstrap = new RecordingBootstrap();
@@ -22,16 +22,21 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
             CorrelationId: "corr-1"));
         var service = new ActorDispatchUserConfigCommandService(
             bootstrap,
-            dispatch,
-            new StubScopeResolver("scope-1"));
+            dispatch);
 
-        var receipt = await service.SaveAsync(new UserConfig(
+        var receipt = await service.UpdateAsync(
+            UserConfigResourceKey.ForOwnerScope("scope-1"),
+            new UserConfigUpdate(
             DefaultModel: "gpt-5.5",
-            PreferredLlmRoute: "/api/v1/proxy/s/openai-work",
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.NyxIdUserService,
+                "/api/v1/proxy/s/openai-work",
+                "us-openai",
+                "openai-work"),
             RuntimeMode: "remote",
-            LocalRuntimeBaseUrl: "http://127.0.0.1:5080/",
-            RemoteRuntimeBaseUrl: "https://runtime.example.com/",
-            GithubUsername: " octocat ",
+            LocalRuntimeBaseUrl: "http://127.0.0.1:5080",
+            RemoteRuntimeBaseUrl: "https://runtime.example.com",
+            GithubUsername: "octocat",
             MaxToolRounds: 7));
 
         bootstrap.EnsuredActorIds.Should().ContainSingle().Which.Should().Be("user-config-scope-1");
@@ -40,11 +45,12 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
         dispatched.ActorId.Should().Be("user-config-scope-1");
         dispatched.Envelope.Route.Direct.TargetActorId.Should().Be("user-config-scope-1");
         dispatched.Envelope.Route.PublisherActorId.Should().Be("aevatar.studio.projection.user-config");
-        dispatched.Envelope.Payload.Is(UserConfigUpdatedEvent.Descriptor).Should().BeTrue();
+        dispatched.Envelope.Payload.Is(UpdateUserConfigCommand.Descriptor).Should().BeTrue();
 
-        var payload = dispatched.Envelope.Payload.Unpack<UserConfigUpdatedEvent>();
+        var payload = dispatched.Envelope.Payload.Unpack<UpdateUserConfigCommand>();
         payload.DefaultModel.Should().Be("gpt-5.5");
-        payload.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.LlmSelection.RouteValue.Should().Be("/api/v1/proxy/s/openai-work");
+        payload.LlmSelection.NyxIdUserServiceId.Should().Be("us-openai");
         payload.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
         payload.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:5080");
         payload.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example.com");
@@ -60,7 +66,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     }
 
     [Fact]
-    public async Task SaveAsync_WhenDispatchAdmissionIsNotAccepted_ShouldReturnRejectedReceipt()
+    public async Task UpdateAsync_WhenDispatchAdmissionIsNotAccepted_ShouldReturnRejectedReceipt()
     {
         var ackedAt = new DateTimeOffset(2026, 5, 26, 12, 0, 0, TimeSpan.Zero);
         var service = new ActorDispatchUserConfigCommandService(
@@ -70,10 +76,11 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
                 CommandId: "rejected-command",
                 AckedAt: ackedAt,
                 ActorId: "user-config-scope-1",
-                CorrelationId: "corr-1")),
-            new StubScopeResolver("scope-1"));
+                CorrelationId: "corr-1")));
 
-        var receipt = await service.SaveAsync(new UserConfig(DefaultModel: "gpt-5.5"));
+        var receipt = await service.UpdateAsync(
+            UserConfigResourceKey.ForOwnerScope("scope-1"),
+            new UserConfigUpdate(DefaultModel: "gpt-5.5"));
 
         receipt.Accepted.Should().BeFalse();
         receipt.CommandId.Should().Be("rejected-command");
@@ -124,7 +131,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
     }
 
     private static ActorDispatchUserConfigCommandService CreateService(RecordingDispatchPort dispatch) =>
-        new(new RecordingBootstrap(), dispatch, new StubScopeResolver("scope-alpha"));
+        new(new RecordingBootstrap(), dispatch);
 
     private sealed class RecordingBootstrap : IStudioActorBootstrap
     {

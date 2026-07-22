@@ -21,24 +21,24 @@ internal sealed class StudioUserConfigOwnerLlmConfigSource : IOwnerLlmConfigSour
 
     public async Task<OwnerLlmConfig> GetForScopeAsync(string scopeId, CancellationToken ct = default)
     {
-        var config = await _queryPort.GetAsync(scopeId, ct);
+        var config = await _queryPort.GetAsync(UserConfigResourceKey.ForOwnerScope(scopeId), ct);
         if (config is null)
             return OwnerLlmConfig.Empty;
 
-        // ProjectionUserConfigQueryPort fills `PreferredLlmRoute` with `UserConfigLlmRouteDefaults.Gateway`
-        // when the user has no saved route or explicitly chose the gateway. Today that sentinel
-        // is empty-string, so the applier's null-or-whitespace guard already filters it out, but
-        // routing through `UserConfigLlmRoute.Normalize` here makes the contract explicit and
-        // future-proof: any "use the default gateway" sentinel — `""` / `"auto"` / `"gateway"`
-        // / invalid URI — collapses to `null`, the applier leaves `NyxIdRoutePreference` unset,
-        // and the LLM provider's compile-time gateway path takes over without any sentinel
-        // value leaking into outbound metadata. (Codex flagged this as a future-bug risk on
-        // PR #509 — the normalization is the explicit fix.)
+        // OwnerLlmConfig uses null to leave the provider's default gateway route unpinned.
+        // Normalize first so all gateway aliases and invalid external routes collapse to the
+        // canonical gateway value, then translate that value to the AI-layer null sentinel.
         var normalizedRoute = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute);
+        var preferredRoute = string.Equals(
+            normalizedRoute,
+            UserConfigLlmRouteDefaults.Gateway,
+            StringComparison.OrdinalIgnoreCase)
+            ? null
+            : NormalizeOptional(normalizedRoute);
 
         return new OwnerLlmConfig(
             DefaultModel: NormalizeOptional(config.DefaultModel),
-            PreferredLlmRoute: NormalizeOptional(normalizedRoute),
+            PreferredLlmRoute: preferredRoute,
             MaxToolRounds: config.MaxToolRounds);
     }
 

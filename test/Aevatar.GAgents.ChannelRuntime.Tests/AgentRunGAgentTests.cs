@@ -1319,7 +1319,9 @@ public sealed class AgentRunGAgentTests
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>("scope-bot-owner"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("scope-bot-owner"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
                 DefaultModel: "gpt-4o-bot-owner",
                 PreferredLlmRoute: "/api/v1/proxy/s/anthropic-via-bot-owner",
@@ -1715,7 +1717,9 @@ public sealed class AgentRunGAgentTests
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-bot", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>("scope-bot-owner"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("scope-bot-owner"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
                 DefaultModel: "owner-model",
                 PreferredLlmRoute: "/api/v1/proxy/s/owner",
@@ -3290,7 +3294,9 @@ public sealed class AgentRunGAgentTests
             .Returns(Task.FromResult<string?>("scope-bot-owner"));
 
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("scope-bot-owner", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("scope-bot-owner"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new Aevatar.Studio.Application.Studio.Abstractions.UserConfig(
                 DefaultModel: "gpt-4o-bot-owner",
                 PreferredLlmRoute: "/api/v1/proxy/s/anthropic-via-bot-owner",
@@ -4094,7 +4100,9 @@ public sealed class AgentRunGAgentTests
                     var scopeId = await _scopeResolver.ResolveScopeIdByApiKeyAsync(apiKeyId, ct);
                     if (!string.IsNullOrWhiteSpace(scopeId))
                     {
-                        var config = await _userConfigQueryPort.GetAsync(scopeId, ct);
+                        var config = await _userConfigQueryPort.GetAsync(
+                            UserConfigResourceKey.ForOwnerScope(scopeId),
+                            ct);
                         control = control with
                         {
                             ModelOverride = string.IsNullOrWhiteSpace(config.DefaultModel)

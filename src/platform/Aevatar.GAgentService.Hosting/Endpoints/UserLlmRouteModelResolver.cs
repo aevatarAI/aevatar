@@ -45,7 +45,10 @@ internal static class UserLlmRouteModelResolver
     }
 
     private static bool IsSameService(NyxIdLlmService service, string requested) =>
-        string.Equals(service.UserServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+        service.Identity is
+        {
+            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+        } identity && string.Equals(identity.NyxIdUserServiceId, requested, StringComparison.Ordinal) ||
         string.Equals(service.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(service.DisplayName, requested, StringComparison.OrdinalIgnoreCase) ||
         string.Equals(service.RouteValue, UserConfigLlmRoute.Normalize(requested), StringComparison.OrdinalIgnoreCase);

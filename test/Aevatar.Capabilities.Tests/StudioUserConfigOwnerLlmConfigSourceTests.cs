@@ -109,7 +109,7 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) =>
             Task.FromResult(config);
     }
 
@@ -117,7 +117,7 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
     {
         public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult<UserConfig>(null!);
 
-        public Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) =>
             Task.FromResult<UserConfig>(null!);
     }
 }

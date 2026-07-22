@@ -30,13 +30,17 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         var defaultModel = config.DefaultModel?.Trim() ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(bearerToken))
-            return _viewBuilder.BuildUnavailable(savedRoute, defaultModel);
+            return _viewBuilder.BuildUnavailable(config.LlmSelection, savedRoute, defaultModel);
 
         try
         {
             var result = await _catalogPort.GetServicesAsync(bearerToken, ct).ConfigureAwait(false);
-            (savedRoute, defaultModel) = ResolveLegacyPrefixedModel(result, savedRoute, defaultModel);
-            return _viewBuilder.BuildAvailable(result, savedRoute, defaultModel);
+            (savedRoute, defaultModel) = ResolveLegacyPrefixedModel(
+                result,
+                config.LlmSelection,
+                savedRoute,
+                defaultModel);
+            return _viewBuilder.BuildAvailable(result, config.LlmSelection, savedRoute, defaultModel);
         }
         catch (OperationCanceledException)
         {
@@ -44,16 +48,18 @@ public sealed class UserLlmPreferenceService : IUserLlmPreferenceService
         }
         catch
         {
-            return _viewBuilder.BuildUnavailable(savedRoute, defaultModel);
+            return _viewBuilder.BuildUnavailable(config.LlmSelection, savedRoute, defaultModel);
         }
     }
 
     private static (string SavedRoute, string DefaultModel) ResolveLegacyPrefixedModel(
         NyxIdLlmServicesResult result,
+        UserLlmSelectionValue? selection,
         string savedRoute,
         string defaultModel)
     {
-        if (!string.IsNullOrWhiteSpace(savedRoute) ||
+        if (selection is not null ||
+            !string.Equals(savedRoute, UserConfigLlmRouteDefaults.Gateway, StringComparison.OrdinalIgnoreCase) ||
             UserConfigLlmModel.TryParseRouteModel(defaultModel) is not { } prefixed)
         {
             return (savedRoute, defaultModel);

@@ -95,7 +95,7 @@ public static class NyxIdLlmServiceCatalogParser
         var diagnostic = diagnostics.FirstOrDefault(candidate =>
             string.Equals(candidate.ServiceSlug, inventoryService.Slug, StringComparison.OrdinalIgnoreCase));
         return new NyxIdLlmService(
-            UserServiceId: inventoryService.Id,
+            CatalogEntryId: diagnostic?.CatalogEntryId,
             ServiceSlug: inventoryService.Slug,
             DisplayName: FirstNonEmpty(
                 inventoryService.Label,
@@ -162,13 +162,20 @@ public static class NyxIdLlmServiceCatalogParser
     {
         using var document = ParseSuccessDocument(response);
         var root = document.RootElement;
-        if (root.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(root, "service") is { } service)
-        {
-            return ParseService(service);
-        }
+        var parsed = root.ValueKind == JsonValueKind.Object &&
+            TryGetProperty(root, "service") is { } service
+            ? ParseService(service)
+            : ParseService(root);
+        var userServiceId = parsed.CatalogEntryId ??
+                            throw new InvalidOperationException(
+                                "NyxID provisioned LLM service did not include a user service ID.");
 
-        return ParseService(root);
+        return parsed with
+        {
+            Identity = new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                userServiceId),
+        };
     }
 
     private static IEnumerable<JsonElement> EnumerateProxyServiceEntries(JsonElement root)
@@ -238,7 +245,7 @@ public static class NyxIdLlmServiceCatalogParser
         var allowed = string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase) &&
                       ReadAllowedOverride(element) != false;
         return new NyxIdLlmService(
-            UserServiceId: ReadOptionalString(element, "id") ?? slug,
+            CatalogEntryId: ReadOptionalString(element, "id") ?? slug,
             ServiceSlug: slug.Trim(),
             DisplayName: displayName.Trim(),
             RouteValue: routeValue,
@@ -331,7 +338,7 @@ public static class NyxIdLlmServiceCatalogParser
         var explicitAllowed = ReadAllowedOverride(element);
         var models = ReadStringArray(element, "models", "available_models", "availableModels");
         return new NyxIdLlmService(
-            UserServiceId: ReadOptionalString(
+            CatalogEntryId: ReadOptionalString(
                     element,
                     "user_service_id",
                     "userServiceId",
@@ -410,7 +417,7 @@ public static class NyxIdLlmServiceCatalogParser
             var routeValue = ResolveLegacyRouteValue(provider, slug);
 
             services.Add(new NyxIdLlmService(
-                UserServiceId: slug,
+                CatalogEntryId: slug,
                 ServiceSlug: slug,
                 DisplayName: ReadOptionalString(provider, "provider_name", "providerName") ?? slug,
                 RouteValue: routeValue,
@@ -457,7 +464,7 @@ public static class NyxIdLlmServiceCatalogParser
         if (element.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException("NyxID LLM service entry must be a JSON object.");
 
-        var userServiceId = ReadRequiredString(element, "user_service_id", "userServiceId", "service_id", "serviceId");
+        var catalogEntryId = ReadRequiredString(element, "user_service_id", "userServiceId", "service_id", "serviceId");
         var serviceSlug = ReadRequiredString(element, "service_slug", "serviceSlug");
         var displayName = ReadOptionalString(element, "display_name", "displayName", "service_name", "serviceName")
             ?? serviceSlug;
@@ -465,7 +472,7 @@ public static class NyxIdLlmServiceCatalogParser
         var models = ReadStringArray(element, "models", "available_models", "availableModels");
 
         return new NyxIdLlmService(
-            UserServiceId: userServiceId,
+            CatalogEntryId: catalogEntryId,
             ServiceSlug: serviceSlug,
             DisplayName: displayName,
             RouteValue: routeValue,
@@ -521,7 +528,7 @@ public static class NyxIdLlmServiceCatalogParser
         return type.Trim().ToLowerInvariant() switch
         {
             "use_existing_service" or "use-existing-service" or "existing" => new UseExistingService(
-                ServiceId: ReadRequiredString(activationElement, "service_id", "serviceId"),
+                UserServiceId: ReadRequiredString(activationElement, "service_id", "serviceId"),
                 RouteValue: ReadRequiredString(activationElement, "route_value", "routeValue"),
                 DefaultModel: ReadOptionalString(activationElement, "default_model", "defaultModel")),
             "provision_then_use" or "provision-then-use" or "provision" => new ProvisionThenUse(
@@ -667,7 +674,7 @@ public static class NyxIdLlmServiceCatalogParser
 
     private static bool ShareServiceKey(NyxIdLlmService left, NyxIdLlmService right) =>
         EqualIfPresent(left.RouteValue, right.RouteValue) ||
-        EqualIfPresent(left.UserServiceId, right.UserServiceId) ||
+        EqualIfPresent(left.CatalogEntryId, right.CatalogEntryId) ||
         EqualIfPresent(left.ServiceSlug, right.ServiceSlug);
 
     private static bool EqualIfPresent(string? left, string? right) =>

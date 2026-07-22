@@ -1732,7 +1732,6 @@ public sealed class ChannelConversationTurnRunnerTests
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var option = new UserLlmOption(
-            ServiceId: "svc-openai",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
@@ -1741,7 +1740,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-openai"));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1757,7 +1759,7 @@ public sealed class ChannelConversationTurnRunnerTests
         activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
         {
             Action = TextUserLlmOptionsRenderer.SelectServiceAction,
-            ServiceId = "svc-openai",
+            ServiceId = "us-openai",
         };
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
@@ -1765,7 +1767,7 @@ public sealed class ChannelConversationTurnRunnerTests
         result.Success.Should().BeTrue();
         result.LlmReplyRequest.Should().BeNull();
         result.SentActivityId.Should().Be("direct-reply:evt-llm-select-1");
-        selectionService.SelectedServiceId.Should().Be("svc-openai");
+        selectionService.SelectedServiceId.Should().Be("us-openai");
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
@@ -1782,8 +1784,8 @@ public sealed class ChannelConversationTurnRunnerTests
         };
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        const string userServiceId = "123e4567-e89b-12d3-a456-426614174000";
         var option = new UserLlmOption(
-            ServiceId: "123e4567-e89b-12d3-a456-426614174000",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
@@ -1792,7 +1794,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                userServiceId));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1806,12 +1811,12 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(registrationQueryPort, adapter, services);
         var activity = BuildCardActionActivity("evt-llm-select-compact-1");
         activity.Content.CardAction!.ActionId = TextUserLlmOptionsRenderer.SelectServiceActionId;
-        activity.Content.CardAction.SubmittedValue = option.ServiceId;
+        activity.Content.CardAction.SubmittedValue = userServiceId;
 
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.SelectedServiceId.Should().Be(userServiceId);
         adapter.Replies.Should().ContainSingle();
         adapter.Replies[0].ReplyText.Should().Contain("OpenAI Work");
     }
@@ -1827,8 +1832,8 @@ public sealed class ChannelConversationTurnRunnerTests
         };
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
+        const string userServiceId = "us-form";
         var option = new UserLlmOption(
-            ServiceId: "svc-form",
             ServiceSlug: "form-route",
             DisplayName: "Form Route",
             RouteValue: "/api/v1/proxy/s/form-route",
@@ -1837,7 +1842,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                userServiceId));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()
@@ -1849,7 +1857,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
         var activity = BuildCardActionActivity(
             "evt-llm-select-form-1",
-            (TextUserLlmOptionsRenderer.ServiceIdArgument, option.ServiceId));
+            (TextUserLlmOptionsRenderer.ServiceIdArgument, userServiceId));
         activity.Content.CardAction!.ActionKind = ActionElementKind.FormSubmit;
         activity.Content.CardAction.LlmSelection = new LlmSelectionActionPayload
         {
@@ -1859,7 +1867,7 @@ public sealed class ChannelConversationTurnRunnerTests
         var result = await runner.RunInboundAsync(activity, CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        selectionService.SelectedServiceId.Should().Be(option.ServiceId);
+        selectionService.SelectedServiceId.Should().Be(userServiceId);
         selectionService.Context?.BindingId.Value.Should().Be("bnd-user-1");
     }
 
@@ -1876,7 +1884,6 @@ public sealed class ChannelConversationTurnRunnerTests
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var options = Enumerable.Range(1, 7)
             .Select(i => new UserLlmOption(
-                ServiceId: $"svc-{i}",
                 ServiceSlug: $"route-{i}",
                 DisplayName: $"Route {i}",
                 RouteValue: $"/api/v1/proxy/s/route-{i}",
@@ -1885,7 +1892,10 @@ public sealed class ChannelConversationTurnRunnerTests
                 Status: "ready",
                 Source: "user",
                 Allowed: true,
-                Description: null))
+                Description: null,
+                Identity: new UserLlmServiceIdentity(
+                    UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                    $"us-{i}")))
             .ToArray();
         var optionsService = new StubUserLlmOptionsService(options, current: options[0]);
         var selectionService = new RecordingUserLlmSelectionService();
@@ -1929,7 +1939,6 @@ public sealed class ChannelConversationTurnRunnerTests
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(subject, new BindingId { Value = "bnd-user-1" });
         var option = new UserLlmOption(
-            ServiceId: "svc-openai",
             ServiceSlug: "openai-work",
             DisplayName: "OpenAI Work",
             RouteValue: "/api/v1/proxy/s/openai-work",
@@ -1938,7 +1947,10 @@ public sealed class ChannelConversationTurnRunnerTests
             Status: "ready",
             Source: "user",
             Allowed: true,
-            Description: null);
+            Description: null,
+            Identity: new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-openai"));
         var optionsService = new StubUserLlmOptionsService(option);
         var selectionService = new RecordingUserLlmSelectionService();
         var services = new ServiceCollection()

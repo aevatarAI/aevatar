@@ -4,10 +4,12 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 namespace Aevatar.Studio.Hosting.Controllers;
 
 public sealed record SaveUserLlmSettingsRequest(
-    [property: JsonPropertyName("routeValue")] string? RouteValue,
+    [property: JsonPropertyName("userServiceId")] string? UserServiceId = null,
+    [property: JsonPropertyName("routeValue")] string? RouteValue = null,
     [property: JsonPropertyName("model")] string? Model = null)
 {
     public SaveUserLlmPreferenceCommand ToCommand() => new(
+        UserServiceId: UserServiceId,
         RouteValue: RouteValue,
         Model: Model);
 }
@@ -32,6 +34,9 @@ public sealed record UserConfigSaveReceiptResponse(
 public sealed record UserLlmSettingsResponse(
     [property: JsonPropertyName("savedRoute")] string SavedRoute,
     [property: JsonPropertyName("savedRouteLabel")] string SavedRouteLabel,
+    [property: JsonPropertyName("savedRouteKind")] string SavedRouteKind,
+    [property: JsonPropertyName("savedUserServiceId")] string? SavedUserServiceId,
+    [property: JsonPropertyName("savedServiceSlug")] string? SavedServiceSlug,
     [property: JsonPropertyName("effectiveRoute")] string EffectiveRoute,
     [property: JsonPropertyName("effectiveRouteLabel")] string EffectiveRouteLabel,
     [property: JsonPropertyName("routeFallbackActive")] bool RouteFallbackActive,
@@ -46,6 +51,9 @@ public sealed record UserLlmSettingsResponse(
     public static UserLlmSettingsResponse FromApplication(UserLlmSettingsView view) => new(
         view.SavedRoute,
         view.SavedRouteLabel,
+        view.SavedRouteKind,
+        view.SavedUserServiceId,
+        view.SavedServiceSlug,
         view.EffectiveRoute,
         view.EffectiveRouteLabel,
         view.RouteFallbackActive,
@@ -65,7 +73,7 @@ public sealed record UserLlmRouteOptionResponse(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("allowed")] bool Allowed,
     [property: JsonPropertyName("ready")] bool Ready,
-    [property: JsonPropertyName("serviceId")] string? ServiceId,
+    [property: JsonPropertyName("userServiceId")] string? UserServiceId,
     [property: JsonPropertyName("serviceSlug")] string? ServiceSlug,
     [property: JsonPropertyName("description")] string? Description)
 {
@@ -76,7 +84,7 @@ public sealed record UserLlmRouteOptionResponse(
         option.Status,
         option.Allowed,
         option.Ready,
-        option.ServiceId,
+        option.UserServiceId,
         option.ServiceSlug,
         option.Description);
 }
@@ -138,7 +146,7 @@ public abstract record UserLlmPresetActivationResponse
         activation switch
         {
             UseExistingService existing => new UseExistingServiceResponse(
-                existing.ServiceId,
+                existing.UserServiceId,
                 existing.RouteValue,
                 existing.DefaultModel),
             ProvisionThenUse provisioning => new ProvisionThenUseResponse(provisioning.ProvisionEndpointId),
@@ -147,7 +155,7 @@ public abstract record UserLlmPresetActivationResponse
 }
 
 public sealed record UseExistingServiceResponse(
-    [property: JsonPropertyName("serviceId")] string ServiceId,
+    [property: JsonPropertyName("userServiceId")] string UserServiceId,
     [property: JsonPropertyName("routeValue")] string RouteValue,
     [property: JsonPropertyName("defaultModel")] string? DefaultModel)
     : UserLlmPresetActivationResponse;
