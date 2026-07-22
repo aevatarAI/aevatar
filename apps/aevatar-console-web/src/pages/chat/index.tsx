@@ -66,7 +66,8 @@ import { t } from "@/shared/i18n/messages";
 type ConversationState = {
   clientId: string;
   conversationId?: string;
-  createIdempotencyKey?: string;
+  createCommandId?: string;
+  createRequestPrompt?: string;
   expectedTurnCount: number;
   latestTurnId?: string;
   messages: ChatMessage[];
@@ -122,7 +123,7 @@ function createClientId(): string {
 function createDraftConversation(): ConversationState {
   return {
     clientId: createClientId(),
-    createIdempotencyKey: createClientId(),
+    createCommandId: createClientId(),
     expectedTurnCount: 0,
     messages: [],
     sessionId: createClientId(),
@@ -1104,8 +1105,18 @@ const ChatPage: React.FC = () => {
           : conversation.title;
       const nextStatus: LocalChatStatus =
         conversation.status === "needs_confirmation" ? "creating" : "streaming";
+      const createCommandId = conversation.conversationId
+        ? undefined
+        : !conversation.createRequestPrompt ||
+            conversation.createRequestPrompt === trimmedInput
+          ? conversation.createCommandId ?? conversation.clientId
+          : createClientId();
       const startedConversation: ConversationState = {
         ...conversation,
+        createCommandId,
+        createRequestPrompt: conversation.conversationId
+          ? undefined
+          : trimmedInput,
         messages: [...conversation.messages, userMessage, assistantMessage],
         status: nextStatus,
         title,
@@ -1117,8 +1128,6 @@ const ChatPage: React.FC = () => {
         typeof extractChatHistoryContext
       > = null;
       let streamingConversation = startedConversation;
-      const createIdempotencyKey =
-        conversation.createIdempotencyKey ?? conversation.clientId;
 
       abortControllerRef.current?.abort();
       if (conversation.conversationId) {
@@ -1141,9 +1150,10 @@ const ChatPage: React.FC = () => {
       try {
         const response = await startChatStreamWithProjectionRetry(
           {
+            commandId: createCommandId,
             conversation: conversation.conversationId
               ? { conversationId: conversation.conversationId }
-              : { createIdempotencyKey },
+              : {},
             prompt: trimmedInput,
             sessionId: conversation.sessionId,
           },
@@ -1241,7 +1251,7 @@ const ChatPage: React.FC = () => {
         if (scopeEpochRef.current !== runScopeEpoch) {
           return;
         }
-        if (!receivedChatHistoryContext) {
+        if (!receivedChatHistoryContext && createCommandId) {
           let recovery: Awaited<ReturnType<typeof chatHistoryApi.recoverCreate>> | null =
             null;
           for (const delayMs of [0, 300, 900, 1_800]) {
@@ -1249,7 +1259,7 @@ const ChatPage: React.FC = () => {
             try {
               recovery = await chatHistoryApi.recoverCreate(
                 scopeId,
-                createIdempotencyKey
+                createCommandId
               );
               break;
             } catch (error) {
@@ -1261,31 +1271,28 @@ const ChatPage: React.FC = () => {
               }
             }
           }
-          if (!recovery) {
-            throw new Error(
-              t(
-                "pages.chat.index.missingChatHistoryContext",
-                "Chat completed without a conversation context."
-              )
+          if (recovery) {
+            receivedChatHistoryContext = true;
+            streamingConversation = {
+              ...streamingConversation,
+              conversationId: recovery.conversationId,
+              expectedTurnCount: conversation.expectedTurnCount + 1,
+              latestTurnId: recovery.turnId,
+            };
+            activeConversationRef.current = streamingConversation;
+            setActiveConversation((current) =>
+              current?.clientId === conversation.clientId
+                ? streamingConversation
+                : current
             );
           }
-          acceptedChatHistoryContext = {
-            conversationId: recovery.conversationId,
-            scopeId,
-            turnId: recovery.turnId,
-          };
-          receivedChatHistoryContext = true;
-          streamingConversation = {
-            ...streamingConversation,
-            conversationId: recovery.conversationId,
-            expectedTurnCount: conversation.expectedTurnCount + 1,
-            latestTurnId: recovery.turnId,
-          };
-          activeConversationRef.current = streamingConversation;
-          setActiveConversation((current) =>
-            current?.clientId === conversation.clientId
-              ? streamingConversation
-              : current
+        }
+        if (!receivedChatHistoryContext) {
+          throw new Error(
+            t(
+              "pages.chat.index.missingChatHistoryContext",
+              "Chat completed without a conversation context."
+            )
           );
         }
 
