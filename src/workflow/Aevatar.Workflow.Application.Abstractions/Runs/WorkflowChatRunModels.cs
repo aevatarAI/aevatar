@@ -78,6 +78,28 @@ public sealed record WorkflowExternalIngressContext(
     string? AuthScheme = null,
     string? PrincipalSubject = null);
 
+public enum WorkflowConversationExecutionRole
+{
+    Unspecified = 0,
+    User = 1,
+    Assistant = 2,
+    Tool = 3,
+}
+
+public sealed record WorkflowConversationExecutionMessage(
+    int Sequence,
+    string TurnId,
+    WorkflowConversationExecutionRole Role,
+    string Content);
+
+public sealed record WorkflowConversationExecutionContext(
+    string ScopeId,
+    string ConversationId,
+    long StateVersion,
+    IReadOnlyList<WorkflowConversationExecutionMessage> Messages,
+    bool Truncated,
+    int MaxMessageCount);
+
 public enum WorkflowChatConversationIntentKind
 {
     None = 0,
@@ -223,6 +245,7 @@ public sealed record WorkflowChatRunRequest(
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
     WorkflowChatConversationIntent? ChatConversation = null,
+    WorkflowConversationExecutionContext? ConversationContext = null,
     [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
     [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {

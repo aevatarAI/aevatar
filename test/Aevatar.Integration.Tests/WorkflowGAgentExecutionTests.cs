@@ -126,6 +126,57 @@ public sealed class WorkflowGAgentExecutionTests : WorkflowGAgentTestBase
         }
 
         [Fact]
+        public async Task WorkflowRunGAgent_ShouldRenderConversationContextIntoExecutionInput()
+        {
+            var publisher = new RecordingEventPublisher();
+            var runtime = new RecordingActorRuntime();
+            var agent = CreateRunAgent(runtime: runtime);
+            agent.EventPublisher = publisher;
+            await agent.BindWorkflowRunDefinitionAsync(
+                "definition-1",
+                BuildValidWorkflowYaml("role_a", "RoleA"),
+                "wf_valid",
+                runId: "run-1");
+
+            await agent.HandleChatRequest(new WorkflowChatRequestEvent
+            {
+                Prompt = "team01",
+                SessionId = "s1",
+                ConversationContext = new WorkflowConversationContext
+                {
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-alpha",
+                    StateVersion = 3,
+                    MaxMessageCount = 24,
+                    Messages =
+                    {
+                        new WorkflowConversationMessage
+                        {
+                            Sequence = 1,
+                            TurnId = "turn-previous",
+                            Role = WorkflowConversationRole.User,
+                            Content = "Create a workflow that generates fund analysis reports.",
+                        },
+                        new WorkflowConversationMessage
+                        {
+                            Sequence = 2,
+                            TurnId = "turn-previous",
+                            Role = WorkflowConversationRole.Assistant,
+                            Content = "Choose a Team: team01 or team02.",
+                        },
+                    },
+                },
+            });
+
+            var start = publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>().Single();
+            start.Input.Should().Contain("[user] Create a workflow that generates fund analysis reports.");
+            start.Input.Should().Contain("[assistant] Choose a Team: team01 or team02.");
+            start.Input.Should().Contain("<current_user_message>\nteam01\n</current_user_message>");
+            start.Input.Should().Contain("team01");
+            start.Input.Split("team01", StringSplitOptions.None).Should().HaveCount(3);
+        }
+
+        [Fact]
         public async Task WorkflowRunGAgent_WhenRebindingDefinition_ShouldResetExecutionStateAndDestroyOldChildren()
         {
             var publisher = new RecordingEventPublisher();

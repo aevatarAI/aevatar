@@ -87,6 +87,8 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
                 result.ChatContext!.TurnId));
         result.ChatContext!.TurnId.Should().NotBeNullOrWhiteSpace();
         result.ChatContext.TurnId.Should().NotBe("turn-from-client");
+        result.ConversationContext.Should().NotBeNull();
+        result.ConversationContext!.ConversationId.Should().Be("conversation-existing");
         var command = dispatch.Calls.Should().ContainSingle().Which.Envelope.Payload.Unpack<ChatTurnHistoryDeliveryReserveRequested>();
         command.ConversationId.Should().Be("conversation-existing");
         command.TurnId.Should().Be(result.ChatContext.TurnId);
@@ -298,11 +300,30 @@ public sealed class ChatTurnHistoryTerminalDeliveryPortTests
         public void SeedDeletedConversation(string scopeId, string conversationId) =>
             _continuableConversations.Remove((scopeId, conversationId));
 
-        public Task<bool> CanContinueAsync(string scopeId, string conversationId, CancellationToken ct = default)
+        public Task<ChatConversationContinuationAdmission> GetContinuationAsync(
+            string scopeId,
+            string conversationId,
+            CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             Calls.Add((scopeId, conversationId));
-            return Task.FromResult(_continuableConversations.Contains((scopeId, conversationId)));
+            if (!_continuableConversations.Contains((scopeId, conversationId)))
+                return Task.FromResult(ChatConversationContinuationAdmission.NotFound());
+
+            return Task.FromResult(ChatConversationContinuationAdmission.Found(
+                new WorkflowConversationExecutionContext(
+                    scopeId,
+                    conversationId,
+                    1,
+                    [
+                        new WorkflowConversationExecutionMessage(
+                            1,
+                            "turn-existing",
+                            WorkflowConversationExecutionRole.User,
+                            "previous user text"),
+                    ],
+                    false,
+                    24)));
         }
     }
 

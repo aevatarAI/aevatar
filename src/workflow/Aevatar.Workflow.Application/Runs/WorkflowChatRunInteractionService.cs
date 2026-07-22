@@ -167,6 +167,7 @@ internal sealed class WorkflowChatRunInteractionService : IWorkflowChatRunIntera
             : attempt.Request with
             {
                 CompletionNotificationTarget = CreateCompletionNotificationTarget(chatHistoryDelivery.Reservation),
+                ConversationContext = chatHistoryDelivery.ConversationContext,
             };
         CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus> result;
         try

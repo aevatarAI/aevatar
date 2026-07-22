@@ -1,12 +1,14 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 internal sealed class ProjectionChatConversationContinuationAdmissionReader
     : IChatConversationContinuationAdmissionReader
 {
+    private const int MaxConversationContextMessages = 24;
     private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _documentReader;
 
     public ProjectionChatConversationContinuationAdmissionReader(
@@ -15,13 +17,13 @@ internal sealed class ProjectionChatConversationContinuationAdmissionReader
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
     }
 
-    public async Task<bool> CanContinueAsync(
+    public async Task<ChatConversationContinuationAdmission> GetContinuationAsync(
         string scopeId,
         string conversationId,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(scopeId) || string.IsNullOrWhiteSpace(conversationId))
-            return false;
+            return ChatConversationContinuationAdmission.NotFound();
 
         var normalizedScopeId = scopeId.Trim();
         var normalizedConversationId = conversationId.Trim();
@@ -39,10 +41,50 @@ internal sealed class ProjectionChatConversationContinuationAdmissionReader
                 string.Equals(document.ScopeId, normalizedScopeId, StringComparison.Ordinal) &&
                 string.Equals(document.ConversationId, normalizedConversationId, StringComparison.Ordinal))
             {
-                return true;
+                return ChatConversationContinuationAdmission.Found(ToExecutionContext(document));
             }
         }
 
-        return false;
+        return ChatConversationContinuationAdmission.NotFound();
+    }
+
+    private static WorkflowConversationExecutionContext ToExecutionContext(
+        ChatConversationCurrentStateDocument document)
+    {
+        var allMessages = document.Turns
+            .OrderBy(static turn => turn.Sequence)
+            .SelectMany(ToExecutionMessages)
+            .Where(static message => !string.IsNullOrWhiteSpace(message.Content))
+            .ToArray();
+        var truncated = allMessages.Length > MaxConversationContextMessages;
+        var retainedMessages = truncated
+            ? allMessages[^MaxConversationContextMessages..]
+            : allMessages;
+
+        return new WorkflowConversationExecutionContext(
+            document.ScopeId,
+            document.ConversationId,
+            document.StateVersion,
+            retainedMessages
+                .Select(static (message, index) => message with { Sequence = index + 1 })
+                .ToArray(),
+            truncated,
+            MaxConversationContextMessages);
+    }
+
+    private static IEnumerable<WorkflowConversationExecutionMessage> ToExecutionMessages(
+        ChatConversationTurnDocument turn)
+    {
+        yield return new WorkflowConversationExecutionMessage(
+            0,
+            turn.TurnId,
+            WorkflowConversationExecutionRole.User,
+            turn.UserText ?? string.Empty);
+
+        yield return new WorkflowConversationExecutionMessage(
+            0,
+            turn.TurnId,
+            WorkflowConversationExecutionRole.Assistant,
+            turn.AssistantText ?? string.Empty);
     }
 }
