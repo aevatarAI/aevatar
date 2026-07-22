@@ -635,7 +635,7 @@ If verification required a source correction, repeat its focused red-green test 
 **Files:**
 - No additional repository files.
 
-- [ ] **Step 1: Confirm AbigailDeng authentication and branch state**
+- [x] **Step 1: Confirm AbigailDeng authentication and branch state**
 
 ```bash
 gh auth status
@@ -645,7 +645,9 @@ git status --short
 
 Expected: `AbigailDeng` is active, branch is `fix/2026-07-22_chat-markdown-tables`, and status is clean.
 
-- [ ] **Step 2: Apply FKST issue labels**
+Actual: all three conditions were confirmed before the GitHub writes.
+
+- [x] **Step 2: Apply FKST issue labels**
 
 ```bash
 gh issue edit 2885 --repo aevatarAI/aevatar \
@@ -655,7 +657,9 @@ gh issue edit 2885 --repo aevatarAI/aevatar \
 
 Expected: issue #2885 has both FKST labels.
 
-- [ ] **Step 3: Push the issue branch**
+Actual: issue #2885 has `fkst-dev:enabled` and `fkst-class:standard`.
+
+- [x] **Step 3: Push the issue branch**
 
 ```bash
 git push --set-upstream origin fix/2026-07-22_chat-markdown-tables
@@ -663,7 +667,10 @@ git push --set-upstream origin fix/2026-07-22_chat-markdown-tables
 
 Expected: the branch is published under the AbigailDeng GitHub credentials.
 
-- [ ] **Step 4: Open a ready PR against dev**
+Actual: `origin/fix/2026-07-22_chat-markdown-tables` was created by the active
+AbigailDeng credentials.
+
+- [x] **Step 4: Open a ready PR against dev**
 
 Create `/tmp/aevatar-pr-2885.md` with `apply_patch` using this exact body:
 
@@ -709,7 +716,10 @@ gh pr create \
 
 Expected: a non-draft PR URL.
 
-- [ ] **Step 5: Enable squash auto-merge as explicitly authorized**
+Actual: https://github.com/aevatarAI/aevatar/pull/2919 is open and ready against
+`dev`.
+
+- [x] **Step 5: Enable squash auto-merge as explicitly authorized**
 
 ```bash
 PR_NUMBER=$(gh pr view --repo aevatarAI/aevatar --json number --jq .number)
@@ -718,6 +728,9 @@ gh pr merge "$PR_NUMBER" --repo aevatarAI/aevatar --auto --squash
 
 Expected: GitHub reports auto-merge enabled, or reports that branch protection already permits an immediate merge. Do not bypass required checks or administrator protections.
 
-- [ ] **Step 6: Report final state**
+Actual: GitHub records an enabled squash auto-merge request by AbigailDeng;
+required CI checks continue normally.
+
+- [x] **Step 6: Report final state**
 
 Record the issue URL, PR URL and number, commit list, all verification results, and auto-merge status. Keep the local development server running and provide its URL when the route remains usable for the user.
