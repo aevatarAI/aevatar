@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
@@ -135,8 +136,10 @@ public sealed class OrnnAgentProfileSkillPackageMapper
                 StringComparison.OrdinalIgnoreCase))
             .ToDictionary(static entry => entry.Key, static entry => entry.Value, StringComparer.Ordinal);
 
-        if (!ValidateReservedAssetPaths(associatedFiles, out path))
+        if (!ValidateAssociatedFileShapes(associatedFiles, out path))
             return false;
+
+        var canonicalPaths = new HashSet<string>(StringComparer.Ordinal);
 
         var workflowExtraction = _workflowExtractor.ExtractFromFiles(associatedFiles);
         var workflowFileCount = associatedFiles.Keys.Count(IsWorkflowPath);
@@ -147,13 +150,12 @@ public sealed class OrnnAgentProfileSkillPackageMapper
             return false;
         }
 
-        foreach (var workflow in workflowExtraction.Workflows)
+        if (!TryNormalizeWorkflows(
+                workflowExtraction.Workflows,
+                canonicalPaths,
+                out var workflows,
+                out path))
         {
-            var (_, diagnostic) = OrnnSkillAssetPathPolicy.NormalizeWorkflowPath(workflow.WorkflowId);
-            if (diagnostic is null)
-                continue;
-
-            path = $"workflows/{workflow.WorkflowId}.yaml";
             return false;
         }
 
@@ -164,12 +166,18 @@ public sealed class OrnnAgentProfileSkillPackageMapper
             workflowExtraction.RemainingFiles);
         var remainingAfterWorkflows = workflowExtraction.RemainingFiles ??
                                       new Dictionary<string, string>(StringComparer.Ordinal);
-        var scriptFileCount = remainingAfterWorkflows.Keys.Count(IsScriptPath);
-        var extractedScriptFileCount = scriptExtraction.Scripts.Sum(static script =>
-            script.SourceFiles.Count + script.ProtoFiles.Count);
-        if (scriptFileCount != extractedScriptFileCount)
+        if (scriptExtraction.RemainingFiles?.Keys.Any(IsScriptPath) == true)
         {
             path = "scripts";
+            return false;
+        }
+
+        if (!TryNormalizeScripts(
+                scriptExtraction.Scripts,
+                canonicalPaths,
+                out var scripts,
+                out path))
+        {
             return false;
         }
 
@@ -178,17 +186,24 @@ public sealed class OrnnAgentProfileSkillPackageMapper
         foreach (var (assetPath, content) in scriptExtraction.RemainingFiles ??
                                                    new Dictionary<string, string>(StringComparer.Ordinal))
         {
-            if (TryMapNamedAsset(assetPath, content, references, assets))
+            if (TryMapNamedAsset(
+                    assetPath,
+                    content,
+                    canonicalPaths,
+                    references,
+                    assets,
+                    out path))
+            {
                 continue;
+            }
 
-            path = assetPath;
             return false;
         }
 
         extracted = new ExtractedPackageContent(
             parsed,
-            workflowExtraction.Workflows,
-            scriptExtraction.Scripts,
+            workflows,
+            scripts,
             references,
             assets);
         path = string.Empty;
@@ -253,7 +268,7 @@ public sealed class OrnnAgentProfileSkillPackageMapper
         if (input is null || input.Count == 0)
             return false;
 
-        var identities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var identities = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (rawPath, content) in input)
         {
             if (!TryNormalizeIncomingPath(rawPath, out var normalizedPath) ||
@@ -293,7 +308,7 @@ public sealed class OrnnAgentProfileSkillPackageMapper
                    segment.Length > 0 && segment is not "." and not "..");
     }
 
-    private static bool ValidateReservedAssetPaths(
+    private static bool ValidateAssociatedFileShapes(
         IReadOnlyDictionary<string, string> files,
         out string path)
     {
@@ -311,9 +326,7 @@ public sealed class OrnnAgentProfileSkillPackageMapper
             }
             else if (IsScriptPath(assetPath))
             {
-                var relative = assetPath["scripts/".Length..];
-                var (_, diagnostic) = OrnnSkillAssetPathPolicy.NormalizeScriptPath(relative);
-                if (diagnostic is null &&
+                if (assetPath.Count(static character => character == '/') == 1 &&
                     (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
                      assetPath.EndsWith(".proto", StringComparison.OrdinalIgnoreCase)))
                 {
@@ -322,25 +335,11 @@ public sealed class OrnnAgentProfileSkillPackageMapper
             }
             else if (assetPath.StartsWith("references/", StringComparison.OrdinalIgnoreCase))
             {
-                var relative = assetPath["references/".Length..];
-                var (_, diagnostic) = OrnnSkillAssetPathPolicy.NormalizeReferencePath(relative);
-                if (diagnostic is null)
-                    continue;
+                continue;
             }
             else if (assetPath.StartsWith("assets/", StringComparison.OrdinalIgnoreCase))
             {
-                // A YAML under assets may be a legacy workflow candidate. It is validated
-                // after workflow extraction; ordinary YAML assets remain invalid.
-                if (assetPath.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) ||
-                    assetPath.EndsWith(".yml", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var relative = assetPath["assets/".Length..];
-                var (_, diagnostic) = OrnnSkillAssetPathPolicy.NormalizeAssetPath(relative);
-                if (diagnostic is null)
-                    continue;
+                continue;
             }
 
             path = assetPath;
@@ -353,28 +352,183 @@ public sealed class OrnnAgentProfileSkillPackageMapper
     private static bool TryMapNamedAsset(
         string path,
         string content,
+        HashSet<string> canonicalPaths,
         ICollection<AgentProfileNamedTextAsset> references,
-        ICollection<AgentProfileNamedTextAsset> assets)
+        ICollection<AgentProfileNamedTextAsset> assets,
+        out string diagnosticPath)
     {
         if (path.StartsWith("references/", StringComparison.OrdinalIgnoreCase))
         {
             var relative = path["references/".Length..];
-            var (normalized, diagnostic) = OrnnSkillAssetPathPolicy.NormalizeReferencePath(relative);
-            if (diagnostic is not null || normalized is null)
+            if (!TryAddCanonicalPath(
+                    relative,
+                    OrnnSkillAssetPathPolicy.NormalizeReferencePath,
+                    path,
+                    canonicalPaths,
+                    out var normalized,
+                    out diagnosticPath))
+            {
                 return false;
+            }
+
             references.Add(new AgentProfileNamedTextAsset { Path = normalized, Content = content });
             return true;
         }
 
         if (!path.StartsWith("assets/", StringComparison.OrdinalIgnoreCase))
+        {
+            diagnosticPath = path;
             return false;
+        }
 
         var assetRelative = path["assets/".Length..];
-        var (assetNormalized, assetDiagnostic) = OrnnSkillAssetPathPolicy.NormalizeAssetPath(assetRelative);
-        if (assetDiagnostic is not null || assetNormalized is null)
+        if (!TryAddCanonicalPath(
+                assetRelative,
+                OrnnSkillAssetPathPolicy.NormalizeAssetPath,
+                path,
+                canonicalPaths,
+                out var assetNormalized,
+                out diagnosticPath))
+        {
             return false;
+        }
+
         assets.Add(new AgentProfileNamedTextAsset { Path = assetNormalized, Content = content });
         return true;
+    }
+
+    private static bool TryNormalizeWorkflows(
+        IReadOnlyList<SkillWorkflowDescriptor> workflows,
+        HashSet<string> canonicalPaths,
+        out IReadOnlyList<SkillWorkflowDescriptor> normalizedWorkflows,
+        out string diagnosticPath)
+    {
+        var normalized = new List<SkillWorkflowDescriptor>(workflows.Count);
+        foreach (var workflow in workflows)
+        {
+            var fallbackPath = $"workflows/{workflow.WorkflowId}.yaml";
+            if (!TryAddCanonicalPath(
+                    workflow.WorkflowId,
+                    OrnnSkillAssetPathPolicy.NormalizeWorkflowPath,
+                    fallbackPath,
+                    canonicalPaths,
+                    out var packagePath,
+                    out diagnosticPath))
+            {
+                normalizedWorkflows = [];
+                return false;
+            }
+
+            normalized.Add(new SkillWorkflowDescriptor
+            {
+                WorkflowId = packagePath["workflows/".Length..^".yaml".Length],
+                WorkflowYamls = workflow.WorkflowYamls,
+            });
+        }
+
+        normalizedWorkflows = normalized;
+        diagnosticPath = string.Empty;
+        return true;
+    }
+
+    private static bool TryNormalizeScripts(
+        IReadOnlyList<SkillScriptDescriptor> scripts,
+        HashSet<string> canonicalPaths,
+        out IReadOnlyList<SkillScriptDescriptor> normalizedScripts,
+        out string diagnosticPath)
+    {
+        var normalized = new List<SkillScriptDescriptor>(scripts.Count);
+        foreach (var script in scripts)
+        {
+            if (!TryNormalizeScriptFiles(
+                    script.SourceFiles,
+                    canonicalPaths,
+                    out var sourceFiles,
+                    out diagnosticPath) ||
+                !TryNormalizeScriptFiles(
+                    script.ProtoFiles,
+                    canonicalPaths,
+                    out var protoFiles,
+                    out diagnosticPath))
+            {
+                normalizedScripts = [];
+                return false;
+            }
+
+            normalized.Add(new SkillScriptDescriptor
+            {
+                ScriptId = script.ScriptId,
+                SourceFiles = sourceFiles,
+                ProtoFiles = protoFiles,
+                EntryBehaviorTypeName = script.EntryBehaviorTypeName,
+            });
+        }
+
+        normalizedScripts = normalized;
+        diagnosticPath = string.Empty;
+        return true;
+    }
+
+    private static bool TryNormalizeScriptFiles(
+        IReadOnlyDictionary<string, string> files,
+        HashSet<string> canonicalPaths,
+        out IReadOnlyDictionary<string, string> normalizedFiles,
+        out string diagnosticPath)
+    {
+        var normalized = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (path, content) in files)
+        {
+            var relative = IsScriptPath(path)
+                ? path["scripts/".Length..]
+                : path.StartsWith("assets/", StringComparison.OrdinalIgnoreCase)
+                    ? path["assets/".Length..]
+                    : string.Empty;
+            if (relative.Length == 0)
+            {
+                normalizedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+                diagnosticPath = path;
+                return false;
+            }
+
+            if (!TryAddCanonicalPath(
+                    relative,
+                    OrnnSkillAssetPathPolicy.NormalizeScriptPath,
+                    path,
+                    canonicalPaths,
+                    out var packagePath,
+                    out diagnosticPath))
+            {
+                normalizedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+                return false;
+            }
+
+            normalized.Add(packagePath, content);
+        }
+
+        normalizedFiles = normalized;
+        diagnosticPath = string.Empty;
+        return true;
+    }
+
+    private static bool TryAddCanonicalPath(
+        string policyInput,
+        Func<string, (string? PackagePath, OrnnSkillPublishDiagnostic? Diagnostic)> normalize,
+        string fallbackPath,
+        HashSet<string> canonicalPaths,
+        out string canonicalPath,
+        out string diagnosticPath)
+    {
+        var (normalized, diagnostic) = normalize(policyInput.Normalize(NormalizationForm.FormC));
+        if (diagnostic is not null || normalized is null)
+        {
+            canonicalPath = string.Empty;
+            diagnosticPath = fallbackPath;
+            return false;
+        }
+
+        canonicalPath = normalized;
+        diagnosticPath = normalized;
+        return canonicalPaths.Add(normalized);
     }
 
     private bool TryParseFrontmatter(string content, out SkillFrontmatterDocument document)

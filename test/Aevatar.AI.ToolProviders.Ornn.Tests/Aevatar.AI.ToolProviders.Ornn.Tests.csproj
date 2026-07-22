@@ -12,6 +12,9 @@
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Scripting\Aevatar.AI.ToolProviders.Scripting.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
     <!--
       Explicit reference: tests instantiate NyxIdApiClient / NyxIdToolOptions directly

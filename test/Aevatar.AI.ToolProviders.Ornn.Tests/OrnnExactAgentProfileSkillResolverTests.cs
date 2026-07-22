@@ -4,8 +4,10 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.AgentProfiles;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.Bootstrap.Extensions.AI.OrnnPublishing;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -267,6 +269,119 @@ public sealed class OrnnExactAgentProfileSkillResolverTests
         result.Failure.Message.Should().Be("Exact Ornn skill package is invalid.");
     }
 
+    public static TheoryData<IReadOnlyDictionary<string, string>, string> CanonicalPathCollisionCases => new()
+    {
+        {
+            new Dictionary<string, string>
+            {
+                ["SKILL.md"] = SkillMarkdown(),
+                ["workflows/alpha.yaml"] = "name: route-\u00e9\nsteps: []",
+                ["workflows/beta.yaml"] = "name: route-e\u0301\nsteps: []",
+            },
+            "workflows/route-\u00e9.yaml"
+        },
+        {
+            new Dictionary<string, string>
+            {
+                ["SKILL.md"] = SkillMarkdown(scriptEntry: "Example.EntryBehavior"),
+                ["scripts/ Main.cs"] = "public sealed class Main {}",
+                ["scripts/Main.cs"] = "public sealed class Main {}",
+            },
+            "scripts/Main.cs"
+        },
+        {
+            new Dictionary<string, string>
+            {
+                ["SKILL.md"] = SkillMarkdown(),
+                ["references/ note.txt"] = "identical",
+                ["references/note.txt"] = "identical",
+            },
+            "references/note.txt"
+        },
+        {
+            new Dictionary<string, string>
+            {
+                ["SKILL.md"] = SkillMarkdown(),
+                ["assets/\u00e9.txt"] = "identical",
+                ["assets/e\u0301.txt"] = "identical",
+            },
+            "assets/\u00e9.txt"
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(CanonicalPathCollisionCases))]
+    public async Task ResolveAsync_ShouldRejectEveryDuplicateCanonicalRetainedPath(
+        IReadOnlyDictionary<string, string> files,
+        string canonicalPath)
+    {
+        var result = await CreateResolver(SuccessHandler(files: files))
+            .ResolveAsync("token", ExactReference());
+
+        result.IsSuccess.Should().BeFalse();
+        result.Failure!.Code.Should().Be("INVALID_SKILL_PACKAGE");
+        result.Failure.Message.Should().Be("Exact Ornn skill package is invalid.");
+        result.Failure.Path.Should().Be(canonicalPath);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldRetainCanonicalScriptPathReturnedByPolicy()
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["SKILL.md"] = SkillMarkdown(scriptEntry: "Example.EntryBehavior"),
+            ["scripts/ Main.cs"] = "public sealed class Main {}",
+        };
+        var pipeline = new OrnnSkillPublishValidationPipeline(
+        [
+            new MarkerAssetValidator(
+                OrnnSkillPublishValidationPipeline.ScriptAssetKind,
+                "marker-not-present"),
+        ]);
+
+        var result = await CreateResolver(SuccessHandler(files: files), pipeline)
+            .ResolveAsync("token", ExactReference());
+
+        result.IsSuccess.Should().BeTrue();
+        result.Package!.Scripts.Should().ContainSingle();
+        result.Package.Scripts[0].SourceFiles.Should().ContainSingle()
+            .Which.Path.Should().Be("scripts/Main.cs");
+    }
+
+    [Theory]
+    [InlineData(
+        OrnnSkillPublishValidationPipeline.WorkflowYamlAssetKind,
+        "workflows/route.yaml",
+        "name: route\nsteps: [unterminated",
+        "workflow_yamls/route.yaml")]
+    [InlineData(
+        OrnnSkillPublishValidationPipeline.ScriptAssetKind,
+        "scripts/Main.cs",
+        "public sealed class Main {",
+        "scripts")]
+    public async Task ResolveAsync_ShouldRejectInvalidFetchedAssetsThroughProductionValidators(
+        string assetKind,
+        string assetPath,
+        string invalidContent,
+        string expectedPath)
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["SKILL.md"] = SkillMarkdown(scriptEntry: "Example.EntryBehavior"),
+            [assetPath] = invalidContent,
+        };
+
+        var result = await CreateResolver(
+                SuccessHandler(files: files),
+                ProductionValidationPipeline())
+            .ResolveAsync("token", ExactReference());
+
+        result.IsSuccess.Should().BeFalse(assetKind);
+        result.Failure!.Code.Should().Be("INVALID_SKILL_PACKAGE");
+        result.Failure.Message.Should().Be("Exact Ornn skill package is invalid.");
+        result.Failure.Path.Should().Be(expectedPath);
+    }
+
     [Theory]
     [InlineData(OrnnSkillPublishValidationPipeline.WorkflowYamlAssetKind, "workflows/route.yaml", "INVALID_WORKFLOW_SECRET")]
     [InlineData(OrnnSkillPublishValidationPipeline.ScriptAssetKind, "scripts/Main.cs", "INVALID_SCRIPT_SECRET")]
@@ -342,6 +457,14 @@ public sealed class OrnnExactAgentProfileSkillResolverTests
         services.Last(descriptor => descriptor.ServiceType == typeof(IExactOrnnSkillResolver))
             .ImplementationType.Should().Be(typeof(OrnnExactAgentProfileSkillResolver));
     }
+
+    private static OrnnSkillPublishValidationPipeline ProductionValidationPipeline() =>
+        new(
+        [
+            new WorkflowOrnnSkillPublishAssetValidator(),
+            new ScriptOrnnSkillPublishAssetValidator(
+                new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
+        ]);
 
     private static OrnnExactAgentProfileSkillResolver CreateResolver(
         HttpMessageHandler handler,

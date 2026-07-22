@@ -134,6 +134,7 @@ public sealed class AgentProfileSkillSealer
             aggregatePromptBytes += PromptByteCount(package);
             var bindingDiagnosticCount = diagnostics.Count;
             ValidateTextAssets(binding.BindingId, package, diagnostics);
+            ValidateDeclaredToolNames(binding.BindingId, package, diagnostics);
             ValidateDeclaredDependencies(
                 binding.BindingId,
                 package,
@@ -237,6 +238,18 @@ public sealed class AgentProfileSkillSealer
                 "skill_bindings");
         }
 
+        if (content.ToolPolicy is not null &&
+            content.ToolPolicy.Mode is not AgentProfileToolPolicyMode.Unspecified and
+                not AgentProfileToolPolicyMode.InheritRouteMaximum and
+                not AgentProfileToolPolicyMode.ExplicitAllowlist)
+        {
+            AddDiagnostic(
+                diagnostics,
+                "INVALID_TOOL_POLICY_MODE",
+                "Profile tool policy mode is invalid.",
+                "tool_policy.mode");
+        }
+
         for (var index = 0; index < content.SkillBindings.Count; index++)
         {
             var activationMode = content.SkillBindings[index].ActivationMode;
@@ -295,6 +308,27 @@ public sealed class AgentProfileSkillSealer
                 "SKILL_TOOL_DEPENDENCY_NOT_ALLOWED",
                 "A declared skill tool dependency is not in the explicit allowlist.",
                 $"skill_bindings.{bindingId}.declared_tool_names.{dependency}");
+        }
+    }
+
+    private static void ValidateDeclaredToolNames(
+        string bindingId,
+        ResolvedOrnnSkillPackage package,
+        List<AgentProfileSafeDiagnostic> diagnostics)
+    {
+        for (var index = 0; index < package.DeclaredToolNames.Count; index++)
+        {
+            if (Encoding.UTF8.GetByteCount(package.DeclaredToolNames[index]) <=
+                AgentProfileValidationLimits.IdentifierMaxUtf8Bytes)
+            {
+                continue;
+            }
+
+            AddDiagnostic(
+                diagnostics,
+                "INVALID_DECLARED_TOOL_NAME",
+                "Declared skill tool name exceeds the UTF-8 byte limit.",
+                $"skill_bindings.{bindingId}.declared_tool_names[{index}]");
         }
     }
 

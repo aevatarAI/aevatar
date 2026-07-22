@@ -121,6 +121,25 @@ public sealed class AgentProfileSkillSealerTests
     }
 
     [Fact]
+    public async Task ResolveAndSealAsync_ShouldRejectUnknownToolPolicyModeBeforeResolution()
+    {
+        var resolver = SuccessResolver();
+        var content = Content((AgentProfileToolPolicyMode)999);
+        content.SkillBindings.Add(Binding(
+            "bind-alpha",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference()));
+
+        var result = await CreateSealer(resolver).ResolveAndSealAsync(Identity(), content, "token");
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "INVALID_TOOL_POLICY_MODE" &&
+            diagnostic.Path == "tool_policy.mode");
+        resolver.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ResolveAndSealAsync_ShouldRejectMultipleDefaultBindingsBeforeResolution()
     {
         var resolver = SuccessResolver();
@@ -183,6 +202,40 @@ public sealed class AgentProfileSkillSealerTests
             .Should().Equal("route-only-tool");
     }
 
+    [Theory]
+    [InlineData(64, true)]
+    [InlineData(65, false)]
+    public async Task ResolveAndSealAsync_InheritRouteMaximum_ShouldEnforceDeclaredToolNameUtf8Limit(
+        int characterCount,
+        bool expectedSuccess)
+    {
+        var declaredToolName = new string('\u00e9', characterCount);
+        var resolver = new RecordingResolver(reference =>
+        {
+            var package = PackageFor(reference);
+            package.DeclaredToolNames.Add(declaredToolName);
+            return ExactOrnnSkillResolutionResult.Success(package);
+        });
+        var content = Content(AgentProfileToolPolicyMode.InheritRouteMaximum);
+        content.SkillBindings.Add(Binding("bind-alpha", AgentProfileSkillActivationMode.Routed, ExactReference()));
+
+        var result = await CreateSealer(resolver).ResolveAndSealAsync(Identity(), content, "token");
+
+        result.IsSuccess.Should().Be(expectedSuccess);
+        resolver.Calls.Should().Be(1);
+        if (expectedSuccess)
+        {
+            result.Snapshot!.SkillBindings.Single().Skill.Package.DeclaredToolNames
+                .Should().Equal(declaredToolName);
+        }
+        else
+        {
+            result.Diagnostics.Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "INVALID_DECLARED_TOOL_NAME" &&
+                diagnostic.Path.Contains("declared_tool_names", StringComparison.Ordinal));
+        }
+    }
+
     [Fact]
     public async Task ResolveAndSealAsync_ShouldRejectUnknownToolSetReference()
     {
@@ -222,7 +275,7 @@ public sealed class AgentProfileSkillSealerTests
     [Fact]
     public async Task ResolveAndSealAsync_ShouldProduceStableHashesAcrossInputOrdering()
     {
-        var reverseAssets = false;
+        var reversePackageOrder = false;
         var resolver = new RecordingResolver(reference =>
         {
             var package = PackageFor(reference);
@@ -231,9 +284,8 @@ public sealed class AgentProfileSkillSealerTests
                 new AgentProfileNamedTextAsset { Path = "alpha.txt", Content = "Alpha\r\nline" },
                 new AgentProfileNamedTextAsset { Path = "zeta.txt", Content = "Zeta line" },
             };
-            package.Assets.Add(reverseAssets ? assets.Reverse() : assets);
-            package.DeclaredToolNames.Add(reverseAssets ? ["zeta", "alpha"] : ["alpha", "zeta"]);
-            reverseAssets = !reverseAssets;
+            package.Assets.Add(reversePackageOrder ? assets.Reverse() : assets);
+            package.DeclaredToolNames.Add(reversePackageOrder ? ["zeta", "alpha"] : ["alpha", "zeta"]);
             return ExactOrnnSkillResolutionResult.Success(package);
         });
         var first = Content();
@@ -249,6 +301,7 @@ public sealed class AgentProfileSkillSealerTests
         var sealer = CreateSealer(resolver);
 
         var firstResult = await sealer.ResolveAndSealAsync(Identity(), first, "token");
+        reversePackageOrder = true;
         var secondResult = await sealer.ResolveAndSealAsync(Identity(), second, "token");
 
         firstResult.IsSuccess.Should().BeTrue();
