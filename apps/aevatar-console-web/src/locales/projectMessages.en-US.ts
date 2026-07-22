@@ -680,6 +680,7 @@ const projectMessages = {
   "pages.chat.chatpresentation.manual": "Manual",
   "pages.chat.chatpresentation.message.count.many": "{count} msgs",
   "pages.chat.chatpresentation.message.count.one": "{count} msg",
+  "pages.chat.chatpresentation.message.table": "Message table",
   "pages.chat.chatpresentation.model": "Model",
   "pages.chat.chatpresentation.msg": "msg",
   "pages.chat.chatpresentation.new.chat": "New chat",

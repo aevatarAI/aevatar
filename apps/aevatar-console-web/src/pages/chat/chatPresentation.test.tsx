@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import React, { useState } from 'react';
-import { ChatInput } from './chatPresentation';
+import { ChatInput, ChatMessageBubble } from './chatPresentation';
+import type { ChatMessage } from './chatTypes';
 
 function ChatInputHarness({ onSend }: { onSend: (value: string) => void }) {
   const [value, setValue] = useState('');
@@ -93,5 +94,36 @@ describe('ChatInput', () => {
       }),
     ).toBe(true);
     expect(onSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatMessageBubble', () => {
+  it('renders GFM tables with accessible headers and responsive containment', () => {
+    const message: ChatMessage = {
+      id: 'message-table',
+      role: 'assistant',
+      content: `| 名称 | member_id | workflow_id |
+| --- | :---: | ---: |
+| Observatory | \`m-alpha\` | \`wf-alpha-with-a-long-identifier\` |`,
+      timestamp: 1,
+      status: 'complete',
+    };
+
+    render(<ChatMessageBubble message={message} />);
+
+    const region = screen.getByRole('region', { name: 'Message table' });
+    expect(region).toHaveStyle({ maxWidth: '100%', overflowX: 'auto' });
+
+    const table = within(region).getByRole('table');
+    const headers = within(table).getAllByRole('columnheader');
+    expect(headers).toHaveLength(3);
+    expect(headers[0]).toHaveAttribute('scope', 'col');
+    expect(headers[2]).toHaveStyle({ textAlign: 'right' });
+
+    const workflowId = within(table).getByText(
+      'wf-alpha-with-a-long-identifier',
+    );
+    expect(workflowId.tagName).toBe('CODE');
+    expect(workflowId.closest('td')).toHaveStyle({ overflowWrap: 'anywhere' });
   });
 });
