@@ -81,7 +81,7 @@ public static class ScheduledDispatchEndpoints
                 catalogReader,
                 revisionCatalogReader,
                 context.AuthenticatedNyxIdOwnerSubject,
-                defaultMissingWorkflowScheduleAuth: false,
+                defaultMissingWorkflowScheduleAuth: true,
                 ct);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
@@ -119,7 +119,7 @@ public static class ScheduledDispatchEndpoints
                 catalogReader,
                 revisionCatalogReader,
                 context.AuthenticatedNyxIdOwnerSubject,
-                defaultMissingWorkflowScheduleAuth: false,
+                defaultMissingWorkflowScheduleAuth: true,
                 ct);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))

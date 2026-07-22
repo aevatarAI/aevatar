@@ -877,7 +877,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Create_WithWorkflowServiceInvocationAndOmittedAuth_ShouldReturnBadRequest()
+    public async Task Create_WithWorkflowServiceInvocationAndOmittedAuth_ShouldDefaultScopeOwnerAuth()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
         host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
@@ -909,8 +909,13 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        host.Schedules.Created.Should().BeEmpty();
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var invocation = host.Schedules.Created.Should().ContainSingle().Which.Target.ServiceInvocation;
+        invocation.Should().NotBeNull();
+        invocation!.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
     }
 
     [Fact]
@@ -1102,7 +1107,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldReturnBadRequest()
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldDefaultScopeOwnerAuth()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
         host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
@@ -1134,8 +1139,13 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        host.Schedules.Updated.Should().BeEmpty();
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var invocation = host.Schedules.Updated.Should().ContainSingle().Which.Configuration.Target.ServiceInvocation;
+        invocation.Should().NotBeNull();
+        invocation!.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
     }
 
     [Fact]
