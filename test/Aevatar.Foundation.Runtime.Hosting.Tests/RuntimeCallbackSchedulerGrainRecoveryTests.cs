@@ -110,8 +110,48 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         produced.Runtime.Callback.FireIndex.Should().Be(1);
         produced.Runtime.Callback.SlotEpoch.Should().Be(RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
 
-        storage.ReadSchedulerState(grain.GetGrainId())
-            .ReminderCallbacks.Should().NotContainKey(callbackId);
+        var state = storage.ReadSchedulerState(grain.GetGrainId());
+        state.ReminderCallbacks.Should().NotContainKey(callbackId);
+        state.CallbackGenerations[callbackId].Should().Be(7);
+    }
+
+    [Fact]
+    public async Task ScheduleTimeoutAsync_AfterOneShotCleanup_ShouldNotReuseFiredGeneration()
+    {
+        const string actorId = "scheduled-recovery-actor";
+        const string callbackId = "scheduled-dispatch-next-fire";
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        using var host = await StartSiloHostAsync(streamProvider, storage);
+
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        var firedCallback = CreateScheduledCallback(callbackId, generation: 7);
+        firedCallback.NextDueAtUnixTimeMs = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds();
+        storage.SeedSchedulerState(grain.GetGrainId(), new RuntimeCallbackSchedulerState
+        {
+            ReminderCallbacks =
+            {
+                [callbackId] = firedCallback,
+            },
+        });
+
+        await grain.CancelAsync("unrelated-callback");
+        var generation = await grain.ScheduleTimeoutAsync(
+            callbackId,
+            CreateEnvelope("evt-next"),
+            dueTimeMs: 60000);
+        await grain.CancelAsync(
+            callbackId,
+            expectedGeneration: 7,
+            expectedSlotEpoch: RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
+
+        generation.Should().Be(8);
+        var state = storage.ReadSchedulerState(grain.GetGrainId());
+        state.ReminderCallbacks.Should().ContainKey(callbackId);
+        state.ReminderCallbacks[callbackId].Generation.Should().Be(8);
+        state.CallbackGenerations[callbackId].Should().Be(8);
     }
 
     private static async Task<IHost> StartSiloHostAsync(
