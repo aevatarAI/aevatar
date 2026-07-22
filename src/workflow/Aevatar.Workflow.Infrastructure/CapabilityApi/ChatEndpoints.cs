@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
@@ -66,7 +67,11 @@ public static class WorkflowCapabilityEndpoints
         ArgumentNullException.ThrowIfNull(chatRunService);
         ArgumentNullException.ThrowIfNull(multipartParser);
 
-        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+        var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+            ct);
         if (!callerCredential.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -179,7 +184,10 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+                http,
+                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -280,7 +288,10 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+                http,
+                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
