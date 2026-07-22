@@ -88,10 +88,8 @@ describe("chatApi", () => {
 
     await startChatStream(
       {
-        conversation: {
-          conversationId: null,
-          createIdempotencyKey: " create-key-a ",
-        },
+        commandId: " create-command-a ",
+        conversation: { conversationId: null },
         prompt: "New conversation",
         sessionId: "runtime-session-a",
       },
@@ -109,7 +107,8 @@ describe("chatApi", () => {
     const firstBody = JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body);
     const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
     expect(firstBody).toEqual({
-      conversation: { createIdempotencyKey: "create-key-a" },
+      commandId: "create-command-a",
+      conversation: {},
       prompt: "New conversation",
       sessionId: "runtime-session-a",
       workflow: "studio",
@@ -122,14 +121,14 @@ describe("chatApi", () => {
     });
   });
 
-  it("rejects a create key on a continuation request", async () => {
+  it("rejects the stale nested create identity contract", async () => {
     await expect(
       startChatStream(
         {
           conversation: {
             conversationId: "conversation-a",
             createIdempotencyKey: "create-key-a",
-          },
+          } as never,
           prompt: "Continue",
           sessionId: "session-a",
         },

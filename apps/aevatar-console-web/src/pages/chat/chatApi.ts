@@ -16,10 +16,10 @@ const CHAT_HISTORY_CONTEXT_TYPE_URL =
 
 export type ChatConversationIntent = {
   conversationId?: string | null;
-  createIdempotencyKey?: string;
 };
 
 export type ChatStreamRequest = {
+  commandId?: string;
   prompt: string;
   conversation?: ChatConversationIntent;
   sessionId: string;
@@ -290,13 +290,9 @@ function normalizeConversationIntent(
   const record = asRecord(conversation);
   if (
     !record ||
-    Object.keys(record).some(
-      (key) => key !== "conversationId" && key !== "createIdempotencyKey"
-    ) ||
+    Object.keys(record).some((key) => key !== "conversationId") ||
     (record.conversationId != null &&
-      typeof record.conversationId !== "string") ||
-    (record.createIdempotencyKey != null &&
-      typeof record.createIdempotencyKey !== "string")
+      typeof record.conversationId !== "string")
   ) {
     throw new ChatApiError(
       "Conversation input is invalid.",
@@ -317,26 +313,7 @@ function normalizeConversationIntent(
     );
   }
 
-  const createIdempotencyKey =
-    typeof record.createIdempotencyKey === "string"
-      ? record.createIdempotencyKey.trim()
-      : undefined;
-  if (record.createIdempotencyKey != null && !createIdempotencyKey) {
-    throw new ChatApiError(
-      "Create idempotency key is invalid.",
-      400,
-      "INVALID_CONVERSATION_INPUT"
-    );
-  }
-  if (conversationId && createIdempotencyKey) {
-    throw new ChatApiError(
-      "Conversation input is invalid.",
-      400,
-      "INVALID_CONVERSATION_INPUT"
-    );
-  }
-
-  return compactObject({ conversationId, createIdempotencyKey });
+  return compactObject({ conversationId });
 }
 
 export async function startChatStream(
@@ -346,6 +323,7 @@ export async function startChatStream(
   const response = await authFetch("/api/chat", {
     body: JSON.stringify(
       compactObject({
+        commandId: request.commandId?.trim() || undefined,
         conversation: normalizeConversationIntent(request.conversation),
         prompt: request.prompt.trim(),
         sessionId: request.sessionId.trim(),
