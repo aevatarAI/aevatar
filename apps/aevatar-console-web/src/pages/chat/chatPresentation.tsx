@@ -2069,6 +2069,8 @@ export function ConversationLlmConfigBar({
   );
 }
 
+const IME_PROCESSING_KEY_CODE = 229;
+
 export function ChatInput({
   disabled,
   footer,
@@ -2088,6 +2090,7 @@ export function ChatInput({
   onStop: () => void;
   value: string;
 }): React.ReactElement {
+  const isComposingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const resizeTextarea = useCallback(() => {
@@ -2136,8 +2139,22 @@ export function ChatInput({
               onChange(event.target.value);
               resizeTextarea();
             }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+            }}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
+                if (
+                  isComposingRef.current ||
+                  event.nativeEvent.isComposing ||
+                  event.nativeEvent.keyCode === IME_PROCESSING_KEY_CODE
+                ) {
+                  return;
+                }
+
                 event.preventDefault();
                 handleSend();
               }
