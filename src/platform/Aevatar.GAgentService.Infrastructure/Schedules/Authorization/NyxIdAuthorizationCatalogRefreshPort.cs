@@ -319,6 +319,21 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
             .OrderBy(static service => service.Id, StringComparer.Ordinal)
             .ToArray();
         var selectedServiceIds = eligibleServices.Select(static service => service.Id).ToArray();
+        if (selectedServiceIds.Length == 0)
+        {
+            var observedAt = _timeProvider.GetUtcNow();
+            await ObserveCatalogAsync(
+                normalizedOwner,
+                refreshId,
+                observedAt,
+                observedAt,
+                NyxIdApiAccessResponseParser.ScopePlanContractVersion,
+                NyxIdApiAccessResponseParser.ScopePlanPolicyVersion,
+                [],
+                ct).ConfigureAwait(false);
+            return;
+        }
+
         string scopePlanResponse;
         try
         {
@@ -359,19 +374,39 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCa
         var services = scopePlan.Services
             .Select(grant => MapServiceEvidence(inventoryById[grant.UserServiceId], grant))
             .ToArray();
-        var observedAt = _timeProvider.GetUtcNow();
-        var contentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(normalizedOwner, services);
-        await _commandPort.ObserveAsync(new NyxIdAuthorizationCatalogObservation(
+        await ObserveCatalogAsync(
             normalizedOwner,
+            refreshId,
+            _timeProvider.GetUtcNow(),
+            scopePlan.EvaluatedAtUtc,
+            scopePlan.ContractVersion,
+            scopePlan.PolicyVersion,
+            services,
+            ct).ConfigureAwait(false);
+
+    }
+
+    private async Task ObserveCatalogAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset observedAt,
+        DateTimeOffset evaluatedAt,
+        string contractVersion,
+        string policyVersion,
+        IReadOnlyList<NyxIdAuthorizationServiceEvidence> services,
+        CancellationToken ct)
+    {
+        var contentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services);
+        await _commandPort.ObserveAsync(new NyxIdAuthorizationCatalogObservation(
+            owner,
             refreshId,
             observedAt,
             observedAt.Add(CatalogFreshnessLifetime),
-            scopePlan.ContractVersion,
-            scopePlan.PolicyVersion,
-            scopePlan.EvaluatedAtUtc,
+            contractVersion,
+            policyVersion,
+            evaluatedAt,
             contentDigest,
-            services), ct);
-
+            services), ct).ConfigureAwait(false);
     }
 
     private async Task RecordProviderTimeoutAsync(

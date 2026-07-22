@@ -208,6 +208,7 @@ public class AIFeatureBootstrapCoverageTests
             options.DefaultProvider = "openai";
             options.EnableMEAIProviders = true;
             options.EnableMEAIToTornadoFailover = true;
+            options.SecretsStore = new InMemorySecretsStore();
         });
 
         using var provider = services.BuildServiceProvider();
@@ -350,6 +351,7 @@ public class AIFeatureBootstrapCoverageTests
             options.DefaultProvider = "openai";
             options.EnableMEAIProviders = true;
             options.EnableMEAIToTornadoFailover = false;
+            options.SecretsStore = new InMemorySecretsStore();
         });
 
         using var provider = services.BuildServiceProvider();

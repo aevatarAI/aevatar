@@ -223,7 +223,7 @@ public static class NyxIdApiAccessResponseParser
         foreach (var serviceElement in servicesElement.EnumerateArray())
         {
             RequireKind(serviceElement, JsonValueKind.Object);
-            var id = RequireNormalizedString(serviceElement, "id");
+            var id = RequireNormalizedString(serviceElement, "id", "_id", "service_id");
             if (!serviceIds.Add(id))
                 throw new NyxIdContractException();
 
@@ -571,16 +571,40 @@ public static class NyxIdApiAccessResponseParser
             : throw new NyxIdContractException();
     }
 
-    private static string RequireNormalizedString(JsonElement root, string propertyName)
+    private static string RequireNormalizedString(
+        JsonElement root,
+        string propertyName,
+        params string[] alternativePropertyNames)
     {
-        var property = RequireProperty(root, propertyName, JsonValueKind.String);
-        var value = property.GetString();
-        if (string.IsNullOrWhiteSpace(value) ||
-            !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+        if (TryReadNormalizedString(root, propertyName, out var value))
+            return value;
+        foreach (var alternativePropertyName in alternativePropertyNames)
+        {
+            if (TryReadNormalizedString(root, alternativePropertyName, out value))
+                return value;
+        }
+
+        throw new NyxIdContractException();
+    }
+
+    private static bool TryReadNormalizedString(
+        JsonElement root,
+        string propertyName,
+        out string value)
+    {
+        value = string.Empty;
+        RequireKind(root, JsonValueKind.Object);
+        if (!root.TryGetProperty(propertyName, out var property))
+            return false;
+        RequireKind(property, JsonValueKind.String);
+        var candidate = property.GetString();
+        if (string.IsNullOrWhiteSpace(candidate) ||
+            !string.Equals(candidate, candidate.Trim(), StringComparison.Ordinal))
         {
             throw new NyxIdContractException();
         }
-        return value;
+        value = candidate;
+        return true;
     }
 
     private static string? ReadOptionalString(JsonElement root, string propertyName)
