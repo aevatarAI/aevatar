@@ -10,6 +10,70 @@ namespace Aevatar.AI.ToolProviders.Workflow.Tests;
 
 public class WorkflowDefinitionToolsTests
 {
+    #region WorkflowListDefsTool
+
+    [Fact]
+    public async Task WorkflowListDefsTool_ReturnsDefinitions()
+    {
+        var adapter = new StubDefinitionAdapter(
+            listResult:
+            [
+                new WorkflowDefinitionSummary("wf-alpha", "Alpha workflow", 3, 2, "rev-aaa"),
+                new WorkflowDefinitionSummary("wf-beta", "Beta workflow", 5, 1, "rev-bbb"),
+            ]);
+
+        var tool = new WorkflowListDefsTool(adapter);
+        var result = await tool.ExecuteAsync("{}");
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        root.GetProperty("count").GetInt32().Should().Be(2);
+
+        var defs = root.GetProperty("definitions");
+        defs.GetArrayLength().Should().Be(2);
+        defs[0].GetProperty("name").GetString().Should().Be("wf-alpha");
+        defs[0].GetProperty("step_count").GetInt32().Should().Be(3);
+        defs[1].GetProperty("name").GetString().Should().Be("wf-beta");
+        defs[1].GetProperty("revision_id").GetString().Should().Be("rev-bbb");
+    }
+
+    #endregion
+
+    #region WorkflowReadDefTool
+
+    [Fact]
+    public async Task WorkflowReadDefTool_ReturnsYaml()
+    {
+        var snapshot = new WorkflowDefinitionSnapshot(
+            "my-workflow",
+            "name: my-workflow\nsteps:\n  - id: s1\n    action: echo",
+            "rev-123",
+            new DateTimeOffset(2026, 3, 15, 10, 0, 0, TimeSpan.Zero));
+
+        var adapter = new StubDefinitionAdapter(getResult: snapshot);
+        var tool = new WorkflowReadDefTool(adapter);
+        var result = await tool.ExecuteAsync("""{"workflow_name":"my-workflow"}""");
+
+        using var doc = JsonDocument.Parse(result);
+        var root = doc.RootElement;
+        root.GetProperty("name").GetString().Should().Be("my-workflow");
+        root.GetProperty("yaml").GetString().Should().Contain("steps:");
+        root.GetProperty("revision_id").GetString().Should().Be("rev-123");
+    }
+
+    [Fact]
+    public async Task WorkflowReadDefTool_ReturnsError_WhenNotFound()
+    {
+        var adapter = new StubDefinitionAdapter(getResult: null);
+        var tool = new WorkflowReadDefTool(adapter);
+        var result = await tool.ExecuteAsync("""{"workflow_name":"nonexistent"}""");
+
+        result.Should().Contain("error");
+        result.Should().Contain("not found");
+    }
+
+    #endregion
+
     #region WorkflowCreateDefTool
 
     [Fact]
@@ -95,7 +159,7 @@ public class WorkflowDefinitionToolsTests
     #region WorkflowAgentToolSource
 
     [Fact]
-    public async Task WorkflowAgentToolSource_DoesNotExposeGlobalDefinitionQueries_WhenAdapterProvided()
+    public async Task WorkflowAgentToolSource_RegistersDefinitionTools_WhenAdapterProvided()
     {
         var adapter = new StubDefinitionAdapter();
         var options = new WorkflowToolOptions();
@@ -104,11 +168,11 @@ public class WorkflowDefinitionToolsTests
         var source = new WorkflowAgentToolSource(null!, options, definitionCommand: adapter);
         var tools = await source.DiscoverToolsAsync();
 
-        // Global filesystem definitions have no caller scope or explicit public visibility contract.
-        tools.Should().HaveCount(6);
+        // 4 base tools (status, workflow_artifact_query, workflow_actor_current_state, event_query) + 4 def tools (list, read, create, update) = 8
+        tools.Should().HaveCount(8);
         tools.Should().Contain(t => t is WorkflowArtifactQueryTool);
-        tools.Should().NotContain(t => t.Name == "workflow_list_defs");
-        tools.Should().NotContain(t => t.Name == "workflow_read_def");
+        tools.Should().Contain(t => t is WorkflowListDefsTool);
+        tools.Should().Contain(t => t is WorkflowReadDefTool);
         tools.Should().Contain(t => t is WorkflowCreateDefTool);
         tools.Should().Contain(t => t is WorkflowUpdateDefTool);
     }
@@ -124,8 +188,7 @@ public class WorkflowDefinitionToolsTests
         // Only the 4 base tools
         tools.Should().HaveCount(4);
         tools.Should().Contain(t => t is WorkflowArtifactQueryTool);
-        tools.Should().NotContain(t => t.Name == "workflow_list_defs");
-        tools.Should().NotContain(t => t.Name == "workflow_read_def");
+        tools.Should().NotContain(t => t is WorkflowListDefsTool);
         tools.Should().NotContain(t => t is WorkflowCreateDefTool);
     }
 
@@ -135,16 +198,28 @@ public class WorkflowDefinitionToolsTests
 
     private sealed class StubDefinitionAdapter : IWorkflowDefinitionCommandAdapter
     {
+        private readonly IReadOnlyList<WorkflowDefinitionSummary>? _listResult;
+        private readonly WorkflowDefinitionSnapshot? _getResult;
         private readonly WorkflowDefinitionCommandResult? _createResult;
         private readonly WorkflowDefinitionCommandResult? _updateResult;
 
         public StubDefinitionAdapter(
+            IReadOnlyList<WorkflowDefinitionSummary>? listResult = null,
+            WorkflowDefinitionSnapshot? getResult = null,
             WorkflowDefinitionCommandResult? createResult = null,
             WorkflowDefinitionCommandResult? updateResult = null)
         {
+            _listResult = listResult;
+            _getResult = getResult;
             _createResult = createResult;
             _updateResult = updateResult;
         }
+
+        public Task<IReadOnlyList<WorkflowDefinitionSummary>> ListDefinitionsAsync(CancellationToken ct = default) =>
+            Task.FromResult(_listResult ?? (IReadOnlyList<WorkflowDefinitionSummary>)[]);
+
+        public Task<WorkflowDefinitionSnapshot?> GetDefinitionAsync(string workflowName, CancellationToken ct = default) =>
+            Task.FromResult(_getResult);
 
         public Task<WorkflowDefinitionCommandResult> CreateAsync(string workflowName, string yaml, CancellationToken ct = default) =>
             Task.FromResult(_createResult ?? new WorkflowDefinitionCommandResult(false, workflowName, null, null, []));

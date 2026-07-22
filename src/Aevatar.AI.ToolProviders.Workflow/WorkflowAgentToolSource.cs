@@ -45,6 +45,8 @@ public sealed class WorkflowAgentToolSource : IAgentToolSource
 
         if (_definitionCommand is not null)
         {
+            tools.Add(new WorkflowListDefsTool(_definitionCommand));
+            tools.Add(new WorkflowReadDefTool(_definitionCommand));
             tools.Add(new WorkflowCreateDefTool(_definitionCommand, _options));
             tools.Add(new WorkflowUpdateDefTool(_definitionCommand, _options));
         }
