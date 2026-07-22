@@ -2,10 +2,16 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.Auditing;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
+using Aevatar.Audit.Abstractions.Identity;
+using Aevatar.Audit.Abstractions.Models;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -40,13 +46,14 @@ public sealed class NyxIdServiceToolsTests
         { NyxIdServiceHeaderName.IfMatch, "etag\r\nInjected: value", "invalid_conditional_header" },
     };
 
-    public static TheoryData<string, bool, bool, bool> RequestMethodCases => new()
+    public static TheoryData<string, bool, bool, bool, bool, bool> RequestMethodCases => new()
     {
-        { "HEAD", false, false, false },
-        { "OPTIONS", true, false, false },
-        { "PUT", true, true, true },
-        { "PATCH", true, true, true },
-        { "DELETE", true, true, true },
+        { "GET", false, false, false, true, false },
+        { "HEAD", false, false, false, true, false },
+        { "OPTIONS", true, false, false, true, false },
+        { "PUT", true, true, true, false, false },
+        { "PATCH", true, true, true, false, false },
+        { "DELETE", true, true, true, false, true },
     };
 
     [Fact]
@@ -350,6 +357,9 @@ public sealed class NyxIdServiceToolsTests
     [InlineData("orders?expand=items")]
     [InlineData("orders#fragment")]
     [InlineData("orders/../secret")]
+    [InlineData("/")]
+    [InlineData("///")]
+    [InlineData("%2e%2e")]
     public async Task RequestTool_InvalidRelativePath_ShouldFailBeforeProxy(string relativePath)
     {
         var handler = new ServiceHandler();
@@ -497,6 +507,92 @@ public sealed class NyxIdServiceToolsTests
     }
 
     [Fact]
+    public async Task RequestTool_DeleteDeniedApproval_ShouldRemainDestructiveInRequestReceiptAndAudit()
+    {
+        var handler = new ServiceHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop", true));
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var requestTool = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_request");
+        var approvalHandler = new RecordingApprovalHandler(ToolApprovalResult.Denied("blocked"));
+        var context = new ToolCallContext
+        {
+            Tool = requestTool,
+            ToolName = requestTool.Name,
+            ToolCallId = "call-delete-denied",
+            ArgumentsJson =
+                """{ "user_service_id": "us-personal-7", "method": "DELETE", "relative_path": "orders/1" }""",
+            ExecutionContext = AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-delete-denied", "call-delete-denied"),
+            },
+        };
+        var nextExecuted = false;
+
+        await new ToolApprovalMiddleware(approvalHandler).InvokeAsync(context, () =>
+        {
+            nextExecuted = true;
+            return Task.CompletedTask;
+        });
+
+        nextExecuted.Should().BeFalse();
+        var approvalRequest = approvalHandler.Requests.Should().ContainSingle().Subject;
+        approvalRequest.IsReadOnly.Should().BeFalse();
+        approvalRequest.IsDestructive.Should().BeTrue();
+        var finalized = ToolCallReceiptFinalizer.Finalize(context);
+        finalized.Receipt.Status.Should().Be(AgentToolReceiptStatus.Denied);
+        finalized.Receipt.IsDestructive.Should().BeTrue();
+        var auditRecord = new ToolAuditRecordFactory(new StableAuditIdentityHasher())
+            .Create(context, finalized);
+        auditRecord.Annotations.Should().Contain("is_destructive", "true");
+    }
+
+    [Fact]
+    public async Task RequestTool_DeleteApprovedExecution_ShouldProduceDestructiveSuccessReceiptAndAudit()
+    {
+        var handler = new ServiceHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop", true));
+        handler.SpecsByServiceId["us-personal-7"] = OperationSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var requestTool = (await source.DiscoverToolsAsync())
+            .Single(tool => tool.Name == "nyxid_service_request");
+        var approvalHandler = new RecordingApprovalHandler(ToolApprovalResult.Approved());
+        var context = new ToolCallContext
+        {
+            Tool = requestTool,
+            ToolName = requestTool.Name,
+            ToolCallId = "call-delete-success",
+            ArgumentsJson =
+                """{ "user_service_id": "us-personal-7", "method": "DELETE", "relative_path": "orders/1" }""",
+            ExecutionContext = AgentToolExecutionContext.Empty with
+            {
+                Request = new AgentToolRequestIdentity("request-delete-success", "call-delete-success"),
+            },
+        };
+
+        await new ToolApprovalMiddleware(approvalHandler).InvokeAsync(context, () =>
+        {
+            context.Result = """{ "deleted": true }""";
+            return Task.CompletedTask;
+        });
+
+        approvalHandler.Requests.Should().ContainSingle().Which.IsDestructive.Should().BeTrue();
+        var finalized = ToolCallReceiptFinalizer.Finalize(context);
+        finalized.Receipt.Status.Should().Be(AgentToolReceiptStatus.Success);
+        finalized.Receipt.IsDestructive.Should().BeTrue();
+        var auditRecord = new ToolAuditRecordFactory(new StableAuditIdentityHasher())
+            .Create(context, finalized);
+        auditRecord.Annotations.Should().Contain("is_destructive", "true");
+    }
+
+    [Fact]
     public async Task FixedMutationAndRequestTools_ShouldRevalidateAndReturnTypedResults()
     {
         var handler = new ServiceHandler();
@@ -616,7 +712,9 @@ public sealed class NyxIdServiceToolsTests
         string method,
         bool shouldSendBody,
         bool shouldAddIdempotencyKey,
-        bool requiresApproval)
+        bool requiresApproval,
+        bool expectedReadOnly,
+        bool expectedDestructive)
     {
         var handler = new ServiceHandler();
         var instance = Instance("us-personal-7", "api-shop", "svc-shop", true);
@@ -638,6 +736,10 @@ public sealed class NyxIdServiceToolsTests
             """;
 
         requestTool.RequiresApproval(arguments).Should().Be(requiresApproval);
+        var callSafety = requestTool.GetCallSafety(arguments);
+        callSafety.RequiresApproval.Should().Be(requiresApproval);
+        callSafety.IsReadOnly.Should().Be(expectedReadOnly);
+        callSafety.IsDestructive.Should().Be(expectedDestructive);
         var result = await requestTool.ExecuteAsync(arguments);
 
         ResponseErrorCode(result).Should().BeNull();
@@ -816,6 +918,25 @@ public sealed class NyxIdServiceToolsTests
         string? Accept,
         string? ContentType,
         string? IfMatch);
+
+    private sealed class RecordingApprovalHandler(ToolApprovalResult result) : IToolApprovalHandler
+    {
+        public List<ToolApprovalRequest> Requests { get; } = [];
+
+        public Task<ToolApprovalResult> RequestApprovalAsync(ToolApprovalRequest request, CancellationToken ct)
+        {
+            Requests.Add(request);
+            return Task.FromResult(result);
+        }
+    }
+
+    private sealed class StableAuditIdentityHasher : IAuditActorIdentityHasher
+    {
+        public AuditActorIdentity Hash(string canonicalActorKey) => new("audit-actor", "audit-key");
+
+        public bool Verify(string canonicalActorKey, string auditActorId, string identityKeyId) =>
+            auditActorId == "audit-actor" && identityKeyId == "audit-key";
+    }
 
     private sealed class ServiceHandler : HttpMessageHandler
     {

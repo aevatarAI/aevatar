@@ -227,6 +227,33 @@ public class ConnectedServiceToolSpecParserTests
     }
 
     [Fact]
+    public void Parse_OptionalUnapprovedHeader_ShouldAttenuateHeaderAndKeepOperation()
+    {
+        const string spec = """
+            {
+              "paths": {
+                "/safe": {
+                  "get": {
+                    "operationId": "safe",
+                    "x-aevatar-tool": true,
+                    "parameters": [
+                      { "name": "Authorization", "in": "header", "required": false, "schema": { "type": "string" } },
+                      { "name": "Accept", "in": "header", "required": false, "schema": { "type": "string" } }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        var operation = OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Single();
+
+        operation.Parameters.Should().ContainSingle(parameter => parameter.Name == "Accept");
+        operation.Parameters.Should().NotContain(parameter => parameter.Name == "Authorization");
+        operation.BuildParametersSchema().Should().Contain("Accept").And.NotContain("Authorization");
+    }
+
+    [Fact]
     public void Parse_RequiredNonExactJsonBody_ShouldNotAdmitOperation()
     {
         const string spec = """

@@ -469,6 +469,40 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task DynamicOperation_UndeclaredPathPlaceholder_FailsBeforeExactReadOrProxy()
+    {
+        const string unresolvedPathSpec = """
+            {
+              "paths": {
+                "/orders/{id}": {
+                  "get": {
+                    "operationId": "get_order_with_undeclared_path",
+                    "x-aevatar-tool": true
+                  }
+                }
+              }
+            }
+            """;
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop"));
+        handler.SpecsByServiceId["us-personal-7"] = unresolvedPathSpec;
+        var source = CreateSource(handler);
+
+        using var scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync())
+            .Single(candidate => candidate.Name ==
+                "nyxid_service_operation__get_order_with_undeclared_path");
+        var result = await tool.ExecuteAsync(
+            """{ "user_service_id": "us-personal-7" }""");
+
+        using var response = JsonDocument.Parse(result);
+        response.RootElement.GetProperty("error").GetString().Should().Be("unresolved_path_template");
+        handler.ExactReads.Should().BeEmpty();
+        handler.ProxyRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_DifferentContractsWithSameName_DropsWholeDynamicName()
     {
         const string conflictSpec = """

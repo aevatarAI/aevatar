@@ -32,6 +32,8 @@ internal static class NyxIdServiceTools
         public virtual bool IsReadOnly => false;
         public virtual bool IsDestructive => false;
         public virtual bool? RequiresApproval(string argumentsJson) => null;
+        public virtual AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+            new(RequiresApproval(argumentsJson), IsReadOnly, IsDestructive);
         public abstract Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default);
 
         protected bool TryGetBinding(
@@ -264,15 +266,22 @@ internal static class NyxIdServiceTools
             ("if_none_match", new JsonObject { ["type"] = "string" }, false),
             ("json_body", new JsonObject(), false));
 
-        public override bool? RequiresApproval(string argumentsJson)
+        public override bool? RequiresApproval(string argumentsJson) =>
+            GetCallSafety(argumentsJson).RequiresApproval;
+
+        public override AgentToolCallSafety GetCallSafety(string argumentsJson)
         {
             if (!TryParse(argumentsJson, out var document, out _))
-                return true;
+                return new AgentToolCallSafety(true, false, false);
             using (document)
             {
                 var method = ParseMethod(ReadString(document.RootElement, "method"));
-                return method is not (NyxIdServiceHttpMethod.Get or
-                    NyxIdServiceHttpMethod.Head or NyxIdServiceHttpMethod.Options);
+                var isReadOnly = method is NyxIdServiceHttpMethod.Get or
+                    NyxIdServiceHttpMethod.Head or NyxIdServiceHttpMethod.Options;
+                return new AgentToolCallSafety(
+                    RequiresApproval: !isReadOnly,
+                    IsReadOnly: isReadOnly,
+                    IsDestructive: method == NyxIdServiceHttpMethod.Delete);
             }
         }
 
