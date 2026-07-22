@@ -67,11 +67,7 @@ public static class WorkflowCapabilityEndpoints
         ArgumentNullException.ThrowIfNull(chatRunService);
         ArgumentNullException.ThrowIfNull(multipartParser);
 
-        var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
-        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
-            http,
-            serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
-            ct);
+        var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
         if (!callerCredential.Succeeded)
         {
             var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
