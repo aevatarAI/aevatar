@@ -235,8 +235,9 @@ public sealed class AgentRunGAgentTests
             },
         });
 
-        var step = runtime.State.GenerationStep.Should().NotBeNull().And.Subject;
-        step.NextStepIndex.Should().Be(3);
+        var step = runtime.State.GenerationStep;
+        step.Should().NotBeNull();
+        step!.NextStepIndex.Should().Be(3);
         step.Round.Should().Be(1);
         step.PendingToolCalls.Should().BeEmpty();
         step.Messages.Should().Contain(message => message.Role == "assistant" && message.ToolCalls.Count == 1);

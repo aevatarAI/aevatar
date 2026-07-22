@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
@@ -14,50 +15,47 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-// Regression for the relay interactive-reply scope gap: reply_with_interaction executes
-// during the TOOL step (BuildToolStepContinuationAsync), but only the LLM step opened an
-// IInteractiveReplyCollector scope. The AsyncLocal scope does not survive the actor
-// continuation hop between steps, so the tool always answered no_active_interactive_scope
-// and every relay card (DM and group chat alike) degraded to plain text. These tests pin:
-//   1. the tool step opens a collector scope on relay turns and returns the captured
-//      intent as a typed fact on AgentRunToolStepResult.outbound_intent;
-//   2. non-relay turns still expose no scope (console turns stay text-only).
+// Interactive tools execute in the same executor call as the LLM response so they use
+// the exact final-request capability objects while the collector scope is still active.
+// Only the typed tool result and outbound intent cross the actor continuation boundary.
 public sealed class AgentRunToolStepInteractiveReplyTests
 {
     private const string ReplyArgumentsJson =
         """{"title":"确认部署到 staging?","actions":[{"action_id":"confirm_deploy","label":"确认部署"},{"action_id":"cancel_deploy","label":"取消"}]}""";
 
     [Fact]
-    public async Task BuildToolStepContinuation_OnRelayTurn_CapturesReplyWithInteractionIntent()
+    public async Task BuildLlmStepContinuation_OnRelayTurn_CapturesReplyWithInteractionIntent()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var tool = new ReplyWithInteractionTool(collector);
         var executor = CreateExecutor(collector, tool);
-        var workItem = BuildToolStepWorkItem(relay: true, tool);
+        var workItem = BuildLlmStepWorkItem(relay: true);
 
-        var continuation = await executor.BuildToolStepContinuationAsync(workItem, CancellationToken.None);
+        var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
 
-        var resultMessage = continuation.ToolStepResult.ResultMessages.Should().ContainSingle().Subject;
+        var toolStepResult = continuation.LlmStepResult.ToolStepResult.Should().NotBeNull().Subject;
+        var resultMessage = toolStepResult.ResultMessages.Should().ContainSingle().Subject;
         resultMessage.Content.Should().NotContain("no_active_interactive_scope");
         resultMessage.Content.Should().Contain("queued");
-        continuation.ToolStepResult.OutboundIntent.Should().NotBeNull();
-        continuation.ToolStepResult.OutboundIntent.Actions.Should()
+        toolStepResult.OutboundIntent.Should().NotBeNull();
+        toolStepResult.OutboundIntent.Actions.Should()
             .Contain(action => action.ActionId == "confirm_deploy");
     }
 
     [Fact]
-    public async Task BuildToolStepContinuation_OnNonRelayTurn_KeepsScopeInactive()
+    public async Task BuildLlmStepContinuation_OnNonRelayTurn_KeepsScopeInactive()
     {
         var collector = new AsyncLocalInteractiveReplyCollector();
         var tool = new ReplyWithInteractionTool(collector);
         var executor = CreateExecutor(collector, tool);
-        var workItem = BuildToolStepWorkItem(relay: false, tool);
+        var workItem = BuildLlmStepWorkItem(relay: false);
 
-        var continuation = await executor.BuildToolStepContinuationAsync(workItem, CancellationToken.None);
+        var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
 
-        var resultMessage = continuation.ToolStepResult.ResultMessages.Should().ContainSingle().Subject;
+        var toolStepResult = continuation.LlmStepResult.ToolStepResult.Should().NotBeNull().Subject;
+        var resultMessage = toolStepResult.ResultMessages.Should().ContainSingle().Subject;
         resultMessage.Content.Should().Contain("no_active_interactive_scope");
-        continuation.ToolStepResult.OutboundIntent.Should().BeNull();
+        toolStepResult.OutboundIntent.Should().BeNull();
     }
 
     private static AgentRunReplyGenerationExecutor CreateExecutor(
@@ -66,8 +64,9 @@ public sealed class AgentRunToolStepInteractiveReplyTests
     {
         var tools = new ToolManager();
         tools.Register(tool);
+        var provider = new ToolCallProvider(tool.Name);
         var plan = new AgentRunReplyStepPlan(
-            CreateStepExecutor(tools),
+            CreateStepExecutor(tools, provider),
             new Dictionary<string, string>(),
             LLMControlContext.Empty,
             AgentToolExecutionContext.Empty,
@@ -81,10 +80,10 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
     }
 
-    private static ChatRuntimeStepExecutor CreateStepExecutor(ToolManager tools)
+    private static ChatRuntimeStepExecutor CreateStepExecutor(ToolManager tools, ILLMProvider provider)
     {
         var runtime = new ChatRuntime(
-            providerFactory: static () => throw new InvalidOperationException("Tool step must not invoke the LLM provider."),
+            providerFactory: () => provider,
             history: new Aevatar.AI.Core.Chat.ChatHistory(),
             toolLoop: new ToolCallLoop(tools),
             hooks: null,
@@ -92,7 +91,7 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         return runtime.CreateStepExecutor(turnCatalog: null);
     }
 
-    private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(bool relay, IAgentTool tool)
+    private static AgentRunReplyStepExecutionRequest BuildLlmStepWorkItem(bool relay)
     {
         var activity = new ChatActivity
         {
@@ -123,25 +122,37 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             CorrelationId = "corr-1",
             TargetActorId = "conversation-actor",
             Attempt = 1,
-            NextStepIndex = 2,
+            NextStepIndex = 1,
             MaxToolRounds = 4,
-            PendingToolCalls =
-            {
-                new AgentRunToolCall
-                {
-                    Id = "call-1",
-                    Name = "reply_with_interaction",
-                    ArgumentsJson = ReplyArgumentsJson,
-                },
-            },
         };
         return new AgentRunReplyStepExecutionRequest(
             "run-1",
             "channel-agent-run:run-1",
             Attempt: 1,
-            StepIndex: 2,
+            StepIndex: 1,
             request,
             stepState);
+    }
+
+    private sealed class ToolCallProvider(string toolName) : ILLMProvider
+    {
+        public string Name => "interactive-tool-call-provider";
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new LLMStreamChunk
+            {
+                DeltaToolCall = new ToolCall
+                {
+                    Id = "call-1",
+                    Name = toolName,
+                    ArgumentsJson = ReplyArgumentsJson,
+                },
+            };
+            await Task.Yield();
+        }
     }
 
     private sealed class StaticStepPlanReplyGenerator(AgentRunReplyStepPlan plan) : IAgentRunStepConversationReplyGenerator
@@ -164,13 +175,13 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             AgentToolExecutionContext? toolContext,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildToolStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
 
         public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildToolStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
     }
 }
