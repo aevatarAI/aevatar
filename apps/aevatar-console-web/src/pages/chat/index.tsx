@@ -693,14 +693,21 @@ const ChatPage: React.FC = () => {
         let finalStateVersion =
           normalizeStateVersion(artifacts.chatContext?.stateVersion) ??
           normalizeStateVersion(conversation.stateVersion);
-        if (finalServerConversationId && !finalStateVersion) {
+        if (finalServerConversationId) {
+          finalStateVersion = undefined;
           try {
             const serverRecord = await chatHistoryApi.loadServerConversation(
               scopeId,
               finalServerConversationId
             );
+            const verifiedStateVersion = normalizeStateVersion(
+              serverRecord?.stateVersion
+            );
             finalStateVersion =
-              normalizeStateVersion(serverRecord?.stateVersion) ?? finalStateVersion;
+              verifiedStateVersion &&
+              (!sourceStateVersion || verifiedStateVersion > sourceStateVersion)
+                ? verifiedStateVersion
+                : undefined;
           } catch {
             finalStateVersion = undefined;
           }

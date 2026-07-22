@@ -56,6 +56,14 @@ function createSseResponse(frames: readonly unknown[]): Response {
   } as Response;
 }
 
+function createJsonResponse(value: unknown): Response {
+  return {
+    json: async () => value,
+    ok: true,
+    status: 200,
+  } as Response;
+}
+
 function createControlledSseResponse(): {
   close: () => void;
   enqueue: (frame: unknown) => void;
@@ -259,67 +267,86 @@ describe("ChatPage MVP", () => {
     expect(await screen.findByRole("button", { name: "Open Workflow Studio" })).toBeTruthy();
   });
 
-  it("continues with backend conversation watermark instead of a client transcript", async () => {
-    (authFetch as jest.Mock)
-      .mockResolvedValueOnce(
-        createSseResponse([
-          {
-            custom: {
-              name: "aevatar.chat.context",
-              payload: {
-                fields: {
-                  conversationId: {
-                    stringValue: "conversation-alpha",
-                  },
-                  scopeId: {
-                    stringValue: "scope-a",
-                  },
-                  stateVersion: {
-                    numberValue: 7,
-                  },
-                  turnId: {
-                    stringValue: "turn-alpha-1",
-                  },
-                },
+  it("persists the post-append backend watermark before the next continuation", async () => {
+    const postBodies: any[] = [];
+    const firstRunFrames = [
+      {
+        custom: {
+          name: "aevatar.chat.context",
+          payload: {
+            fields: {
+              conversationId: {
+                stringValue: "conversation-alpha",
+              },
+              scopeId: {
+                stringValue: "scope-a",
+              },
+              stateVersion: {
+                numberValue: 7,
+              },
+              turnId: {
+                stringValue: "turn-alpha-1",
               },
             },
           },
-          {
-            runFinished: {
-              result: {
-                output: "Choose a Team: team01 or team02.",
-              },
-            },
+        },
+      },
+      {
+        runFinished: {
+          result: {
+            output: "Choose a Team: team01 or team02.",
           },
-        ])
-      )
-      .mockResolvedValueOnce(
-        createSseResponse([
-          {
-            runFinished: {
-              result: {
-                output: "Continuing with team01.",
-              },
-            },
+        },
+      },
+    ];
+    const secondRunFrames = [
+      {
+        runFinished: {
+          result: {
+            output: "Continuing with team01.",
           },
-        ])
-      );
+        },
+      },
+    ];
+    let postCount = 0;
+    (authFetch as jest.Mock).mockImplementation(
+      async (url: string, options?: RequestInit) => {
+        if (url === "/api/chat") {
+          postBodies.push(JSON.parse(String(options?.body)));
+          postCount += 1;
+          return createSseResponse(
+            postCount === 1 ? firstRunFrames : secondRunFrames
+          );
+        }
+
+        if (
+          url ===
+          "/api/scopes/scope-a/chat-history/conversations/conversation-alpha"
+        ) {
+          return createJsonResponse({
+            messages: [],
+            stateVersion: 8,
+          });
+        }
+
+        throw new Error(`Unexpected request: ${url}`);
+      }
+    );
 
     renderWithQueryClient(<ChatPage />);
     await sendPrompt("Create a workflow that generates fund analysis reports");
     await screen.findByText("Choose a Team: team01 or team02.");
     await sendPrompt("team01");
 
-    await waitFor(() => expect(authFetch).toHaveBeenCalledTimes(2));
-    const firstBody = JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body);
-    const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
+    await waitFor(() => expect(postBodies).toHaveLength(2));
+    const [firstBody, secondBody] = postBodies;
     expect(firstBody.conversation).toEqual({ conversationId: null });
     expect(firstBody.commandId).toBeTruthy();
     expect(secondBody.prompt).toBe("team01");
     expect(secondBody.prompt).not.toContain("<conversation_history>");
     expect(secondBody.conversation).toEqual({
       conversationId: "conversation-alpha",
-      minimumStateVersion: 7,
+      minimumStateVersion: 8,
     });
   });
 
