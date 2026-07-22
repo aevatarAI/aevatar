@@ -115,7 +115,8 @@ internal static class WorkOrderEndpoints
         {
             response = await service.GetAsync(scopeId, workOrderId, ct);
         }
-        catch (ArgumentException)
+        catch (ArgumentException ex) when (
+            string.Equals(ex.ParamName, nameof(workOrderId), StringComparison.Ordinal))
         {
             return BadRequest(
                 "INVALID_WORK_ORDER_ID",
@@ -227,7 +228,8 @@ internal static class WorkOrderEndpoints
         {
             receipt = await command(principal, ct);
         }
-        catch (ArgumentException)
+        catch (ArgumentException ex) when (
+            string.Equals(ex.ParamName, nameof(workOrderId), StringComparison.Ordinal))
         {
             return BadRequest(
                 "INVALID_WORK_ORDER_ID",

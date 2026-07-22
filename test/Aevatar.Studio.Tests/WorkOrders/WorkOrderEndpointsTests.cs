@@ -59,7 +59,9 @@ public sealed class WorkOrderEndpointsTests
     {
         var service = new RecordingWorkOrderService
         {
-            GetException = new ArgumentException("sensitive canonical identity details"),
+            GetException = new ArgumentException(
+                "sensitive canonical identity details",
+                "workOrderId"),
         };
 
         var result = await WorkOrderEndpoints.HandleGetAsync(
@@ -77,7 +79,9 @@ public sealed class WorkOrderEndpointsTests
     {
         var service = new RecordingWorkOrderService
         {
-            DispatchException = new ArgumentException("sensitive canonical identity details"),
+            DispatchException = new ArgumentException(
+                "sensitive canonical identity details",
+                "workOrderId"),
         };
 
         var result = await WorkOrderEndpoints.HandleDispatchAsync(
@@ -89,6 +93,47 @@ public sealed class WorkOrderEndpointsTests
             CancellationToken.None);
 
         AssertMalformedWorkOrderId(result);
+    }
+
+    [Theory]
+    [InlineData("scopeId")]
+    [InlineData(null)]
+    public async Task HandleGetAsync_WhenArgumentExceptionIsNotForWorkOrderId_ShouldRethrow(
+        string? parameterName)
+    {
+        var expected = CreateUnrelatedArgumentException(parameterName);
+        var service = new RecordingWorkOrderService { GetException = expected };
+
+        var act = () => WorkOrderEndpoints.HandleGetAsync(
+            CreateAuthenticatedContext("requester-1"),
+            ScopeId,
+            "wo-1",
+            service,
+            CancellationToken.None);
+
+        (await act.Should().ThrowAsync<ArgumentException>())
+            .Which.Should().BeSameAs(expected);
+    }
+
+    [Theory]
+    [InlineData("scopeId")]
+    [InlineData(null)]
+    public async Task HandleDispatchAsync_WhenArgumentExceptionIsNotForWorkOrderId_ShouldRethrow(
+        string? parameterName)
+    {
+        var expected = CreateUnrelatedArgumentException(parameterName);
+        var service = new RecordingWorkOrderService { DispatchException = expected };
+
+        var act = () => WorkOrderEndpoints.HandleDispatchAsync(
+            CreateAuthenticatedContext("requester-1"),
+            ScopeId,
+            "wo-1",
+            new DispatchWorkOrderRequest(ExpectedLifecycleVersion: 3),
+            service,
+            CancellationToken.None);
+
+        (await act.Should().ThrowAsync<ArgumentException>())
+            .Which.Should().BeSameAs(expected);
     }
 
     private static CreateWorkOrderRequest CreateRequest() =>
@@ -134,6 +179,11 @@ public sealed class WorkOrderEndpointsTests
         payload.GetProperty("message").GetString().Should().Be("The WorkOrder identity is malformed.");
         payload.ToString().Should().NotContain("sensitive canonical identity details");
     }
+
+    private static ArgumentException CreateUnrelatedArgumentException(string? parameterName) =>
+        parameterName is null
+            ? new ArgumentException("sensitive downstream argument details")
+            : new ArgumentException("sensitive downstream argument details", parameterName);
 
     private sealed class RecordingWorkOrderService : IWorkOrderService
     {
