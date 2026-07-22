@@ -951,6 +951,33 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenBearerMissingAndTypedNyxIdAuthorityPresent_ShouldDeferTokenIssuanceToPort()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "fallback-owner",
+            accessToken: null,
+            nyxIdAuthority: new AgentToolNyxIdAuthorityContext("nyxid", "tenant-typed", "typed-user"));
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        schedulePort.LastRequest!.ProvisioningBearerToken.Should().BeNull();
+        schedulePort.LastRequest.AuthenticatedOwner.SubjectPlatform.Should().Be("nyxid");
+        schedulePort.LastRequest.AuthenticatedOwner.SubjectTenant.Should().Be("tenant-typed");
+        schedulePort.LastRequest.AuthenticatedOwner.SubjectExternalUserId.Should().Be("typed-user");
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenUncertainCallIsRetried_ShouldReuseStableOperationIdentity()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();

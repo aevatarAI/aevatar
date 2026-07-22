@@ -718,6 +718,35 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshPersonalAsync_WhenNoServicesAreEligible_ShouldObserveEmptyCatalog()
+    {
+        var commands = new RecordingCommandPort();
+        var handler = new RoutingJsonHandler(Ok("""
+            {"services":[]}
+            """));
+
+        var result = await Create(commands, handler)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        result.Status.Should().Be(NyxIdAuthorizationCatalogRefreshStatus.Observed);
+        result.FailureCode.Should().BeEmpty();
+        handler.Requests.Select(static request => (request.Method, request.Path))
+            .Should().Equal((HttpMethod.Get, "/api/v1/user-services"));
+        var observation = commands.Observations.Should().ContainSingle().Subject;
+        observation.Owner.Should().BeEquivalentTo(Owner());
+        observation.ObservedAtUtc.Should().Be(Now);
+        observation.FreshUntilUtc.Should().Be(Now.AddMinutes(15));
+        observation.ContractVersion.Should().Be("1");
+        observation.PolicyVersion.Should().Be("api-key-scope-v1");
+        observation.EvaluatedAtUtc.Should().Be(Now);
+        observation.ContentDigest.Should().Be(
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(observation.Owner, observation.Services));
+        observation.Services.Should().BeEmpty();
+        commands.Invalidations.Should().BeEmpty();
+        commands.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_WhenPersonalGrantClaimsAnotherOwner_ShouldInvalidateAsUnstable()
     {
         var commands = new RecordingCommandPort();

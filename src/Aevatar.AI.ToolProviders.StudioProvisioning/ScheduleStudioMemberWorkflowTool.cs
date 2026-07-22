@@ -111,7 +111,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
             return ErrorJson("authenticated_owner_context_unavailable", "A verified NyxID binding is required to authorize a Team schedule.");
         bindingId ??= $"nyxid:{nyxUserId}";
         var provisioningBearerToken = Normalize(AgentToolRequestContext.NyxIdAccessToken);
-        if (provisioningBearerToken is null)
+        if (provisioningBearerToken is null && !typedAuthority.IsComplete)
             return ErrorJson("caller_credential_unavailable", "A current NyxID credential is required to create the schedule credential.");
 
         ScheduleStudioMemberWorkflowArguments? args;
