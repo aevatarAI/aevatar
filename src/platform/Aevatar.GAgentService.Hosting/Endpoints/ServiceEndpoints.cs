@@ -163,6 +163,7 @@ public static partial class ServiceEndpoints
                 var admissionContext = WorkflowCapabilityAdmissionHttpContext.Create(
                     http,
                     ExternalCapabilityExecutionMode.Durable);
+                spec.WorkflowSpec.ExpectedExecutionMode = admissionContext.ExecutionMode;
                 spec.WorkflowSpec.CapabilityAdmissionPlan = await capabilityAdmissionService.AdmitAsync(
                     new WorkflowExternalCapabilityAdmissionRequest(
                         new ExternalWorkflowCapabilityAccessContext(

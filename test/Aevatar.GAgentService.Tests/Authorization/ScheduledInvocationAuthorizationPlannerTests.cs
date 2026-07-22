@@ -14,33 +14,39 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-16T08:00:00Z");
 
     [Fact]
-    public async Task PlanAsync_ShouldPreserveExactServiceAndNodeOrderAndMultiplicity()
+    public void FailureCodeWireValues_ShouldKeepDistinctDurableAndProjectionPendingSemantics()
+    {
+        ((int)ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable).Should().Be(13);
+        ((int)ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending).Should().Be(14);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ShouldCanonicalizeServiceAndNodePermissionSets()
     {
         var catalog = new MutableCatalogQueryPort(Snapshot(
             Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired),
             Service("svc-a", "provider-a", AuthorizationGrantRequirement.Required,
-                Node("node-z", NyxIdNodeRole.Fallback),
-                Node("node-a", NyxIdNodeRole.Primary))));
+                "node-a",
+                "node-z")));
         var planner = NewPlanner(catalog);
 
         var result = await planner.PlanAsync(Request(["svc-b", "svc-a", "svc-a"]));
 
         result.Success.Should().BeTrue();
         result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
-            .Should().Equal("svc-b", "svc-a", "svc-a");
-        result.Plan.NyxIdNodeGrants.Select(static grant => grant.NodeId)
-            .Should().Equal("node-z", "node-a", "node-z", "node-a");
-        result.Plan.NyxIdNodeGrants.Select(static grant => grant.EdgeKind)
-            .Should().Equal(
-                NyxIdNodeEdgeKind.NodeBinding,
-                NyxIdNodeEdgeKind.UserServicePrimary,
-                NyxIdNodeEdgeKind.NodeBinding,
-                NyxIdNodeEdgeKind.UserServicePrimary);
+            .Should().Equal("svc-a", "svc-b");
+        result.Plan.NyxIdServiceGrants[0].NodeIds.Should().Equal("node-a", "node-z");
+        result.Plan.NyxIdServiceGrants[0].ResourceOwner.Should().BeEquivalentTo(ResourceOwner());
+        result.Plan.NyxIdServiceGrants[0].NodeGrantRequirement.Should()
+            .Be(AuthorizationGrantRequirement.Required);
+        result.Plan.NyxIdServiceGrants[1].NodeIds.Should().BeEmpty();
+        result.Plan.NyxIdServiceGrants[1].NodeGrantRequirement.Should()
+            .Be(AuthorizationGrantRequirement.NotRequired);
         result.Plan.CredentialPolicy.AllowAllServices.Should().BeFalse();
         result.Plan.CredentialPolicy.AllowAllNodes.Should().BeFalse();
         result.Plan.PermissionDigest.Should().Be(
             ScheduledInvocationAuthorizationPlanner.ComputeDigest(result.Plan));
-        JsonFormatter.Default.Format(result.Plan).Should().NotContain("binding-a");
+        JsonFormatter.Default.Format(result.Plan).Should().NotContain("binding");
     }
 
     [Fact]
@@ -80,6 +86,98 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
+    public async Task PlanAsync_ForPersonalOwner_ShouldBindAuthenticatedActorToOwner()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
+
+        var result = await planner.PlanAsync(Request(["svc-a"]));
+
+        result.Success.Should().BeTrue();
+        result.Plan!.AuthenticatedActor.Should().BeEquivalentTo(Owner());
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForPersonalOwnerWithDifferentAuthenticatedActor_ShouldFail()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
+        var request = Request(["svc-a"]);
+        request = request with
+        {
+            OwnerContext = request.OwnerContext with
+            {
+                AuthenticatedActor = Identity(AuthorizationOwnerKind.Personal, "user-other"),
+            },
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.OwnerInvalid);
+        result.Detail.Should().Be("nyxid_authenticated_actor_invalid");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForOrganizationOwnerWithoutAuthenticatedAdministrator_ShouldFail()
+    {
+        var organization = Identity(AuthorizationOwnerKind.Organization, "org-alpha");
+        var planner = NewPlanner(new MutableCatalogQueryPort(
+            Snapshot(Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)) with
+            {
+                Owner = organization.Clone(),
+            }));
+        var request = Request(["svc-a"]);
+        request = request with
+        {
+            OwnerContext = request.OwnerContext with
+            {
+                Owner = organization,
+                AuthenticatedActor = null,
+            },
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.OwnerInvalid);
+        result.Detail.Should().Be("nyxid_authenticated_actor_invalid");
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForOrganizationOwner_ShouldBindExplicitPersonalAdministrator()
+    {
+        var organization = Identity(AuthorizationOwnerKind.Organization, "org-alpha");
+        var administrator = Identity(AuthorizationOwnerKind.Personal, "admin-alpha");
+        var snapshot = Snapshot(Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)) with
+        {
+            Owner = organization.Clone(),
+        };
+        snapshot = snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                snapshot.Services),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
+        var request = Request(["svc-a"]);
+        request = request with
+        {
+            OwnerContext = request.OwnerContext with
+            {
+                Owner = organization,
+                AuthenticatedActor = administrator,
+            },
+        };
+
+        var result = await planner.PlanAsync(request);
+
+        result.Success.Should().BeTrue();
+        result.Plan!.Owner.Should().BeEquivalentTo(organization);
+        result.Plan.AuthenticatedActor.Should().BeEquivalentTo(administrator);
+    }
+
+    [Fact]
     public async Task PlanAsync_WithMissingRequiredNodeTopology_ShouldFailDurableAuthorization()
     {
         var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
@@ -91,45 +189,225 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.FailureCode.Should().Be(
             ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
         result.Detail.Should().Be("nyxid_node_authorization_topology_unavailable:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(7);
+    }
+
+    [Theory]
+    [InlineData("other-authority")]
+    [InlineData("NYXID")]
+    [InlineData("nyxid ")]
+    public async Task PlanAsync_WithNonNyxIdResourceOwner_ShouldFailDurableAuthorization(
+        string authority)
+    {
+        var service = Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired);
+        service.ResourceOwner.Authority = authority;
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(service)));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_resource_owner_invalid:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(7);
     }
 
     [Fact]
-    public async Task ComputeDigest_ShouldChangeForGrantSwapAndDuplicateMultiplicity()
+    public async Task PlanAsync_WithNonNyxIdResourceOwnerOnUnrequestedService_ShouldFailDurableAuthorization()
+    {
+        var invalidService = Service(
+            "us-home-beta",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired);
+        invalidService.ResourceOwner.Authority = "other-authority";
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired),
+            invalidService)));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("nyxid_resource_owner_invalid:us-home-beta");
+        result.ObservedCatalogStateVersion.Should().Be(7);
+    }
+
+    [Theory]
+    [InlineData("state_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("negative_state_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("not_activated", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("cleaned", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("default_observed_at", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("blank_contract_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("blank_policy_version", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("default_evaluated_at", "nyxid_catalog_lifecycle_invalid")]
+    [InlineData("missing_digest", "nyxid_catalog_content_digest_invalid")]
+    [InlineData("mismatched_digest", "nyxid_catalog_content_digest_invalid")]
+    public async Task PlanAsync_WithLifecycleIneligibleCatalog_ShouldFailClosed(
+        string scenario,
+        string expectedDetail)
+    {
+        var snapshot = Snapshot(Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired));
+        snapshot = scenario switch
+        {
+            "state_version" => snapshot with { StateVersion = 0 },
+            "negative_state_version" => snapshot with { StateVersion = -1 },
+            "not_activated" => snapshot with { Activated = false },
+            "cleaned" => snapshot with { Cleaned = true },
+            "default_observed_at" => snapshot with { ObservedAtUtc = default },
+            "blank_contract_version" => snapshot with { ContractVersion = " " },
+            "blank_policy_version" => snapshot with { PolicyVersion = " " },
+            "default_evaluated_at" => snapshot with { EvaluatedAtUtc = default },
+            "missing_digest" => snapshot with { ContentDigest = string.Empty },
+            "mismatched_digest" => snapshot with { ContentDigest = "forged-digest" },
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be(expectedDetail);
+        result.ObservedCatalogStateVersion.Should().Be(snapshot.StateVersion);
+    }
+
+    [Theory]
+    [InlineData(
+        "owner_mismatch",
+        ScheduledInvocationAuthorizationFailureCode.OwnerMismatch,
+        "nyxid_catalog_owner_mismatch")]
+    [InlineData(
+        "invalidated",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(
+        "cleaned",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_lifecycle_invalid")]
+    [InlineData(
+        "lifecycle",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_lifecycle_invalid")]
+    [InlineData(
+        "digest",
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_content_digest_invalid")]
+    public async Task PlanAsync_WithMultipleInvalidCatalogConditions_ShouldRespectValidationOrder(
+        string scenario,
+        ScheduledInvocationAuthorizationFailureCode expectedFailureCode,
+        string expectedDetail)
+    {
+        var snapshot = Snapshot(Service(
+            "us-home-alpha",
+            "home-assistant",
+            AuthorizationGrantRequirement.NotRequired));
+        snapshot = scenario switch
+        {
+            "owner_mismatch" => snapshot with
+            {
+                Owner = Identity(AuthorizationOwnerKind.Personal, "user-other"),
+                Invalidated = true,
+                Cleaned = true,
+                StateVersion = 0,
+                Activated = false,
+                ObservedAtUtc = default,
+                ContentDigest = "forged-digest",
+                FreshUntilUtc = Now,
+            },
+            "invalidated" => snapshot with
+            {
+                Invalidated = true,
+                Cleaned = true,
+                StateVersion = 0,
+                Activated = false,
+                ContentDigest = "forged-digest",
+            },
+            "cleaned" => snapshot with
+            {
+                Cleaned = true,
+                StateVersion = 0,
+                ContentDigest = "forged-digest",
+            },
+            "lifecycle" => snapshot with
+            {
+                StateVersion = 0,
+                ContentDigest = "forged-digest",
+            },
+            "digest" => snapshot with
+            {
+                ContentDigest = "forged-digest",
+                FreshUntilUtc = Now,
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null),
+        };
+        var planner = NewPlanner(new MutableCatalogQueryPort(snapshot));
+
+        var result = await planner.PlanAsync(Request(["us-home-alpha"]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(expectedFailureCode);
+        result.Detail.Should().Be(expectedDetail);
+        result.ObservedCatalogStateVersion.Should().Be(snapshot.StateVersion);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithChangedSlugSnapshot_ShouldFailSnapshotStale()
+    {
+        var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired))));
+
+        var result = await planner.PlanAsync(Request([
+            NyxIdService("us-home-alpha", "home-assistant-renamed"),
+        ]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
+        result.Detail.Should().Be("nyxid_service_slug_snapshot_changed:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task PlanAsync_WithConflictingSlugSnapshotsForSameId_ShouldFailSnapshotStale()
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("us-home-alpha", "home-assistant", AuthorizationGrantRequirement.NotRequired)));
+        var planner = NewPlanner(catalog);
+
+        var result = await planner.PlanAsync(Request([
+            NyxIdService("us-home-alpha", "home-assistant"),
+            NyxIdService("us-home-alpha", "home-assistant-renamed"),
+        ]));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotStale);
+        result.Detail.Should().Be("nyxid_service_slug_snapshot_conflict:us-home-alpha");
+        result.ObservedCatalogStateVersion.Should().Be(0);
+        catalog.QueryCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PlanAsync_ShouldProduceSameDigestForEquivalentPermissionSets()
     {
         var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
             Service("svc-a", "provider-a", AuthorizationGrantRequirement.Required,
-                Node("node-primary", NyxIdNodeRole.Primary),
-                Node("node-fallback", NyxIdNodeRole.Fallback)),
+                "node-a",
+                "node-z"),
             Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired))));
-        var original = (await planner.PlanAsync(Request(["svc-a", "svc-b", "svc-a"]))).Plan!;
-        var originalDigest = ScheduledInvocationAuthorizationPlanner.ComputeDigest(original);
+        var first = await planner.PlanAsync(Request(["svc-b", "svc-a", "svc-a"]));
+        var second = await planner.PlanAsync(Request(["svc-a", "svc-b"]));
 
-        var serviceSwap = original.Clone();
-        serviceSwap.NyxIdServiceGrants[0] = original.NyxIdServiceGrants[1].Clone();
-        serviceSwap.NyxIdServiceGrants[1] = original.NyxIdServiceGrants[0].Clone();
-
-        var serviceDuplicateAdded = original.Clone();
-        serviceDuplicateAdded.NyxIdServiceGrants.Add(original.NyxIdServiceGrants[0].Clone());
-
-        var serviceDuplicateRemoved = original.Clone();
-        serviceDuplicateRemoved.NyxIdServiceGrants.RemoveAt(2);
-
-        var nodeSwap = original.Clone();
-        (nodeSwap.NyxIdNodeGrants[0], nodeSwap.NyxIdNodeGrants[1]) =
-            (nodeSwap.NyxIdNodeGrants[1], nodeSwap.NyxIdNodeGrants[0]);
-
-        var nodeDuplicateAdded = original.Clone();
-        nodeDuplicateAdded.NyxIdNodeGrants.Add(original.NyxIdNodeGrants[1].Clone());
-
-        new[]
-        {
-            serviceSwap,
-            serviceDuplicateAdded,
-            serviceDuplicateRemoved,
-            nodeSwap,
-            nodeDuplicateAdded,
-        }.Should().OnlyContain(plan =>
-            ScheduledInvocationAuthorizationPlanner.ComputeDigest(plan) != originalDigest);
+        first.Success.Should().BeTrue();
+        second.Success.Should().BeTrue();
+        first.Plan!.ToByteArray().Should().Equal(second.Plan!.ToByteArray());
+        first.Plan.PermissionDigest.Should().Be(second.Plan.PermissionDigest);
     }
 
     [Fact]
@@ -137,8 +415,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     {
         var catalog = new MutableCatalogQueryPort(Snapshot(
             Service("svc-a", "provider-a", AuthorizationGrantRequirement.Required,
-                Node("node-primary", NyxIdNodeRole.Primary),
-                Node("node-fallback", NyxIdNodeRole.Fallback))));
+                "node-a",
+                "node-z")));
         var planner = NewPlanner(catalog);
         var request = Request(["svc-a", "svc-a"]);
 
@@ -149,8 +427,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         second.Success.Should().BeTrue();
         first.Plan!.ToByteArray().Should().Equal(second.Plan!.ToByteArray());
         first.Plan!.PermissionDigest.Should().Be(second.Plan!.PermissionDigest);
-        first.Plan.PermissionDigest.Should().Be(
-            "c827239c72a763cec54d3f68f4332649a6f2a98a42e0dfcb8ca3b364cdc01d87");
+        first.Plan.SchemaVersion.Should().Be("scheduled-invocation-authorization/v2");
+        first.Plan.CredentialPolicy.PolicyVersion.Should().Be("nyxid-api-key/scheduled-invocation/v2");
     }
 
     [Fact]
@@ -164,11 +442,17 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         [
             static plan => plan.InvocationTarget.ScheduledAgent.ExecutionScopeId = "scope-other",
             static plan => plan.Owner.OwnerSubject = "owner-other",
+            static plan => plan.AuthenticatedActor.OwnerSubject = "admin-other",
             static plan => plan.SourceStamps[0].StateVersion = 17,
             static plan => plan.CatalogAuthority.ActorStateVersion++,
             static plan => plan.CatalogAuthority.ObservedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-2)),
             static plan => plan.CatalogAuthority.FreshUntil = Timestamp.FromDateTimeOffset(Now.AddMinutes(30)),
             static plan => plan.CatalogAuthority.ContentDigest = "digest-other",
+            static plan => plan.CatalogAuthority.ContractVersion = "contract-other",
+            static plan => plan.CatalogAuthority.PolicyVersion = "provider-policy-other",
+            static plan => plan.CatalogAuthority.EvaluatedAt = Timestamp.FromDateTimeOffset(Now.AddMinutes(-3)),
+            static plan => plan.NyxIdServiceGrants[0].ResourceOwner.OwnerSubject = "resource-owner-other",
+            static plan => plan.NyxIdServiceGrants[0].NodeIds.Add("node-other"),
             static plan => plan.CredentialPolicy.ExpiresAt = Timestamp.FromDateTimeOffset(Now.AddDays(31)),
             static plan => plan.CredentialPolicy.PolicyVersion = "policy-other",
             static plan => plan.CredentialPolicy.AllowAllServices = true,
@@ -190,14 +474,14 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     {
         var invalidAccess = Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired);
         invalidAccess.Access = (NyxIdAuthorizationAccess)999;
-        var invalidNode = Service(
+        var invalidRequirement = Service(
             "svc-a",
             "provider-a",
             AuthorizationGrantRequirement.Required,
-            Node("node-primary", NyxIdNodeRole.Primary));
-        invalidNode.Nodes[0].Role = (NyxIdNodeRole)999;
+            "node-a");
+        invalidRequirement.NodeGrantRequirement = (AuthorizationGrantRequirement)999;
 
-        foreach (var service in new[] { invalidAccess, invalidNode })
+        foreach (var service in new[] { invalidAccess, invalidRequirement })
         {
             var result = await NewPlanner(new MutableCatalogQueryPort(Snapshot(service)))
                 .PlanAsync(Request(["svc-a"]));
@@ -261,6 +545,38 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Success.Should().BeFalse();
         result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged);
         result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+    }
+
+    [Theory]
+    [InlineData(true, "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(false, "nyxid_catalog_snapshot_stale")]
+    public async Task RevalidateAsync_ShouldReportObservedCatalogVersionForUnavailableCurrentEvidence(
+        bool invalidated,
+        string expectedDetail)
+    {
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired)));
+        var planner = NewPlanner(catalog);
+        var request = Request(["svc-a"]);
+        var original = await planner.PlanAsync(request);
+        catalog.Snapshot = catalog.Snapshot! with
+        {
+            StateVersion = 24,
+            Invalidated = invalidated,
+            FreshUntilUtc = invalidated ? catalog.Snapshot.FreshUntilUtc : Now,
+        };
+        var revalidator = new ScheduledInvocationAuthorizationRevalidator(
+            planner,
+            new FakeTimeProvider(Now));
+
+        var result = await revalidator.RevalidateAsync(
+            request,
+            ScheduledInvocationAuthorizationConfirmations.FromPlan(original.Plan!));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged);
+        result.Detail.Should().Be(expectedDetail);
+        result.ObservedCatalogStateVersion.Should().Be(24);
     }
 
     [Fact]
@@ -501,8 +817,21 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     };
 
     private static NyxIdAuthorizationCatalogSnapshot Snapshot(
-        params NyxIdAuthorizationServiceEvidence[] services) =>
-        new(Owner(), 7, Now.AddMinutes(-1), Now.AddMinutes(15), "revision-7", "digest-7", services);
+        params NyxIdAuthorizationServiceEvidence[] services)
+    {
+        var owner = Owner();
+        return new NyxIdAuthorizationCatalogSnapshot(
+            owner,
+            7,
+            Now.AddMinutes(-1),
+            Now.AddMinutes(15),
+            "1",
+            "api-key-scope-v1",
+            Now.AddMinutes(-2),
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services),
+            services,
+            Activated: true);
+    }
 
     private static AuthorizationOwnerIdentity Owner() => new()
     {
@@ -511,11 +840,27 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         OwnerSubject = "user-alpha",
     };
 
+    private static AuthorizationOwnerIdentity Identity(
+        AuthorizationOwnerKind ownerKind,
+        string ownerSubject) => new()
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = ownerKind,
+            OwnerSubject = ownerSubject,
+        };
+
+    private static AuthorizationOwnerIdentity ResourceOwner() => new()
+    {
+        Authority = NyxIdAuthorizationAuthorities.NyxId,
+        OwnerKind = AuthorizationOwnerKind.Organization,
+        OwnerSubject = "org-alpha",
+    };
+
     private static NyxIdAuthorizationServiceEvidence Service(
         string id,
         string slug,
         AuthorizationGrantRequirement nodeRequirement,
-        params NyxIdAuthorizationNodeEvidence[] nodes)
+        params string[] nodeIds)
     {
         var service = new NyxIdAuthorizationServiceEvidence
         {
@@ -524,22 +869,11 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             DisplayName = slug,
             Access = NyxIdAuthorizationAccess.Permitted,
             NodeGrantRequirement = nodeRequirement,
+            ResourceOwner = ResourceOwner(),
         };
-        service.Nodes.Add(nodes);
+        service.NodeIds.Add(nodeIds);
         return service;
     }
-
-    private static NyxIdAuthorizationNodeEvidence Node(string id, NyxIdNodeRole role) => new()
-    {
-        NodeId = id,
-        DisplayName = id,
-        Role = role,
-        EdgeKind = role == NyxIdNodeRole.Primary
-            ? NyxIdNodeEdgeKind.UserServicePrimary
-            : NyxIdNodeEdgeKind.NodeBinding,
-        BindingId = role == NyxIdNodeRole.Primary ? string.Empty : $"binding-{id}",
-        RoutePriority = role == NyxIdNodeRole.Primary ? 0 : 1,
-    };
 
     private sealed class MutableCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
         : INyxIdAuthorizationCatalogQueryPort

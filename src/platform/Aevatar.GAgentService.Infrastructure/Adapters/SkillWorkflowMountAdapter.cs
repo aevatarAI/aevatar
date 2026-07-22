@@ -33,6 +33,9 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                 Message: "The skill does not expose workflow YAML bundles.");
         }
 
+        if (string.IsNullOrWhiteSpace(request.CallerId))
+            throw new InvalidOperationException("Skill workflow mounting requires an authenticated caller identity.");
+
         var mounted = new List<MountedSkillWorkflow>(request.Workflows.Count);
         foreach (var workflow in request.Workflows)
         {
@@ -47,7 +50,7 @@ public sealed class SkillWorkflowMountAdapter : ISkillWorkflowMountPort
                     InlineWorkflowYamls: bundle.SubWorkflowYamls)
                 {
                     CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
-                        request.ScopeId,
+                        request.CallerId.Trim(),
                         request.NyxIdAccessToken),
                 },
                 ct);

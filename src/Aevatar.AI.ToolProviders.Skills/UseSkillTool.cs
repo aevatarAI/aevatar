@@ -261,10 +261,23 @@ public sealed class UseSkillTool : IAgentTool
                 Message: "Workflow mounting skipped because nyxid access token is missing from the request context.");
         }
 
+        var callerId = ResolveCapabilityCallerId();
+        if (string.IsNullOrWhiteSpace(callerId))
+        {
+            return new SkillWorkflowMountResult(
+                Status: "missing_identity",
+                Mounted: false,
+                Workflows: [],
+                Message: "Workflow mounting skipped because authenticated caller identity is missing from the request context.");
+        }
+
         try
         {
             return await _workflowMountPort.MountAsync(
-                new SkillWorkflowMountRequest(scopeId.Trim(), token.Trim(), skill.Workflows),
+                new SkillWorkflowMountRequest(scopeId.Trim(), token.Trim(), skill.Workflows)
+                {
+                    CallerId = callerId.Trim(),
+                },
                 ct);
         }
         catch (OperationCanceledException)
@@ -304,6 +317,14 @@ public sealed class UseSkillTool : IAgentTool
                 "Workflow mounting is not available in this host.",
                 "scope workflow command port is not available in this host");
 
+        var callerId = ResolveCapabilityCallerId();
+        if (string.IsNullOrWhiteSpace(callerId))
+            return BuildScopeWorkflowMountError(
+                "missing_identity",
+                "Workflow mounting skipped because authenticated caller identity is missing from the request context.",
+                "authenticated caller identity not available in request context");
+
+        callerId = callerId.Trim();
         var mountedPayloads = new List<object>(skill.Workflows.Count);
         var mountedWorkflows = new List<MountedSkillWorkflow>(skill.Workflows.Count);
         foreach (var workflow in skill.Workflows)
@@ -332,7 +353,7 @@ public sealed class UseSkillTool : IAgentTool
                     InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls))
                 {
                     CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
-                        ResolveCapabilityCallerId(),
+                        callerId,
                         AgentToolRequestContext.NyxIdAccessToken,
                         AgentToolRequestContext.NyxIdOrgToken),
                 },
@@ -371,7 +392,6 @@ public sealed class UseSkillTool : IAgentTool
             return authority.ExternalUserId!;
 
         return AgentToolRequestContext.OwnerSubject?.Trim()
-            ?? AgentToolRequestContext.SenderNyxUserId?.Trim()
             ?? string.Empty;
     }
 

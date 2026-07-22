@@ -7,20 +7,23 @@ namespace Aevatar.Workflow.Abstractions;
 
 public static class WorkflowCapabilityAdmissionPlanIntegrity
 {
-    public const string SchemaVersion = "external-capability-admission.v1";
+    public const string SchemaVersion = "external-capability-admission.v2";
+    public const string NyxIdAuthority = "nyxid";
 
     public static WorkflowCapabilityAdmissionPlan Create(
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         ExternalCapabilityExecutionMode executionMode,
         IEnumerable<ExternalWorkflowCapabilityRef> capabilities,
-        IEnumerable<ExternalCapabilitySourceStamp> sourceStamps)
+        IEnumerable<ExternalCapabilitySourceStamp> sourceStamps,
+        ExternalCapabilityAuthorizationOwner? durableAuthorizationOwner = null)
     {
         var plan = new WorkflowCapabilityAdmissionPlan
         {
             SchemaVersion = SchemaVersion,
             DefinitionDigest = ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls),
             ExecutionMode = executionMode,
+            DurableAuthorizationOwner = durableAuthorizationOwner?.Clone(),
         };
         plan.ExternalCapabilities.Add(
             capabilities
@@ -84,7 +87,8 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             throw new InvalidOperationException("Workflow capability admission execution mode does not match the binding request.");
         }
 
-        var expected = expectedCapabilities
+        var expectedCapabilityArray = expectedCapabilities.ToArray();
+        var expected = expectedCapabilityArray
             .Select(CapabilityKey)
             .OrderBy(static key => key, StringComparer.Ordinal)
             .ToArray();
@@ -97,6 +101,30 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
 
         if (actual.Length > 0 && plan.SourceStamps.Count == 0)
             throw new InvalidOperationException("Workflow capability admission source evidence is required.");
+        var requiresDurableAuthorizationCatalog = RequiresDurableAuthorizationCatalog(
+            executionMode,
+            expectedCapabilityArray);
+        if (requiresDurableAuthorizationCatalog &&
+            !HasDurableAuthorizationCatalogSource(plan.SourceStamps))
+        {
+            throw new InvalidOperationException(
+                "Workflow capability admission durable authorization catalog source is required.");
+        }
+        if (!HasRequiredSourceEvidence(executionMode, expectedCapabilityArray, plan.SourceStamps))
+            throw new InvalidOperationException("Workflow capability admission required source evidence is invalid.");
+        if (requiresDurableAuthorizationCatalog)
+        {
+            if (!IsCanonicalDurableAuthorizationOwner(plan.DurableAuthorizationOwner))
+            {
+                throw new InvalidOperationException(
+                    "Workflow capability admission durable authorization owner is invalid.");
+            }
+        }
+        else if (plan.DurableAuthorizationOwner is not null)
+        {
+            throw new InvalidOperationException(
+                "Workflow capability admission durable authorization owner is not applicable.");
+        }
 
         if (!FixedTimeEquals(plan.AdmissionDigest, ComputeAdmissionDigest(plan)))
             throw new InvalidOperationException("Workflow capability admission digest is invalid.");
@@ -124,6 +152,105 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
                 capability.NyxIdUserService.ContractDigest),
             _ => "none",
         };
+    }
+
+    public static bool RequiresDurableAuthorizationCatalog(
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<ExternalWorkflowCapabilityRef> capabilities) =>
+        executionMode == ExternalCapabilityExecutionMode.Durable &&
+        capabilities.Any(static capability =>
+            capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService);
+
+    public static bool HasDurableAuthorizationCatalogSource(
+        IEnumerable<ExternalCapabilitySourceStamp> sourceStamps,
+        string? expectedSourceId = null)
+    {
+        var catalogs = sourceStamps
+            .Where(static source =>
+                source.SourceKind == ExternalCapabilitySourceKind.DurableAuthorizationCatalog)
+            .ToArray();
+        return catalogs.Length == 1 &&
+               IsUsableSourceStamp(catalogs[0], requirePositiveVersion: true) &&
+               (expectedSourceId is null ||
+                string.Equals(catalogs[0].SourceId, expectedSourceId, StringComparison.Ordinal));
+    }
+
+    public static bool HasRequiredSourceEvidence(
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<ExternalWorkflowCapabilityRef> capabilities,
+        IEnumerable<ExternalCapabilitySourceStamp> sourceStamps)
+    {
+        var capabilityArray = capabilities.ToArray();
+        var sources = sourceStamps.ToArray();
+        foreach (var capability in capabilityArray)
+        {
+            switch (capability.CapabilityCase)
+            {
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector:
+                    if (!HasSource(sources, ExternalCapabilitySourceKind.ConnectorCatalog))
+                        return false;
+                    break;
+                case ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService:
+                    if (!HasSource(sources, ExternalCapabilitySourceKind.NyxIdUserServices) ||
+                        !HasSource(
+                            sources,
+                            ExternalCapabilitySourceKind.NyxIdOpenApi,
+                            capability.NyxIdUserService.UserServiceId))
+                    {
+                        return false;
+                    }
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        return !RequiresDurableAuthorizationCatalog(executionMode, capabilityArray) ||
+               HasDurableAuthorizationCatalogSource(sources);
+    }
+
+    public static bool IsCanonicalDurableAuthorizationOwner(
+        ExternalCapabilityAuthorizationOwner? owner) =>
+        owner is not null &&
+        string.Equals(owner.Authority, NyxIdAuthority, StringComparison.Ordinal) &&
+        owner.OwnerKind == ExternalCapabilityAuthorizationOwnerKind.Personal &&
+        !string.IsNullOrWhiteSpace(owner.OwnerSubject) &&
+        string.Equals(owner.OwnerSubject, owner.OwnerSubject.Trim(), StringComparison.Ordinal);
+
+    private static bool HasSource(
+        IEnumerable<ExternalCapabilitySourceStamp> sources,
+        ExternalCapabilitySourceKind sourceKind,
+        string? expectedSourceId = null) =>
+        sources.Any(source =>
+            source.SourceKind == sourceKind &&
+            IsUsableSourceStamp(source, requirePositiveVersion: false) &&
+            (expectedSourceId is null ||
+             string.Equals(source.SourceId, expectedSourceId, StringComparison.Ordinal)));
+
+    private static bool IsUsableSourceStamp(
+        ExternalCapabilitySourceStamp source,
+        bool requirePositiveVersion)
+    {
+        if (string.IsNullOrWhiteSpace(source.SourceId) ||
+            !string.Equals(source.SourceId, source.SourceId.Trim(), StringComparison.Ordinal) ||
+            source.SourceVersion < 0 ||
+            requirePositiveVersion && source.SourceVersion == 0 ||
+            source.ObservedAt is null ||
+            source.FreshUntil is null ||
+            string.IsNullOrWhiteSpace(source.ContentDigest) ||
+            !string.Equals(source.ContentDigest, source.ContentDigest.Trim(), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            return source.ObservedAt.ToDateTimeOffset() < source.FreshUntil.ToDateTimeOffset();
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static string SourceKey(ExternalCapabilitySourceStamp source) =>

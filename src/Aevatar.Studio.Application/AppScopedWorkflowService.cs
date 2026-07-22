@@ -109,8 +109,21 @@ public sealed class AppScopedWorkflowService
         var suppliedAdmission = request.CapabilityAdmission;
         var executionMode = suppliedAdmission?.ExecutionMode
             ?? ExternalCapabilityExecutionMode.Interactive;
-        await _capabilityAdmissionService.AdmitAsync(
-            new WorkflowExternalCapabilityAdmissionRequest(
+        if (suppliedAdmission?.ExistingPlan is { } existingPlan)
+        {
+            await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    normalizedYaml,
+                    new Dictionary<string, string>(),
+                    "studio_workflow_draft",
+                    executionMode),
+                ct);
+        }
+        else
+        {
+            await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     suppliedAdmission?.CallerId ?? string.Empty,
@@ -119,9 +132,9 @@ public sealed class AppScopedWorkflowService
                 normalizedYaml,
                 new Dictionary<string, string>(),
                 "studio_workflow_draft",
-                executionMode,
-                suppliedAdmission?.ExistingPlan),
-            ct);
+                executionMode),
+                ct);
+        }
 
         var parsed = _yamlDocumentService.Parse(normalizedYaml);
         var workflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName)

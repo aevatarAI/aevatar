@@ -316,6 +316,8 @@ public sealed class ServiceEndpointsTests
         host.CommandPort.CreateRevisionCommand!.Spec.WorkflowSpec.CapabilityAdmissionPlan.Should().NotBeNull();
         host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.CapabilityAdmissionPlan.ExecutionMode.Should()
             .Be(ExternalCapabilityExecutionMode.Durable);
+        host.CommandPort.CreateRevisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
     }
 
     [Fact]
@@ -1693,6 +1695,8 @@ public sealed class ServiceEndpointsTests
 
         public List<WorkflowExternalCapabilityAdmissionRequest> Requests { get; } = [];
 
+        public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
@@ -1707,6 +1711,17 @@ public sealed class ServiceEndpointsTests
                 request.ExecutionMode,
                 [],
                 []));
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            PersistedRequests.Add(request);
+            if (_failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+            return Task.FromResult(request.Plan.Clone());
         }
     }
 

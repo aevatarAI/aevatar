@@ -49,8 +49,17 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         var inlineWorkflowYamls = ScopeWorkflowCapabilityConventions.NormalizeInlineWorkflowYamls(request.InlineWorkflowYamls);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
-            new WorkflowExternalCapabilityAdmissionRequest(
+        var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    workflowYaml,
+                    inlineWorkflowYamls,
+                    "scope_workflow_upsert",
+                    executionMode),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     admissionContext?.CallerId ?? string.Empty,
@@ -59,9 +68,8 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                 workflowYaml,
                 inlineWorkflowYamls,
                 "scope_workflow_upsert",
-                executionMode,
-                admissionContext?.ExistingPlan),
-            ct);
+                executionMode),
+                ct);
         var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId);
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
             _options,
@@ -123,6 +131,7 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                 WorkflowYaml = workflowYaml,
                 DefinitionActorId = definitionActorIdPrefix,
                 CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                ExpectedExecutionMode = executionMode,
             },
         };
         ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(revisionSpec.WorkflowSpec.InlineWorkflowYamls, inlineWorkflowYamls);

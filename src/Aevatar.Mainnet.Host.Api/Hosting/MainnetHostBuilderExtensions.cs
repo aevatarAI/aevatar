@@ -298,7 +298,8 @@ public static class MainnetHostBuilderExtensions
         {
             // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
             // non-empty value; an absent/empty config key must NOT clobber the default to null.
-            var nyxAuthority = builder.Configuration["Aevatar:NyxId:Authority"]
+            var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
+                               ?? builder.Configuration["Aevatar:NyxId:Authority"]
                                ?? builder.Configuration["Cli:App:NyxId:Authority"]
                                ?? builder.Configuration["Aevatar:Authentication:Authority"];
             if (!string.IsNullOrWhiteSpace(nyxAuthority))

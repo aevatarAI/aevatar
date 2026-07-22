@@ -7,8 +7,8 @@ namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 public static class ScheduledInvocationAuthorizationContractVersions
 {
-    public const string Schema = "scheduled-invocation-authorization/v1";
-    public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v1";
+    public const string Schema = "scheduled-invocation-authorization/v2";
+    public const string CredentialPolicy = "nyxid-api-key/scheduled-invocation/v2";
 }
 
 public sealed record AuthenticatedAuthorizationOwnerContext(
@@ -16,7 +16,8 @@ public sealed record AuthenticatedAuthorizationOwnerContext(
     string SubjectPlatform,
     string SubjectTenant,
     string SubjectExternalUserId,
-    string VerifiedBindingId);
+    string VerifiedBindingId,
+    AuthorizationOwnerIdentity? AuthenticatedActor = null);
 
 public sealed record ScheduledInvocationAuthorizationRequest(
     ScheduledInvocationTarget InvocationTarget,
@@ -33,17 +34,24 @@ public sealed record ScheduledInvocationAuthorizationRequest(
 public sealed record ScheduledInvocationAuthorizationPlanResult(
     ScheduledInvocationAuthorizationPlan? Plan,
     ScheduledInvocationAuthorizationFailureCode FailureCode,
-    string Detail)
+    string Detail,
+    long ObservedCatalogStateVersion = 0)
 {
     public bool Success => Plan is not null;
 
     public static ScheduledInvocationAuthorizationPlanResult Succeeded(
         ScheduledInvocationAuthorizationPlan plan) =>
-        new(plan, ScheduledInvocationAuthorizationFailureCode.Unspecified, string.Empty);
+        new(
+            plan,
+            ScheduledInvocationAuthorizationFailureCode.Unspecified,
+            string.Empty,
+            plan.CatalogAuthority?.ActorStateVersion ?? 0);
 
     public static ScheduledInvocationAuthorizationPlanResult Failed(
         ScheduledInvocationAuthorizationFailureCode failureCode,
-        string detail) => new(null, failureCode, detail);
+        string detail,
+        long observedCatalogStateVersion = 0) =>
+        new(null, failureCode, detail, observedCatalogStateVersion);
 }
 
 public sealed class ValidatedScheduledInvocationAuthorizationPlan
@@ -100,7 +108,9 @@ public static class NyxIdAuthorizationCatalogIntegrity
 public sealed record ScheduledInvocationAuthorizationValidationResult(
     ValidatedScheduledInvocationAuthorizationPlan? ValidatedPlan,
     ScheduledInvocationAuthorizationFailureCode FailureCode,
-    string Detail)
+    string Detail,
+    long RequiredStateVersion = 0,
+    long ObservedCatalogStateVersion = 0)
 {
     public bool Success => ValidatedPlan is not null;
 
@@ -108,11 +118,35 @@ public sealed record ScheduledInvocationAuthorizationValidationResult(
         ScheduledInvocationAuthorizationPlan plan) =>
         new(new ValidatedScheduledInvocationAuthorizationPlan(plan),
             ScheduledInvocationAuthorizationFailureCode.Unspecified,
-            string.Empty);
+            string.Empty,
+            ObservedCatalogStateVersion: plan.CatalogAuthority?.ActorStateVersion ?? 0);
 
     public static ScheduledInvocationAuthorizationValidationResult Failed(
         ScheduledInvocationAuthorizationFailureCode failureCode,
-        string detail) => new(null, failureCode, detail);
+        string detail,
+        long observedCatalogStateVersion = 0) =>
+        new(
+            null,
+            failureCode,
+            detail,
+            ObservedCatalogStateVersion: observedCatalogStateVersion);
+
+    public static ScheduledInvocationAuthorizationValidationResult ProjectionPending(
+        long requiredStateVersion,
+        long observedCatalogStateVersion)
+    {
+        if (requiredStateVersion <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requiredStateVersion));
+        if (observedCatalogStateVersion < 0 || observedCatalogStateVersion >= requiredStateVersion)
+            throw new ArgumentOutOfRangeException(nameof(observedCatalogStateVersion));
+
+        return new(
+            null,
+            ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending,
+            "nyxid_catalog_projection_pending",
+            requiredStateVersion,
+            observedCatalogStateVersion);
+    }
 }
 
 public sealed record NyxIdAuthorizationCatalogSnapshot(
@@ -120,7 +154,9 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     long StateVersion,
     DateTimeOffset ObservedAtUtc,
     DateTimeOffset FreshUntilUtc,
-    string ExternalRevision,
+    string ContractVersion,
+    string PolicyVersion,
+    DateTimeOffset EvaluatedAtUtc,
     string ContentDigest,
     IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
     bool Invalidated = false,
@@ -133,14 +169,45 @@ public sealed record NyxIdAuthorizationCatalogSnapshot(
     DateTimeOffset? CleanedAtUtc = null,
     string CleanupReason = "");
 
+public enum NyxIdAuthorizationCatalogVisibilityStatus
+{
+    Unspecified = 0,
+    Ready = 1,
+    ProjectionPending = 2,
+    OwnerMismatch = 3,
+    Invalidated = 4,
+    Stale = 5,
+    Invalid = 6,
+    Unavailable = 7,
+}
+
+public sealed record NyxIdAuthorizationCatalogVisibilityResult(
+    NyxIdAuthorizationCatalogVisibilityStatus Status,
+    long RequiredStateVersion,
+    long VisibleStateVersion,
+    string FailureCode)
+{
+    public bool Ready => Status == NyxIdAuthorizationCatalogVisibilityStatus.Ready;
+    public bool ProjectionPending => Status == NyxIdAuthorizationCatalogVisibilityStatus.ProjectionPending;
+
+    public static NyxIdAuthorizationCatalogVisibilityResult Unavailable(long requiredStateVersion) =>
+        new(
+            NyxIdAuthorizationCatalogVisibilityStatus.Unavailable,
+            requiredStateVersion,
+            0,
+            "nyxid_catalog_visibility_unavailable");
+}
+
 public sealed record NyxIdAuthorizationCatalogObservation(
     AuthorizationOwnerIdentity Owner,
+    string RefreshId,
     DateTimeOffset ObservedAtUtc,
     DateTimeOffset FreshUntilUtc,
-    string ExternalRevision,
+    string ContractVersion,
+    string PolicyVersion,
+    DateTimeOffset EvaluatedAtUtc,
     string ContentDigest,
-    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services,
-    long ExpectedLifecycleFence = 0);
+    IReadOnlyList<NyxIdAuthorizationServiceEvidence> Services);
 
 public enum NyxIdAuthorizationCatalogRefreshStatus
 {
@@ -151,17 +218,23 @@ public enum NyxIdAuthorizationCatalogRefreshStatus
     ObservationTimedOut = 4,
     OwnerNotSupported = 5,
     CatalogUnstable = 6,
-    PublishedContractMissing = 7,
+    Superseded = 7,
 }
 
 public sealed record NyxIdAuthorizationCatalogRefreshResult(
     NyxIdAuthorizationCatalogRefreshStatus Status,
-    string FailureCode)
+    string FailureCode,
+    long StateVersion = 0)
 {
     public bool Success => Status == NyxIdAuthorizationCatalogRefreshStatus.Observed;
 
-    public static NyxIdAuthorizationCatalogRefreshResult Observed { get; } =
-        new(NyxIdAuthorizationCatalogRefreshStatus.Observed, string.Empty);
+    public static NyxIdAuthorizationCatalogRefreshResult ObservedAt(long stateVersion)
+    {
+        if (stateVersion <= 0)
+            throw new ArgumentOutOfRangeException(nameof(stateVersion));
+
+        return new(NyxIdAuthorizationCatalogRefreshStatus.Observed, string.Empty, stateVersion);
+    }
 }
 
 public sealed record ScheduledInvocationMemberEvidence(
@@ -200,15 +273,18 @@ public interface INyxIdAuthorizationCatalogQueryPort
 
 public interface INyxIdAuthorizationCatalogCommandPort
 {
-    Task ActivateAsync(
+    Task BeginRefreshAsync(
         AuthorizationOwnerIdentity owner,
-        DateTimeOffset activatedAtUtc,
+        string refreshId,
+        DateTimeOffset startedAtUtc,
+        long expectedLifecycleFence,
         CancellationToken ct = default);
 
     Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default);
 
     Task RecordRefreshFailureAsync(
         AuthorizationOwnerIdentity owner,
+        string refreshId,
         DateTimeOffset failedAtUtc,
         string failureCode,
         CancellationToken ct = default);
@@ -217,6 +293,14 @@ public interface INyxIdAuthorizationCatalogCommandPort
         AuthorizationOwnerIdentity owner,
         DateTimeOffset invalidatedAtUtc,
         string reason,
+        CancellationToken ct = default);
+
+    Task InvalidateRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset invalidatedAtUtc,
+        string reason,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus outcomeStatus,
         CancellationToken ct = default);
 
     Task CleanupAsync(
@@ -236,6 +320,14 @@ public interface INyxIdAuthorizationCatalogRefreshPort
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
         string verifiedOwnerSubject,
         string bearerToken,
+        CancellationToken ct = default);
+}
+
+public interface INyxIdAuthorizationCatalogVisibilityPort
+{
+    Task<NyxIdAuthorizationCatalogVisibilityResult> ResolveAsync(
+        AuthorizationOwnerIdentity owner,
+        long requiredStateVersion,
         CancellationToken ct = default);
 }
 

@@ -161,11 +161,15 @@ internal sealed class RecordingProjectionReleaseService<TLease>
 {
     public List<TLease> Released { get; } = [];
 
+    public Exception? Exception { get; init; }
+
     public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(lease);
         Released.Add(lease);
-        return Task.CompletedTask;
+        return Exception == null
+            ? Task.CompletedTask
+            : Task.FromException(Exception);
     }
 }
 

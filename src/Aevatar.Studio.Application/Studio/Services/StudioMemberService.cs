@@ -108,10 +108,17 @@ public sealed class StudioMemberService : IStudioMemberService
             var suppliedAdmission = request.CapabilityAdmission;
             var existingPlan = workflow.CapabilityAdmissionPlan ?? suppliedAdmission?.ExistingPlan;
             var executionMode = suppliedAdmission?.ExecutionMode
-                ?? existingPlan?.ExecutionMode
                 ?? ExternalCapabilityExecutionMode.Interactive;
-            var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
-                WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
+            var capabilityAdmissionPlan = existingPlan is not null
+                ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                    PersistedWorkflowCapabilityAdmissionRequest.FromWorkflowYamls(
+                        existingPlan,
+                        workflow.WorkflowYamls,
+                        "studio_member_binding_run",
+                        executionMode),
+                    ct)
+                : await _capabilityAdmissionService.AdmitAsync(
+                    WorkflowExternalCapabilityAdmissionRequest.FromWorkflowYamls(
                     new ExternalWorkflowCapabilityAccessContext(
                         normalizedScopeId,
                         suppliedAdmission?.CallerId ?? string.Empty,
@@ -119,9 +126,8 @@ public sealed class StudioMemberService : IStudioMemberService
                         suppliedAdmission?.NyxIdOrganizationBearerToken),
                     workflow.WorkflowYamls,
                     "studio_member_binding_run",
-                    executionMode,
-                    existingPlan),
-                ct);
+                    executionMode),
+                    ct);
             request = request with
             {
                 Workflow = workflow with

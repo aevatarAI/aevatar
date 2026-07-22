@@ -198,7 +198,8 @@ message ScheduledInvocationAuthorizationFactState
   bool service_grants_not_required = 7;
   ScheduledInvocationAuthorizationDisclosureState disclosure = 8;
   ScheduledInvocationAuthorizationAuthorityState authority = 9;
-  repeated ScheduledInvocationAuthorizationNodeGrantState node_grants = 10;
+  reserved 10;
+  reserved "node_grants";
 }
 
 message ScheduledInvocationAuthorizationOwnerState
@@ -215,17 +216,6 @@ message ScheduledInvocationAuthorizationServiceGrantState
   bool node_grants_not_required = 3;
 }
 
-message ScheduledInvocationAuthorizationNodeGrantState
-{
-  string user_service_id = 1;
-  string node_id = 2;
-  string display_name = 3;
-  string role = 4;
-  string edge_kind = 5;
-  string binding_id = 6;
-  int32 route_priority = 7;
-}
-
 message ScheduledInvocationAuthorizationDisclosureState
 {
   bool dedicated_to_schedule = 1;
@@ -237,6 +227,9 @@ message ScheduledInvocationAuthorizationDisclosureState
 
 message ScheduledInvocationAuthorizationAuthorityState
 {
+  reserved 8;
+  reserved "catalog_external_revision";
+
   int64 member_state_version = 1;
   int64 workflow_state_version = 2;
   int64 connector_state_version = 3;
@@ -244,8 +237,10 @@ message ScheduledInvocationAuthorizationAuthorityState
   int64 catalog_state_version = 5;
   google.protobuf.Timestamp catalog_observed_at = 6;
   google.protobuf.Timestamp catalog_fresh_until = 7;
-  string catalog_external_revision = 8;
   string catalog_content_digest = 9;
+  string catalog_contract_version = 10;
+  string catalog_policy_version = 11;
+  google.protobuf.Timestamp catalog_evaluated_at = 12;
 }
 
 message ScheduledServiceInvocationAuthState

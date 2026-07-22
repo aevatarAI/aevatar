@@ -15,7 +15,11 @@ internal sealed class StudioWorkflowCapabilityAdmissionTestService :
 
     public List<WorkflowExternalCapabilityAdmissionRequest> Requests { get; } = [];
 
+    public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
+
     public Action<WorkflowExternalCapabilityAdmissionRequest>? OnAdmit { get; init; }
+
+    public Action<PersistedWorkflowCapabilityAdmissionRequest>? OnRevalidate { get; init; }
 
     public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
         WorkflowExternalCapabilityAdmissionRequest request,
@@ -26,12 +30,23 @@ internal sealed class StudioWorkflowCapabilityAdmissionTestService :
         if (_failure is not null)
             return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
 
-        return Task.FromResult(request.ExistingPlan?.Clone()
-            ?? WorkflowCapabilityAdmissionPlanIntegrity.Create(
-                request.WorkflowYaml,
-                request.InlineWorkflowYamls,
-                request.ExecutionMode,
-                [],
-                []));
+        return Task.FromResult(WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            request.WorkflowYaml,
+            request.InlineWorkflowYamls,
+            request.ExecutionMode,
+            [],
+            []));
+    }
+
+    public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+        PersistedWorkflowCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        PersistedRequests.Add(request);
+        OnRevalidate?.Invoke(request);
+        if (_failure is not null)
+            return Task.FromException<WorkflowCapabilityAdmissionPlan>(_failure);
+
+        return Task.FromResult(request.Plan.Clone());
     }
 }

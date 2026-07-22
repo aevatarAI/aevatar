@@ -376,8 +376,17 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
         var admissionContext = request.CapabilityAdmission;
         var executionMode = admissionContext?.ExecutionMode ?? ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
-            new WorkflowExternalCapabilityAdmissionRequest(
+        var capabilityAdmissionPlan = admissionContext?.ExistingPlan is { } existingPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    workflowBundle.EntryWorkflowYaml,
+                    workflowBundle.SubWorkflowYamls,
+                    "scope_binding_upsert",
+                    executionMode),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     admissionContext?.CallerId ?? string.Empty,
@@ -386,9 +395,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 workflowBundle.EntryWorkflowYaml,
                 workflowBundle.SubWorkflowYamls,
                 "scope_binding_upsert",
-                executionMode,
-                admissionContext?.ExistingPlan),
-            ct);
+                executionMode),
+                ct);
         var suppliedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.Workflow?.WorkflowId);
         var workflowId = ResolveWorkflowBindingWorkflowId(suppliedWorkflowId, identity);
         var definitionActorIdPrefix = string.IsNullOrWhiteSpace(suppliedWorkflowId)
@@ -422,6 +430,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                         WorkflowYaml = workflowBundle.EntryWorkflowYaml,
                         DefinitionActorId = definitionActorIdPrefix,
                         CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                        ExpectedExecutionMode = executionMode,
                     },
                 };
                 ScopeWorkflowCapabilityConventions.AddInlineWorkflowYamls(

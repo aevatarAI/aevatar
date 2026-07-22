@@ -1432,32 +1432,42 @@ public sealed class AgentDeliveryTargetToolTests
         private static NyxIdAuthorizationCatalogSnapshot CreateSnapshot()
         {
             var now = DateTimeOffset.UtcNow;
+            var owner = new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "user-1",
+            };
+            NyxIdAuthorizationServiceEvidence[] services =
+            [
+                ServiceEvidence(owner, "svc-lark", "api-lark-bot"),
+                ServiceEvidence(owner, "svc-lark-2", "api-lark-bot-2"),
+                ServiceEvidence(owner, "svc-email", "api-email-outbound"),
+            ];
             return new NyxIdAuthorizationCatalogSnapshot(
-                new AuthorizationOwnerIdentity
-                {
-                    Authority = NyxIdAuthorizationAuthorities.NyxId,
-                    OwnerKind = AuthorizationOwnerKind.Personal,
-                    OwnerSubject = "user-1",
-                },
+                owner,
                 23,
                 now,
                 now.AddMinutes(10),
-                "catalog-r23",
-                "catalog-digest-r23",
-                [
-                    ServiceEvidence("svc-lark", "api-lark-bot"),
-                    ServiceEvidence("svc-lark-2", "api-lark-bot-2"),
-                    ServiceEvidence("svc-email", "api-email-outbound"),
-                ]);
+                "1",
+                "api-key-scope-v1",
+                now.AddMinutes(-1),
+                NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services),
+                services,
+                Activated: true);
         }
 
-        private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug) => new()
+        private static NyxIdAuthorizationServiceEvidence ServiceEvidence(
+            AuthorizationOwnerIdentity owner,
+            string id,
+            string slug) => new()
         {
             UserServiceId = id,
             ServiceSlug = slug,
             DisplayName = slug,
             Access = NyxIdAuthorizationAccess.Permitted,
             NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+            ResourceOwner = owner.Clone(),
         };
     }
 }

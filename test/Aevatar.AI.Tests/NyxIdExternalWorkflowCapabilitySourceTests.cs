@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
@@ -431,6 +432,108 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             .Should().Be(ExternalCapabilityRemediationActionKind.UseInteractiveExecution);
     }
 
+    [Fact]
+    public async Task InspectAsync_ShouldReturnReadyForDurableMode_WhenCatalogProvesExactGrant()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        result.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        result.SelectedCapability.NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
+        var catalogSource = result.Sources.Should().ContainSingle(sourceStamp =>
+            sourceStamp.SourceKind == ExternalCapabilitySourceKind.DurableAuthorizationCatalog).Which;
+        catalogSource.SourceVersion.Should().Be(17);
+        catalogSource.ContentDigest.Should().Be(snapshot.ContentDigest);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailDurableMode_WhenCatalogContentDigestIsTampered()
+    {
+        var snapshot = ReadyCatalogSnapshot() with
+        {
+            ContentDigest = "tampered-content-digest",
+        };
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        AssertDurableAuthorizationUnavailable(result);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailDurableMode_WhenCatalogIsStale()
+    {
+        var snapshot = ReadyCatalogSnapshot() with
+        {
+            FreshUntilUtc = new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero),
+        };
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        AssertDurableAuthorizationUnavailable(result);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailDurableMode_WhenCatalogOwnerDoesNotMatchCaller()
+    {
+        var owner = ReadyCatalogSnapshot().Owner.Clone();
+        owner.OwnerSubject = "caller-other";
+        var snapshot = ReadyCatalogSnapshot() with { Owner = owner };
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        AssertDurableAuthorizationUnavailable(result);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailDurableMode_WhenCatalogSlugSnapshotDrifts()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+        snapshot.Services[0].ServiceSlug = "home-assistant-renamed";
+        snapshot = WithCanonicalContentDigest(snapshot);
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        AssertDurableAuthorizationUnavailable(result);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailDurableMode_WhenCatalogDeniesSelectedService()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+        snapshot.Services[0].Access = NyxIdAuthorizationAccess.Denied;
+        snapshot = WithCanonicalContentDigest(snapshot);
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        AssertDurableAuthorizationUnavailable(result);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailDurableMode_WhenRequiredNodeIdsAreMissing()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+        snapshot.Services[0].NodeIds.Clear();
+        snapshot = WithCanonicalContentDigest(snapshot);
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        AssertDurableAuthorizationUnavailable(result);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldFailDurableMode_WhenResourceOwnerAuthorityIsNotNyxId()
+    {
+        var snapshot = ReadyCatalogSnapshot();
+        snapshot.Services[0].ResourceOwner.Authority = "other-authority";
+        snapshot = WithCanonicalContentDigest(snapshot);
+
+        var result = await InspectDurableWithCatalogAsync(snapshot);
+
+        AssertDurableAuthorizationUnavailable(result);
+    }
+
     public static TheoryData<string, string?, ExternalCapabilityReadinessStatus, string> NonReadyCases =>
         new()
         {
@@ -542,6 +645,84 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             "runtime-caller-credential",
             "runtime-organization-credential");
 
+    private static NyxIdAuthorizationCatalogSnapshot ReadyCatalogSnapshot()
+    {
+        var owner = new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "caller-alpha",
+        };
+        var service = new NyxIdAuthorizationServiceEvidence
+        {
+            UserServiceId = "us-home-alpha",
+            ServiceSlug = "home-assistant",
+            DisplayName = "Home Assistant",
+            Access = NyxIdAuthorizationAccess.Permitted,
+            NodeGrantRequirement = AuthorizationGrantRequirement.Required,
+            ResourceOwner = new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Organization,
+                OwnerSubject = "org-home-alpha",
+            },
+        };
+        service.NodeIds.Add(["node-home-alpha", "node-home-beta"]);
+        NyxIdAuthorizationServiceEvidence[] services = [service];
+        return new NyxIdAuthorizationCatalogSnapshot(
+            owner,
+            17,
+            new DateTimeOffset(2026, 7, 21, 9, 59, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero),
+            "scope-plan-contract/v1",
+            "scope-plan-policy/v1",
+            new DateTimeOffset(2026, 7, 21, 9, 59, 0, TimeSpan.Zero),
+            NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, services),
+            services,
+            Activated: true);
+    }
+
+    private static NyxIdAuthorizationCatalogSnapshot WithCanonicalContentDigest(
+        NyxIdAuthorizationCatalogSnapshot snapshot) =>
+        snapshot with
+        {
+            ContentDigest = NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(
+                snapshot.Owner,
+                snapshot.Services),
+        };
+
+    private static async Task<ExternalCapabilityReadiness> InspectDurableWithCatalogAsync(
+        NyxIdAuthorizationCatalogSnapshot snapshot)
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = AdmittedSpec },
+        };
+        var services = new ServiceCollection();
+        services.AddSingleton<INyxIdAuthorizationCatalogQueryPort>(new StubCatalogQueryPort(snapshot));
+        services.AddSingleton<TimeProvider>(new FixedTimeProvider());
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyxid.invalid");
+        services.AddHttpClient<NyxIdApiClient>()
+            .ConfigurePrimaryHttpMessageHandler(() => handler);
+        await using var provider = services.BuildServiceProvider();
+        var source = provider.GetServices<IExternalWorkflowCapabilitySource>()
+            .OfType<NyxIdExternalWorkflowCapabilitySource>()
+            .Single();
+        var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
+        return await source.InspectAsync(
+            Access(),
+            descriptor.Capability,
+            ExternalCapabilityExecutionMode.Durable,
+            CancellationToken.None);
+    }
+
+    private static void AssertDurableAuthorizationUnavailable(ExternalCapabilityReadiness result)
+    {
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("DURABLE_AUTHORIZATION_UNAVAILABLE");
+    }
+
     private static async Task<ExternalCapabilityReadiness> InspectPublishedServiceAsync(string keysJson)
     {
         var handler = new ReadinessHandler
@@ -619,6 +800,14 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
+    }
+
+    private sealed class StubCatalogQueryPort(NyxIdAuthorizationCatalogSnapshot? snapshot)
+        : INyxIdAuthorizationCatalogQueryPort
+    {
+        public Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default) => Task.FromResult(snapshot);
     }
 
     private sealed class FixedTimeProvider : TimeProvider

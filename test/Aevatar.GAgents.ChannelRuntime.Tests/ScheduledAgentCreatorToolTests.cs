@@ -407,12 +407,13 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().Equal(
-                    "svc-ornn", "svc-lark", "svc-lark-failure", "svc-tavily", "svc-github", "svc-llm");
+                    "svc-github", "svc-lark", "svc-lark-failure", "svc-llm", "svc-ornn", "svc-tavily");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Get);
         });
     }
@@ -450,7 +451,8 @@ public sealed class ScheduledAgentCreatorToolTests
 
             ownerLLMQueryPort.ScopeIds.Should().Equal("scope-bot-1", "scope-bot-1");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
@@ -480,7 +482,8 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
@@ -556,7 +559,8 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
-            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Post);
+            handler.Requests.Should().ContainSingle(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
         });
     }
@@ -746,7 +750,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.OutputFormat.Should().Be(ScheduledAgentOutputFormat.FeishuDoc);
             captured.CatalogEntry.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
 
-            var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = harness.Handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
@@ -821,7 +826,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot-scheduled");
             captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-scheduled");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-ornn", "svc-scheduled-lark", "svc-lark-failure", "svc-llm");
@@ -1014,7 +1020,8 @@ public sealed class ScheduledAgentCreatorToolTests
             handler.Requests.Should().NotContain(request =>
                 request.Method == HttpMethod.Get &&
                 request.Path.Contains("/proxy/s/ornn-api/", StringComparison.Ordinal));
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
@@ -1070,7 +1077,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot-2");
             captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-2");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-lark-2", "svc-lark-failure", "svc-llm");
@@ -1273,6 +1281,48 @@ public sealed class ScheduledAgentCreatorToolTests
         return handler;
     }
 
+    private static string CreateScopePlanResponse(string? requestBody)
+    {
+        using var request = JsonDocument.Parse(requestBody ?? throw new InvalidOperationException(
+            "The scope-plan test request body is required."));
+        var serviceIds = request.RootElement.GetProperty("selected_service_ids")
+            .EnumerateArray()
+            .Select(static value => value.GetString()!)
+            .ToArray();
+        return JsonSerializer.Serialize(new
+        {
+            authority = "nyxid",
+            contract_version = "1",
+            policy_version = "api-key-scope-v1",
+            authenticated_actor = new { id = "nyx-user-1", type = "personal" },
+            intended_key_owner = new { id = "nyx-user-1", type = "personal" },
+            services = serviceIds.Select(static serviceId => new
+            {
+                user_service_id = serviceId,
+                resource_owner = new { id = "nyx-user-1", type = "personal" },
+                node_grant = new { type = "not_required" },
+            }),
+            allowed_service_ids = serviceIds,
+            allowed_node_ids = Array.Empty<string>(),
+            evaluated_at = "2026-07-21T00:00:00Z",
+            normalized_grant_digest =
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            freshness = new
+            {
+                mode = "mutation_revalidated_snapshot",
+                precondition_field = "scope_plan_digest",
+                post_creation_drift = "fail_closed",
+            },
+            completeness = new
+            {
+                list_complete = true,
+                no_duplicates = true,
+                route_candidate_basis = "active_configured_routes",
+                transient_node_state_excluded = true,
+            },
+        });
+    }
+
     private static async Task WithToolContext(Func<Task> action) =>
         await WithToolContext(CreateToolContext(), action);
 
@@ -1359,9 +1409,12 @@ public sealed class ScheduledAgentCreatorToolTests
             23,
             now.AddMinutes(-1),
             now.AddMinutes(10),
-            string.Empty,
+            "1",
+            "api-key-scope-v1",
+            now.AddMinutes(-2),
             NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, clonedServices),
-            clonedServices);
+            clonedServices,
+            Activated: true);
     }
 
     private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug) => new()
@@ -1371,6 +1424,12 @@ public sealed class ScheduledAgentCreatorToolTests
         DisplayName = slug,
         Access = NyxIdAuthorizationAccess.Permitted,
         NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        ResourceOwner = new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "nyx-user-1",
+        },
     };
 
     private sealed record CreatorHarness(
@@ -1411,15 +1470,32 @@ public sealed class ScheduledAgentCreatorToolTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             Requests.Add(new RecordedRequest(request.Method, path, body, request.Headers.Authorization));
 
-            return _responses.TryGetValue($"{request.Method.Method}:{path}", out var response)
-                ? new HttpResponseMessage(response.Status)
+            if (_responses.TryGetValue($"{request.Method.Method}:{path}", out var response))
+            {
+                return new HttpResponseMessage(response.Status)
                 {
                     Content = new StringContent(response.Json, Encoding.UTF8, "application/json"),
-                }
-                : new HttpResponseMessage(HttpStatusCode.NotFound)
-                {
-                    Content = new StringContent("""{"error":true,"message":"not found"}""", Encoding.UTF8, "application/json"),
                 };
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/api/v1/api-keys/scope-plan")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        CreateScopePlanResponse(body),
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent(
+                    """{"error":true,"message":"not found"}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            };
         }
     }
 

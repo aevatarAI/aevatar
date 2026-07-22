@@ -107,8 +107,17 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         var executionMode = ShouldSchedule(request)
             ? ExternalCapabilityExecutionMode.Durable
             : ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
-            new WorkflowExternalCapabilityAdmissionRequest(
+        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    workflowYaml,
+                    new Dictionary<string, string>(),
+                    "studio_workflow_provisioning",
+                    executionMode),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     normalizedScopeId,
                     suppliedAdmission?.CallerId ?? string.Empty,
@@ -117,9 +126,8 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                 workflowYaml,
                 new Dictionary<string, string>(),
                 "studio_workflow_provisioning",
-                executionMode,
-                suppliedAdmission?.ExistingPlan),
-            ct);
+                executionMode),
+                ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             suppliedAdmission?.CallerId ?? string.Empty,
             suppliedAdmission?.NyxIdCallerBearerToken,

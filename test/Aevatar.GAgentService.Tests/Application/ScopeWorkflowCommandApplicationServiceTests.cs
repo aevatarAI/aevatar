@@ -56,6 +56,9 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         createCommand.Spec.Identity.TenantId.Should().Be(ScopeId);
         createCommand.Spec.Identity.AppId.Should().Be(DefaultOptions.ServiceAppId);
         createCommand.Spec.Identity.Namespace.Should().Be(DefaultOptions.ServiceNamespace);
+        var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        revisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
         governanceCommandPort.CreateEndpointCatalogCommand.Should().NotBeNull();
         governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
         governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
@@ -202,6 +205,11 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
                 request.ExecutionMode,
                 [],
                 []));
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(request.Plan.Clone());
     }
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(

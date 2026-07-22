@@ -1,3 +1,4 @@
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -29,18 +30,11 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         if (request.ExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
             throw new InvalidOperationException("External capability execution mode is required.");
 
-        var definition = await ParseDefinitionAsync(request, cancellationToken);
-        if (request.ExistingPlan is not null)
-        {
-            WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
-                request.ExistingPlan,
-                definition.WorkflowYaml,
-                definition.InlineWorkflowYamls,
-                request.ExecutionMode,
-                definition.Capabilities);
-            EnsureSourcesAreFresh(request.ExistingPlan);
-            return request.ExistingPlan.Clone();
-        }
+        var definition = await ParseDefinitionAsync(
+            request.WorkflowYaml,
+            request.InlineWorkflowYamls,
+            request.WorkflowYamls,
+            cancellationToken);
 
         var sources = new List<ExternalCapabilitySourceStamp>();
         foreach (var capability in definition.Capabilities)
@@ -53,6 +47,14 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 cancellationToken);
             if (readiness.Status != ExternalCapabilityReadinessStatus.Ready)
                 throw new WorkflowExternalCapabilityAdmissionException(readiness);
+            var proofFailure = ValidateReadinessProof(
+                request.Access,
+                capability,
+                request.ExecutionMode,
+                readiness);
+            if (proofFailure is not null)
+                throw new WorkflowExternalCapabilityAdmissionException(proofFailure);
+            EnsureSourcesAreFresh(readiness.Sources, request.ExecutionMode, capability);
             sources.AddRange(readiness.Sources.Select(static source => source.Clone()));
         }
 
@@ -61,21 +63,148 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             definition.InlineWorkflowYamls,
             request.ExecutionMode,
             definition.Capabilities,
-            sources);
+            sources,
+            BuildDurableAuthorizationOwner(
+                request.Access,
+                request.ExecutionMode,
+                definition.Capabilities));
+    }
+
+    public async Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+        PersistedWorkflowCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var definition = await ParseDefinitionAsync(
+            request.WorkflowYaml,
+            request.InlineWorkflowYamls,
+            request.WorkflowYamls,
+            cancellationToken);
+        WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            request.Plan,
+            definition.WorkflowYaml,
+            definition.InlineWorkflowYamls,
+            request.ExpectedExecutionMode,
+            definition.Capabilities);
+        EnsureDurableCatalogMatchesPlanOwner(request.Plan);
+        EnsureSourcesAreFresh(request.Plan);
+        return request.Plan.Clone();
+    }
+
+    private static ExternalCapabilityReadiness? ValidateReadinessProof(
+        ExternalWorkflowCapabilityAccessContext access,
+        ExternalWorkflowCapabilityRef capability,
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalCapabilityReadiness readiness)
+    {
+        if (readiness.ExecutionMode != executionMode)
+        {
+            return ReadinessProofFailure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.ContractDrift,
+                "READINESS_EXECUTION_MODE_MISMATCH",
+                "External capability readiness was evaluated for a different execution mode.");
+        }
+
+        if (!string.Equals(
+                WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(readiness.SelectedCapability),
+                WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(capability),
+                StringComparison.Ordinal))
+        {
+            return ReadinessProofFailure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.ContractDrift,
+                "READINESS_CAPABILITY_MISMATCH",
+                "External capability readiness was evaluated for a different capability.");
+        }
+
+        if (WorkflowCapabilityAdmissionPlanIntegrity.RequiresDurableAuthorizationCatalog(
+                executionMode,
+                [capability]) &&
+            !WorkflowCapabilityAdmissionPlanIntegrity.HasDurableAuthorizationCatalogSource(readiness.Sources))
+        {
+            return ReadinessProofFailure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                "DURABLE_AUTHORIZATION_SOURCE_REQUIRED",
+                "Durable NyxID capability admission requires current authorization catalog evidence.");
+        }
+
+        if (WorkflowCapabilityAdmissionPlanIntegrity.RequiresDurableAuthorizationCatalog(
+                executionMode,
+                [capability]) &&
+            !WorkflowCapabilityAdmissionPlanIntegrity.HasDurableAuthorizationCatalogSource(
+                readiness.Sources,
+                ExpectedDurableCatalogSourceId(access)))
+        {
+            return ReadinessProofFailure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                "DURABLE_AUTHORIZATION_SOURCE_MISMATCH",
+                "Durable NyxID authorization evidence belongs to a different caller.");
+        }
+
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.HasRequiredSourceEvidence(
+                executionMode,
+                [capability],
+                readiness.Sources))
+        {
+            return ReadinessProofFailure(
+                capability,
+                executionMode,
+                ExternalCapabilityReadinessStatus.ContractDrift,
+                "READINESS_SOURCE_REQUIRED",
+                "External capability readiness is missing required source evidence.");
+        }
+
+        return null;
+    }
+
+    private static ExternalCapabilityReadiness ReadinessProofFailure(
+        ExternalWorkflowCapabilityRef capability,
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalCapabilityReadinessStatus status,
+        string code,
+        string safeMessage)
+    {
+        var failure = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = executionMode,
+            Status = status,
+            SelectedCapability = capability.Clone(),
+        };
+        failure.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = status,
+            Code = code,
+            SafeMessage = safeMessage,
+        });
+        failure.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.RefreshSource,
+            Label = "Re-evaluate capability",
+        });
+        return failure;
     }
 
     private async Task<ParsedAdmissionDefinition> ParseDefinitionAsync(
-        WorkflowExternalCapabilityAdmissionRequest request,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string> inlineWorkflowYamls,
+        IReadOnlyList<string>? workflowYamls,
         CancellationToken cancellationToken)
     {
-        if (request.WorkflowYamls is { } workflowYamls)
+        if (workflowYamls is not null)
             return await ParseWorkflowBundleAsync(workflowYamls, cancellationToken);
 
         var definitions = new List<(string Key, string Yaml)>
         {
-            ("root", request.WorkflowYaml),
+            ("root", workflowYaml),
         };
-        definitions.AddRange(request.InlineWorkflowYamls
+        definitions.AddRange(inlineWorkflowYamls
             .OrderBy(static item => item.Key, StringComparer.Ordinal)
             .Select(static item => (item.Key, item.Value)));
 
@@ -93,8 +222,8 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         }
 
         return new ParsedAdmissionDefinition(
-            request.WorkflowYaml,
-            request.InlineWorkflowYamls,
+            workflowYaml,
+            inlineWorkflowYamls,
             SortCapabilities(capabilities));
     }
 
@@ -158,21 +287,93 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             .OrderBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
             .ToArray();
 
-    private void EnsureSourcesAreFresh(WorkflowCapabilityAdmissionPlan plan)
+    private static void EnsureDurableCatalogMatchesPlanOwner(
+        WorkflowCapabilityAdmissionPlan plan)
     {
-        if (plan.ExternalCapabilities.Count == 0)
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.RequiresDurableAuthorizationCatalog(
+                plan.ExecutionMode,
+                plan.ExternalCapabilities))
+        {
             return;
+        }
 
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.HasDurableAuthorizationCatalogSource(
+                plan.SourceStamps,
+                ExpectedDurableCatalogSourceId(plan.DurableAuthorizationOwner)))
+        {
+            throw new InvalidOperationException(
+                "Workflow capability admission durable authorization catalog source does not match the persisted owner.");
+        }
+    }
+
+    private static string ExpectedDurableCatalogSourceId(ExternalWorkflowCapabilityAccessContext access)
+    {
+        if (string.IsNullOrWhiteSpace(access.CallerId))
+            return string.Empty;
+
+        return ExpectedDurableCatalogSourceId(new ExternalCapabilityAuthorizationOwner
+        {
+            Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+            OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            OwnerSubject = access.CallerId,
+        });
+    }
+
+    private static string ExpectedDurableCatalogSourceId(
+        ExternalCapabilityAuthorizationOwner? owner)
+    {
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.IsCanonicalDurableAuthorizationOwner(owner))
+            return string.Empty;
+
+        return NyxIdAuthorizationCatalogActorIds.Build(new AuthorizationOwnerIdentity
+        {
+            Authority = owner!.Authority,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = owner.OwnerSubject,
+        });
+    }
+
+    private static ExternalCapabilityAuthorizationOwner? BuildDurableAuthorizationOwner(
+        ExternalWorkflowCapabilityAccessContext access,
+        ExternalCapabilityExecutionMode executionMode,
+        IEnumerable<ExternalWorkflowCapabilityRef> capabilities)
+    {
+        if (!WorkflowCapabilityAdmissionPlanIntegrity.RequiresDurableAuthorizationCatalog(
+                executionMode,
+                capabilities))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(access.CallerId))
+            throw new InvalidOperationException("Verified caller is required for durable NyxID admission.");
+
+        return new ExternalCapabilityAuthorizationOwner
+        {
+            Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+            OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+            OwnerSubject = access.CallerId,
+        };
+    }
+
+    private void EnsureSourcesAreFresh(WorkflowCapabilityAdmissionPlan plan) =>
+        EnsureSourcesAreFresh(plan.SourceStamps, plan.ExecutionMode);
+
+    private void EnsureSourcesAreFresh(
+        IEnumerable<ExternalCapabilitySourceStamp> sources,
+        ExternalCapabilityExecutionMode executionMode,
+        ExternalWorkflowCapabilityRef? selectedCapability = null)
+    {
         var now = _timeProvider.GetUtcNow();
-        var stale = plan.SourceStamps.FirstOrDefault(source =>
-            source.FreshUntil is null || source.FreshUntil.ToDateTimeOffset() <= now);
+        var stale = sources.FirstOrDefault(source => !IsFresh(source, now));
         if (stale is null)
             return;
 
         var readiness = new ExternalCapabilityReadiness
         {
-            ExecutionMode = plan.ExecutionMode,
+            ExecutionMode = executionMode,
             Status = ExternalCapabilityReadinessStatus.SourceStale,
+            SelectedCapability = selectedCapability?.Clone(),
         };
         readiness.Blockers.Add(new ExternalCapabilityBlocker
         {
@@ -186,6 +387,22 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             Label = "Refresh capability readiness",
         });
         throw new WorkflowExternalCapabilityAdmissionException(readiness);
+    }
+
+    private static bool IsFresh(ExternalCapabilitySourceStamp source, DateTimeOffset now)
+    {
+        if (source.ObservedAt is null || source.FreshUntil is null)
+            return false;
+
+        try
+        {
+            return source.ObservedAt.ToDateTimeOffset() <= now &&
+                   source.FreshUntil.ToDateTimeOffset() > now;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private sealed record ParsedAdmissionDefinition(

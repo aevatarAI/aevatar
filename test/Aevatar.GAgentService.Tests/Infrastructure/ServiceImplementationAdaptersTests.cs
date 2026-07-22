@@ -628,6 +628,7 @@ public sealed class ServiceImplementationAdaptersTests
                     WorkflowYaml = workflowYaml,
                     InlineWorkflowYamls = { ["child"] = "name: child" },
                     CapabilityAdmissionPlan = admissionPlan,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
                 },
             },
         });
@@ -697,6 +698,7 @@ public sealed class ServiceImplementationAdaptersTests
                     DefinitionActorId = "workflow-definition-1",
                     InlineWorkflowYamls = { ["child.yaml"] = "name: child" },
                     CapabilityAdmissionPlan = capabilityAdmissionPlan,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
                 },
             },
         });
@@ -705,9 +707,123 @@ public sealed class ServiceImplementationAdaptersTests
         artifact.DeploymentPlan.WorkflowPlan.InlineWorkflowYamls.Should().ContainKey("child.yaml");
         artifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.AdmissionDigest.Should()
             .Be(capabilityAdmissionPlan.AdmissionDigest);
-        admission.Request.Should().NotBeNull();
-        admission.Request!.ExistingPlan!.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
+        admission.PersistedRequest.Should().NotBeNull();
+        admission.PersistedRequest!.Plan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
+        admission.PersistedRequest.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
         workflowPort.ParseCalls.Should().ContainSingle("name: ignored");
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_WithPersistedPlan_ShouldRevalidateWithoutInferringCallerFromServiceIdentity()
+    {
+        const string workflowYaml = "name: persisted-workflow";
+        var capability = new ExternalWorkflowCapabilityRef
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-home-alpha",
+                ServiceSlugSnapshot = "home-assistant",
+                OperationId = "read_states",
+                HttpMethod = "GET",
+                PathTemplate = "/api/states",
+                ContractDigest = "nyxid-digest-alpha",
+            },
+        };
+        var dependencies = new WorkflowAuthorizationDependencies
+        {
+            ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
+        };
+        dependencies.ExternalCapabilities.Add(capability);
+        var persistedPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Durable,
+            [capability],
+            [],
+            new ExternalCapabilityAuthorizationOwner
+            {
+                Authority = WorkflowCapabilityAdmissionPlanIntegrity.NyxIdAuthority,
+                OwnerKind = ExternalCapabilityAuthorizationOwnerKind.Personal,
+                OwnerSubject = "caller-alpha",
+            });
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = WorkflowYamlParseResult.Success("persisted-workflow", dependencies),
+        };
+        var admission = new RecordingWorkflowCapabilityAdmissionService();
+        var adapter = new WorkflowServiceImplementationAdapter(workflowPort, admission);
+
+        var artifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "tenant-alpha",
+                    AppId = "app-beta",
+                    Namespace = "ns-delta",
+                    ServiceId = "svc-gamma",
+                },
+                RevisionId = "r-persisted",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowYaml = workflowYaml,
+                    CapabilityAdmissionPlan = persistedPlan,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Durable,
+                },
+            },
+        });
+
+        admission.LiveRequest.Should().BeNull();
+        admission.PersistedRequest.Should().NotBeNull();
+        var persistedRequest = admission.PersistedRequest!;
+        typeof(PersistedWorkflowCapabilityAdmissionRequest)
+            .GetProperty(nameof(WorkflowExternalCapabilityAdmissionRequest.Access))
+            .Should().BeNull();
+        persistedRequest.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().Be("caller-alpha");
+        persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().NotBe("app-beta");
+        persistedRequest.Plan.DurableAuthorizationOwner.OwnerSubject.Should().NotBe("svc-gamma");
+        artifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.DurableAuthorizationOwner.OwnerSubject
+            .Should().Be("caller-alpha");
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_WithPersistedPlan_ShouldRequireExpectedExecutionMode()
+    {
+        const string workflowYaml = "name: persisted-workflow";
+        var persistedPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
+        var adapter = new WorkflowServiceImplementationAdapter(
+            new RecordingWorkflowRunActorPort
+            {
+                ParseResult = CreateSuccessfulWorkflowParse("persisted-workflow"),
+            },
+            new RecordingWorkflowCapabilityAdmissionService());
+
+        var act = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "r-persisted",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowYaml = workflowYaml,
+                    CapabilityAdmissionPlan = persistedPlan,
+                },
+            },
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*execution mode is required*");
     }
 
     [Fact]
@@ -845,7 +961,9 @@ public sealed class ServiceImplementationAdaptersTests
 
     private sealed class RecordingWorkflowCapabilityAdmissionService : IWorkflowExternalCapabilityAdmissionService
     {
-        public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
+        public WorkflowExternalCapabilityAdmissionRequest? LiveRequest { get; private set; }
+
+        public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
 
         public WorkflowCapabilityAdmissionPlan? Result { get; init; }
 
@@ -853,15 +971,22 @@ public sealed class ServiceImplementationAdaptersTests
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
         {
-            Request = request;
+            LiveRequest = request;
             return Task.FromResult(Result?.Clone()
-                ?? request.ExistingPlan?.Clone()
                 ?? WorkflowCapabilityAdmissionPlanIntegrity.Create(
                     request.WorkflowYaml,
                     request.InlineWorkflowYamls,
                     request.ExecutionMode,
                     [],
                     []));
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            PersistedRequest = request;
+            return Task.FromResult(Result?.Clone() ?? request.Plan.Clone());
         }
     }
 

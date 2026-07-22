@@ -108,83 +108,16 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         ArgumentNullException.ThrowIfNull(request);
 
         var resolved = await ResolveAuthorizationRequestAsync(request, ct);
-        var result = await PlanWithCatalogRefreshRetryAsync(
-            resolved.AuthorizationRequest,
-            request.ProvisioningBearerToken,
-            ct);
+        var result = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
         return new StudioMemberWorkflowAuthorizationResult(
             result.Success, result.Plan, result.FailureCode, result.Detail);
-    }
-
-    private async Task<ScheduledInvocationAuthorizationPlanResult> PlanWithCatalogRefreshRetryAsync(
-        ScheduledInvocationAuthorizationRequest authorizationRequest,
-        string? provisioningBearerToken,
-        CancellationToken ct)
-    {
-        var first = await _authorizationPlanner.PlanAsync(authorizationRequest, ct);
-        if (first.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(first))
-            return first;
-
-        var bearerToken = NormalizeOptional(provisioningBearerToken);
-        if (bearerToken is null)
-        {
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_requires_bearer_token:{first.Detail}");
-        }
-
-        if (_catalogRefreshPort is null)
-        {
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_unavailable:{first.Detail}");
-        }
-
-        NyxIdAuthorizationCatalogRefreshResult refresh;
-        try
-        {
-            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
-                authorizationRequest.Owner.OwnerKind);
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_failed:{ex.GetType().Name}");
-        }
-
-        if (!refresh.Success)
-        {
-            var failureCode = string.IsNullOrWhiteSpace(refresh.FailureCode)
-                ? refresh.Status.ToString()
-                : refresh.FailureCode.Trim();
-            return ScheduledInvocationAuthorizationPlanResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_failed:{failureCode}");
-        }
-
-        var retryEvaluatedAtUtc = _timeProvider.GetUtcNow();
-        var retryRequest = authorizationRequest with
-        {
-            EvaluatedAtUtc = retryEvaluatedAtUtc,
-            ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
-        };
-        var second = await _authorizationPlanner.PlanAsync(retryRequest, ct);
-        if (second.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(second))
-            return second;
-
-        return ScheduledInvocationAuthorizationPlanResult.Failed(
-            second.FailureCode,
-            $"nyxid_catalog_refresh_observed_but_snapshot_unavailable:{second.Detail}");
     }
 
     private async Task<ScheduledInvocationAuthorizationValidationResult> RevalidateWithCatalogRefreshRetryAsync(
         ScheduledInvocationAuthorizationRequest authorizationRequest,
         ScheduledInvocationAuthorizationConfirmation confirmation,
         string? provisioningBearerToken,
+        DateTimeOffset? fixedCredentialExpiresAtUtc,
         CancellationToken ct)
     {
         var first = await _authorizationRevalidator.RevalidateAsync(authorizationRequest, confirmation, ct);
@@ -211,15 +144,35 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
         {
             _logger.LogWarning(
-                ex,
                 "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
                 authorizationRequest.Owner.OwnerKind);
-            return ScheduledInvocationAuthorizationValidationResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_failed:{ex.GetType().Name}");
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
+        }
+
+        if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
+        {
+            if (refresh.StateVersion > 0 &&
+                first.ObservedCatalogStateVersion < refresh.StateVersion)
+            {
+                return ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
+                    refresh.StateVersion,
+                    first.ObservedCatalogStateVersion);
+            }
+
+            throw new StudioMemberAutomationCatalogRefreshSupersededException();
+        }
+
+        if (refresh.Status is NyxIdAuthorizationCatalogRefreshStatus.Failed or
+            NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)
+        {
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
         }
 
         if (!refresh.Success)
@@ -236,15 +189,15 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var retryRequest = authorizationRequest with
         {
             EvaluatedAtUtc = retryEvaluatedAtUtc,
-            ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
+            ExpiresAtUtc = fixedCredentialExpiresAtUtc ??
+                           _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
         };
         var second = await _authorizationRevalidator.RevalidateAsync(retryRequest, confirmation, ct);
-        if (second.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(second.Detail))
-            return second;
-
-        return ScheduledInvocationAuthorizationValidationResult.Failed(
-            second.FailureCode,
-            $"nyxid_catalog_refresh_observed_but_snapshot_unavailable:{second.Detail}");
+        return second.ObservedCatalogStateVersion < refresh.StateVersion
+            ? ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
+                refresh.StateVersion,
+                second.ObservedCatalogStateVersion)
+            : second;
     }
 
     public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
@@ -324,12 +277,21 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             current.AuthorizationRequest,
             existing.Schedule.PermissionDigest,
             existing.Schedule.PolicyVersion);
-        var validated = await _authorizationRevalidator.RevalidateAsync(
+        var validated = await RevalidateWithCatalogRefreshRetryAsync(
             current.AuthorizationRequest,
             confirmation,
+            command.ProvisioningBearerToken,
+            current.AuthorizationRequest.ExpiresAtUtc,
             ct);
         if (!validated.Success)
         {
+            if (validated.FailureCode ==
+                ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending)
+            {
+                throw new StudioMemberAutomationProjectionPendingException(
+                    validated.RequiredStateVersion);
+            }
+
             throw new StudioMemberAutomationPlanConflictException(
                 "reauthorization_required",
                 validated.Detail);
@@ -491,9 +453,17 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             resolved.AuthorizationRequest,
             confirmation,
             request.ProvisioningBearerToken,
-            ct);
+            fixedCredentialExpiresAtUtc: null,
+            ct: ct);
         if (!validation.Success)
         {
+            if (validation.FailureCode ==
+                ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending)
+            {
+                throw new StudioMemberAutomationProjectionPendingException(
+                    validation.RequiredStateVersion);
+            }
+
             throw new StudioMemberAutomationPlanConflictException(
                 validation.FailureCode == ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged
                     ? "authorization_plan_changed"
@@ -1064,20 +1034,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var catalog = plan.CatalogAuthority
             ?? throw new InvalidOperationException("scheduled_authorization_catalog_authority_missing");
         var disclosure = plan.Disclosures.ToHashSet();
-        var grants = plan.NyxIdServiceGrants.Select(grant =>
-        {
-            var nodeIds = plan.NyxIdNodeGrants
-                .Where(node => string.Equals(
-                    node.UserServiceId,
-                    grant.UserServiceId,
-                    StringComparison.Ordinal))
-                .Select(static node => node.NodeId)
-                .ToArray();
-            return new ScheduledInvocationAuthorizationServiceGrant(
+        var grants = plan.NyxIdServiceGrants.Select(static grant =>
+            new ScheduledInvocationAuthorizationServiceGrant(
                 grant.UserServiceId,
-                nodeIds,
-                nodeIds.Length == 0);
-        }).ToArray();
+                grant.NodeIds.ToArray(),
+                grant.NodeGrantRequirement == AuthorizationGrantRequirement.NotRequired))
+            .ToArray();
         return new ScheduledInvocationAuthorizationFact(
             plan.PermissionDigest,
             policy.PolicyVersion,
@@ -1103,19 +1065,10 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 catalog.ActorStateVersion,
                 catalog.ObservedAt.ToDateTimeOffset(),
                 catalog.FreshUntil.ToDateTimeOffset(),
-                catalog.ExternalRevision,
-                catalog.ContentDigest))
-        {
-            NodeGrants = plan.NyxIdNodeGrants.Select(static node =>
-                new ScheduledInvocationAuthorizationNodeGrant(
-                    node.UserServiceId,
-                    node.NodeId,
-                    node.DisplayName,
-                    node.Role.ToString(),
-                    node.EdgeKind.ToString(),
-                    node.BindingId,
-                    node.RoutePriority)).ToArray(),
-        };
+                catalog.ContentDigest,
+                catalog.ContractVersion,
+                catalog.PolicyVersion,
+                catalog.EvaluatedAt.ToDateTimeOffset()));
     }
 
     private static string ToScopeName(NyxIdCredentialScope scope) => scope switch
@@ -1432,18 +1385,6 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private static bool IsStableErrorCode(string value) =>
         value.Length <= 128 && value.All(static c =>
             char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
-
-    private static bool IsRecoverableNyxIdCatalogSnapshotFailure(
-        ScheduledInvocationAuthorizationPlanResult result)
-    {
-        if (result.FailureCode is not (ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound or
-            ScheduledInvocationAuthorizationFailureCode.SnapshotStale))
-        {
-            return false;
-        }
-
-        return IsRecoverableNyxIdCatalogSnapshotFailure(result.Detail);
-    }
 
     private static bool IsRecoverableNyxIdCatalogSnapshotFailure(string? detail)
     {

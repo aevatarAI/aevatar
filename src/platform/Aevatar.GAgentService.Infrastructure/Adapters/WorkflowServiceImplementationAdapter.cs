@@ -48,19 +48,29 @@ public sealed class WorkflowServiceImplementationAdapter : IServiceImplementatio
 
         var authorizationDependencies = parse.AuthorizationDependencies
             ?? throw new InvalidOperationException("workflow authorization dependencies are required.");
-        var executionMode = spec.CapabilityAdmissionPlan?.ExecutionMode
-            ?? ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
-            new WorkflowExternalCapabilityAdmissionRequest(
-                new ExternalWorkflowCapabilityAccessContext(
-                    request.Spec.Identity?.TenantId ?? string.Empty,
-                    request.Spec.Identity?.AppId ?? string.Empty),
-                spec.WorkflowYaml,
-                spec.InlineWorkflowYamls,
-                "service_revision_prepare",
-                executionMode,
-                spec.CapabilityAdmissionPlan),
-            ct);
+        var expectedExecutionMode = spec.CapabilityAdmissionPlan is null &&
+                                    spec.ExpectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified
+            ? ExternalCapabilityExecutionMode.Interactive
+            : spec.ExpectedExecutionMode;
+        var capabilityAdmissionPlan = spec.CapabilityAdmissionPlan is { } persistedPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    persistedPlan,
+                    spec.WorkflowYaml,
+                    spec.InlineWorkflowYamls,
+                    "service_revision_prepare",
+                    expectedExecutionMode),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
+                    new ExternalWorkflowCapabilityAccessContext(
+                        request.Spec.Identity?.TenantId ?? string.Empty,
+                        string.Empty),
+                    spec.WorkflowYaml,
+                    spec.InlineWorkflowYamls,
+                    "service_revision_prepare",
+                    expectedExecutionMode),
+                ct);
 
         return WorkflowServiceRevisionArtifactBuilder.Build(
             request.Spec,

@@ -133,6 +133,39 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ProvisionAsync_WhenScheduledPlanIsPersisted_ShouldRevalidateAsDurable()
+    {
+        const string workflowYaml = "name: monitor";
+        var persistedPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [],
+            []);
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var sut = NewService(member, schedule, admission);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", workflowYaml)
+            {
+                TeamId = TeamId,
+                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                    "caller-alpha",
+                    existingPlan: persistedPlan),
+            });
+
+        admission.Requests.Should().BeEmpty();
+        admission.PersistedRequests.Should().ContainSingle()
+            .Which.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        member.BindRequest!.CapabilityAdmission!.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
+    }
+
+    [Fact]
     public async Task ProvisionAsync_HappyPath_CreatesBindsAndSchedulesWithoutPollingBind()
     {
         var member = NewMemberService();

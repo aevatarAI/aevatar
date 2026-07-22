@@ -52,6 +52,18 @@ enum ExternalCapabilitySourceKind {
   EXTERNAL_CAPABILITY_SOURCE_KIND_DURABLE_AUTHORIZATION_CATALOG = 4;
 }
 
+enum ExternalCapabilityAuthorizationOwnerKind {
+  EXTERNAL_CAPABILITY_AUTHORIZATION_OWNER_KIND_UNSPECIFIED = 0;
+  EXTERNAL_CAPABILITY_AUTHORIZATION_OWNER_KIND_PERSONAL = 1;
+  EXTERNAL_CAPABILITY_AUTHORIZATION_OWNER_KIND_ORGANIZATION = 2;
+}
+
+message ExternalCapabilityAuthorizationOwner {
+  string authority = 1;
+  ExternalCapabilityAuthorizationOwnerKind owner_kind = 2;
+  string owner_subject = 3;
+}
+
 message HostConnectorCapabilityRef {
   string connector_capability_ref = 1;
   string operation_id = 2;
@@ -119,4 +131,5 @@ message WorkflowCapabilityAdmissionPlan {
   repeated ExternalWorkflowCapabilityRef external_capabilities = 4;
   repeated ExternalCapabilitySourceStamp source_stamps = 5;
   string admission_digest = 6;
+  ExternalCapabilityAuthorizationOwner durable_authorization_owner = 7;
 }

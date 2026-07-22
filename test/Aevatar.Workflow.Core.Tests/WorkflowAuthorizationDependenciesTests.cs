@@ -183,7 +183,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             actual.ExternalCapabilities,
-            [ReadySourceStamp()]);
+            ReadySourceStamps());
 
         await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
         {
@@ -208,7 +208,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             dependencies.ExternalCapabilities,
-            [ReadySourceStamp()]);
+            ReadySourceStamps());
         var agent = NewAgent();
 
         var act = () => agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
@@ -235,7 +235,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Interactive,
             [forged],
-            [ReadySourceStamp()]);
+            ReadySourceStamps("us-forged-beta"));
         var agent = NewAgent();
 
         var act = () => agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
@@ -291,17 +291,30 @@ public sealed class WorkflowAuthorizationDependenciesTests
               arguments: '{"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"get-state","method":"GET","path":"/states/{entity_id}","contract_digest":"operation-digest"}'
         """;
 
-    private static ExternalCapabilitySourceStamp ReadySourceStamp() =>
-        new()
-        {
-            SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
-            SourceId = "nyxid-user-services:caller",
-            ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
-                new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
-            FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
-                new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
-            ContentDigest = "source-digest",
-        };
+    private static ExternalCapabilitySourceStamp[] ReadySourceStamps(
+        string userServiceId = "us-home-alpha") =>
+        [
+            new()
+            {
+                SourceKind = ExternalCapabilitySourceKind.NyxIdUserServices,
+                SourceId = "nyxid-user-services:caller",
+                ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
+                FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
+                ContentDigest = "source-digest",
+            },
+            new()
+            {
+                SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
+                SourceId = userServiceId,
+                ObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 21, 10, 0, 0, TimeSpan.Zero)),
+                FreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 21, 10, 5, 0, TimeSpan.Zero)),
+                ContentDigest = "openapi-digest",
+            },
+        ];
 
     private sealed class InMemoryWorkflowEventSourcingBehaviorFactory
         : IEventSourcingBehaviorFactory<WorkflowState>

@@ -1250,6 +1250,11 @@ public sealed class ScopeWorkflowEndpointsTests
                 request.ExecutionMode,
                 [],
                 []));
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(request.Plan.Clone());
     }
 
     private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort

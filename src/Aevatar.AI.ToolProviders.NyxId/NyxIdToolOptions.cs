@@ -8,14 +8,13 @@ public sealed class NyxIdToolOptions
     public const string DefaultSandboxServiceSlug = "chrono-sandbox";
 
     /// <summary>
-    /// The single default NyxID base URL (the identity/OIDC authority AND the proxy host — the
-    /// nyx-api.chrono-ai.fun alias is the same endpoint). This is the one place the default lives;
-    /// hosts override it from config (e.g. Aevatar:NyxId:Authority) only when a value is provided, so
-    /// when config is absent the relay OIDC discovery and nyxid_proxy calls still work out of the box.
+    /// Default NyxID REST API base URL. Deployments may configure a dedicated API/resource-server
+    /// base independently from their browser/OIDC authority; the production default remains usable
+    /// when no override is supplied.
     /// </summary>
     public const string DefaultBaseUrl = "https://nyx.chrono-ai.fun/";
 
-    /// <summary>NyxID base URL. Defaults to <see cref="DefaultBaseUrl"/>; set via config to override.</summary>
+    /// <summary>NyxID REST API base URL. Defaults to <see cref="DefaultBaseUrl"/>.</summary>
     public string? BaseUrl { get; set; } = DefaultBaseUrl;
 
     /// <summary>

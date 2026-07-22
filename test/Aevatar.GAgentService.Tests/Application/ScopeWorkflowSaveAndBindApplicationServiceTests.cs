@@ -128,11 +128,23 @@ public sealed class ScopeWorkflowSaveAndBindApplicationServiceTests
 
         public List<WorkflowExternalCapabilityAdmissionRequest> Requests { get; } = [];
 
+        public List<PersistedWorkflowCapabilityAdmissionRequest> PersistedRequests { get; } = [];
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
+            return _exception is null
+                ? Task.FromResult(Plan.Clone())
+                : Task.FromException<WorkflowCapabilityAdmissionPlan>(_exception);
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            PersistedRequests.Add(request);
             return _exception is null
                 ? Task.FromResult(Plan.Clone())
                 : Task.FromException<WorkflowCapabilityAdmissionPlan>(_exception);

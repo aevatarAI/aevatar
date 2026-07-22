@@ -110,6 +110,8 @@ External operation 先按 authority owner 选 primitive，而不是按“是否�
 
 Chat authoring 先调用只读 `list_external_workflow_capabilities`，再把完整 candidate 原样交给 `inspect_external_workflow_capability_readiness` 并指定 `interactive` 或 `durable`。只有每个 external capability 的 typed readiness status 都是 `READY` 才尝试 Workflow write；其他 status 只展示 typed blocker 和 trusted remediation。Readiness 是 point-in-time decision，不是 Workflow lifecycle，也不会创建连接、approval 或 projection。
 
+NyxID 的 `durable` readiness 不会永久返回 unavailable。它在 live `/keys` 与 exact OpenAPI 校验之外，只读一次 verified caller 对应的 owner-scoped authorization catalog current-state read model；查询不得触发 refresh、activation、lease、polling、replay 或 projection priming。只有 catalog 已 activated、未 invalidated/cleaned、仍在 freshness window 内，且 exact `user_service_id` 的 slug snapshot、`PERMITTED` access、normalized resource owner、node-grant requirement 与 canonical Node ids 全部一致时才返回 `READY`。该结果必须携带 `DURABLE_AUTHORIZATION_CATALOG` source stamp；统一 admission 还会校验 execution mode、exact capability identity 与 stamp，已有 durable plan 缺少该证据同样 fail closed。Catalog snapshot 本身还必须具有正 authoritative version、完整 lifecycle facts，以及与 typed owner/services 一致的 canonical content digest；非 exact ordinal `nyxid` resource owner authority 一律拒绝。
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
@@ -132,7 +134,9 @@ flowchart LR
     O --> P
 ```
 
-所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，在 mutation 前重新 parse YAML、读取 live sources 并生成 `WorkflowCapabilityAdmissionPlan`。Plan 固化 definition digest、exact capability refs、operation contract digests 和 source stamps。Definition actor 再次独立 parse，并在一个 actor transition 中提交 definition 与 admission fact；caller-supplied evidence 不能覆盖 actor 解析结果。仓库 `workflows/` 是无租户 caller authority 的 startup definition source，因此不得内嵌租户专属 NyxID `user_service_id`；这类 workflow 必须由 scope/user authoring 路径基于 live candidate 创建。
+所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v2` plan。Actor 已持有 plan 的后续 prepare、publish、replay 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。
+
+V2 plan 固化 definition digest、exact capability refs、operation contract digests 和 source stamps。Durable NyxID plan 还必须携带 typed `durable_authorization_owner = nyxid/personal/<subject>`，该 owner 参与 `admission_digest`，并且必须能确定唯一、完全相等的 owner-scoped catalog source id。即使篡改者重新计算未加密 digest，owner/source mismatch 仍 fail closed；不需要 durable NyxID catalog 的 plan 则禁止携带该 owner。Definition actor 再次独立 parse，并在一个 actor transition 中提交 definition 与 admission fact；caller-supplied evidence 不能覆盖 actor 解析结果。仓库 `workflows/` 是无租户 caller authority 的 startup definition source，因此不得内嵌租户专属 NyxID `user_service_id`；这类 workflow 必须由 scope/user authoring 路径基于 live candidate 创建。
 
 YAML 的 exact capability 规则：
 

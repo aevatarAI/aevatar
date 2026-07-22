@@ -39,8 +39,17 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
         var suppliedAdmission = request.CapabilityAdmission;
         var executionMode = suppliedAdmission?.ExecutionMode
             ?? ExternalCapabilityExecutionMode.Interactive;
-        var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
-            new WorkflowExternalCapabilityAdmissionRequest(
+        var capabilityAdmissionPlan = suppliedAdmission?.ExistingPlan is { } existingPlan
+            ? await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    request.WorkflowYaml,
+                    new Dictionary<string, string>(),
+                    "studio_member_workflow_binding",
+                    executionMode),
+                ct)
+            : await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
                 new ExternalWorkflowCapabilityAccessContext(
                     request.ScopeId,
                     suppliedAdmission?.CallerId ?? string.Empty,
@@ -49,9 +58,8 @@ public sealed class StudioMemberWorkflowBindingPort : IStudioMemberWorkflowBindi
                 request.WorkflowYaml,
                 new Dictionary<string, string>(),
                 "studio_member_workflow_binding",
-                executionMode,
-                suppliedAdmission?.ExistingPlan),
-            ct);
+                executionMode),
+                ct);
         var trustedAdmission = new WorkflowCapabilityAdmissionContext(
             suppliedAdmission?.CallerId ?? string.Empty,
             suppliedAdmission?.NyxIdCallerBearerToken,

@@ -127,6 +127,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
     {
         public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
 
+        public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
@@ -141,6 +143,17 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
                 AdmissionDigest = "startup-admission-digest",
                 ExecutionMode = request.ExecutionMode,
             });
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PersistedRequest = request;
+            if (failure is not null)
+                throw failure;
+            return Task.FromResult(request.Plan.Clone());
         }
     }
 

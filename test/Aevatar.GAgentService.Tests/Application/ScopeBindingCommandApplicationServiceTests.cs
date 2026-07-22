@@ -88,6 +88,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         revisionCommand.Spec.WorkflowSpec.Should().NotBeNull();
         revisionCommand.Spec.WorkflowSpec!.DefinitionActorId.Should().Be(expectedDefinitionActorIdPrefix);
         revisionCommand.Spec.WorkflowSpec.CapabilityAdmissionPlan.Should().BeEquivalentTo(admission.Plan);
+        revisionCommand.Spec.WorkflowSpec.ExpectedExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
         admission.Request.Should().NotBeNull();
         admission.Request!.WorkflowYaml.Should().Contain("name: main_runtime");
         admission.Request.InlineWorkflowYamls.Should().ContainKey("child");
@@ -2354,6 +2356,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     {
         public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
 
+        public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
+
         public WorkflowCapabilityAdmissionPlan? Plan { get; private set; }
 
         public Exception? Exception { get; init; }
@@ -2372,6 +2376,18 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 request.ExecutionMode,
                 [],
                 []);
+            return Task.FromResult(Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            PersistedRequest = request;
+            if (Exception is not null)
+                throw Exception;
+
+            Plan = request.Plan.Clone();
             return Task.FromResult(Plan.Clone());
         }
     }

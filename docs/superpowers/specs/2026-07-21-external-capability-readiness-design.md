@@ -126,6 +126,15 @@ published OpenAPI locator, maps external JSON immediately into typed repository
 contracts, and retains no process-local service catalog. Neither source primes a
 projection, activates an actor, replays events, or creates a second fact store.
 
+Durable NyxID readiness additionally performs one owner-scoped query against the
+NyxID authorization catalog current-state read model. The queried personal owner
+is derived from the verified caller id, not from the selected service or its
+slug. `READY` requires an activated, fresh, non-invalidated, non-cleaned catalog
+for that exact owner and one permitted exact service id whose slug snapshot,
+normalized resource owner, node-grant requirement, and canonical Node ids all
+match. The query path never refreshes the catalog, acquires a projection lease,
+activates an actor, replays events, or otherwise primes the replica.
+
 ## Readiness Rules
 
 `READY` requires a selected exact capability identity and an exact allowlisted
@@ -154,20 +163,51 @@ Only operations marked by the published `x-aevatar-tool` allowlist are exposed.
 Unknown operation ids, a changed method/path pair, dynamic service identities,
 slug-only identities, and sensitive authentication headers fail closed.
 
+A durable NyxID `READY` proof carries a
+`DURABLE_AUTHORIZATION_CATALOG` source stamp with the catalog actor id,
+authoritative state version, observation/freshness timestamps, and content
+digest. Admission verifies that every readiness proof was evaluated for the
+requested execution mode and exact capability identity. The catalog snapshot
+must be active and not cleaned, have a positive authoritative version and
+complete lifecycle facts, use the exact ordinal `nyxid` resource-owner
+authority, and carry the canonical digest of its typed owner and services. A
+durable NyxID plan is invalid without that catalog stamp; a generic `READY`
+status cannot substitute for durable evidence.
+
 ## Unified Workflow Admission
 
 `IWorkflowExternalCapabilityAdmissionService` is the single workflow write
-admission contract. It:
+admission boundary with two explicit operations:
+
+- live `AdmitAsync` accepts authenticated caller authority and transient
+  credentials, evaluates current readiness, and creates a plan;
+- `RevalidatePersistedAsync` accepts an actor-owned plan and the bound workflow
+  definition, but no caller identity or credentials and performs no external
+  readiness read.
+
+Live admission:
 
 1. compiles the YAML through the existing workflow parser;
 2. extracts static typed external capability references;
 3. rejects dynamic identity, slug-only NyxID calls, unknown operations, and
    sensitive headers;
 4. evaluates typed readiness for every reference;
-5. produces a plan containing the definition digest, exact capability refs,
-   operation contract digests, and source stamps; and
-6. allows the bind actor to compare the submitted plan against independently
+5. produces an `external-capability-admission.v2` plan containing the definition
+   digest, exact capability refs, operation contract digests, and source stamps;
+6. for durable NyxID capabilities, seals the exact typed
+   `nyxid/personal/<subject>` owner into the admission digest; and
+7. allows the bind actor to compare the submitted plan against independently
    parsed structure before committing the definition and admission fact.
+
+Persisted revalidation reparses the definition and checks schema, execution
+mode, exact capabilities, required source evidence, freshness, and admission
+digest. For durable NyxID plans it also derives the catalog actor id from the
+sealed owner and requires an exact source-stamp match. Recomputing the unkeyed
+digest after changing the owner cannot make a plan valid for another catalog.
+The expected execution mode comes from the current write/handoff contract, not
+from the persisted plan being validated, and must match the plan exactly.
+The persisted path never substitutes `appId`, `serviceId`, or an empty caller
+for the original authority and never recovers credentials from actor state.
 
 Scope upsert, Studio provisioning, member binding, revision preparation,
 publish, skill mount, and startup file materialization paths use this same
@@ -198,9 +238,10 @@ failure and terminates that run without storing the raw response or any secret.
 
 Durable and scheduled execution reuses
 `ScheduledInvocationAuthorizationPlan -> ScheduledAgentApiKeyIssuer`. Admission
-supplies exact service ids. Issuance keeps `allow_all_services=false` and
-`allow_all_nodes=false`, and the key value only enters the existing secret
-reference boundary. Missing topology evidence yields
+supplies exact service ids and the stamped durable catalog evidence. Issuance
+keeps `allow_all_services=false` and `allow_all_nodes=false`, and the key value
+only enters the existing secret reference boundary. Missing, stale, or
+inconsistent topology evidence yields
 `DURABLE_AUTHORIZATION_UNAVAILABLE`; the system never persists a caller bearer,
 widens a key, guesses an instance from a slug, or fabricates an OAuth resource
 grant.

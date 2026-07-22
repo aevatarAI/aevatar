@@ -434,6 +434,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
     {
         public WorkflowExternalCapabilityAdmissionRequest? Request { get; private set; }
 
+        public PersistedWorkflowCapabilityAdmissionRequest? PersistedRequest { get; private set; }
+
         public Exception? Exception { get; init; }
 
         public WorkflowCapabilityAdmissionPlan Plan { get; } =
@@ -453,6 +455,17 @@ public sealed class ScopeWorkflowApplicationServicesTests
                 throw Exception;
 
             return Task.FromResult(Plan.Clone());
+        }
+
+        public Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+            PersistedWorkflowCapabilityAdmissionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            PersistedRequest = request;
+            if (Exception is not null)
+                throw Exception;
+
+            return Task.FromResult(request.Plan.Clone());
         }
     }
 

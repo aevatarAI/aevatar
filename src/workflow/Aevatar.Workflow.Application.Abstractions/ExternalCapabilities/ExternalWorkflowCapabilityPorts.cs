@@ -55,15 +55,13 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode executionMode,
-        WorkflowCapabilityAdmissionPlan? existingPlan = null)
+        ExternalCapabilityExecutionMode executionMode)
     {
         Access = access ?? throw new ArgumentNullException(nameof(access));
         WorkflowYaml = workflowYaml ?? string.Empty;
         InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
         SourceKind = sourceKind?.Trim() ?? string.Empty;
         ExecutionMode = executionMode;
-        ExistingPlan = existingPlan?.Clone();
     }
 
     public ExternalWorkflowCapabilityAccessContext Access { get; }
@@ -76,16 +74,13 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
 
     public ExternalCapabilityExecutionMode ExecutionMode { get; }
 
-    public WorkflowCapabilityAdmissionPlan? ExistingPlan { get; }
-
     public IReadOnlyList<string>? WorkflowYamls { get; private init; }
 
     public static WorkflowExternalCapabilityAdmissionRequest FromWorkflowYamls(
         ExternalWorkflowCapabilityAccessContext access,
         IReadOnlyList<string> workflowYamls,
         string sourceKind,
-        ExternalCapabilityExecutionMode executionMode,
-        WorkflowCapabilityAdmissionPlan? existingPlan = null)
+        ExternalCapabilityExecutionMode executionMode)
     {
         ArgumentNullException.ThrowIfNull(workflowYamls);
         if (workflowYamls.Count == 0)
@@ -96,8 +91,7 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
             string.Empty,
             new Dictionary<string, string>(),
             sourceKind,
-            executionMode,
-            existingPlan)
+            executionMode)
         {
             WorkflowYamls = workflowYamls.ToArray(),
         };
@@ -105,6 +99,62 @@ public sealed class WorkflowExternalCapabilityAdmissionRequest
 
     public override string ToString() =>
         $"{nameof(WorkflowExternalCapabilityAdmissionRequest)} {{ Access = {Access}, SourceKind = {SourceKind}, ExecutionMode = {ExecutionMode}, Definition = [REDACTED] }}";
+}
+
+public sealed class PersistedWorkflowCapabilityAdmissionRequest
+{
+    public PersistedWorkflowCapabilityAdmissionRequest(
+        WorkflowCapabilityAdmissionPlan plan,
+        string workflowYaml,
+        IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
+        string sourceKind,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
+    {
+        Plan = plan?.Clone() ?? throw new ArgumentNullException(nameof(plan));
+        if (expectedExecutionMode == ExternalCapabilityExecutionMode.Unspecified)
+            throw new InvalidOperationException("Expected external capability execution mode is required.");
+
+        WorkflowYaml = workflowYaml ?? string.Empty;
+        InlineWorkflowYamls = inlineWorkflowYamls ?? new Dictionary<string, string>();
+        SourceKind = sourceKind?.Trim() ?? string.Empty;
+        ExpectedExecutionMode = expectedExecutionMode;
+    }
+
+    public WorkflowCapabilityAdmissionPlan Plan { get; }
+
+    public string WorkflowYaml { get; }
+
+    public IReadOnlyDictionary<string, string> InlineWorkflowYamls { get; }
+
+    public string SourceKind { get; }
+
+    public ExternalCapabilityExecutionMode ExpectedExecutionMode { get; }
+
+    public IReadOnlyList<string>? WorkflowYamls { get; private init; }
+
+    public static PersistedWorkflowCapabilityAdmissionRequest FromWorkflowYamls(
+        WorkflowCapabilityAdmissionPlan plan,
+        IReadOnlyList<string> workflowYamls,
+        string sourceKind,
+        ExternalCapabilityExecutionMode expectedExecutionMode)
+    {
+        ArgumentNullException.ThrowIfNull(workflowYamls);
+        if (workflowYamls.Count == 0)
+            throw new InvalidOperationException("At least one workflow YAML is required.");
+
+        return new PersistedWorkflowCapabilityAdmissionRequest(
+            plan,
+            string.Empty,
+            new Dictionary<string, string>(),
+            sourceKind,
+            expectedExecutionMode)
+        {
+            WorkflowYamls = workflowYamls.ToArray(),
+        };
+    }
+
+    public override string ToString() =>
+        $"{nameof(PersistedWorkflowCapabilityAdmissionRequest)} {{ SourceKind = {SourceKind}, ExpectedExecutionMode = {ExpectedExecutionMode}, Definition = [REDACTED], Plan = [REDACTED] }}";
 }
 
 public interface IExternalWorkflowCapabilitySource
@@ -140,6 +190,10 @@ public interface IWorkflowExternalCapabilityAdmissionService
 {
     Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
         WorkflowExternalCapabilityAdmissionRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
+        PersistedWorkflowCapabilityAdmissionRequest request,
         CancellationToken cancellationToken = default);
 }
 
