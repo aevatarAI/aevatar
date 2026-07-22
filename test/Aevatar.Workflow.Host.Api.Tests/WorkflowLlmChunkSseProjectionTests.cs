@@ -1,18 +1,26 @@
+using System.Reflection;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Runtime.Implementations.Local.Actors;
+using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
+using Aevatar.Workflow.Integration.AI;
 using Aevatar.Workflow.Presentation.AGUIAdapter;
 using Aevatar.Workflow.Projection;
 using Aevatar.Workflow.Projection.Orchestration;
 using FluentAssertions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Workflow.Host.Api.Tests;
 
@@ -48,39 +56,50 @@ public sealed class WorkflowLlmChunkSseProjectionTests
             RootActorId = "workflow-run-1",
             ProjectionKind = "workflow-execution-session",
         };
+        await using var projectionSubscription = await streams.GetStream("workflow-run-1")
+            .SubscribeAsync<EventEnvelope>(envelope => projector.ProjectAsync(context, envelope).AsTask());
+        await using var services = new ServiceCollection()
+            .AddSingleton<IEventStore, InMemoryEventStore>()
+            .AddSingleton<EventSourcingRuntimeOptions>()
+            .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
+            .BuildServiceProvider();
+        var llmProvider = new StreamingLlmProvider();
+        var roleAgent = new WorkflowRoleGAgent(llmProvider)
+        {
+            Services = services,
+            EventPublisher = new LocalActorPublisher(
+                "role:assistant",
+                () => "workflow-run-1",
+                () => 0,
+                streams),
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        SetAgentId(roleAgent, "role:assistant");
+        await roleAgent.ActivateAsync();
+        await roleAgent.HandleWorkflowRoleInitialize(new WorkflowRoleInitializeEvent
+        {
+            RoleId = "assistant",
+            RoleName = "Assistant",
+            ProviderName = "mock",
+            SystemPrompt = "workflow role",
+        });
 
-        await projector.ProjectAsync(context, WrapCommitted(new WorkflowLlmStreamChunkEvent
+        var execution = roleAgent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
         {
             RunId = "run-1",
             StepId = "step-1",
             SessionId = "session-1",
-            RoleActorId = "role:assistant",
-            DeltaContent = "Hello",
-        }, "role:assistant", version: 1));
-        await responseBody.WaitForFlushedFrameCountAsync(1, TimeSpan.FromSeconds(2));
+            Prompt = "hello",
+        });
+        await responseBody.WaitForFlushedFrameCountAsync(2, TimeSpan.FromSeconds(2));
         var firstChunkSse = responseBody.SnapshotText();
         ReadSseFrames(firstChunkSse)
             .Count(HasTextMessageContent)
             .Should().Be(1, "the projected SSE payload was {0}", firstChunkSse);
 
-        await projector.ProjectAsync(context, WrapCommitted(new WorkflowLlmStreamChunkEvent
-        {
-            RunId = "run-1",
-            StepId = "step-1",
-            SessionId = "session-1",
-            RoleActorId = "role:assistant",
-            DeltaReasoningContent = "thinking",
-        }, "role:assistant", version: 2));
+        llmProvider.ReleaseRemainingChunks();
+        await execution;
         await responseBody.WaitForFlushedFrameCountAsync(2, TimeSpan.FromSeconds(2));
-
-        await projector.ProjectAsync(context, WrapCommitted(new WorkflowLlmStreamChunkEvent
-        {
-            RunId = "run-1",
-            StepId = "step-1",
-            SessionId = "session-1",
-            RoleActorId = "role:assistant",
-            DeltaContent = " world",
-        }, "role:assistant", version: 3));
         await responseBody.WaitForFlushedFrameCountAsync(3, TimeSpan.FromSeconds(2));
 
         var preTerminalFrames = ReadSseFrames(responseBody.SnapshotText());
@@ -97,14 +116,19 @@ public sealed class WorkflowLlmChunkSseProjectionTests
         preTerminalFrames.Count(IsReasoningFrame).Should().Be(1);
         preTerminalFrames.Count(HasRunFinished).Should().Be(0);
 
-        await projector.ProjectAsync(context, WrapCommitted(new WorkflowCompletedEvent
+        var runPublisher = new LocalActorPublisher(
+            "workflow-run-1",
+            () => null,
+            () => 0,
+            streams);
+        await runPublisher.PublishAsync(new WorkflowCompletedEvent
         {
             RunId = "run-1",
             WorkflowName = "workflow-a",
             Success = true,
             Output = "Hello world",
-        }, "workflow-run-1", version: 4));
-        await responseBody.WaitForFlushedFrameCountAsync(5, TimeSpan.FromSeconds(2));
+        }, TopologyAudience.Self);
+        await responseBody.WaitForFlushedFrameCountAsync(7, TimeSpan.FromSeconds(2));
 
         var frames = ReadSseFrames(responseBody.SnapshotText());
         frames.FindIndex(HasRunFinished)
@@ -112,32 +136,13 @@ public sealed class WorkflowLlmChunkSseProjectionTests
         responseBody.FlushedFrameCount.Should().Be(frames.Count);
     }
 
-    private static EventEnvelope WrapCommitted<T>(T evt, string publisherActorId, long version)
-        where T : IMessage
+    private static void SetAgentId(GAgentBase agent, string agentId)
     {
-        var eventId = Guid.NewGuid().ToString("N");
-        var timestamp = Timestamp.FromDateTime(DateTime.UtcNow);
-        return new EventEnvelope
-        {
-            Id = eventId,
-            Timestamp = timestamp,
-            Route = EnvelopeRouteSemantics.CreateObserverPublication(publisherActorId),
-            Propagation = new EnvelopePropagation
-            {
-                CorrelationId = "cmd-stream-1",
-            },
-            Payload = Any.Pack(new CommittedStateEventPublished
-            {
-                StateEvent = new StateEvent
-                {
-                    EventId = eventId,
-                    Version = version,
-                    Timestamp = timestamp.Clone(),
-                    EventData = Any.Pack(evt),
-                },
-                StateRoot = Any.Pack(new WorkflowRunState()),
-            }),
-        };
+        var setIdMethod = typeof(GAgentBase).GetMethod(
+            "SetId",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        setIdMethod.Should().NotBeNull();
+        setIdMethod!.Invoke(agent, [agentId]);
     }
 
     private static List<JsonElement> ReadSseFrames(string text)
@@ -160,6 +165,36 @@ public sealed class WorkflowLlmChunkSseProjectionTests
         return frame.TryGetProperty("custom", out var custom) &&
                custom.GetProperty("name").GetString() == "aevatar.llm.reasoning" &&
                custom.GetProperty("payload").GetProperty("delta").GetString() == "thinking";
+    }
+
+    private sealed class StreamingLlmProvider : ILLMProviderFactory, ILLMProvider
+    {
+        private readonly TaskCompletionSource _remainingChunksReleased =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string Name => "mock";
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public void ReleaseRemainingChunks() => _remainingChunksReleased.TrySetResult();
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            yield return new LLMStreamChunk { DeltaContent = "Hello" };
+            await _remainingChunksReleased.Task.WaitAsync(ct);
+            yield return new LLMStreamChunk { DeltaReasoningContent = "thinking" };
+            yield return new LLMStreamChunk { DeltaContent = " world" };
+            yield return new LLMStreamChunk { IsLast = true, FinishReason = "stop" };
+            await Task.CompletedTask;
+        }
     }
 
     private sealed class FlushSignalingStream : MemoryStream
