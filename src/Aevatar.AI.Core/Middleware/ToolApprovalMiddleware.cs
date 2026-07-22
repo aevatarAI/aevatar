@@ -34,6 +34,7 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
     public async Task InvokeAsync(ToolCallContext context, Func<Task> next)
     {
         var mode = context.Tool.ApprovalMode;
+        var callSafety = context.Tool.GetCallSafety(context.ArgumentsJson);
         if (TryConsumeMatchingGrant(context))
         {
             await next();
@@ -58,7 +59,7 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
 
         // Runtime argument-based check: tool can inspect call arguments to decide.
         // Returns true → requires approval, false → skip, null → fall through to static check.
-        var runtimeDecision = context.Tool.RequiresApproval(context.ArgumentsJson);
+        var runtimeDecision = callSafety.RequiresApproval;
         if (runtimeDecision == false)
         {
             await next();
@@ -68,13 +69,13 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
         // Auto 模式分类器 (only when runtime check returned null)
         if (runtimeDecision == null && mode == ToolApprovalMode.Auto)
         {
-            if (context.Tool.IsReadOnly)
+            if (callSafety.IsReadOnly)
             {
                 await next();
                 return;
             }
 
-            if (!context.Tool.IsDestructive)
+            if (!callSafety.IsDestructive)
             {
                 // 既非 ReadOnly 也非 Destructive → 默认放行
                 await next();
@@ -104,8 +105,8 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             ToolCallId = context.ToolCallId,
             ArgumentsJson = context.ArgumentsJson,
             ApprovalMode = mode,
-            IsReadOnly = context.Tool.IsReadOnly,
-            IsDestructive = context.Tool.IsDestructive,
+            IsReadOnly = callSafety.IsReadOnly,
+            IsDestructive = callSafety.IsDestructive,
         };
 
         // Hook: approval requested
@@ -145,6 +146,7 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                     context.Tool,
                     context.ToolCallId,
                     context.ToolName,
+                    callSafety,
                     context.Result,
                     request.RequestId,
                     result.Reason ?? "Tool approval denied.");
@@ -160,6 +162,7 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                     context.Tool,
                     context.ToolCallId,
                     context.ToolName,
+                    callSafety,
                     context.Result,
                     request.RequestId,
                     "approval_timeout",
@@ -185,6 +188,7 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                     context.Tool,
                     context.ToolCallId,
                     context.ToolName,
+                    callSafety,
                     context.Result,
                     request.RequestId);
                 return;

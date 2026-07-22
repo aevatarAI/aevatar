@@ -372,7 +372,8 @@ public sealed class ChatRuntime
         string? finalContent = null;
         var lengthRecoveryCount = 0;
         var hasStreamedTextContent = false;
-        var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest);
+        var authorizedTools = ToolCallLoop.CreateRequestToolManager(baseRequest.Tools);
+        var skillRecovery = CreateSkillRecoveryOrchestrator(baseRequest, () => authorizedTools);
         var executedToolOutcomes = new List<ToolOutcomeReplyFact>();
 
         if (skillRecovery.RequiresInitialSearch)
@@ -387,6 +388,7 @@ public sealed class ChatRuntime
 
         for (var round = 0; round < effectiveMaxToolRounds; round++)
         {
+            authorizedTools = ToolCallLoop.CreateRequestToolManager(baseRequest.Tools);
             if (hasStreamedTextContent)
             {
                 wroteOutput = true;
@@ -395,15 +397,16 @@ public sealed class ChatRuntime
 
             var authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
             var streamingExecutor = new StreamingToolExecutor(
-                _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
                 toolContext: authorizedToolContext);
             using var streamingToolState = streamingExecutor.CreateExecutionState();
 
             void BindAuthorizedRequest(LLMRequest authorizedRequest)
             {
                 authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(authorizedRequest);
+                authorizedTools = ToolCallLoop.CreateRequestToolManager(authorizedRequest.Tools);
                 streamingExecutor = new StreamingToolExecutor(
-                    _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
                     toolContext: authorizedToolContext);
             }
 
@@ -558,14 +561,14 @@ public sealed class ChatRuntime
                             parsed.ToolCalls);
 
                         var textToolExecutor = new StreamingToolExecutor(
-                            _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                            authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
                             toolContext: authorizedToolContext);
                         using var textToolState = textToolExecutor.CreateExecutionState();
                         foreach (var tc in parsed.ToolCalls)
                             textToolExecutor.AddTool(textToolState, tc);
                         await foreach (var result in textToolExecutor.GetRemainingResultsAsync(textToolState, runToken))
                         {
-                            executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, parsed.ToolCalls));
+                            executedToolOutcomes.Add(BuildToolOutcomeReplyFact(authorizedTools, result, parsed.ToolCalls));
                             if (result.Receipt is not null)
                                 yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
                             var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
@@ -645,7 +648,7 @@ public sealed class ChatRuntime
 
             await foreach (var result in streamingExecutor.GetRemainingResultsAsync(streamingToolState, runToken))
             {
-                executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, roundResult.ToolCalls));
+                executedToolOutcomes.Add(BuildToolOutcomeReplyFact(authorizedTools, result, roundResult.ToolCalls));
                 if (result.Receipt is not null)
                     yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
                 var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
@@ -680,7 +683,14 @@ public sealed class ChatRuntime
                 ResponseFormat = baseRequest.ResponseFormat,
             };
             var finalScope = new StreamingRoundScope();
-            await foreach (var chunk in StreamLlmRoundAsync(provider, finalRequest, finalScope, runToken))
+            authorizedTools = ToolCallLoop.CreateRequestToolManager(finalRequest.Tools);
+            await foreach (var chunk in StreamLlmRoundAsync(
+                               provider,
+                               finalRequest,
+                               finalScope,
+                               runToken,
+                               onRequestAuthorized: request =>
+                                   authorizedTools = ToolCallLoop.CreateRequestToolManager(request.Tools)))
             {
                 wroteOutput = true;
                 yield return chunk;
@@ -700,14 +710,14 @@ public sealed class ChatRuntime
                     finalParsed.ToolCalls);
 
                 var finalToolExecutor = new StreamingToolExecutor(
-                    _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                    authorizedTools, _hooks, _toolLoop.ToolMiddlewares,
                     toolContext: finalRequest.ToolContext);
                 using var finalToolState = finalToolExecutor.CreateExecutionState();
                 foreach (var tc in finalParsed.ToolCalls)
                     finalToolExecutor.AddTool(finalToolState, tc);
                 await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(finalToolState, runToken))
                 {
-                    executedToolOutcomes.Add(BuildToolOutcomeReplyFact(result, finalParsed.ToolCalls));
+                    executedToolOutcomes.Add(BuildToolOutcomeReplyFact(authorizedTools, result, finalParsed.ToolCalls));
                     if (result.Receipt is not null)
                         yield return new LLMStreamChunk { ToolReceipt = result.Receipt.Clone() };
                     var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.ToolName, result.Result);
@@ -757,11 +767,13 @@ public sealed class ChatRuntime
             yield return new LLMStreamChunk { DeltaContent = runContext.Result };
     }
 
-    private SkillRecoveryOrchestrator CreateSkillRecoveryOrchestrator(LLMRequest baseRequest) =>
+    private SkillRecoveryOrchestrator CreateSkillRecoveryOrchestrator(
+        LLMRequest baseRequest,
+        Func<ToolManager> authorizedTools) =>
         new(
             baseRequest.ToolContext?.SkillRecovery ?? AgentSkillRecoveryContext.Empty,
             toolContext => new StreamingToolExecutor(
-                _toolLoop.Tools,
+                authorizedTools(),
                 _hooks,
                 _toolLoop.ToolMiddlewares,
                 requestMetadata: baseRequest.Metadata,
@@ -780,14 +792,15 @@ public sealed class ChatRuntime
     }
 
     private ToolOutcomeReplyFact BuildToolOutcomeReplyFact(
+        ToolManager tools,
         ToolExecutionResult result,
         IReadOnlyList<ToolCall>? toolCalls)
     {
         var matchingCall = toolCalls?.FirstOrDefault(call =>
             string.Equals(call.Id, result.CallId, StringComparison.Ordinal) ||
             string.Equals(call.Name, result.ToolName, StringComparison.OrdinalIgnoreCase));
-        var tool = _toolLoop.Tools.Get(result.ToolName)
-                   ?? (matchingCall is null ? null : _toolLoop.Tools.Get(matchingCall.Name));
+        var tool = tools.Get(result.ToolName)
+                   ?? (matchingCall is null ? null : tools.Get(matchingCall.Name));
         return new ToolOutcomeReplyFact(
             tool,
             matchingCall?.ArgumentsJson,
@@ -868,6 +881,8 @@ public sealed class ChatRuntime
         TokenUsage? streamedUsage = null;
         IReadOnlyList<ToolCall>? streamedToolCalls = null;
         string? streamedFinishReason = null;
+        IReadOnlyList<IAgentTool> authorizedTools = [];
+        var authorizedToolContext = AgentToolExecutionContext.Empty;
 
         var llmBridge = new LLMCallMiddlewareBridge();
         var middlewareTask = MiddlewarePipeline.RunLLMCallAsync(
@@ -883,6 +898,8 @@ public sealed class ChatRuntime
         if (readyTask == coreTurnTask && !llmCallContext.Terminate)
         {
             llmCallContext.Request = authorizationFence.Apply(llmCallContext.Request);
+            authorizedTools = llmCallContext.Request.Tools?.ToArray() ?? [];
+            authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(llmCallContext.Request);
             onRequestAuthorized?.Invoke(llmCallContext.Request);
             var full = new StringBuilder();
             var fullReasoning = new StringBuilder();
@@ -947,6 +964,9 @@ public sealed class ChatRuntime
 
         if (llmCallContext.Terminate)
         {
+            var authorizedRequest = authorizationFence.Apply(llmCallContext.Request);
+            authorizedTools = authorizedRequest.Tools?.ToArray() ?? [];
+            authorizedToolContext = AgentToolExecutionContextMapper.FromRequest(authorizedRequest);
             streamedContent = llmCallContext.Response?.Content;
             streamedReasoningContent = llmCallContext.Response?.ReasoningContent;
             streamedUsage = llmCallContext.Response?.Usage;
@@ -977,7 +997,9 @@ public sealed class ChatRuntime
             response.ToolCalls,
             llmCallContext.Terminate,
             response.FinishReason ?? streamedFinishReason,
-            response.Usage);
+            response.Usage,
+            authorizedTools,
+            authorizedToolContext);
     }
 
     internal async Task<StreamingRoundResult> ExecuteSingleLlmStepAsync(
@@ -999,11 +1021,12 @@ public sealed class ChatRuntime
 
     internal async Task<IReadOnlyList<ToolExecutionResult>> ExecuteSingleToolStepAsync(
         IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyList<IAgentTool>? tools,
         AgentToolExecutionContext? toolContext,
         CancellationToken ct)
     {
         var executor = new StreamingToolExecutor(
-            _toolLoop.Tools,
+            ToolCallLoop.CreateRequestToolManager(tools),
             _hooks,
             _toolLoop.ToolMiddlewares,
             toolContext: toolContext);
@@ -1230,7 +1253,9 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall>? ToolCalls,
         bool Terminated,
         string? FinishReason,
-        TokenUsage? Usage);
+        TokenUsage? Usage,
+        IReadOnlyList<IAgentTool> AuthorizedTools,
+        AgentToolExecutionContext AuthorizedToolContext);
 
     // Refactor (iter31/cluster-032-chatruntime-taskrun-business-loop):
     //   Old pattern: ChatRuntime.ChatStreamAsync 用 Task.Run + Channel<LLMStreamChunk>/ChannelWriter 在 actor turn 外跑 LLM/tool/hook/history 业务循环,违反 actor execution integrity

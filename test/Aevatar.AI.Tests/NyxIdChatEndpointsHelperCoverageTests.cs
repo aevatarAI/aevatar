@@ -76,39 +76,6 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
         InvokePrivateStatic<string?>(TryExtractJwtSubjectMethod, "not-a-jwt").Should().BeNull();
     }
 
-    [Fact]
-    public async Task BuildConnectedServicesContext_ShouldUseFallbackNamesAndNoServicesMessage()
-    {
-        var context = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            """
-            {
-              "data": [
-                {
-                  "slug": "calendar",
-                  "label": "Calendar",
-                  "base_url": "https://calendar.example.com"
-                },
-                {
-                  "slug": "docs",
-                  "name": "Docs",
-                  "endpoint_url": "https://docs.example.com"
-                }
-              ]
-            }
-            """,
-            null, "", CancellationToken.None);
-
-        context.Should().Contain("Calendar");
-        context.Should().Contain("docs");
-        context.Should().Contain("https://calendar.example.com");
-        context.Should().Contain("https://docs.example.com");
-        context.Should().Contain("nyxid_proxy");
-
-        var emptyContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            "{\"services\":[]}", null, "", CancellationToken.None);
-        emptyContext.Should().Contain("No services connected yet");
-    }
-
     private static string BuildJwt(string payloadJson)
     {
         var header = Base64UrlEncode("{\"alg\":\"none\"}");

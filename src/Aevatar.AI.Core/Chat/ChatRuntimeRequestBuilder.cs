@@ -50,7 +50,9 @@ internal static class ChatRuntimeRequestBuilder
             ToolContext = effectiveToolContext,
             RoutingContext = effectiveLlmControl?.ToRoutingContext(baseRequest.RoutingContext) ?? baseRequest.RoutingContext,
             LlmControl = effectiveLlmControl,
-            Tools = FilterVisibleTools(baseRequest.Tools, effectiveToolContext.ToolVisibility),
+            Tools = FilterVisibleTools(
+                MergeExactTools(baseRequest.Tools, turnCatalog?.RouteOwnedTools.Values),
+                effectiveToolContext.ToolVisibility),
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
@@ -62,8 +64,37 @@ internal static class ChatRuntimeRequestBuilder
     {
         ArgumentNullException.ThrowIfNull(request);
         return new AuthorizationFence(
-            request.Tools?.Select(static tool => tool.Name) ?? [],
+            request.Tools ?? [],
             (request.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(request)).ToolVisibility);
+    }
+
+    private static IReadOnlyList<IAgentTool>? MergeExactTools(
+        IEnumerable<IAgentTool>? baseTools,
+        IEnumerable<IAgentTool>? routeOwnedTools)
+    {
+        var merged = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tool in (baseTools ?? []).Concat(routeOwnedTools ?? []))
+        {
+            if (string.IsNullOrWhiteSpace(tool.Name))
+                continue;
+
+            var name = tool.Name.Trim();
+            if (collisions.Contains(name))
+                continue;
+            if (!merged.TryGetValue(name, out var existing))
+            {
+                merged.Add(name, tool);
+                continue;
+            }
+            if (ReferenceEquals(existing, tool))
+                continue;
+
+            merged.Remove(name);
+            collisions.Add(name);
+        }
+
+        return merged.Count == 0 ? null : merged.Values.ToArray();
     }
 
     private static AgentToolVisibilityScope IntersectVisibility(
@@ -128,17 +159,14 @@ internal static class ChatRuntimeRequestBuilder
 
     internal sealed class AuthorizationFence
     {
-        private readonly IReadOnlySet<string> _schemaToolNames;
+        private readonly IReadOnlyDictionary<string, IAgentTool> _schemaTools;
         private readonly AgentToolVisibilityScope _toolVisibility;
 
         public AuthorizationFence(
-            IEnumerable<string> schemaToolNames,
+            IEnumerable<IAgentTool> schemaTools,
             AgentToolVisibilityScope toolVisibility)
         {
-            _schemaToolNames = schemaToolNames
-                .Where(static name => !string.IsNullOrWhiteSpace(name))
-                .Select(static name => name.Trim())
-                .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+            _schemaTools = FreezeExactTools(schemaTools);
             _toolVisibility = FreezeVisibility(toolVisibility);
         }
 
@@ -147,9 +175,7 @@ internal static class ChatRuntimeRequestBuilder
             ArgumentNullException.ThrowIfNull(request);
             var toolContext = request.ToolContext ?? AgentToolExecutionContextMapper.FromRequest(request);
             var visibility = CopyVisibility(IntersectVisibility(toolContext.ToolVisibility, _toolVisibility));
-            var tools = request.Tools?
-                .Where(tool => _schemaToolNames.Contains(tool.Name.Trim()) && visibility.Allows(tool.Name))
-                .ToList();
+            var tools = ApplyExactTools(request.Tools, visibility);
             var toolsWereAttenuated = (request.Tools?.Count ?? 0) != (tools?.Count ?? 0);
             var visibilityWasAttenuated = !HasSameVisibility(toolContext.ToolVisibility, visibility);
             if (!forceCopy &&
@@ -175,6 +201,55 @@ internal static class ChatRuntimeRequestBuilder
                 MaxTokens = request.MaxTokens,
                 ResponseFormat = request.ResponseFormat,
             };
+        }
+
+        private IReadOnlyList<IAgentTool>? ApplyExactTools(
+            IReadOnlyList<IAgentTool>? requestTools,
+            AgentToolVisibilityScope visibility)
+        {
+            if (requestTools is not { Count: > 0 })
+                return null;
+
+            var accepted = new List<IAgentTool>();
+            foreach (var group in requestTools
+                         .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+                         .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+            {
+                if (!_schemaTools.TryGetValue(group.Key, out var exact) ||
+                    !visibility.Allows(group.Key) ||
+                    group.Any(tool => !ReferenceEquals(tool, exact)))
+                {
+                    continue;
+                }
+
+                accepted.Add(exact);
+            }
+
+            return accepted.Count == 0 ? null : accepted;
+        }
+
+        private static IReadOnlyDictionary<string, IAgentTool> FreezeExactTools(IEnumerable<IAgentTool> tools)
+        {
+            var exact = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+            var collisions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var tool in tools.Where(static tool => !string.IsNullOrWhiteSpace(tool.Name)))
+            {
+                var name = tool.Name.Trim();
+                if (collisions.Contains(name))
+                    continue;
+                if (!exact.TryGetValue(name, out var existing))
+                {
+                    exact.Add(name, tool);
+                    continue;
+                }
+                if (ReferenceEquals(existing, tool))
+                    continue;
+
+                exact.Remove(name);
+                collisions.Add(name);
+            }
+
+            return exact.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
         }
 
         private static AgentToolVisibilityScope FreezeVisibility(AgentToolVisibilityScope visibility) =>

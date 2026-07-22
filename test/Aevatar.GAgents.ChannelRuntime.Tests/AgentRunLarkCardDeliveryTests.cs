@@ -1665,19 +1665,14 @@ public sealed class AgentRunLarkCardDeliveryTests
             CancellationToken ct) =>
             Task.FromResult(new AgentRunReplyStepState());
 
-        public Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
-            Task.CompletedTask;
-
-        public Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct) =>
-            Task.CompletedTask;
-
-        public Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
+        public Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
             AgentRunReplyStepExecutionRequest request,
             CancellationToken ct) =>
             throw new NotSupportedException();
 
         public Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
             AgentRunReplyStepExecutionRequest request,
+            AgentRunAuthorizedToolStep? authorizedToolStep,
             CancellationToken ct) =>
             throw new NotSupportedException();
     }

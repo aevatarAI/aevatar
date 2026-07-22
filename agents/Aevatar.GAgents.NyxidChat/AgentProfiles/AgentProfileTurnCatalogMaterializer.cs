@@ -71,9 +71,24 @@ public sealed class AgentProfileTurnCatalogMaterializer
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
             diagnostics,
             ct);
-        var registered = ToEligibleToolNames(registeredTools, toolContext, diagnostics);
-        var available = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
-        available.IntersectWith(registered.Names);
+        if (routeTools.HadFailure)
+        {
+            return CreatePreparation(
+                sessionId,
+                candidate: null,
+                selectedExactSkillRef: null,
+                AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                [],
+                diagnostics);
+        }
+
+        var availableTools = MergeExactTools(
+            routeTools.Tools,
+            registeredTools,
+            toolContext,
+            diagnostics,
+            out var hadMergeFailure);
+        var available = new HashSet<string>(availableTools.Keys, StringComparer.OrdinalIgnoreCase);
         available.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
 
         var maximum = await ResolvePolicyAsync(profile.MaximumToolPolicy, toolContext, diagnostics, ct);
@@ -81,7 +96,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         var recovery = await ResolvePolicyAsync(profile.RecoveryToolPolicy, toolContext, diagnostics, ct);
         var recoveryNames = new HashSet<string>(available, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
-        if (routeTools.HadFailure || registered.HadFailure || maximum.HadFailure || recovery.HadFailure)
+        if (routeTools.HadFailure || hadMergeFailure ||
+            maximum.HadFailure || recovery.HadFailure)
         {
             return CreatePreparation(
                 sessionId,
@@ -183,7 +199,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 [],
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                routeOwnedTools: []);
         }
 
         var routeTools = await DiscoverToolSetAsync(
@@ -192,9 +209,26 @@ public sealed class AgentProfileTurnCatalogMaterializer
             AgentProfileTurnDiagnosticCode.RouteToolSetUnavailable,
             diagnostics,
             ct);
-        var registered = ToEligibleToolNames(registeredTools, toolContext, diagnostics);
-        var eligible = new HashSet<string>(routeTools.Names, StringComparer.OrdinalIgnoreCase);
-        eligible.IntersectWith(registered.Names);
+        if (routeTools.HadFailure)
+        {
+            return BuildMaterialization(
+                profile,
+                committedAuthority,
+                AgentProfileTurnAuthorityKind.RestrictedEmpty,
+                [],
+                selectedIntentId: null,
+                selectedSkillPromptLayer: null,
+                diagnostics,
+                routeOwnedTools: []);
+        }
+
+        var availableTools = MergeExactTools(
+            routeTools.Tools,
+            registeredTools,
+            toolContext,
+            diagnostics,
+            out var hadMergeFailure);
+        var eligible = new HashSet<string>(availableTools.Keys, StringComparer.OrdinalIgnoreCase);
         eligible.RemoveWhere(name => !toolContext.ToolVisibility.Allows(name));
         var maximum = await ResolvePolicyAsync(profile.MaximumToolPolicy, toolContext, diagnostics, ct);
         eligible.IntersectWith(maximum.Names);
@@ -203,7 +237,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         var recoveryNames = new HashSet<string>(eligible, StringComparer.OrdinalIgnoreCase);
         recoveryNames.IntersectWith(recovery.Names);
 
-        if (routeTools.HadFailure || registered.HadFailure || maximum.HadFailure || recovery.HadFailure)
+        if (routeTools.HadFailure || hadMergeFailure ||
+            maximum.HadFailure || recovery.HadFailure)
         {
             return BuildMaterialization(
                 profile,
@@ -216,7 +251,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 recoveryNames,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                SelectTools(routeTools.Tools, recoveryNames));
         }
 
         if (committedAuthority.SelectedExactSkillRef is null)
@@ -228,7 +264,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 eligible,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                SelectTools(routeTools.Tools, eligible));
         }
 
         var candidate = ResolveCommittedCandidate(profile, committedAuthority);
@@ -244,7 +281,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 [],
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                routeOwnedTools: []);
         }
 
         var fetched = await FetchSelectedSkillAsync(profile, candidate, accessToken, diagnostics, ct);
@@ -257,7 +295,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 recoveryNames,
                 selectedIntentId: null,
                 selectedSkillPromptLayer: null,
-                diagnostics);
+                diagnostics,
+                SelectTools(routeTools.Tools, recoveryNames));
         }
 
         var selectedLayer = new SelectedSkillPromptLayer(
@@ -272,7 +311,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
             eligible,
             candidate.IntentId,
             selectedLayer,
-            diagnostics);
+            diagnostics,
+            SelectTools(routeTools.Tools, eligible));
     }
 
     private async Task<AgentProfileSkillMember?> SelectCandidateAsync(
@@ -485,7 +525,7 @@ public sealed class AgentProfileTurnCatalogMaterializer
         return new ToolPolicyResolution(names, hadFailure);
     }
 
-    private async Task<ToolPolicyResolution> DiscoverToolSetAsync(
+    private async Task<ToolDiscoveryResolution> DiscoverToolSetAsync(
         string? toolSetName,
         AgentToolExecutionContext toolContext,
         AgentProfileTurnDiagnosticCode unavailableCode,
@@ -500,8 +540,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         catch (Exception)
         {
             diagnostics.Add(new AgentProfileTurnDiagnostic(unavailableCode, toolSetName ?? string.Empty));
-            return new ToolPolicyResolution(
-                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            return new ToolDiscoveryResolution(
+                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase),
                 true);
         }
 
@@ -510,8 +550,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
             diagnostics.Add(new AgentProfileTurnDiagnostic(
                 unavailableCode,
                 resolved.Error?.Code ?? "resolve_failed"));
-            return new ToolPolicyResolution(
-                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            return new ToolDiscoveryResolution(
+                new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase),
                 true);
         }
 
@@ -531,27 +571,28 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
                     AgentProfileTurnDiagnosticCode.ToolDiscoveryFailed,
                     resolved.Name ?? string.Empty));
-                return new ToolPolicyResolution(
-                    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                return new ToolDiscoveryResolution(
+                    new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase),
                     true);
             }
         }
 
-        return ToEligibleToolNames(discovered, toolContext, diagnostics);
+        return ToEligibleTools(discovered, toolContext, diagnostics);
     }
 
-    private static ToolPolicyResolution ToEligibleToolNames(
+    private static ToolDiscoveryResolution ToEligibleTools(
         IReadOnlyList<IAgentTool> tools,
         AgentToolExecutionContext toolContext,
         List<AgentProfileTurnDiagnostic> diagnostics)
     {
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var eligibleTools = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
         var hadFailure = false;
         foreach (var group in tools
                      .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
                      .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
         {
-            if (group.Count() > 1)
+            var tool = group.First();
+            if (group.Any(candidate => !ReferenceEquals(candidate, tool)))
             {
                 hadFailure = true;
                 diagnostics.Add(new AgentProfileTurnDiagnostic(
@@ -560,7 +601,6 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 continue;
             }
 
-            var tool = group.Single();
             if (!IsEligible(tool, toolContext))
             {
                 hadFailure = true;
@@ -570,11 +610,65 @@ public sealed class AgentProfileTurnCatalogMaterializer
                 continue;
             }
 
-            names.Add(group.Key);
+            eligibleTools.Add(group.Key, tool);
         }
 
-        return new ToolPolicyResolution(names, hadFailure);
+        return new ToolDiscoveryResolution(eligibleTools, hadFailure);
     }
+
+    private static IReadOnlyDictionary<string, IAgentTool> MergeExactTools(
+        IReadOnlyDictionary<string, IAgentTool> routeTools,
+        IReadOnlyList<IAgentTool> registeredTools,
+        AgentToolExecutionContext toolContext,
+        List<AgentProfileTurnDiagnostic> diagnostics,
+        out bool hadFailure)
+    {
+        var available = new Dictionary<string, IAgentTool>(routeTools, StringComparer.OrdinalIgnoreCase);
+        hadFailure = false;
+        foreach (var group in registeredTools
+                     .Where(tool =>
+                         !string.IsNullOrWhiteSpace(tool.Name) && routeTools.ContainsKey(tool.Name.Trim()))
+                     .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var registeredTool = group.First();
+            var name = group.Key;
+            if (group.Any(candidate => !ReferenceEquals(candidate, registeredTool)))
+            {
+                hadFailure = true;
+                available.Remove(name);
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ToolNameCollision,
+                    name));
+                continue;
+            }
+
+            if (!IsEligible(registeredTool, toolContext))
+            {
+                hadFailure = true;
+                available.Remove(name);
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ToolCapabilityRejected,
+                    name));
+                continue;
+            }
+
+            if (!ReferenceEquals(routeTools[name], registeredTool))
+            {
+                hadFailure = true;
+                available.Remove(name);
+                diagnostics.Add(new AgentProfileTurnDiagnostic(
+                    AgentProfileTurnDiagnosticCode.ToolNameCollision,
+                    name));
+            }
+        }
+
+        return available;
+    }
+
+    private static IEnumerable<IAgentTool> SelectTools(
+        IReadOnlyDictionary<string, IAgentTool> tools,
+        IReadOnlySet<string> selectedNames) =>
+        tools.Where(pair => selectedNames.Contains(pair.Key)).Select(static pair => pair.Value);
 
     private static bool IsEligible(IAgentTool tool, AgentToolExecutionContext toolContext)
     {
@@ -631,7 +725,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         IEnumerable<string> ceilingToolNames,
         string? selectedIntentId,
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
-        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
+        IEnumerable<IAgentTool> routeOwnedTools)
     {
         var canonicalCeilingToolNames = CanonicalToolNames(ceilingToolNames);
         var proposal = committedAuthority.Clone();
@@ -651,7 +746,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedIntentId,
             committedAuthority.CandidateRoute?.IntentId,
             selectedSkillPromptLayer,
-            diagnostics);
+            diagnostics,
+            routeOwnedTools);
         return AgentProfileTurnCatalogMaterialization.Create(catalog, proposal);
     }
 
@@ -792,7 +888,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
         string? selectedIntentId,
         string? candidateIntentId,
         SelectedSkillPromptLayer? selectedSkillPromptLayer,
-        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics)
+        IReadOnlyList<AgentProfileTurnDiagnostic> diagnostics,
+        IEnumerable<IAgentTool> routeOwnedTools)
     {
         var profileText = new StringBuilder()
             .Append("Agent profile: ").Append(profile.ProfileId)
@@ -814,7 +911,8 @@ public sealed class AgentProfileTurnCatalogMaterializer
             selectedSkillPromptLayer,
             selectedIntentId,
             candidateIntentId,
-            diagnostics);
+            diagnostics,
+            routeOwnedTools);
     }
 
     private static bool MatchesAlias(string? userMessage, string? alias)
@@ -831,4 +929,9 @@ public sealed class AgentProfileTurnCatalogMaterializer
     }
 
     private sealed record ToolPolicyResolution(IReadOnlySet<string> Names, bool HadFailure);
+
+    private sealed record ToolDiscoveryResolution(IReadOnlyDictionary<string, IAgentTool> Tools, bool HadFailure)
+    {
+        public IReadOnlySet<string> Names { get; } = Tools.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
 }

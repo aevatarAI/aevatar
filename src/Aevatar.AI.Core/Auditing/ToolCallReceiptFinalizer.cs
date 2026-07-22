@@ -15,15 +15,19 @@ public static class ToolCallReceiptFinalizer
     public static FinalizedToolCallReceipt Finalize(ToolCallContext context, Exception? exception = null)
     {
         ArgumentNullException.ThrowIfNull(context);
+        var callSafety = context.Tool.GetCallSafety(context.ArgumentsJson);
 
         if (context.Receipt != null)
-            return new FinalizedToolCallReceipt(NormalizeReceipt(context, context.Receipt), IsSynthetic: false);
+            return new FinalizedToolCallReceipt(
+                NormalizeReceipt(context, context.Receipt, callSafety),
+                IsSynthetic: false);
 
         if (exception != null)
         {
             return new FinalizedToolCallReceipt(
                 CreateMinimalReceipt(
                     context,
+                    callSafety,
                     AgentToolReceiptStatus.Error,
                     errorCode: "tool_execution_exception",
                     errorMessage: ResolveSafeExceptionClass(exception)),
@@ -31,22 +35,27 @@ public static class ToolCallReceiptFinalizer
         }
 
         if (context.Terminate)
-            return new FinalizedToolCallReceipt(CreateTerminationReceipt(context), IsSynthetic: true);
+            return new FinalizedToolCallReceipt(
+                CreateTerminationReceipt(context, callSafety),
+                IsSynthetic: true);
 
         var successReceipt = AgentToolReceiptFactory.CreateSuccess(
             context.Tool,
             context.ToolCallId,
             context.ToolName,
+            callSafety,
             context.Result ?? string.Empty);
 
         return new FinalizedToolCallReceipt(
             successReceipt == null
-                ? CreateMinimalReceipt(context, AgentToolReceiptStatus.Success)
-                : NormalizeReceipt(context, successReceipt),
+                ? CreateMinimalReceipt(context, callSafety, AgentToolReceiptStatus.Success)
+                : NormalizeReceipt(context, successReceipt, callSafety),
             IsSynthetic: successReceipt == null);
     }
 
-    private static AgentToolReceipt CreateTerminationReceipt(ToolCallContext context)
+    private static AgentToolReceipt CreateTerminationReceipt(
+        ToolCallContext context,
+        AgentToolCallSafety callSafety)
     {
         var errorCode = ExtractErrorCode(context.Result) ?? ResolveTerminationErrorCode(context);
         var errorMessage = context.TerminationReason ?? ExtractErrorMessage(context.Result) ?? string.Empty;
@@ -63,13 +72,17 @@ public static class ToolCallReceiptFinalizer
 
         return CreateMinimalReceipt(
             context,
+            callSafety,
             status,
             context.PendingApproval?.ApprovalRequestId ?? string.Empty,
             errorCode,
             errorMessage);
     }
 
-    private static AgentToolReceipt NormalizeReceipt(ToolCallContext context, AgentToolReceipt receipt)
+    private static AgentToolReceipt NormalizeReceipt(
+        ToolCallContext context,
+        AgentToolReceipt receipt,
+        AgentToolCallSafety callSafety)
     {
         var normalized = receipt.Clone();
         if (string.IsNullOrWhiteSpace(normalized.CallId))
@@ -82,7 +95,7 @@ public static class ToolCallReceiptFinalizer
             normalized.Status = AgentToolReceiptStatus.Success;
         if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
             normalized.ApprovalMode = AgentToolReceiptFactory.MapApprovalMode(context.Tool.ApprovalMode);
-        normalized.IsDestructive = normalized.IsDestructive || context.Tool.IsDestructive;
+        normalized.IsDestructive = normalized.IsDestructive || callSafety.IsDestructive;
         normalized.SideEffectKind = NormalizeSideEffectKind(
             string.IsNullOrWhiteSpace(normalized.SideEffectKind)
                 ? context.Tool.SideEffectKind
@@ -92,6 +105,7 @@ public static class ToolCallReceiptFinalizer
 
     private static AgentToolReceipt CreateMinimalReceipt(
         ToolCallContext context,
+        AgentToolCallSafety callSafety,
         AgentToolReceiptStatus status,
         string approvalRequestId = "",
         string errorCode = "",
@@ -104,7 +118,7 @@ public static class ToolCallReceiptFinalizer
                 : context.ToolName,
             Status = status,
             ApprovalMode = AgentToolReceiptFactory.MapApprovalMode(context.Tool.ApprovalMode),
-            IsDestructive = context.Tool.IsDestructive,
+            IsDestructive = callSafety.IsDestructive,
             SideEffectKind = NormalizeSideEffectKind(context.Tool.SideEffectKind),
             ApprovalRequestId = approvalRequestId ?? string.Empty,
             ErrorCode = errorCode ?? string.Empty,

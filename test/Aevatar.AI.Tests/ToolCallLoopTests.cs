@@ -49,10 +49,11 @@ public class ToolCallLoopTests
             new LLMResponse { Content = "done" },
         ]);
         var tools = new ToolManager();
-        tools.Register(new DelegateTool("echo", args => $"RESULT:{args}"));
+        var exactTool = new DelegateTool("echo", args => $"RESULT:{args}");
+        tools.Register(exactTool);
         var loop = new ToolCallLoop(tools);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = [exactTool] };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
 
@@ -60,6 +61,230 @@ public class ToolCallLoopTests
         messages.Any(m => m.Role == "assistant" && m.ToolCalls?.Count == 1).Should().BeTrue();
         messages.Should().Contain(m => m.Role == "tool" && m.ToolCallId == "tc-1" && m.Content == """RESULT:{"q":"abc"}""");
         messages.Should().Contain(m => m.Role == "assistant" && m.Content == "done");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldExecuteExactRequestToolInsteadOfActorToolWithSameName()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-exact", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var actorTool = new DelegateTool("echo", _ => "actor");
+        var requestTool = new DelegateTool("echo", _ => "request");
+        var actorTools = new ToolManager();
+        actorTools.Register(actorTool);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(actorTools).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [requestTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        messages.Should().Contain(message => message.Role == "tool" && message.Content == "request");
+        messages.Should().NotContain(message => message.Role == "tool" && message.Content == "actor");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithNoRequestTools_ShouldNotFallBackToActorTool()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-forged", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var actorTools = new ToolManager();
+        actorTools.Register(new DelegateTool("echo", _ => "actor"));
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(actorTools).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = null },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        messages.Should().Contain(message =>
+            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+        messages.Should().NotContain(message => message.Role == "tool" && message.Content == "actor");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareRemovesTool_ShouldNotExecuteRemovedTool()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-removed", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var executions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            executions++;
+            return "executed";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            context.Request = CopyRequestWithTools(context.Request, null);
+            await next();
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        provider.Requests[0].Tools.Should().BeNull();
+        executions.Should().Be(0);
+        messages.Should().Contain(message =>
+            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareAddsTool_ShouldHideAndRejectAddedTool()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-added", Name = "added", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var exactTool = new DelegateTool("echo", _ => "exact");
+        var addedExecutions = 0;
+        var addedTool = new DelegateTool("added", _ =>
+        {
+            addedExecutions++;
+            return "added";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            context.Request = CopyRequestWithTools(context.Request, [exactTool, addedTool]);
+            await next();
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        provider.Requests[0].Tools.Should().ContainSingle().Which.Should().BeSameAs(exactTool);
+        addedExecutions.Should().Be(0);
+        messages.Should().Contain(message =>
+            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareReplacesToolWithSameName_ShouldRejectBothObjects()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-replaced", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var exactExecutions = 0;
+        var replacementExecutions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            exactExecutions++;
+            return "exact";
+        });
+        var replacementTool = new DelegateTool("echo", _ =>
+        {
+            replacementExecutions++;
+            return "replacement";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            context.Request = CopyRequestWithTools(context.Request, [replacementTool]);
+            await next();
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        provider.Requests[0].Tools.Should().BeNull();
+        exactExecutions.Should().Be(0);
+        replacementExecutions.Should().Be(0);
+        messages.Should().Contain(message =>
+            message.Role == "tool" && message.Content!.Contains("not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenLlmMiddlewareMutatesToolsAfterProvider_ShouldUseProviderSnapshot()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-after", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var exactExecutions = 0;
+        var replacementExecutions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            exactExecutions++;
+            return "exact";
+        });
+        var replacementTool = new DelegateTool("echo", _ =>
+        {
+            replacementExecutions++;
+            return "replacement";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var middleware = new DelegateLlmCallMiddleware(async (context, next) =>
+        {
+            await next();
+            ((IList<IAgentTool>)context.Request.Tools!)[0] = replacementTool;
+        });
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        await new ToolCallLoop(tools, llmMiddlewares: [middleware]).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 3,
+            CancellationToken.None);
+
+        exactExecutions.Should().Be(1);
+        replacementExecutions.Should().Be(0);
+        messages.Should().Contain(message => message.Role == "tool" && message.Content == "exact");
     }
 
     [Fact]
@@ -88,6 +313,7 @@ public class ToolCallLoopTests
         var request = new LLMRequest
         {
             Messages = [],
+            Tools = tools.GetAll(),
             RequestId = "session-99",
             Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -187,6 +413,7 @@ public class ToolCallLoopTests
         var request = new LLMRequest
         {
             Messages = [],
+            Tools = tools.GetAll(),
             Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [LLMRequestMetadataKeys.NyxIdAccessToken] = "metadata-token",
@@ -298,6 +525,7 @@ public class ToolCallLoopTests
         var request = new LLMRequest
         {
             Messages = [],
+            Tools = tools.GetAll(),
             RequestId = "session-operator",
             Metadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -354,6 +582,7 @@ public class ToolCallLoopTests
         var request = new LLMRequest
         {
             Messages = [],
+            Tools = tools.GetAll(),
             RequestId = "session-105",
         };
 
@@ -442,7 +671,7 @@ public class ToolCallLoopTests
         var hooks = new AgentHookPipeline([hook]);
         var loop = new ToolCallLoop(tools, hooks);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
 
@@ -486,7 +715,7 @@ public class ToolCallLoopTests
             toolMiddlewares: [],
             llmMiddlewares: [llmMiddleware]);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
 
@@ -557,7 +786,7 @@ public class ToolCallLoopTests
             llmMiddlewares: []);
 
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
 
@@ -608,7 +837,7 @@ public class ToolCallLoopTests
             llmMiddlewares: []);
 
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
 
@@ -769,7 +998,7 @@ public class ToolCallLoopTests
         tools.Register(new DelegateTool("echo", _ => "ok"));
         var loop = new ToolCallLoop(tools);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
 
@@ -831,7 +1060,7 @@ public class ToolCallLoopTests
         tools.Register(new DelegateTool("echo", _ => "ok"));
         var loop = new ToolCallLoop(tools);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
 
@@ -857,7 +1086,7 @@ public class ToolCallLoopTests
         var hook = new BlockPostSamplingHook();
         var loop = new ToolCallLoop(tools, new AgentHookPipeline([hook]));
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
 
@@ -880,7 +1109,7 @@ public class ToolCallLoopTests
         tools.Register(new DelegateTool("echo", _ => "echo-result"));
         var loop = new ToolCallLoop(tools);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
 
@@ -913,7 +1142,7 @@ public class ToolCallLoopTests
         var hook = new BlockPostSamplingHook();
         var loop = new ToolCallLoop(tools, new AgentHookPipeline([hook]));
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
 
@@ -934,7 +1163,7 @@ public class ToolCallLoopTests
         tools.Register(new DelegateTool("echo", _ => "ok"));
         var loop = new ToolCallLoop(tools);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 1, CancellationToken.None);
 
@@ -947,6 +1176,48 @@ public class ToolCallLoopTests
         forwardedFinalDsmlAssistant.ReasoningContent.Should().Be("final-dsml-thinking");
         var lastAssistant = messages.Last(m => m.Role == "assistant");
         lastAssistant.ReasoningContent.Should().Be("summary-thinking");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenFinalNoToolsCallContainsDsml_ShouldRejectToolAndNotExecuteAgain()
+    {
+        var finalDsml =
+            "Final search.\n<function_calls><invoke name=\"echo\"><parameter name=\"q\">final</parameter></invoke></function_calls>";
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls = [new ToolCall { Id = "tc-initial", Name = "echo", ArgumentsJson = "{}" }],
+            },
+            new LLMResponse { Content = finalDsml },
+            new LLMResponse { Content = "summary" },
+        ]);
+        var executions = 0;
+        var exactTool = new DelegateTool("echo", _ =>
+        {
+            executions++;
+            return "ok";
+        });
+        var tools = new ToolManager();
+        tools.Register(exactTool);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+
+        var result = await new ToolCallLoop(tools).ExecuteAsync(
+            provider,
+            messages,
+            new LLMRequest { Messages = [], Tools = [exactTool] },
+            maxRounds: 1,
+            CancellationToken.None);
+
+        result.Should().Be("summary");
+        executions.Should().Be(1);
+        messages.Where(message => message.Role == "tool").Should().SatisfyRespectively(
+            initialResult => initialResult.Content.Should().Be("ok"),
+            rejectedFinalResult => rejectedFinalResult.Content.Should()
+                .Contain("not found"));
+        provider.Requests.Should().HaveCount(3);
+        provider.Requests[1].Tools.Should().BeNull();
+        provider.Requests[2].Tools.Should().BeNull();
     }
 
     [Theory]
@@ -975,7 +1246,7 @@ public class ToolCallLoopTests
             $$"""{"{{payloadKey}}":"Zm9v","media_type":"image/png","text":"diagram"}"""));
         var loop = new ToolCallLoop(tools);
         var messages = new List<ChatMessage> { ChatMessage.User("hello") };
-        var request = new LLMRequest { Messages = [], Tools = null };
+        var request = new LLMRequest { Messages = [], Tools = tools.GetAll() };
 
         var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
 
@@ -1037,6 +1308,24 @@ public class ToolCallLoopTests
             await Task.CompletedTask;
         }
     }
+
+    private static LLMRequest CopyRequestWithTools(
+        LLMRequest request,
+        IReadOnlyList<IAgentTool>? tools) => new()
+    {
+        Messages = request.Messages,
+        RequestId = request.RequestId,
+        Metadata = request.Metadata,
+        CallerContext = request.CallerContext,
+        ToolContext = request.ToolContext,
+        RoutingContext = request.RoutingContext,
+        LlmControl = request.LlmControl,
+        Tools = tools,
+        Model = request.Model,
+        Temperature = request.Temperature,
+        MaxTokens = request.MaxTokens,
+        ResponseFormat = request.ResponseFormat,
+    };
 
     private sealed class DelegateTool : IAgentTool
     {

@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
@@ -31,9 +32,8 @@ public static class ServiceCollectionExtensions
         services.RemoveAll<NyxIdToolOptions>();
         services.AddSingleton(options);
         services.AddHttpClient<NyxIdApiClient>();
+        services.TryAddTransient<NyxIdServiceInstanceClient>();
         services.TryAddSingleton<INyxIdApiClientFactory, HttpClientFactoryNyxIdApiClientFactory>();
-        services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
-        services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());

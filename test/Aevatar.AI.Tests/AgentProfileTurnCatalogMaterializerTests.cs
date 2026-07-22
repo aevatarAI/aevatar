@@ -1,6 +1,9 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Chat;
+using Aevatar.AI.Core.Tools;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
@@ -443,6 +446,63 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
     }
 
     [Fact]
+    public async Task MaterializeAsync_RouteOnlyTool_ShouldFreezeExactObject()
+    {
+        var routeTool = new TestTool("task");
+        var registry = RegistryWithRoute([routeTool]);
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("task");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+
+        var catalog = await NewMaterializer(
+                registry,
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                [],
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().ContainSingle().Which.Should().Be("task");
+        catalog.RouteOwnedTools.Should().ContainSingle();
+        catalog.RouteOwnedTools["task"].Should().BeSameAs(routeTool);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_RouteAndRegisteredSameNameDifferentReference_ShouldFailClosed()
+    {
+        var routeTool = new TestTool("task");
+        var registeredTool = new TestTool("task");
+        var registry = RegistryWithRoute([routeTool]);
+        var profile = BuildProfile(withAlias: true);
+        profile.MaximumToolPolicy.ToolNames.Clear();
+        profile.MaximumToolPolicy.ToolNames.Add("task");
+        profile.RecoveryToolPolicy.ToolNames.Clear();
+
+        var catalog = await NewMaterializer(
+                registry,
+                new RecordingClassifier(AgentProfileTurnClassificationResult.NoMatch()),
+                new RecordingFetcher(SuccessfulFetch()))
+            .MaterializeAsync(
+                SealProfile(profile),
+                "/alpha",
+                "token",
+                [registeredTool],
+                ToolContext(),
+                CancellationToken.None);
+
+        catalog.FinalAllowedToolNames.Should().BeEmpty();
+        catalog.RouteOwnedTools.Should().BeEmpty();
+        catalog.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == AgentProfileTurnDiagnosticCode.ToolNameCollision &&
+            diagnostic.Detail == "task");
+    }
+
+    [Fact]
     public async Task MaterializeAsync_PolicyToolSetRefs_ShouldOnlyAttenuateFinalAuthority()
     {
         var routeTools = NewTools(
@@ -450,23 +510,24 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "task-from-set",
             "route-only",
             "visibility-blocked");
-        var registeredTools = NewTools(
-            "recovery-from-set",
-            "task-from-set",
-            "route-only",
-            "visibility-blocked",
-            "registered-only");
+        var registeredOnlyTool = new TestTool("registered-only");
+        var registeredTools = routeTools
+            .Append(registeredOnlyTool)
+            .ToArray();
         var registry = new RecordingToolSetRegistry();
         registry.Add("profile.route", new StaticToolSource(routeTools));
         registry.Add("maximum.policy", new StaticToolSource(NewTools(
             "recovery-from-set",
             "task-from-set",
+            "registered-only",
             "maximum-only")));
         registry.Add("recovery.policy", new StaticToolSource(NewTools(
             "recovery-from-set",
+            "registered-only",
             "recovery-outside-maximum")));
         registry.Add("task.policy", new StaticToolSource(NewTools(
             "task-from-set",
+            "registered-only",
             "task-outside-maximum")));
         var profile = BuildProfile(withAlias: true);
         profile.MaximumToolPolicy.ToolNames.Clear();
@@ -478,7 +539,7 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
         var toolContext = ToolContext() with
         {
             ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
-                ["recovery-from-set", "task-from-set", "route-only"]),
+                ["recovery-from-set", "task-from-set", "route-only", "registered-only"]),
         };
 
         var catalog = await NewMaterializer(
@@ -502,6 +563,22 @@ public sealed class AgentProfileTurnCatalogMaterializerTests
             "recovery-outside-maximum",
             "task-outside-maximum",
         ]);
+        catalog.RouteOwnedTools.Keys.Should().BeEquivalentTo("recovery-from-set", "task-from-set");
+
+        var toolManager = new ToolManager();
+        toolManager.Register(registeredTools);
+        var runtime = new ChatRuntime(
+            providerFactory: static () => throw new InvalidOperationException("Provider is not used."),
+            history: new ChatHistory(),
+            toolLoop: new ToolCallLoop(toolManager),
+            hooks: null,
+            requestBuilder: _ => new LLMRequest { Messages = [], Tools = toolManager.GetAll() });
+        var request = runtime.CreateStepExecutor(catalog).BuildBaseRequest(null, null, toolContext, null);
+
+        request.Tools.Should().HaveCount(2);
+        request.Tools.Should().OnlyContain(tool =>
+            tool.Name == "recovery-from-set" || tool.Name == "task-from-set");
+        request.Tools.Should().NotContain(tool => ReferenceEquals(tool, registeredOnlyTool));
         registry.ResolveCalls.Should().Equal(
             "profile.route",
             "maximum.policy",

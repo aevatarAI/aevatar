@@ -376,7 +376,7 @@ public sealed class StreamingToolExecutor
                         effectiveTool,
                         toolCallContext.ToolCallId,
                         toolCallContext.ToolName,
-                        result,
+                        callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson), resultJson: result,
                         "tool_execution_error",
                         error.Message);
                 }
@@ -391,7 +391,7 @@ public sealed class StreamingToolExecutor
                               effectiveTool,
                               toolCallContext.ToolCallId,
                               toolCallContext.ToolName,
-                              toolResult);
+                              callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson), resultJson: toolResult);
             var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or AgentToolReceiptStatus.Denied;
 
             toolCtx.ToolResult = toolResult;

@@ -6,11 +6,8 @@ using FluentAssertions;
 namespace Aevatar.AI.Core.Tests.Middleware;
 
 /// <summary>
-/// M6 (middleware half): once a connected-service write resolves to <c>IsDestructive == true</c>
-/// (the fail-closed default for non-GET/HEAD/OPTIONS methods), <see cref="ToolApprovalMiddleware"/>
-/// must route it through the approval handler under <see cref="ToolApprovalMode.Auto"/> rather than
-/// letting it pass. A read (<c>IsDestructive == false</c>) still bypasses. This locks in the
-/// destructive → approval-required linkage that <c>ConnectedServiceProxyTool</c> now relies on.
+/// Under <see cref="ToolApprovalMode.Auto"/>, destructive tools must pass through approval while
+/// non-destructive reads may proceed without an approval request.
 /// </summary>
 public class ToolApprovalDestructiveDefaultTests
 {
@@ -21,9 +18,8 @@ public class ToolApprovalDestructiveDefaultTests
         var middleware = new ToolApprovalMiddleware(handler);
         var ctx = new ToolCallContext
         {
-            // Shape of an unmarked connected-service write after the M6 fail-closed default.
-            Tool = new DestructiveAutoTool("nyxid_api-shop__create_order", isReadOnly: false, isDestructive: true),
-            ToolName = "nyxid_api-shop__create_order",
+            Tool = new DestructiveAutoTool("operation_write", isReadOnly: false, isDestructive: true),
+            ToolName = "operation_write",
             ToolCallId = "tc-write-1",
             ArgumentsJson = "{}",
         };
@@ -48,9 +44,8 @@ public class ToolApprovalDestructiveDefaultTests
         var middleware = new ToolApprovalMiddleware(handler);
         var ctx = new ToolCallContext
         {
-            // Shape of a GET connected-service operation: read-only, non-destructive.
-            Tool = new DestructiveAutoTool("nyxid_api-shop__get_order", isReadOnly: true, isDestructive: false),
-            ToolName = "nyxid_api-shop__get_order",
+            Tool = new DestructiveAutoTool("operation_read", isReadOnly: true, isDestructive: false),
+            ToolName = "operation_read",
             ToolCallId = "tc-read-1",
             ArgumentsJson = "{}",
         };
@@ -83,14 +78,12 @@ public class ToolApprovalDestructiveDefaultTests
     private sealed class DestructiveAutoTool(string name, bool isReadOnly, bool isDestructive) : IAgentTool
     {
         public string Name { get; } = name;
-        public string Description => "connected-service proxy tool under test";
+        public string Description => "approval policy test tool";
         public string ParametersSchema => "{}";
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
         public bool IsReadOnly { get; } = isReadOnly;
         public bool IsDestructive { get; } = isDestructive;
 
-        // null → middleware falls through to the static IsReadOnly/IsDestructive classifier,
-        // mirroring ConnectedServiceProxyTool which does not override RequiresApproval.
         public bool? RequiresApproval(string argumentsJson) => null;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>

@@ -1,5 +1,7 @@
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using FluentAssertions;
 
@@ -169,13 +171,13 @@ public class ConnectedServiceToolSpecParserTests
     [Fact]
     public void ToolNaming_IsStableAndProviderSafe()
     {
-        var first = ConnectedServiceToolNaming.Build("api-shop", "search_orders");
-        var second = ConnectedServiceToolNaming.Build("api-shop", "search_orders");
+        var first = ConnectedServiceToolNaming.Build("search_orders");
+        var second = ConnectedServiceToolNaming.Build("search_orders");
 
-        first.Should().Be("nyxid_api-shop__search_orders");
-        first.Should().StartWith("nyxid_api-shop__");
+        first.Should().Be("nyxid_service_operation__search_orders");
+        first.Should().StartWith("nyxid_service_operation__");
         first.Should().NotBe("nyxid_service_request");
-        first.Should().Be(second, "naming must be deterministic for a given (slug, operation) pair");
+        first.Should().Be(second, "naming must be deterministic for a given operation");
     }
 
     [Fact]
@@ -183,10 +185,151 @@ public class ConnectedServiceToolSpecParserTests
     {
         var longOp = new string('x', 200);
 
-        var name = ConnectedServiceToolNaming.Build("api-shop", longOp);
+        var name = ConnectedServiceToolNaming.Build(longOp);
 
         name.Length.Should().BeLessThanOrEqualTo(64);
-        name.Should().Be(ConnectedServiceToolNaming.Build("api-shop", longOp), "truncated names stay stable");
+        name.Should().Be(ConnectedServiceToolNaming.Build(longOp), "truncated names stay stable");
         name.Should().MatchRegex("^[A-Za-z0-9_-]+$");
+    }
+
+    [Theory]
+    [InlineData("trace")]
+    [InlineData("connect")]
+    public void Parse_UnsupportedMethod_ShouldNotAdmitOperation(string method)
+    {
+        var spec = $$"""
+            { "paths": { "/unsafe": { "{{method}}": { "operationId": "unsafe", "x-aevatar-tool": true } } } }
+            """;
+
+        OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_RequiredUnapprovedHeader_ShouldNotAdmitOperation()
+    {
+        const string spec = """
+            {
+              "paths": {
+                "/unsafe": {
+                  "get": {
+                    "operationId": "unsafe",
+                    "x-aevatar-tool": true,
+                    "parameters": [
+                      { "name": "Authorization", "in": "header", "required": true, "schema": { "type": "string" } }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_OptionalUnapprovedHeader_ShouldAttenuateHeaderAndKeepOperation()
+    {
+        const string spec = """
+            {
+              "paths": {
+                "/safe": {
+                  "get": {
+                    "operationId": "safe",
+                    "x-aevatar-tool": true,
+                    "parameters": [
+                      { "name": "Authorization", "in": "header", "required": false, "schema": { "type": "string" } },
+                      { "name": "Accept", "in": "header", "required": false, "schema": { "type": "string" } }
+                    ]
+                  }
+                }
+              }
+            }
+            """;
+
+        var operation = OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Single();
+
+        operation.Parameters.Should().ContainSingle(parameter => parameter.Name == "Accept");
+        operation.Parameters.Should().NotContain(parameter => parameter.Name == "Authorization");
+        operation.BuildParametersSchema().Should().Contain("Accept").And.NotContain("Authorization");
+    }
+
+    [Fact]
+    public void Parse_RequiredNonExactJsonBody_ShouldNotAdmitOperation()
+    {
+        const string spec = """
+            {
+              "paths": {
+                "/unsafe": {
+                  "post": {
+                    "operationId": "unsafe",
+                    "x-aevatar-tool": true,
+                    "requestBody": {
+                      "required": true,
+                      "content": {
+                        "application/merge-patch+json": { "schema": { "type": "object" } }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("""{ "required": true }""")]
+    [InlineData("""{ "required": true, "content": [] }""")]
+    public void Parse_MalformedOrUnsupportedRequiredRequestBody_ShouldNotAdmitOperation(
+        string requestBodyJson)
+    {
+        var operation = new JsonObject
+        {
+            ["operationId"] = "unsafe",
+            ["x-aevatar-tool"] = true,
+            ["requestBody"] = JsonNode.Parse(requestBodyJson),
+        };
+        var spec = new JsonObject
+        {
+            ["paths"] = new JsonObject
+            {
+                ["/unsafe"] = new JsonObject
+                {
+                    ["post"] = operation,
+                },
+            },
+        };
+
+        OpenApiToolSpecParser.Parse(spec.ToJsonString()).AdmittedOperations().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void SafeOperation_DestructiveOrAlwaysMarker_ShouldOnlyTightenApproval()
+    {
+        const string spec = """
+            {
+              "paths": {
+                "/danger": {
+                  "get": {
+                    "operationId": "danger",
+                    "x-aevatar-tool": {
+                      "enabled": true,
+                      "readOnly": true,
+                      "destructive": true,
+                      "approval": "always"
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+        var operation = OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Single();
+
+        operation.IsReadOnly.Should().BeFalse();
+        operation.IsDestructive.Should().BeTrue();
+        operation.ApprovalMode.Should().Be(ToolApprovalMode.AlwaysRequire);
     }
 }

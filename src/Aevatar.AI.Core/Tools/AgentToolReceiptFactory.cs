@@ -5,11 +5,12 @@ namespace Aevatar.AI.Core.Tools;
 
 internal static class AgentToolReceiptFactory
 {
-    public static bool IsReceiptWorthy(IAgentTool tool)
+    public static bool IsReceiptWorthy(IAgentTool tool, AgentToolCallSafety callSafety)
     {
         ArgumentNullException.ThrowIfNull(tool);
+        ArgumentNullException.ThrowIfNull(callSafety);
         return tool.ApprovalMode != ToolApprovalMode.NeverRequire ||
-               tool.IsDestructive ||
+               callSafety.IsDestructive ||
                !string.IsNullOrWhiteSpace(tool.SideEffectKind);
     }
 
@@ -17,16 +18,17 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
+        AgentToolCallSafety callSafety,
         string resultJson)
     {
-        if (!IsReceiptWorthy(tool))
+        if (!IsReceiptWorthy(tool, callSafety))
             return null;
 
         var providerReceipt = tool.CreateSuccessReceipt(callId, toolName, resultJson ?? string.Empty);
         if (providerReceipt is not null)
-            return NormalizeProviderSuccessReceipt(tool, callId, toolName, resultJson, providerReceipt);
+            return NormalizeProviderSuccessReceipt(tool, callId, toolName, callSafety, resultJson, providerReceipt);
 
-        var receipt = CreateBase(tool, callId, toolName, AgentToolReceiptStatus.Success);
+        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Success);
         receipt.ResultJson = resultJson ?? string.Empty;
         return receipt;
     }
@@ -35,14 +37,15 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
+        AgentToolCallSafety callSafety,
         string resultJson,
         string errorCode,
         string errorMessage)
     {
-        if (!IsReceiptWorthy(tool))
+        if (!IsReceiptWorthy(tool, callSafety))
             return null;
 
-        var receipt = CreateBase(tool, callId, toolName, AgentToolReceiptStatus.Error);
+        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Error);
         receipt.ResultJson = resultJson ?? string.Empty;
         receipt.ErrorCode = errorCode ?? string.Empty;
         receipt.ErrorMessage = errorMessage ?? string.Empty;
@@ -53,10 +56,11 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
+        AgentToolCallSafety callSafety,
         string resultJson,
         string approvalRequestId)
     {
-        var receipt = CreateBase(tool, callId, toolName, AgentToolReceiptStatus.ApprovalRequired);
+        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.ApprovalRequired);
         receipt.ResultJson = resultJson ?? string.Empty;
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         return receipt;
@@ -66,11 +70,12 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
+        AgentToolCallSafety callSafety,
         string resultJson,
         string approvalRequestId,
         string reason)
     {
-        var receipt = CreateBase(tool, callId, toolName, AgentToolReceiptStatus.Denied);
+        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Denied);
         receipt.ResultJson = resultJson ?? string.Empty;
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         receipt.ErrorCode = "approval_denied";
@@ -82,12 +87,13 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
+        AgentToolCallSafety callSafety,
         string resultJson,
         string approvalRequestId,
         string errorCode,
         string errorMessage)
     {
-        var receipt = CreateBase(tool, callId, toolName, AgentToolReceiptStatus.Error);
+        var receipt = CreateBase(tool, callId, toolName, callSafety, AgentToolReceiptStatus.Error);
         receipt.ResultJson = resultJson ?? string.Empty;
         receipt.ApprovalRequestId = approvalRequestId ?? string.Empty;
         receipt.ErrorCode = errorCode ?? string.Empty;
@@ -108,6 +114,7 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
+        AgentToolCallSafety callSafety,
         AgentToolReceiptStatus status) =>
         new()
         {
@@ -115,7 +122,7 @@ internal static class AgentToolReceiptFactory
             ToolName = string.IsNullOrWhiteSpace(toolName) ? tool.Name ?? string.Empty : toolName,
             Status = status,
             ApprovalMode = MapApprovalMode(tool.ApprovalMode),
-            IsDestructive = tool.IsDestructive,
+            IsDestructive = callSafety.IsDestructive,
             SideEffectKind = NormalizeSideEffectKind(tool.SideEffectKind),
         };
 
@@ -126,6 +133,7 @@ internal static class AgentToolReceiptFactory
         IAgentTool tool,
         string callId,
         string toolName,
+        AgentToolCallSafety callSafety,
         string? resultJson,
         AgentToolReceipt receipt)
     {
@@ -137,7 +145,7 @@ internal static class AgentToolReceiptFactory
         normalized.Status = AgentToolReceiptStatus.Success;
         if (normalized.ApprovalMode == AgentToolReceiptApprovalMode.Unspecified)
             normalized.ApprovalMode = MapApprovalMode(tool.ApprovalMode);
-        normalized.IsDestructive = normalized.IsDestructive || tool.IsDestructive;
+        normalized.IsDestructive = normalized.IsDestructive || callSafety.IsDestructive;
         normalized.SideEffectKind = string.IsNullOrWhiteSpace(normalized.SideEffectKind)
             ? NormalizeSideEffectKind(tool.SideEffectKind)
             : NormalizeSideEffectKind(normalized.SideEffectKind);

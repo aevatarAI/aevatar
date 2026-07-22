@@ -2,6 +2,11 @@ using Aevatar.AI.Abstractions;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
+public sealed record AgentToolCallSafety(
+    bool? RequiresApproval,
+    bool IsReadOnly,
+    bool IsDestructive);
+
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
 public interface IAgentTool
 {
@@ -37,6 +42,10 @@ public interface IAgentTool
     /// (e.g., HTTP proxy: GET is read-only, POST is destructive).
     /// </summary>
     bool? RequiresApproval(string argumentsJson) => null;
+
+    /// <summary>Classifies one concrete invocation without collapsing approval and safety semantics.</summary>
+    AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        new(RequiresApproval(argumentsJson), IsReadOnly, IsDestructive);
 
     /// <summary>执行工具。参数为 JSON 字符串，返回结果为 JSON 字符串。</summary>
     /// <param name="argumentsJson">LLM 传入的参数 JSON。</param>
