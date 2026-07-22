@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Projection.ReadModels;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
@@ -105,6 +106,7 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort
 
     public async Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
         string scopeId,
+        AuthenticatedAuthorizationOwnerContext? ownerContext = null,
         CancellationToken ct = default)
     {
         var document = await _reader.GetAsync($"user-config-{scopeId.Trim()}", ct);
@@ -123,9 +125,7 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort
                 AuthorizationGrantRequirement.NotRequired);
         }
 
-        var serviceSlug = route.StartsWith(NyxIdProxyRoutePrefix, StringComparison.Ordinal)
-            ? route[NyxIdProxyRoutePrefix.Length..].Trim('/')
-            : route.Trim('/');
+        var serviceSlug = ResolveServiceSlug(route);
         if (serviceSlug.Length == 0 || serviceSlug.Contains('/'))
         {
             return new ScheduledInvocationOwnerLLMEvidence(
@@ -139,8 +139,14 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort
             stateVersion,
             string.Empty,
             serviceSlug,
-            AuthorizationGrantRequirement.Required);
+            AuthorizationGrantRequirement.Required,
+            route);
     }
+
+    private static string ResolveServiceSlug(string route) =>
+        route.StartsWith(NyxIdProxyRoutePrefix, StringComparison.Ordinal)
+            ? route[NyxIdProxyRoutePrefix.Length..].Trim('/')
+            : route.Trim('/');
 
     private static string NormalizeRoutePreference(string? value)
     {
@@ -158,4 +164,7 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort
             ? normalized
             : $"{NyxIdProxyRoutePrefix}{normalized.Trim('/')}";
     }
+
+    private static string? NormalizeOptional(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

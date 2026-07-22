@@ -172,6 +172,7 @@ message WorkflowCallerNyxIdAuthority {
   string tenant = 2;
   string external_user_id = 3;
   string scope = 4;
+  string binding_id = 5;
 }
 
 message WorkflowExternalIngressContext {

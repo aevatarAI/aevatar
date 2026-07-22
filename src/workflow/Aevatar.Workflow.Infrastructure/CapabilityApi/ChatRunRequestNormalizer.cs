@@ -119,7 +119,8 @@ internal static class ChatRunRequestNormalizer
             platform,
             NormalizeOptional(authority.Tenant) ?? string.Empty,
             externalUserId,
-            scope);
+            scope,
+            NormalizeOptional(authority.BindingId));
     }
 
     private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)

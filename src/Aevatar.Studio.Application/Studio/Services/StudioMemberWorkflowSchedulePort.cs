@@ -851,8 +851,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             throw new UnauthorizedAccessException("authenticated_authorization_owner_required");
         var subjectPlatform = NormalizeOptional(owner.SubjectPlatform);
         var subjectExternalUserId = NormalizeOptional(owner.SubjectExternalUserId);
+        var bindingId = NormalizeOptional(owner.VerifiedBindingId);
         if (subjectPlatform is null || subjectExternalUserId is null)
             throw new UnauthorizedAccessException("authenticated_authorization_owner_incomplete");
+        if (bindingId is null)
+            throw new UnauthorizedAccessException("authenticated_authorization_owner_binding_missing");
         if (_callerAccessTokenProvider is null)
             throw new InvalidOperationException("workflow_caller_access_token_provider_unavailable");
 
@@ -863,6 +866,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 Tenant = NormalizeOptional(owner.SubjectTenant) ?? string.Empty,
                 ExternalUserId = subjectExternalUserId,
                 Scope = ProvisioningBearerCapabilityScope,
+                BindingId = bindingId,
             },
             ct);
         var issuedToken = WorkflowCallerCredentialTokens.ParseOptional(issued);

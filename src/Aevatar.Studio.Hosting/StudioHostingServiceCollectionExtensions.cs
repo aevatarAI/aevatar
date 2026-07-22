@@ -31,6 +31,7 @@ internal static class StudioHostingServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()

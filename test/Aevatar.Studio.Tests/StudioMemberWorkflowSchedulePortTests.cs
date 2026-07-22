@@ -159,6 +159,60 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         exception.Message.Should().Be("The authorization catalog could not be refreshed. Retry this request.");
     }
 
+    [Fact]
+    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndBearerAvailable_ShouldReturnPlannerResultWithoutSideEffects()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found"));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var request = Request("scope-1", "member-1");
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh);
+
+        var result = await port.PreflightAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndTypedAuthorityAvailable_ShouldNotIssueFreshTokenOrRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found"));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var request = Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+        tokenProvider.Requests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(
         ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
@@ -166,7 +220,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     [InlineData(
         ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
         "nyxid_catalog_snapshot_stale")]
-    public async Task PreflightAsync_WhenCatalogSnapshotUnavailable_ShouldReturnSinglePlannerResultWithoutSideEffects(
+    public async Task PreflightAsync_WhenCatalogSnapshotUnavailableWithoutBearer_ShouldReturnSinglePlannerResultWithoutSideEffects(
         ScheduledInvocationAuthorizationFailureCode failureCode,
         string detail)
     {
@@ -188,6 +242,17 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         var result = await port.PreflightAsync(Request("scope-1", "member-1") with
         {
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                "lark",
+                "tenant-alpha",
+                "sender-alpha",
+                string.Empty),
             ProvisioningBearerToken = null,
         });
 
@@ -227,6 +292,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
+                BindingId = "binding-alpha",
             });
         materializer.BearerToken.Should().Be("issued-bearer-alpha");
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;

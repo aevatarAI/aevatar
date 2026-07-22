@@ -4,9 +4,12 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.ConnectorCatalog;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
@@ -124,7 +127,112 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         ownerLlm!.StateVersion.Should().Be(11);
         ownerLlm.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
         ownerLlm.NyxIdServiceSlug.Should().Be("provider-alpha");
+        ownerLlm.NyxIdRoute.Should().Be("/api/v1/proxy/s/provider-alpha");
         ownerLlm.NyxIdServiceId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OwnerLlmResolver_WithVerifiedOwnerContext_ShouldResolveExactServiceIdFromReadyCatalogRoute()
+    {
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var catalogPort = new RecordingUserLlmCatalogPort([
+            new NyxIdLlmService(
+                "disabled-service-alpha",
+                "provider-alpha",
+                "Disabled Provider Alpha",
+                "/api/v1/proxy/s/provider-alpha",
+                null,
+                [],
+                "disabled",
+                NyxIdLlmProviderSource.UserService,
+                true,
+                null),
+            new NyxIdLlmService(
+                "user-service-alpha",
+                "provider-alpha",
+                "Provider Alpha",
+                "/api/v1/proxy/s/provider-alpha",
+                null,
+                [],
+                "ready",
+                NyxIdLlmProviderSource.UserService,
+                true,
+                null),
+        ]);
+        var resolver = new StudioOwnerLLMServiceIdentityResolver(tokenProvider, catalogPort);
+        var ownerContext = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "owner-alpha",
+            },
+            "lark",
+            "tenant-alpha",
+            "sender-alpha",
+            "binding-alpha");
+
+        var result = await resolver.ResolveAsync(
+            new ScheduledInvocationOwnerLLMEvidence(
+                12,
+                string.Empty,
+                "provider-alpha",
+                AuthorizationGrantRequirement.Required,
+                "/api/v1/proxy/s/provider-alpha"),
+            ownerContext);
+
+        result.Should().Be("user-service-alpha");
+        tokenProvider.Authorities.Should().ContainSingle().Which.Should().BeEquivalentTo(new WorkflowCallerNyxIdAuthority
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+            Scope = "proxy",
+            BindingId = "binding-alpha",
+        });
+        catalogPort.BearerTokens.Should().ContainSingle().Which.Should().Be("issued-token-alpha");
+    }
+
+    [Fact]
+    public async Task OwnerLlmResolver_WithRouteEvidence_ShouldNotFallbackToSlugMismatch()
+    {
+        var resolver = new StudioOwnerLLMServiceIdentityResolver(
+            new RecordingWorkflowCallerAccessTokenProvider(),
+            new RecordingUserLlmCatalogPort([
+                new NyxIdLlmService(
+                    "user-service-alpha",
+                    "provider-alpha",
+                    "Provider Alpha",
+                    "/api/v1/proxy/s/other-provider",
+                    null,
+                    [],
+                    "ready",
+                    NyxIdLlmProviderSource.UserService,
+                    true,
+                    null),
+            ]));
+        var ownerContext = new AuthenticatedAuthorizationOwnerContext(
+            new AuthorizationOwnerIdentity
+            {
+                Authority = NyxIdAuthorizationAuthorities.NyxId,
+                OwnerKind = AuthorizationOwnerKind.Personal,
+                OwnerSubject = "owner-alpha",
+            },
+            "lark",
+            "tenant-alpha",
+            "sender-alpha",
+            "binding-alpha");
+
+        var result = await resolver.ResolveAsync(
+            new ScheduledInvocationOwnerLLMEvidence(
+                12,
+                string.Empty,
+                "provider-alpha",
+                AuthorizationGrantRequirement.Required,
+                "/api/v1/proxy/s/provider-alpha"),
+            ownerContext);
+
+        result.Should().BeEmpty();
     }
 
     [Fact]
@@ -221,7 +329,8 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             0,
             string.Empty,
             "chrono-llm-public",
-            AuthorizationGrantRequirement.Required));
+            AuthorizationGrantRequirement.Required,
+            "/api/v1/proxy/s/chrono-llm-public"));
     }
 
     private static ServiceRevisionCatalogSnapshot CreateWorkflowRevisionCatalog(
@@ -257,6 +366,34 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             ],
             DateTimeOffset.UtcNow,
             StateVersion: 5);
+    }
+
+    private sealed class RecordingWorkflowCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
+    {
+        public List<WorkflowCallerNyxIdAuthority> Authorities { get; } = [];
+
+        public Task<string> IssueAsync(WorkflowCallerNyxIdAuthority authority, CancellationToken ct = default)
+        {
+            Authorities.Add(authority.Clone());
+            return Task.FromResult("issued-token-alpha");
+        }
+    }
+
+    private sealed class RecordingUserLlmCatalogPort(IReadOnlyList<NyxIdLlmService> services) : IUserLlmCatalogPort
+    {
+        public List<string> BearerTokens { get; } = [];
+
+        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
+        {
+            BearerTokens.Add(bearerToken);
+            return Task.FromResult(new NyxIdLlmServicesResult(services, null));
+        }
+
+        public Task<NyxIdLlmService> ProvisionAsync(
+            string bearerToken,
+            string provisionEndpointId,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingRevisionCatalogReader(ServiceRevisionCatalogSnapshot? snapshot)

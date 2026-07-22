@@ -1024,7 +1024,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         owner.SubjectPlatform.Should().Be("nyxid");
         owner.SubjectTenant.Should().Be("tenant-typed");
         owner.SubjectExternalUserId.Should().Be("typed-user");
-        owner.VerifiedBindingId.Should().Be("nyxid:typed-user");
+        owner.VerifiedBindingId.Should().Be("binding-alpha");
     }
 
     [Fact]
@@ -1258,6 +1258,24 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         ErrorCode(output).Should().Be("caller_subject_unavailable");
         schedulePort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenSenderBindingMissing_ShouldReturnAuthorizationContextUnavailable()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            senderBindingId: null);
+        var output = await tool.ExecuteAsync("""{"member_id":"member-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
+
+        ErrorCode(output).Should().Be("authenticated_owner_context_unavailable");
+        schedulePort.PreflightRequests.Should().BeEmpty();
+        schedulePort.CreateRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1655,14 +1673,15 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? callId = "call-1",
         string? idempotencyKey = null,
         string? ownerScopeId = null,
-        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null,
+        string? senderBindingId = "binding-alpha")
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
             AgentToolChannelContext.Empty,
-            AgentToolSenderBindingContext.Empty,
+            new AgentToolSenderBindingContext(senderBindingId),
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
             AgentSkillRecoveryContext.Empty,

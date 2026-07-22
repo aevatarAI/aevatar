@@ -119,7 +119,7 @@ public static class ScheduledDispatchEndpoints
                 catalogReader,
                 revisionCatalogReader,
                 context.AuthenticatedNyxIdOwnerSubject,
-                defaultMissingWorkflowScheduleAuth: false,
+                defaultMissingWorkflowScheduleAuth: true,
                 ct);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
@@ -381,7 +381,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
-        bool defaultMissingWorkflowScheduleAuth = true,
+        bool defaultMissingWorkflowScheduleAuth = false,
         CancellationToken ct = default)
     {
         var resolvedTarget = await ResolveTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);
