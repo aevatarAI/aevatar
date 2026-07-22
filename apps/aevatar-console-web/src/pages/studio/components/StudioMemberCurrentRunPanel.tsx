@@ -512,6 +512,8 @@ function renderMarkdownBlock(
           {renderMarkdownLines(block.lines, `quote-${index}`)}
         </blockquote>
       );
+    case 'table':
+      return renderMarkdownTable(block, index);
     case 'code':
       return (
         <pre key={index} style={markdownCodeStyle}>
@@ -526,7 +528,6 @@ function renderMarkdownBlock(
         />
       );
     case 'paragraph':
-    default:
       return (
         <div key={index} style={markdownParagraphStyle}>
           {renderMarkdownLines(block.lines, `paragraph-${index}`)}
@@ -535,42 +536,42 @@ function renderMarkdownBlock(
   }
 }
 
-function splitMarkdownTableRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((cell) => cell.trim());
-}
-
-function isMarkdownTableSeparator(line: string): boolean {
-  return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line);
-}
-
-function renderMarkdownTable(lines: readonly string[], index: number) {
-  const header = splitMarkdownTableRow(lines[0]);
-  const rows = lines.slice(2).map(splitMarkdownTableRow);
-
+function renderMarkdownTable(
+  block: Extract<MarkdownBlock, { kind: 'table' }>,
+  index: number,
+) {
   return (
     <div key={`table-${index}`} style={markdownTableWrapperStyle}>
       <table style={markdownTableStyle}>
         <thead>
           <tr>
-            {header.map((cell, cellIndex) => (
-              <th key={cellIndex} style={markdownTableHeaderCellStyle}>
+            {block.headers.map((cell, cellIndex) => (
+              <th
+                key={cellIndex}
+                scope="col"
+                style={{
+                  ...markdownTableHeaderCellStyle,
+                  textAlign: block.alignments[cellIndex] ?? 'left',
+                }}
+              >
                 {renderInlineContent(cell, `table-${index}-head-${cellIndex}`)}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, rowIndex) => (
+          {block.rows.map((row, rowIndex) => (
             <tr key={rowIndex}>
-              {header.map((_, cellIndex) => (
-                <td key={cellIndex} style={markdownTableCellStyle}>
+              {block.headers.map((_, cellIndex) => (
+                <td
+                  key={cellIndex}
+                  style={{
+                    ...markdownTableCellStyle,
+                    textAlign: block.alignments[cellIndex] ?? 'left',
+                  }}
+                >
                   {renderInlineContent(
-                    row[cellIndex] || '',
+                    row[cellIndex] ?? '',
                     `table-${index}-${rowIndex}-${cellIndex}`,
                   )}
                 </td>
@@ -591,18 +592,7 @@ function renderRunOutputContent(text: string): React.ReactNode {
 
   return (
     <div style={renderedOutputStyle}>
-      {blocks.map((block, index) => {
-        if (
-          block.kind === 'paragraph' &&
-          block.lines.length >= 3 &&
-          block.lines[0].includes('|') &&
-          isMarkdownTableSeparator(block.lines[1])
-        ) {
-          return renderMarkdownTable(block.lines, index);
-        }
-
-        return renderMarkdownBlock(block, index);
-      })}
+      {blocks.map((block, index) => renderMarkdownBlock(block, index))}
     </div>
   );
 }

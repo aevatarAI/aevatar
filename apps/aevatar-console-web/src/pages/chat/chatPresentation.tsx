@@ -120,6 +120,40 @@ function renderLineCollection(
   ));
 }
 
+const markdownTableRegionStyle: React.CSSProperties = {
+  border: "1px solid #e5e7eb",
+  borderRadius: 8,
+  margin: "8px 0 12px",
+  maxWidth: "100%",
+  overflowX: "auto",
+};
+
+const markdownTableStyle: React.CSSProperties = {
+  borderCollapse: "collapse",
+  fontSize: 13,
+  minWidth: "100%",
+  width: "max-content",
+};
+
+const markdownTableHeaderCellStyle: React.CSSProperties = {
+  background: "#f8fafc",
+  borderBottom: "1px solid #d1d5db",
+  color: "#475569",
+  fontWeight: 700,
+  padding: "9px 11px",
+  textAlign: "left",
+  whiteSpace: "nowrap",
+};
+
+const markdownTableCellStyle: React.CSSProperties = {
+  borderTop: "1px solid #eef2f7",
+  maxWidth: 320,
+  overflowWrap: "anywhere",
+  padding: "9px 11px",
+  verticalAlign: "top",
+  wordBreak: "normal",
+};
+
 function renderMarkdownBlock(
   block: MarkdownBlock,
   blockIndex: number
@@ -200,6 +234,61 @@ function renderMarkdownBlock(
           ))}
         </div>
       );
+    case "table":
+      return (
+        <div
+          aria-label={t(
+            "pages.chat.chatpresentation.message.table",
+            "Message table"
+          )}
+          key={`block-${blockIndex}`}
+          role="region"
+          style={markdownTableRegionStyle}
+          tabIndex={0}
+        >
+          <table style={markdownTableStyle}>
+            <thead>
+              <tr>
+                {block.headers.map((header, cellIndex) => (
+                  <th
+                    key={`table-${blockIndex}-header-${cellIndex}`}
+                    scope="col"
+                    style={{
+                      ...markdownTableHeaderCellStyle,
+                      textAlign: block.alignments[cellIndex] ?? "left",
+                    }}
+                  >
+                    {renderInlineTokens(
+                      tokenizeInlineContent(header),
+                      `table-${blockIndex}-header-${cellIndex}`
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={`table-${blockIndex}-row-${rowIndex}`}>
+                  {block.headers.map((_, cellIndex) => (
+                    <td
+                      key={`table-${blockIndex}-row-${rowIndex}-${cellIndex}`}
+                      style={{
+                        ...markdownTableCellStyle,
+                        textAlign: block.alignments[cellIndex] ?? "left",
+                      }}
+                    >
+                      {renderInlineTokens(
+                        tokenizeInlineContent(row[cellIndex] ?? ""),
+                        `table-${blockIndex}-row-${rowIndex}-${cellIndex}`
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
     case "code":
       return (
         <div
@@ -252,8 +341,6 @@ function renderMarkdownBlock(
           }}
         />
       );
-    default:
-      return null;
   }
 }
 
