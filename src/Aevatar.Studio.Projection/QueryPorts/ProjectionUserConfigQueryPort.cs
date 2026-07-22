@@ -44,7 +44,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
         UserConfigResourceKey resource,
         CancellationToken ct = default)
     {
-        var actorId = BuildActorId(resource);
+        var actorId = UserConfigActorIdMapper.Build(resource);
         var document = await _documentReader.GetAsync(actorId, ct);
 
         if (document is null)
@@ -78,13 +78,6 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
             RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl,
             GithubUsername: null,
             LlmSelection: null);
-
-    private static string BuildActorId(UserConfigResourceKey resource) => resource.Kind switch
-    {
-        UserConfigResourceKind.OwnerScope => $"user-config-{resource.Value}",
-        UserConfigResourceKind.ChannelBinding => $"channel-user-config-{resource.Value}",
-        _ => throw new ArgumentOutOfRangeException(nameof(resource)),
-    };
 
     private static UserLlmSelectionValue? MapSelection(UserLlmSelection? selection)
     {
