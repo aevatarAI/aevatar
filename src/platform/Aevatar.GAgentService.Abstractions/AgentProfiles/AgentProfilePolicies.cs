@@ -377,7 +377,7 @@ public static class AgentProfilePolicies
                     "Binding id is required and must be bounded.",
                     $"{path}.binding_id"));
             }
-            else if (!bindingIds.Add(binding.BindingId))
+            else if (!bindingIds.Add(NormalizeBindingIdentity(binding.BindingId)))
             {
                 diagnostics.Add(Diagnostic(
                     "DUPLICATE_BINDING_ID",
@@ -441,7 +441,7 @@ public static class AgentProfilePolicies
                     "Binding id is required and must be bounded.",
                     "skill_bindings.binding_id"));
             }
-            else if (!bindingIds.Add(binding.BindingId))
+            else if (!bindingIds.Add(NormalizeBindingIdentity(binding.BindingId)))
             {
                 diagnostics.Add(Diagnostic(
                     "DUPLICATE_BINDING_ID",
@@ -580,6 +580,9 @@ public static class AgentProfilePolicies
     private static bool HasBoundaryWhitespace(string value) =>
         value.Length > 0 &&
         (char.IsWhiteSpace(value[0]) || char.IsWhiteSpace(value[^1]));
+
+    private static string NormalizeBindingIdentity(string bindingId) =>
+        bindingId.Normalize(NormalizationForm.FormC);
 
     private static void ValidateAuthoredText(
         ICollection<AgentProfileSafeDiagnostic> diagnostics,

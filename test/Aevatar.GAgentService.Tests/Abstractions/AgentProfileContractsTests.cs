@@ -107,6 +107,67 @@ public sealed class AgentProfileContractsTests
     }
 
     [Fact]
+    public void NormalizeContent_ShouldRejectBindingIdsThatCollideAfterNfcNormalization()
+    {
+        var bindingIdOrders = new[]
+        {
+            new[] { "binding-\u00e9", "binding-e\u0301" },
+            new[] { "binding-e\u0301", "binding-\u00e9" },
+        };
+
+        foreach (var bindingIds in bindingIdOrders)
+        {
+            var content = Content("Purpose", "Instructions", ["alpha"]);
+            content.SkillBindings.Add(bindingIds.Select(static bindingId =>
+                new AgentProfileSkillBinding
+                {
+                    BindingId = bindingId,
+                    ActivationMode = AgentProfileSkillActivationMode.Routed,
+                    Skill = ExactReference(),
+                }));
+
+            AgentProfilePolicies.ValidateContent(content)
+                .Should().ContainSingle(x => x.Code == "DUPLICATE_BINDING_ID");
+            var act = () => AgentProfileDeterminism.NormalizeContent(content);
+            act.Should().Throw<AgentProfileContractValidationException>()
+                .Which.Diagnostics.Should().ContainSingle(x => x.Code == "DUPLICATE_BINDING_ID");
+        }
+    }
+
+    [Fact]
+    public void NormalizePublishedSnapshot_ShouldRejectBindingIdsThatCollideAfterNfcNormalization()
+    {
+        foreach (var reverse in new[] { false, true })
+        {
+            var snapshot = PublishedSnapshot(Content("Purpose", "Instructions", ["alpha"]));
+            var bindings = new[]
+            {
+                new SealedAgentProfileSkillBinding
+                {
+                    BindingId = "binding-\u00e9",
+                    ActivationMode = AgentProfileSkillActivationMode.Always,
+                    Skill = ValidSealedSkill(),
+                },
+                new SealedAgentProfileSkillBinding
+                {
+                    BindingId = "binding-e\u0301",
+                    ActivationMode = AgentProfileSkillActivationMode.Routed,
+                    Skill = ValidSealedSkill(),
+                },
+            };
+            if (reverse)
+                Array.Reverse(bindings);
+            snapshot.SkillBindings.Add(bindings);
+
+            AgentProfilePolicies.ValidatePublishedSnapshot(snapshot)
+                .Should().ContainSingle(x => x.Code == "DUPLICATE_BINDING_ID");
+            var act = () => AgentProfileDeterminism.NormalizePublishedSnapshot(snapshot);
+            act.Should().Throw<AgentProfileContractValidationException>()
+                .Which.Diagnostics.Should().ContainSingle(x => x.Code == "DUPLICATE_BINDING_ID");
+        }
+    }
+
+    [Fact]
     public void ComputeSealedSkillSha256_ShouldCanonicalizeAssetOrderingAndLineEndings()
     {
         var first = SealedSkill(
