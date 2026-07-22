@@ -21,6 +21,7 @@ type WorkflowStudioCanvasProps = {
   readonly onNodeSelect?: (nodeId: string) => void;
   readonly selectedEdgeId?: string;
   readonly selectedNodeId?: string;
+  readonly viewportRightInset?: number;
 };
 
 const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
@@ -37,6 +38,7 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
   onNodeSelect,
   selectedEdgeId,
   selectedNodeId,
+  viewportRightInset,
 }) => (
   <div
     data-testid="workflow-studio-canvas"
@@ -74,6 +76,7 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
       selectedEdgeId={selectedEdgeId}
       selectedNodeId={selectedNodeId}
       variant="studio"
+      viewportRightInset={viewportRightInset}
     />
   </div>
 );

@@ -21,8 +21,9 @@ describe("app navigation groups", () => {
     jest.resetModules();
   });
 
-  it("places Chat as a top-level navigation group below Teams", () => {
+  it("places Chat as a top-level navigation item below Teams", () => {
     const groups = loadNavigationGroups();
+    const chatGroup = groups.find((group) => group.key === "chat");
 
     expect(groups.map((group) => group.label)).toEqual([
       "Teams",
@@ -36,8 +37,8 @@ describe("app navigation groups", () => {
       "nav.groups.platform",
       "nav.groups.settings",
     ]);
-    expect(groups.find((group) => group.key === "chat")?.flattenSingleItem).toBe(true);
-    expect(groups.find((group) => group.key === "chat")?.flattenSingleItemAsGroupLabel).toBe(true);
+    expect(chatGroup?.flattenSingleItem).toBe(true);
+    expect(chatGroup?.icon).toBeTruthy();
     expect(groups.find((group) => group.key === "teams")?.flattenSingleItem).toBeUndefined();
   });
 
@@ -73,7 +74,7 @@ describe("app navigation groups", () => {
         },
       ],
       groups,
-      (group) => group.label,
+      (group) => `Group:${group.label}`,
     );
 
     expect(menuItems.map((item) => item.path ?? item.key)).toEqual([
@@ -85,5 +86,13 @@ describe("app navigation groups", () => {
     expect(menuItems[0].children?.map((child) => child.path)).toEqual([
       "/scopes",
     ]);
+    expect(menuItems[0].name).toBe("Group:Teams");
+    expect(menuItems[1]).toMatchObject({
+      menuGroupKey: "chat",
+      name: "Chat",
+      path: "/chat",
+    });
+    expect(menuItems[1].icon).toBeTruthy();
+    expect(menuItems[2].name).toBe("Group:Platform");
   });
 });

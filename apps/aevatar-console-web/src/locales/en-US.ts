@@ -1182,7 +1182,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publish.publishingStatus': 'Publishing',
   'teamMemberWorkflowStudio.header.publishMember': 'Publish member workflow',
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
-  'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
+  'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Teams',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',

@@ -1,12 +1,12 @@
 import {
   DashboardOutlined,
+  MessageOutlined,
   SettingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
 import React from "react";
 
 export type NavigationGroup = {
-  flattenSingleItemAsGroupLabel?: boolean;
   flattenSingleItem?: boolean;
   icon?: React.ReactNode;
   key: string;
@@ -22,8 +22,8 @@ const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
     labelMessageId: "nav.groups.teams",
   },
   {
-    flattenSingleItemAsGroupLabel: true,
     flattenSingleItem: true,
+    icon: <MessageOutlined />,
     key: "chat",
     label: "Chat",
     labelMessageId: "nav.groups.chat",

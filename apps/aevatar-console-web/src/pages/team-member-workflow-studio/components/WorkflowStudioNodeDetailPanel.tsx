@@ -29,14 +29,23 @@ type WorkflowStudioNodeDetailPanelProps = {
   readonly onClose: () => void;
   readonly onConfigurationChange: (parametersText: string) => void;
   readonly onConfigurationErrorChange: (error: string) => void;
+  readonly onWidthChange: (width: number) => void;
   readonly stepDraft: StudioStepInspectorDraft | null;
+  readonly width: number;
 };
 
-const DEFAULT_PANEL_WIDTH = 420;
+export const WORKFLOW_STUDIO_NODE_INSPECTOR_DEFAULT_WIDTH = 420;
+export const WORKFLOW_STUDIO_NODE_INSPECTOR_OVERLAY_INSET = 16;
 const MIN_PANEL_WIDTH = 360;
 const MAX_PANEL_WIDTH = 500;
+const WORKFLOW_STUDIO_NODE_INSPECTOR_RADIUS = 8;
+const WORKFLOW_STUDIO_NODE_INSPECTOR_SCROLLBAR_WIDTH = 6;
+const WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY = "#1D4ED8";
+const WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY_HOVER = "#1E40AF";
+const WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY_ACTIVE = "#1E3A8A";
 
-function buildInspectorCss(screenMd: number): string {
+function buildInspectorCss(screenLg: number): string {
+  const compactMaxWidth = Math.max(0, screenLg - 1);
   return `
 .workflow-studio-node-inspector {
   color: var(--workflow-node-inspector-text);
@@ -51,6 +60,7 @@ function buildInspectorCss(screenMd: number): string {
   display: flex;
   justify-content: center;
   left: calc(var(--workflow-node-inspector-resize-hit-width) / -2);
+  margin: 0;
   padding: 0;
   position: absolute;
   top: 0;
@@ -74,20 +84,52 @@ function buildInspectorCss(screenMd: number): string {
   width: var(--workflow-node-inspector-scrollbar-width);
 }
 
+.workflow-studio-node-inspector__body {
+  scrollbar-color: var(--workflow-node-inspector-scroll-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+.workflow-studio-node-inspector__body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .workflow-studio-node-inspector__body::-webkit-scrollbar-thumb {
   background: var(--workflow-node-inspector-scroll-thumb);
-  border: 3px solid var(--workflow-node-inspector-surface);
+  border: 1px solid var(--workflow-node-inspector-surface);
   border-radius: var(--workflow-node-inspector-pill-radius);
 }
 
-@media (max-width: ${screenMd}px) {
+.workflow-studio-node-inspector
+  .workflow-studio-node-inspector__update.ant-btn-primary:not(:disabled) {
+  background: var(--workflow-node-inspector-primary);
+  border-color: var(--workflow-node-inspector-primary);
+  color: #ffffff;
+}
+
+.workflow-studio-node-inspector
+  .workflow-studio-node-inspector__update.ant-btn-primary:not(:disabled):hover,
+.workflow-studio-node-inspector
+  .workflow-studio-node-inspector__update.ant-btn-primary:not(:disabled):focus-visible {
+  background: var(--workflow-node-inspector-primary-hover);
+  border-color: var(--workflow-node-inspector-primary-hover);
+  color: #ffffff;
+}
+
+.workflow-studio-node-inspector
+  .workflow-studio-node-inspector__update.ant-btn-primary:not(:disabled):active {
+  background: var(--workflow-node-inspector-primary-active);
+  border-color: var(--workflow-node-inspector-primary-active);
+  color: #ffffff;
+}
+
+@media (max-width: ${compactMaxWidth}px) {
   .workflow-studio-node-inspector {
     border-left: 0 !important;
     border-radius: var(--workflow-node-inspector-mobile-radius) var(--workflow-node-inspector-mobile-radius) 0 0 !important;
     border-top: 1px solid var(--workflow-node-inspector-border) !important;
     bottom: 0 !important;
     left: 0 !important;
-    max-height: calc(100vh - var(--workflow-node-inspector-mobile-offset)) !important;
+    max-height: calc(100% - var(--workflow-node-inspector-mobile-offset)) !important;
     max-width: none !important;
     right: 0 !important;
     top: auto !important;
@@ -288,10 +330,11 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   onClose,
   onConfigurationChange,
   onConfigurationErrorChange,
+  onWidthChange,
   stepDraft,
+  width,
 }) => {
   const { token } = theme.useToken();
-  const [panelWidth, setPanelWidth] = React.useState(DEFAULT_PANEL_WIDTH);
   const [resizing, setResizing] = React.useState(false);
   const resizeStartRef = React.useRef<{
     readonly startWidth: number;
@@ -334,8 +377,8 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     return null;
   }
 
-  const overlayInset = token.padding;
-  const inspectorCss = buildInspectorCss(token.screenMD);
+  const overlayInset = WORKFLOW_STUDIO_NODE_INSPECTOR_OVERLAY_INSET;
+  const inspectorCss = buildInspectorCss(token.screenLG);
   const inspectorVariables: InspectorCssVariables = {
     "--workflow-node-inspector-border": token.colorBorderSecondary,
     "--workflow-node-inspector-border-strong": token.colorBorder,
@@ -347,10 +390,19 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
       : token.controlHeightLG
         ? doubledPx(token.controlHeightLG)
         : doubledPx(token.paddingXL),
-    "--workflow-node-inspector-mobile-radius": toPx(token.borderRadiusLG),
+    "--workflow-node-inspector-mobile-radius": toPx(
+      WORKFLOW_STUDIO_NODE_INSPECTOR_RADIUS,
+    ),
     "--workflow-node-inspector-muted": token.colorTextSecondary,
-    "--workflow-node-inspector-panel-radius": toPx(token.borderRadiusLG),
-    "--workflow-node-inspector-pill-radius": toPx(token.borderRadiusSM),
+    "--workflow-node-inspector-panel-radius": toPx(
+      WORKFLOW_STUDIO_NODE_INSPECTOR_RADIUS,
+    ),
+    "--workflow-node-inspector-pill-radius": "3px",
+    "--workflow-node-inspector-primary": WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY,
+    "--workflow-node-inspector-primary-active":
+      WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY_ACTIVE,
+    "--workflow-node-inspector-primary-hover":
+      WORKFLOW_STUDIO_NODE_INSPECTOR_PRIMARY_HOVER,
     "--workflow-node-inspector-resize": token.colorBorder,
     "--workflow-node-inspector-resize-active": token.colorPrimary,
     "--workflow-node-inspector-resize-grip-height": token.controlHeightLG
@@ -359,7 +411,9 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     "--workflow-node-inspector-resize-grip-width": toPx(token.lineWidthBold),
     "--workflow-node-inspector-resize-hit-width": toPx(token.controlHeightXS),
     "--workflow-node-inspector-scroll-thumb": token.colorTextQuaternary,
-    "--workflow-node-inspector-scrollbar-width": toPx(token.controlHeightXS),
+    "--workflow-node-inspector-scrollbar-width": toPx(
+      WORKFLOW_STUDIO_NODE_INSPECTOR_SCROLLBAR_WIDTH,
+    ),
     "--workflow-node-inspector-section-gap": toPx(token.paddingLG),
     "--workflow-node-inspector-section-radius": toPx(token.borderRadius),
     "--workflow-node-inspector-surface": token.colorBgElevated,
@@ -377,7 +431,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
   const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     resizeStartRef.current = {
-      startWidth: panelWidth,
+      startWidth: width,
       startX: event.clientX,
     };
     setResizing(true);
@@ -390,7 +444,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
     }
 
     const delta = resizeStartRef.current.startX - event.clientX;
-    setPanelWidth(clampPanelWidth(resizeStartRef.current.startWidth + delta));
+    onWidthChange(clampPanelWidth(resizeStartRef.current.startWidth + delta));
   };
 
   const stopResize = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -412,7 +466,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
 
     event.preventDefault();
     const direction = event.key === "ArrowLeft" ? 1 : -1;
-    setPanelWidth((currentWidth) => clampPanelWidth(currentWidth + direction * 16));
+    onWidthChange(clampPanelWidth(width + direction * 16));
   };
 
   const updateFieldValue = (fieldName: string, value: string) => {
@@ -604,7 +658,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           background: token.colorBgElevated,
           border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
           borderLeft: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}`,
-          borderRadius: token.borderRadiusLG,
+          borderRadius: WORKFLOW_STUDIO_NODE_INSPECTOR_RADIUS,
           bottom: overlayInset,
           boxShadow: token.boxShadowSecondary,
           display: "flex",
@@ -615,11 +669,11 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           position: "absolute",
           right: overlayInset,
           top: overlayInset,
-          width: panelWidth,
+          width,
           zIndex: token.zIndexPopupBase,
         }}
       >
-        <div
+        <hr
           aria-label={t(
             "teamMemberWorkflowStudio.nodeInspector.resizeHandle",
             "Resize node inspector",
@@ -627,14 +681,13 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
           aria-orientation="vertical"
           aria-valuemax={MAX_PANEL_WIDTH}
           aria-valuemin={MIN_PANEL_WIDTH}
-          aria-valuenow={panelWidth}
+          aria-valuenow={width}
           className="workflow-studio-node-inspector__resize"
           onKeyDown={resizeWithKeyboard}
           onPointerCancel={stopResize}
           onPointerDown={startResize}
           onPointerMove={updateResize}
           onPointerUp={stopResize}
-          role="separator"
           tabIndex={0}
         />
         <header
@@ -754,6 +807,7 @@ const WorkflowStudioNodeDetailPanel: React.FC<WorkflowStudioNodeDetailPanelProps
               </Typography.Paragraph>
             </div>
             <Button
+              className="workflow-studio-node-inspector__update"
               disabled={Boolean(structuredError)}
               onClick={applyConfigurationToDraft}
               size="small"

@@ -1092,6 +1092,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     React.useState<StudioMemberBindingRunStatusResponse | null>(null);
   const [publishError, setPublishError] = React.useState("");
   const [publishErrorVisible, setPublishErrorVisible] = React.useState(true);
+  const clearPublishError = React.useCallback(() => {
+    setPublishError("");
+    setPublishErrorVisible(true);
+  }, []);
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [draftRunPanelOpen, setDraftRunPanelOpen] = React.useState(false);
   const [yamlPanelOpen, setYamlPanelOpen] = React.useState(false);
@@ -2659,6 +2663,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     }
 
     const memberResult = await memberQuery.refetch();
+    if (memberResult.isError || !memberResult.data) {
+      const refreshError = memberResult.error;
+      void message.error(
+        refreshError instanceof Error
+          ? refreshError.message
+          : "Failed to refresh published member status.",
+      );
+      return;
+    }
+
     if (routeDraftWorkflowId) {
       await workflowQuery.refetch();
     }
@@ -2688,11 +2702,13 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
       setPublishBindingRun(refreshedRun);
       if (refreshedRun.status === "failed" || refreshedRun.status === "rejected") {
+        setPublishErrorVisible(true);
         setPublishError(readBindingRunFailureMessage(refreshedRun));
         void message.error(readBindingRunFailureMessage(refreshedRun));
         return;
       }
 
+      clearPublishError();
       if (refreshedRun.status === "succeeded") {
         void message.success("Published member status refreshed.");
         return;
@@ -2703,6 +2719,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     }
 
     if (hasCurrentCompletedMemberBinding(refreshedMember)) {
+      clearPublishError();
       setPublishBindingRun((currentRun) =>
         currentRun && !isTerminalBindingRun(currentRun)
           ? {
@@ -2715,8 +2732,18 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       return;
     }
 
+    clearPublishError();
+    setPublishBindingRun(null);
     void message.info("No published member status is visible yet.");
-  }, [memberQuery, route.memberId, route.mode, route.scopeId, routeDraftWorkflowId, workflowQuery]);
+  }, [
+    clearPublishError,
+    memberQuery,
+    route.memberId,
+    route.mode,
+    route.scopeId,
+    routeDraftWorkflowId,
+    workflowQuery,
+  ]);
   const executionStatus = currentDraftRunMutation.isPending
     ? "running"
     : resolveWorkflowExecutionStatus(executionDetail);

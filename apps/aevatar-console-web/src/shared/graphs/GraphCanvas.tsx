@@ -39,6 +39,7 @@ type GraphCanvasProps = {
   edges: Edge[];
   height?: number | string;
   bottomInset?: number;
+  viewportRightInset?: number;
   overlayContent?: React.ReactNode;
   selectedNodeId?: string;
   selectedEdgeId?: string;
@@ -59,6 +60,10 @@ type GraphCanvasProps = {
 };
 
 const SELF_MANAGED_SELECTION_CLASS = 'graph-canvas-self-managed-selection';
+const STUDIO_CANVAS_RADIUS = 8;
+const STUDIO_NODE_ICON_RADIUS = 6;
+const STUDIO_CONTROLS_LEFT_INSET = 16;
+const STUDIO_MINIMAP_LEFT_INSET = 58;
 const selfManagedSelectionCss = `
 .react-flow__node.${SELF_MANAGED_SELECTION_CLASS},
 .react-flow__node.${SELF_MANAGED_SELECTION_CLASS}.selected,
@@ -112,7 +117,7 @@ function StudioWorkflowNode({
     <div
       style={{
         width,
-        borderRadius: 24,
+        borderRadius: STUDIO_CANVAS_RADIUS,
         overflow: 'hidden',
         border: `1px solid ${selected ? category.color : '#E8E2D9'}`,
         background: '#FFFFFF',
@@ -147,7 +152,7 @@ function StudioWorkflowNode({
           style={{
             alignItems: 'center',
             background: `${category.color}18`,
-            borderRadius: 14,
+            borderRadius: STUDIO_NODE_ICON_RADIUS,
             color: category.color,
             display: 'flex',
             flexShrink: 0,
@@ -262,6 +267,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   edges,
   height = 420,
   bottomInset = 0,
+  viewportRightInset = 0,
   overlayContent,
   selectedNodeId,
   selectedEdgeId,
@@ -280,6 +286,13 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   const [flowInstance, setFlowInstance] =
     React.useState<ReactFlowInstance | null>(null);
   const isStudioVariant = variant === 'studio';
+  const studioViewportRightInset =
+    isStudioVariant &&
+    Number.isFinite(viewportRightInset) &&
+    viewportRightInset > 0
+      ? viewportRightInset
+      : 0;
+  const previousViewportRightInsetRef = React.useRef(studioViewportRightInset);
   const studioFitViewOptions = React.useMemo(
     () => ({
       padding: 0.2,
@@ -289,6 +302,26 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
     }),
     [],
   );
+
+  React.useLayoutEffect(() => {
+    const previousInset = previousViewportRightInsetRef.current;
+    const insetDelta = studioViewportRightInset - previousInset;
+    previousViewportRightInsetRef.current = studioViewportRightInset;
+
+    if (!flowInstance || !isStudioVariant || insetDelta === 0) {
+      return;
+    }
+
+    const viewport = flowInstance.getViewport();
+    void flowInstance.setViewport(
+      {
+        x: viewport.x - insetDelta / 2,
+        y: viewport.y,
+        zoom: viewport.zoom,
+      },
+      { duration: 0 },
+    );
+  }, [flowInstance, isStudioVariant, studioViewportRightInset]);
 
   useEffect(() => {
     setLocalNodes(nodes);
@@ -405,8 +438,9 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   return (
     <div
       style={{
+        background: isStudioVariant ? '#FBFBFC' : undefined,
         border: isStudioVariant ? '1px solid #E8E2D9' : '1px solid #f0f0f0',
-        borderRadius: isStudioVariant ? 24 : 8,
+        borderRadius: 8,
         height,
         minHeight: 0,
         overflow: 'hidden',
@@ -415,140 +449,153 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
       }}
     >
       {!isStudioVariant ? <style>{selfManagedSelectionCss}</style> : null}
-      <ReactFlow
-        onInit={setFlowInstance}
-        nodes={decoratedNodes}
-        edges={decoratedEdges}
-        fitView
-        fitViewOptions={
-          isStudioVariant ? studioFitViewOptions : undefined
-        }
-        minZoom={isStudioVariant ? 0.14 : undefined}
-        maxZoom={isStudioVariant ? 1.6 : undefined}
-        nodeTypes={
-          isStudioVariant
-            ? {
-                studioWorkflowNode: StudioWorkflowNode,
-              }
-            : undefined
-        }
-        nodesDraggable={isStudioVariant}
-        nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
-        elementsSelectable
-        deleteKeyCode={
-          isStudioVariant && !onDeleteNodes && !onDeleteEdges ? null : undefined
-        }
-        onNodesChange={isStudioVariant ? handleNodesChange : undefined}
-        onBeforeDelete={
-          isStudioVariant && (onDeleteNodes || onDeleteEdges)
-            ? async ({ edges: edgesToDelete, nodes: nodesToDelete }) => {
-                const nodeIds = nodesToDelete
-                  .map((node) => String(node.id ?? '').trim())
-                  .filter(Boolean);
-                const edgeIds = edgesToDelete
-                  .map((edge) => String(edge.id ?? '').trim())
-                  .filter(Boolean);
-                if (nodeIds.length === 0 && edgeIds.length === 0) {
+      <div
+        data-testid="graph-canvas-viewport"
+        style={{
+          bottom: 0,
+          left: 0,
+          minWidth: 0,
+          position: 'absolute',
+          right: studioViewportRightInset,
+          top: 0,
+        }}
+      >
+        <ReactFlow
+          onInit={setFlowInstance}
+          nodes={decoratedNodes}
+          edges={decoratedEdges}
+          fitView
+          fitViewOptions={isStudioVariant ? studioFitViewOptions : undefined}
+          minZoom={isStudioVariant ? 0.14 : undefined}
+          maxZoom={isStudioVariant ? 1.6 : undefined}
+          nodeTypes={
+            isStudioVariant
+              ? {
+                  studioWorkflowNode: StudioWorkflowNode,
+                }
+              : undefined
+          }
+          nodesDraggable={isStudioVariant}
+          nodesConnectable={Boolean(isStudioVariant && onConnectNodes)}
+          elementsSelectable
+          deleteKeyCode={
+            isStudioVariant && !onDeleteNodes && !onDeleteEdges ? null : undefined
+          }
+          onNodesChange={isStudioVariant ? handleNodesChange : undefined}
+          onBeforeDelete={
+            isStudioVariant && (onDeleteNodes || onDeleteEdges)
+              ? async ({ edges: edgesToDelete, nodes: nodesToDelete }) => {
+                  const nodeIds = nodesToDelete
+                    .map((node) => String(node.id ?? '').trim())
+                    .filter(Boolean);
+                  const edgeIds = edgesToDelete
+                    .map((edge) => String(edge.id ?? '').trim())
+                    .filter(Boolean);
+                  if (nodeIds.length === 0 && edgeIds.length === 0) {
+                    return false;
+                  }
+
+                  try {
+                    if (nodeIds.length > 0) {
+                      await onDeleteNodes?.(nodeIds);
+                    }
+                    if (edgeIds.length > 0) {
+                      await onDeleteEdges?.(edgeIds);
+                    }
+                  } catch {
+                    // Keep the local graph unchanged until the parent document confirms deletion.
+                  }
+
                   return false;
                 }
-
-                try {
-                  if (nodeIds.length > 0) {
-                    await onDeleteNodes?.(nodeIds);
+              : undefined
+          }
+          onNodeDragStop={
+            isStudioVariant
+              ? () =>
+                  onNodeLayoutChange?.(
+                    (flowInstance?.getNodes() as Node[]) ?? localNodes,
+                  )
+              : undefined
+          }
+          onConnect={
+            isStudioVariant
+              ? (connection) => {
+                  if (!connection.source || !connection.target) {
+                    return;
                   }
-                  if (edgeIds.length > 0) {
-                    await onDeleteEdges?.(edgeIds);
-                  }
-                } catch {
-                  // Keep the local graph unchanged until the parent document confirms deletion.
-                }
 
-                return false;
-              }
-            : undefined
-        }
-        onNodeDragStop={
-          isStudioVariant
-            ? () =>
-                onNodeLayoutChange?.(
-                  (flowInstance?.getNodes() as Node[]) ?? localNodes,
-                )
-            : undefined
-        }
-        onConnect={
-          isStudioVariant
-            ? (connection) => {
-                if (!connection.source || !connection.target) {
-                  return;
+                  onConnectNodes?.(connection.source, connection.target);
                 }
-
-                onConnectNodes?.(connection.source, connection.target);
-              }
-            : undefined
-        }
-        onNodeClick={(_, node) => onNodeSelect?.(node.id)}
-        onEdgeClick={(_, edge) => onEdgeSelect?.(edge.id)}
-        onPaneClick={() => onCanvasSelect?.()}
-        onPaneContextMenu={
-          isStudioVariant
-            ? (event) => {
-                event.preventDefault();
-                const flowPosition = flowInstance?.screenToFlowPosition({
-                  x: event.clientX,
-                  y: event.clientY,
-                }) ?? { x: 420, y: 220 };
-                onCanvasContextMenu?.({
-                  clientX: event.clientX,
-                  clientY: event.clientY,
-                  flowX: flowPosition.x,
-                  flowY: flowPosition.y,
-                });
-              }
-            : undefined
-        }
-        className={isStudioVariant ? 'studio-canvas' : undefined}
-      >
-        <Background
-          color={isStudioVariant ? '#D8D2C8' : undefined}
-          variant={isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines}
-          gap={isStudioVariant ? 24 : 16}
-          size={isStudioVariant ? 1 : 1}
-        />
-        {isStudioVariant ? (
-          <>
-            <MiniMap
-              position="bottom-left"
-              zoomable
-              pannable
-              style={{
-                background: 'rgba(248, 247, 244, 0.98)',
-                border: '1px solid #E8E2D9',
-                borderRadius: 18,
-                height: 108,
-                marginBottom: 24 + bottomInset,
-                marginLeft: 16,
-                width: 164,
-              }}
-              maskColor="rgba(255, 255, 255, 0.76)"
-              bgColor="rgba(248, 247, 244, 0.98)"
-              nodeBorderRadius={8}
-              nodeColor={(node) => {
-                const data = node.data as StudioGraphNodeData | undefined;
-                return getStudioGraphCategory(data?.stepType || '').color;
-              }}
-            />
-            <Controls
-              position="bottom-left"
-              style={{
-                marginBottom: 20 + bottomInset,
-                marginLeft: 16,
-              }}
-            />
-          </>
-        ) : (
-          <Controls showInteractive={false} />
-        )}
-      </ReactFlow>
+              : undefined
+          }
+          onNodeClick={(_, node) => onNodeSelect?.(node.id)}
+          onEdgeClick={(_, edge) => onEdgeSelect?.(edge.id)}
+          onPaneClick={() => onCanvasSelect?.()}
+          onPaneContextMenu={
+            isStudioVariant
+              ? (event) => {
+                  event.preventDefault();
+                  const flowPosition = flowInstance?.screenToFlowPosition({
+                    x: event.clientX,
+                    y: event.clientY,
+                  }) ?? { x: 420, y: 220 };
+                  onCanvasContextMenu?.({
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                    flowX: flowPosition.x,
+                    flowY: flowPosition.y,
+                  });
+                }
+              : undefined
+          }
+          className={isStudioVariant ? 'studio-canvas' : undefined}
+        >
+          <Background
+            color={isStudioVariant ? '#D8D2C8' : undefined}
+            variant={
+              isStudioVariant ? BackgroundVariant.Dots : BackgroundVariant.Lines
+            }
+            gap={isStudioVariant ? 24 : 16}
+            size={1}
+          />
+          {isStudioVariant ? (
+            <>
+              <MiniMap
+                position="bottom-left"
+                zoomable
+                pannable
+                style={{
+                  background: 'rgba(248, 247, 244, 0.98)',
+                  border: '1px solid #E8E2D9',
+                  borderRadius: STUDIO_CANVAS_RADIUS,
+                  height: 108,
+                  marginBottom: 24 + bottomInset,
+                  marginLeft: STUDIO_MINIMAP_LEFT_INSET,
+                  width: 164,
+                }}
+                maskColor="rgba(255, 255, 255, 0.76)"
+                bgColor="rgba(248, 247, 244, 0.98)"
+                nodeBorderRadius={8}
+                nodeColor={(node) => {
+                  const data = node.data as StudioGraphNodeData | undefined;
+                  return getStudioGraphCategory(data?.stepType || '').color;
+                }}
+              />
+              <Controls
+                fitViewOptions={studioFitViewOptions}
+                position="bottom-left"
+                style={{
+                  marginBottom: 20 + bottomInset,
+                  marginLeft: STUDIO_CONTROLS_LEFT_INSET,
+                }}
+              />
+            </>
+          ) : (
+            <Controls showInteractive={false} />
+          )}
+        </ReactFlow>
+      </div>
       {overlayContent}
     </div>
   );

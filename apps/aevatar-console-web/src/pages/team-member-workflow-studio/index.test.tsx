@@ -1,4 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { Grid } from "antd";
 import React from "react";
 import {
   cleanupTestQueryClients,
@@ -29,11 +30,15 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
     ) => void;
     onNodeSelect?: (nodeId: string) => void;
     overlayContent?: unknown;
+    viewportRightInset?: number;
   }) => {
     const React = require("react");
     return React.createElement(
       "div",
-      { "data-testid": "graph-canvas" },
+      {
+        "data-testid": "graph-canvas",
+        "data-viewport-right-inset": String(props.viewportRightInset ?? 0),
+      },
       React.createElement(
         "span",
         { key: "count" },
@@ -461,7 +466,10 @@ function closeOpenMenu() {
 function clickMoreAction(
   name:
     | "Delete selected connection"
-    | "Delete selected node",
+    | "Delete selected node"
+    | "Invoke"
+    | "Published runs"
+    | "Recurring work",
 ) {
   openMoreActionsMenu();
   fireEvent.click(screen.getByRole("menuitem", { name }));
@@ -547,6 +555,14 @@ function mockNewWorkflowMemberCreateFixtures() {
 describe("TeamMemberWorkflowStudioPage", () => {
   beforeEach(() => {
     jest.resetAllMocks();
+    jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: true,
+      sm: true,
+      md: true,
+      lg: true,
+      xl: true,
+      xxl: true,
+    });
     window.history.replaceState({}, "", "/");
     mockTeam();
     mockSerializeYaml();
@@ -565,6 +581,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
   });
 
   afterEach(() => {
+    jest.restoreAllMocks();
     cleanupTestQueryClients();
   });
 
@@ -580,14 +597,32 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(await screen.findByDisplayValue("Untitled member")).toBeTruthy();
     expect(screen.getByText("Add first step")).toBeTruthy();
     expect(screen.getByText("nodes:0")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Invoke" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Invoke" })).toHaveAttribute(
+    openMoreActionsMenu();
+    const invokeMenuItem = screen.getByRole("menuitem", { name: "Invoke" });
+    expect(invokeMenuItem).toHaveAttribute("aria-disabled", "true");
+    expect(within(invokeMenuItem).getByText("Invoke")).toHaveAttribute(
       "title",
       "Save this member before invoking it.",
     );
     expect(screen.queryByRole("link", { name: "Invoke" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Recurring work" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Recurring work" })).toHaveAttribute(
+    const publishedRunsMenuItem = screen.getByRole("menuitem", {
+      name: "Published runs",
+    });
+    expect(publishedRunsMenuItem).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(publishedRunsMenuItem).getByText("Published runs"),
+    ).toHaveAttribute(
+      "title",
+      "Save this member before viewing published runs.",
+    );
+    expect(screen.queryByRole("link", { name: "Published runs" })).toBeNull();
+    const recurringWorkMenuItem = screen.getByRole("menuitem", {
+      name: "Recurring work",
+    });
+    expect(recurringWorkMenuItem).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(recurringWorkMenuItem).getByText("Recurring work"),
+    ).toHaveAttribute(
       "title",
       "Save this member before adding recurring work.",
     );
@@ -1275,7 +1310,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
         expect.any(Function),
       );
     });
-    fireEvent.click(screen.getByRole("link", { name: "Team" }));
+    fireEvent.click(screen.getByRole("link", { name: "Teams" }));
     expect(confirmSpy).toHaveBeenCalledWith(
       "You have unsaved workflow changes. Leave this editor and discard them?",
     );
@@ -1739,6 +1774,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     expect(await screen.findByDisplayValue("Workflow Alpha")).toBeTruthy();
+    openMoreActionsMenu();
     const recurringWorkLink = await screen.findByRole("link", {
       name: "Recurring work",
     });
@@ -1801,6 +1837,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
 
     expect(await screen.findByDisplayValue("Workflow Alpha")).toBeTruthy();
+    openMoreActionsMenu();
     const invokeLink = await screen.findByRole("link", {
       name: "Invoke",
     });
@@ -2305,6 +2342,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByText("Published")).toBeTruthy();
     expect(screen.queryByText("Draft")).toBeNull();
     expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
+    openMoreActionsMenu();
     const publishedRunsButton = screen.getByRole("link", {
       name: "Published runs",
     });
@@ -2621,9 +2659,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("nodes:2")).toBeTruthy();
       expect(screen.getByText("Unsaved changes")).toBeTruthy();
     });
+    fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
+    expect(screen.getByLabelText("Node inspector")).toBeTruthy();
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "452",
+    );
     clickYamlAction("Edit YAML");
 
     const yamlView = await screen.findByLabelText("Workflow YAML editor");
+    expect(screen.queryByLabelText("Node inspector")).toBeNull();
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "0",
+    );
     await waitFor(() => {
       expect((yamlView as HTMLTextAreaElement).value).toContain("type: guard");
       expect(studioApi.serializeYaml).toHaveBeenCalledWith(
@@ -2828,8 +2877,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(screen.getByText("nodes:2")).toBeTruthy();
     expect(screen.queryByTestId("workflow-node-inspector")).toBeNull();
     expect(
-      screen.queryByRole("button", { name: "More workflow actions" }),
+      screen.getByRole("button", { name: "More workflow actions" }),
+    ).toBeTruthy();
+    openMoreActionsMenu();
+    expect(
+      screen.queryByRole("menuitem", { name: "Delete selected connection" }),
     ).toBeNull();
+    closeOpenMenu();
     expect(confirmSpy).toHaveBeenCalledWith(
       "Delete the selected connection? This cannot be undone.",
     );
@@ -3010,9 +3064,30 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
     const inspector = screen.getByLabelText("Node inspector");
     expect(inspector).toHaveStyle({
+      borderRadius: "8px",
       position: "absolute",
       width: "420px",
     });
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "452",
+    );
+    expect(
+      inspector.style.getPropertyValue(
+        "--workflow-node-inspector-scrollbar-width",
+      ),
+    ).toBe("6px");
+    expect(
+      inspector.style.getPropertyValue("--workflow-node-inspector-primary"),
+    ).toBe("#1D4ED8");
+    const inspectorStyleText = findRenderedStyleText(
+      ".workflow-studio-node-inspector__body::-webkit-scrollbar",
+    );
+    expect(inspectorStyleText).toContain("border: 1px solid");
+    expect(inspectorStyleText).toContain("scrollbar-width: thin;");
+    expect(inspectorStyleText).toContain(
+      "background: var(--workflow-node-inspector-primary-hover);",
+    );
     expect(screen.getByLabelText("Resize node inspector")).toBeTruthy();
     expect(within(inspector).queryByText("triage")).toBeNull();
     expect(within(inspector).getAllByText("LLM call").length).toBeGreaterThan(0);
@@ -3173,10 +3248,21 @@ describe("TeamMemberWorkflowStudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
     const inspector = screen.getByLabelText("Node inspector");
     const resizeHandle = screen.getByLabelText("Resize node inspector");
+    const inspectorStyle = Array.from(document.querySelectorAll("style")).find(
+      (style) => style.textContent?.includes(".workflow-studio-node-inspector"),
+    );
+    expect(inspectorStyle).toHaveTextContent("@media (max-width: 991px)");
+    expect(inspectorStyle).toHaveTextContent(
+      "max-height: calc(100% - var(--workflow-node-inspector-mobile-offset)) !important;",
+    );
     expect(inspector).toHaveStyle({ width: "420px" });
     expect(resizeHandle).toHaveAttribute("aria-valuemin", "360");
     expect(resizeHandle).toHaveAttribute("aria-valuemax", "500");
     expect(resizeHandle).toHaveAttribute("aria-valuenow", "420");
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "452",
+    );
 
     for (let index = 0; index < 10; index += 1) {
       fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
@@ -3184,6 +3270,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(inspector).toHaveStyle({ width: "500px" });
     expect(resizeHandle).toHaveAttribute("aria-valuenow", "500");
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "532",
+    );
 
     for (let index = 0; index < 20; index += 1) {
       fireEvent.keyDown(resizeHandle, { key: "ArrowRight" });
@@ -3191,6 +3281,33 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(inspector).toHaveStyle({ width: "360px" });
     expect(resizeHandle).toHaveAttribute("aria-valuenow", "360");
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "392",
+    );
+
+    (Grid.useBreakpoint as jest.Mock).mockReturnValue({
+      xs: true,
+      sm: true,
+      md: true,
+      lg: false,
+      xl: false,
+      xxl: false,
+    });
+    fireEvent.keyDown(resizeHandle, { key: "ArrowLeft" });
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "0",
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Close node inspector" }),
+    );
+    expect(screen.queryByLabelText("Node inspector")).toBeNull();
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "0",
+    );
   });
 
   it("resizes the node inspector with pointer drag and restores page resize styles", async () => {
@@ -3244,6 +3361,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
     const resizeHandle = screen.getByLabelText("Resize node inspector");
     const setPointerCapture = jest.fn();
     const releasePointerCapture = jest.fn();
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "452",
+    );
     resizeHandle.setPointerCapture = setPointerCapture;
     resizeHandle.releasePointerCapture = releasePointerCapture;
     resizeHandle.hasPointerCapture = jest.fn(() => true);
@@ -3260,6 +3381,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(inspector).toHaveStyle({ width: "500px" });
     expect(resizeHandle).toHaveAttribute("aria-valuenow", "500");
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-viewport-right-inset",
+      "532",
+    );
 
     fireEvent(resizeHandle, createPointerDragEvent("pointerup", 240));
 
@@ -3852,7 +3977,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(screen.getByLabelText("Workflow title")).toHaveAttribute(
       "title",
-      "Edit workflow name",
+      "Workflow Alpha",
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Edit workflow name" }),
@@ -3878,26 +4003,40 @@ describe("TeamMemberWorkflowStudioPage", () => {
       ".workflow-studio-header__identity",
     );
     expect(headerResponsiveRules).toContain("overflow: visible;");
-    expect(headerResponsiveRules).toContain("flex-wrap: wrap;");
     expect(headerResponsiveRules).toContain(
-      "max-width: min(360px, 100%);",
+      "grid-template-columns: 30px minmax(0, 1fr);",
     );
-    expect(headerResponsiveRules).toContain("@media (max-width: 1320px)");
+    expect(headerResponsiveRules).toContain("grid-template-rows: auto auto;");
+    expect(headerResponsiveRules).toContain("grid-column: 1;");
+    expect(headerResponsiveRules).toContain("grid-row: 2;");
+    expect(headerResponsiveRules).toContain(
+      "max-width: min(480px, 100%);",
+    );
+    expect(headerResponsiveRules).toContain(
+      ".workflow-studio-header__title-input.ant-input",
+    );
+    expect(headerResponsiveRules).toContain("text-overflow: ellipsis;");
     expect(headerResponsiveRules).toContain("@media (max-width: 980px)");
+    expect(headerResponsiveRules).not.toContain("@media (max-width: 1320px)");
     expect(headerResponsiveRules).toContain("overflow: hidden;");
     expect(headerResponsiveRules).not.toContain("overflow-x: auto;");
     expect(screen.queryByTestId("workflow-header-context-row")).toBeNull();
     expect(screen.queryByTestId("workflow-header-node-actions")).toBeNull();
-    expect(within(headerIdentity).getByRole("link", { name: "Team" })).toHaveAttribute(
-      "href",
-      "/scopes",
-    );
+    expect(
+      within(headerIdentity).getByRole("link", { name: "Teams" }),
+    ).toHaveAttribute("href", "/scopes");
+    expect(
+      within(headerIdentity).getByRole("link", { name: "Teams" }),
+    ).toHaveAttribute("title", "Teams");
     expect(
       within(headerIdentity).getByRole("link", { name: "Support Team" }),
     ).toHaveAttribute(
       "href",
       "/scopes/scope-1/teams/t-alpha?memberId=member-alpha&workflowId=workflow-alpha&tab=members",
     );
+    expect(
+      within(headerIdentity).getByRole("link", { name: "Support Team" }),
+    ).toHaveAttribute("title", "Support Team");
     const globalBackButton = within(headerIdentity).getByRole("button", {
       name: "Back",
     });
@@ -3915,20 +4054,16 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(
       within(headerPrimaryActions).getByRole("button", { name: "Add node" }),
     ).toBeTruthy();
-    const publishedRunsButton = within(headerPrimaryActions).getByRole("button", {
-      name: "Published runs",
+    const saveButton = within(headerPrimaryActions).getByRole("button", {
+      name: "Save",
     });
-    expect(publishedRunsButton).toBeDisabled();
-    expect(publishedRunsButton).toHaveAttribute(
-      "title",
-      "Publish this member to start recording published runs.",
-    );
-    expect(
-      within(headerPrimaryActions).getByRole("button", { name: "Save" }),
-    ).toBeTruthy();
-    expect(
-      within(headerPrimaryActions).getByRole("button", { name: "Publish" }),
-    ).toBeTruthy();
+    const publishButton = within(headerPrimaryActions).getByRole("button", {
+      name: "Publish",
+    });
+    expect(saveButton).toBeDisabled();
+    expect(saveButton).not.toHaveClass("ant-btn-primary");
+    expect(publishButton).toBeEnabled();
+    expect(publishButton).toHaveClass("ant-btn-primary");
     expect(
       within(headerPrimaryActions).queryByRole("button", {
         name: "Refresh status",
@@ -3943,10 +4078,23 @@ describe("TeamMemberWorkflowStudioPage", () => {
       within(headerPrimaryActions).getByRole("button", { name: "Edit YAML" }),
     ).toBeTruthy();
     expect(
-      within(headerPrimaryActions).queryByRole("button", {
+      within(headerPrimaryActions).getByRole("button", {
         name: "More workflow actions",
       }),
-    ).toBeNull();
+    ).toBeTruthy();
+    openMoreActionsMenu();
+    const publishedRunsMenuItem = screen.getByRole("menuitem", {
+      name: "Published runs",
+    });
+    expect(publishedRunsMenuItem).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(publishedRunsMenuItem).getByText("Published runs"),
+    ).toHaveAttribute(
+      "title",
+      "Publish this member to start recording published runs.",
+    );
+    expect(screen.queryByRole("link", { name: "Published runs" })).toBeNull();
+    closeOpenMenu();
     expect(screen.queryByRole("button", { name: "Paste YAML" })).toBeNull();
     expect(screen.queryByRole("button", { name: "View YAML" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete node" })).toBeNull();
@@ -4030,10 +4178,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(consolePanel).toHaveTextContent("succeeded");
     });
-    await waitFor(() => {
-      expect(publishedRunsButton).toBeDisabled();
-      expect(publishedRunsButton).not.toHaveAttribute("href");
+    openMoreActionsMenu();
+    const publishedRunsMenuItemAfterRun = screen.getByRole("menuitem", {
+      name: "Published runs",
     });
+    expect(publishedRunsMenuItemAfterRun).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("link", { name: "Published runs" })).toBeNull();
+    closeOpenMenu();
     expect(within(consolePanel).getByLabelText("Logs overview")).toBeTruthy();
     expect(within(consolePanel).getByLabelText("Log details")).toBeTruthy();
     expect(consolePanel).toHaveTextContent(/Tokens\s*42/);
@@ -4218,19 +4369,25 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(readActionButtonNames()).toEqual([
       "Run",
       "Add node",
-      "Save",
+      "More workflow actions",
       "Edit YAML",
+      "Save",
     ]);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
     expect(
-      within(headerPrimaryActions).queryByRole("button", {
+      within(headerPrimaryActions).getByRole("button", {
         name: "More workflow actions",
       }),
-    ).toBeNull();
+    ).toBeTruthy();
+    openMoreActionsMenu();
+    expect(screen.getByRole("link", { name: "Invoke" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Published runs" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Recurring work" })).toBeTruthy();
     expect(
       screen.queryByRole("menuitem", { name: "Delete selected node" }),
     ).toBeNull();
+    closeOpenMenu();
 
     const editYamlButton = screen.getByRole("button", { name: "Edit YAML" });
     expect(editYamlButton).toBeTruthy();
@@ -4250,9 +4407,13 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(readActionButtonNames()).toEqual([
       "Run",
       "Add node",
-      "Save",
+      "More workflow actions",
       "Edit YAML",
+      "Save",
     ]);
+    expect(screen.getByRole("button", { name: "Save" })).toHaveClass(
+      "ant-btn-primary",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "node:step:triage" }));
     openMoreActionsMenu();
@@ -5998,6 +6159,14 @@ describe("TeamMemberWorkflowStudioPage", () => {
       expect(screen.getByText("Published")).toBeTruthy();
       expect(screen.getByTitle(/Published member workflow is serviceable/)).toBeTruthy();
     });
+    expect(screen.getByRole("status", { name: "Workflow status" })).toHaveAttribute(
+      "aria-live",
+      "polite",
+    );
+    expect(screen.getByRole("status", { name: "Workflow status" })).toHaveAttribute(
+      "aria-atomic",
+      "true",
+    );
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
   });
 
@@ -6063,7 +6232,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
   });
 
-  it("reports rejected publish binding without introducing activation language", async () => {
+  it("preserves a rejected publish error until refresh confirms no active binding status", async () => {
     window.history.replaceState(
       {},
       "",
@@ -6134,6 +6303,44 @@ describe("TeamMemberWorkflowStudioPage", () => {
     });
     expect(screen.queryByTitle(/Activation/)).toBeNull();
     expect(studioApi.setTeamEntryMember).not.toHaveBeenCalled();
+
+    (studioApi.getMember as jest.Mock).mockRejectedValueOnce(
+      new StudioApiError("Member status refresh failed.", 502),
+    );
+    const refreshButton = screen.getByRole("button", { name: "Refresh status" });
+    await waitFor(() => {
+      expect(refreshButton).toBeEnabled();
+    });
+    const workflowRequestCountBeforeFailedRefresh = (
+      studioApi.getWorkflow as jest.Mock
+    ).mock.calls.length;
+    fireEvent.click(refreshButton);
+
+    expect(await screen.findByText("Member status refresh failed.")).toBeTruthy();
+    expect(studioApi.getMember).toHaveBeenCalledTimes(3);
+    expect(studioApi.getWorkflow).toHaveBeenCalledTimes(
+      workflowRequestCountBeforeFailedRefresh,
+    );
+    expect(screen.getByText("Error")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+    expect(
+      screen.queryByText("No published member status is visible yet."),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
+
+    expect(
+      await screen.findByText("No published member status is visible yet."),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("Draft")).toBeTruthy();
+      expect(screen.queryByText("Error")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+    });
+    expect(studioApi.getMember).toHaveBeenCalledTimes(4);
+    expect(studioApi.getMemberBindingRun).toHaveBeenCalledTimes(1);
   });
 
   it("stops local publish loading when binding remains in progress after the observation window", async () => {
