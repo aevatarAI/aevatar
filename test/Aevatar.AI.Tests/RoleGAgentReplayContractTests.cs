@@ -7,6 +7,7 @@ using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
+using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
@@ -483,7 +484,9 @@ public class RoleGAgentReplayContractTests
     {
         var store = new InMemoryEventStoreForTests();
         var provider = new CountingLlmProviderFactory("completed output");
-        var services = BuildServices(store);
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var services = BuildServices(store, collection =>
+            collection.AddSingleton<IActorRuntimeCallbackScheduler>(scheduler));
         var failingPublisher = new RecordingEventPublisher { FailSends = true };
         var first = CreateAgent(services, "role-terminal-replay", provider);
         first.EventPublisher = failingPublisher;
@@ -509,7 +512,9 @@ public class RoleGAgentReplayContractTests
             },
         };
         await first.HandleChatRequest(request);
-        first.State.Sessions["session-1"].CompletionNotificationDispatched.Should().BeFalse();
+        first.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.RetryScheduled);
+        scheduler.TimeoutRequests.Should().ContainSingle();
         var committed = (await store.GetEventsAsync("role-terminal-replay"))
             .Single(x => x.EventData.Is(RoleChatSessionCompletedEvent.Descriptor))
             .EventData
@@ -537,7 +542,8 @@ public class RoleGAgentReplayContractTests
         notification.Should().BeEquivalentTo(expectedNotification);
         notification.TerminalProgress.Should().BeEmpty(
             "actor-to-actor completion notification carries final authority, not AGUI presentation tail");
-        recovered.State.Sessions["session-1"].CompletionNotificationDispatched.Should().BeTrue();
+        recovered.State.Sessions["session-1"].CompletionNotificationDeliveryStatus.Should()
+            .Be(RoleChatCompletionNotificationDeliveryStatus.Dispatched);
     }
 
     [Fact]
@@ -1305,6 +1311,35 @@ public class RoleGAgentReplayContractTests
             _ = audience;
             return PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
         }
+    }
+
+    private sealed class RecordingRuntimeCallbackScheduler : IActorRuntimeCallbackScheduler
+    {
+        public List<RuntimeCallbackTimeoutRequest> TimeoutRequests { get; } = [];
+
+        public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
+            RuntimeCallbackTimeoutRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TimeoutRequests.Add(request);
+            return Task.FromResult(new RuntimeCallbackLease(
+                request.ActorId,
+                request.CallbackId,
+                TimeoutRequests.Count,
+                RuntimeCallbackBackend.InMemory));
+        }
+
+        public Task<RuntimeCallbackLease> ScheduleTimerAsync(
+            RuntimeCallbackTimerRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelAsync(RuntimeCallbackLease lease, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task PurgeActorAsync(string actorId, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 
     private sealed class ThrowOnceEventPublisher(

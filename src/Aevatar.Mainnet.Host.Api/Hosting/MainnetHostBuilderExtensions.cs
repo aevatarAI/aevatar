@@ -16,6 +16,7 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
@@ -358,6 +359,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
+                    CreateToolSource<WorkflowCatalogAgentToolSource>,
                     CreateToolSource<ProvisionWorkflowScheduleToolSource>,
                     CreateToolSource<CreateStudioTeamToolSource>,
                     CreateToolSource<StudioTeamQueryToolSource>,

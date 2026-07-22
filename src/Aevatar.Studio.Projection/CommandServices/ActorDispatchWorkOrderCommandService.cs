@@ -29,6 +29,12 @@ internal sealed class ActorDispatchWorkOrderCommandService : IWorkOrderCommandPo
         WorkOrderValidatedAssignment assignment,
         CancellationToken ct = default)
     {
+        var requestedAt = DateTimeOffset.UtcNow;
+        if (!request.TimeoutAtUtc.HasValue)
+            throw new InvalidOperationException("WorkOrder deadline is required before actor dispatch.");
+        if (request.TimeoutAtUtc.Value <= requestedAt)
+            throw new InvalidOperationException("WorkOrder deadline must be later than the request time.");
+
         var workOrderId = WorkOrderConventions.BuildWorkOrderId(scopeId, request.DedupKey);
         var command = new CreateWorkOrder
         {
@@ -47,11 +53,10 @@ internal sealed class ActorDispatchWorkOrderCommandService : IWorkOrderCommandPo
             Input = ToInput(request.Input),
             PermissionPlan = ToPermissionPlan(request.PermissionPlan),
             ApprovalId = WorkOrderConventions.BuildApprovalId(workOrderId),
-            RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
+            TimeoutAtUtc = Timestamp.FromDateTimeOffset(request.TimeoutAtUtc.Value),
             ExpectedLifecycleVersion = 0,
         };
-        if (request.TimeoutAtUtc.HasValue)
-            command.TimeoutAtUtc = Timestamp.FromDateTimeOffset(request.TimeoutAtUtc.Value);
 
         return await DispatchAsync(
             scopeId,

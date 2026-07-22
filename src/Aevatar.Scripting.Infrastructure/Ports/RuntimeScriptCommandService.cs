@@ -54,6 +54,8 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
             requestedEventType,
             scopeId,
             completionNotificationActorId: null,
+            completionNotificationDeliveryId: null,
+            completionNotificationExpiresAtUnixMs: 0,
             ct);
 
     // Refactor (iter25/cluster-026-scope-service-script-stream-inline-orchestration):
@@ -81,6 +83,8 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
             requestedEventType,
             scopeId,
             completionNotificationActorId: null,
+            completionNotificationDeliveryId: null,
+            completionNotificationExpiresAtUnixMs: 0,
             ct);
 
     public async Task RunRuntimeAsync(
@@ -94,6 +98,35 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
         string requestedEventType,
         string? scopeId,
         string? completionNotificationActorId,
+        CancellationToken ct) =>
+        await RunRuntimeAsync(
+            runtimeActorId,
+            runId,
+            commandId,
+            correlationId,
+            inputPayload,
+            scriptRevision,
+            definitionActorId,
+            requestedEventType,
+            scopeId,
+            completionNotificationActorId,
+            completionNotificationDeliveryId: null,
+            completionNotificationExpiresAtUnixMs: 0,
+            ct);
+
+    public async Task RunRuntimeAsync(
+        string runtimeActorId,
+        string runId,
+        string commandId,
+        string correlationId,
+        Any? inputPayload,
+        string scriptRevision,
+        string definitionActorId,
+        string requestedEventType,
+        string? scopeId,
+        string? completionNotificationActorId,
+        string? completionNotificationDeliveryId,
+        long completionNotificationExpiresAtUnixMs,
         CancellationToken ct)
     {
         var command = new RunScriptRuntimeCommand(
@@ -108,7 +141,11 @@ public sealed class RuntimeScriptCommandService : IScriptRuntimeCommandPort
             string.IsNullOrWhiteSpace(correlationId) ? null : correlationId.Trim(),
             string.IsNullOrWhiteSpace(completionNotificationActorId)
                 ? null
-                : completionNotificationActorId.Trim());
+                : completionNotificationActorId.Trim(),
+            string.IsNullOrWhiteSpace(completionNotificationDeliveryId)
+                ? null
+                : completionNotificationDeliveryId.Trim(),
+            completionNotificationExpiresAtUnixMs);
         var result = await _dispatchService.DispatchAsync(command, ct);
         if (!result.Succeeded)
             throw result.Error?.ToException() ?? new InvalidOperationException("Script runtime dispatch failed.");

@@ -90,6 +90,48 @@ public sealed class WorkOrderCommandServiceTests
             .Should().OnlyHaveUniqueItems();
     }
 
+    [Fact]
+    public async Task CreateAsync_WhenDeadlineMissing_ShouldRejectBeforeActorDispatch()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ActorDispatchWorkOrderCommandService(
+            bootstrap,
+            CreateCommandDispatch(dispatchPort));
+
+        var create = () => service.CreateAsync(
+            ScopeId,
+            CreateRequest() with { TimeoutAtUtc = null },
+            new WorkOrderPrincipalContract("requester-1", "user"),
+            CreateAssignment());
+
+        await create.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*deadline*required*");
+        bootstrap.ActorIds.Should().BeEmpty();
+        dispatchPort.Envelopes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenDeadlineElapsed_ShouldRejectBeforeActorDispatch()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatchPort = new RecordingDispatchPort();
+        var service = new ActorDispatchWorkOrderCommandService(
+            bootstrap,
+            CreateCommandDispatch(dispatchPort));
+
+        var create = () => service.CreateAsync(
+            ScopeId,
+            CreateRequest() with { TimeoutAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1) },
+            new WorkOrderPrincipalContract("requester-1", "user"),
+            CreateAssignment());
+
+        await create.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*deadline*later*request time*");
+        bootstrap.ActorIds.Should().BeEmpty();
+        dispatchPort.Envelopes.Should().BeEmpty();
+    }
+
     private static CreateWorkOrderRequest CreateRequest() =>
         new(
             TeamId: "team-1",
@@ -99,7 +141,8 @@ public sealed class WorkOrderCommandServiceTests
             Intent: "Produce the report",
             DedupKey: "dedup-1",
             Input: new WorkOrderServiceInputContract(
-                new WorkOrderChatInputContract("Create it")));
+                new WorkOrderChatInputContract("Create it")),
+            TimeoutAtUtc: DateTimeOffset.UtcNow.AddHours(1));
 
     private static WorkOrderValidatedAssignment CreateAssignment() =>
         new(
