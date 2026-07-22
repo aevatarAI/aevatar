@@ -6,6 +6,11 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 /// </summary>
 public interface IUserConfigQueryPort
 {
+    Task<UserConfig> GetAsync(
+        UserConfigResourceKey resource,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException("Typed UserConfig reads are not implemented by this adapter.");
+
     Task<UserConfig> GetAsync(CancellationToken ct = default);
 
     Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default);
