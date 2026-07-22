@@ -1,3 +1,4 @@
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -11,6 +12,69 @@ namespace Aevatar.Studio.Tests;
 /// </summary>
 public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
 {
+    [Fact]
+    public void ComposeInventory_ShouldMintOnlyInventoryIdsAndPreserveDuplicateSlugs()
+    {
+        var diagnostics = new NyxIdLlmServicesResult(
+            [Diagnostic("key-alpha", "chrono-llm-public")],
+            null);
+        var inventory = new NyxIdUserServices(
+        [
+            Inventory("us-alpha", "chrono-llm-public"),
+            Inventory("us-beta", "chrono-llm-public"),
+        ]);
+
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(diagnostics, inventory);
+
+        result.Services.Should().HaveCount(2);
+        result.Services.Select(service => service.Identity!.NyxIdUserServiceId)
+            .Should()
+            .Equal("us-alpha", "us-beta");
+        result.Services.Should().OnlyContain(service =>
+            service.Identity!.Authority == UserLlmIdentityAuthority.NyxIdUserServicesInventory);
+        result.Services.Should().NotContain(service =>
+            service.Identity!.NyxIdUserServiceId == "key-alpha");
+    }
+
+    [Fact]
+    public void ComposeInventory_ShouldIncludeOnlyActiveAuthorizedCredentialSources()
+    {
+        var inventory = new NyxIdUserServices(
+        [
+            Inventory("us-personal", "personal-llm"),
+            Inventory("us-inactive", "inactive-llm", isActive: false),
+            Inventory("us-org-allowed", "org-allowed-llm", organizationAllowed: true),
+            Inventory("us-org-denied", "org-denied-llm", organizationAllowed: false),
+        ]);
+
+        var result = NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(
+            new NyxIdLlmServicesResult([], null),
+            inventory);
+
+        result.Services.Select(service => service.Identity!.NyxIdUserServiceId)
+            .Should()
+            .Equal("us-org-allowed", "us-personal");
+    }
+
+    [Fact]
+    public void ToOption_ShouldCopyOnlyExplicitInventoryIdentity()
+    {
+        var identity = new UserLlmServiceIdentity(
+            UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            "us-alpha");
+        var proven = Diagnostic("legacy-diagnostic-id", "chrono-llm") with
+        {
+            Identity = identity,
+        };
+        var unproven = Diagnostic("source-derived-id", "other-llm") with
+        {
+            Source = NyxIdLlmProviderSource.UserService,
+        };
+
+        NyxIdLlmServiceMapping.ToOption(proven).Identity.Should().Be(identity);
+        NyxIdLlmServiceMapping.ToOption(unproven).Identity.Should().BeNull();
+    }
+
     private static NyxIdLlmService NotConnectedProxyService(string slug = "chrono-llm") => new(
         UserServiceId: "svc-catalog-id",
         ServiceSlug: slug,
@@ -25,6 +89,41 @@ public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
 
     private static NyxIdLlmServicesResult ResultWith(params NyxIdLlmService[] services) =>
         new(services, null);
+
+    private static NyxIdLlmService Diagnostic(string diagnosticId, string slug) => new(
+        UserServiceId: diagnosticId,
+        ServiceSlug: slug,
+        DisplayName: "Chrono LLM",
+        RouteValue: $"/api/v1/proxy/s/{slug}",
+        DefaultModel: "gpt-5.5",
+        Models: ["gpt-5.5"],
+        Status: UserLlmRouteStatus.Ready,
+        Source: NyxIdLlmProviderSource.ProxyService,
+        Allowed: true,
+        Description: null)
+    {
+        Identity = null,
+    };
+
+    private static NyxIdUserService Inventory(
+        string id,
+        string slug,
+        bool isActive = true,
+        bool? organizationAllowed = null) => new(
+        Id: id,
+        Slug: slug,
+        Label: $"Inventory {id}",
+        CatalogServiceName: "Chrono LLM",
+        IsActive: isActive,
+        CredentialSource: organizationAllowed is { } allowed
+            ? new NyxIdUserServiceCredentialSource(
+                NyxIdUserServiceCredentialSourceKind.Organization,
+                OrganizationId: "org-1",
+                OrganizationName: "Org",
+                OrganizationRole: NyxIdOrganizationRole.Member,
+                Allowed: allowed)
+            : new NyxIdUserServiceCredentialSource(
+                NyxIdUserServiceCredentialSourceKind.Personal));
 
     [Fact]
     public void ActiveKeyReplacesNotConnectedProxyEntryAsSelectable()

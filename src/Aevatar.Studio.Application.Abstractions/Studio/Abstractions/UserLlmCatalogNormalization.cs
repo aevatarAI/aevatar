@@ -94,7 +94,8 @@ public static class NyxIdLlmServiceMapping
         Status: UserLlmCatalogNormalization.NormalizeStatus(service.Status).ToWireValue(),
         Source: UserLlmCatalogNormalization.NormalizeSource(service.Source).ToWireValue(),
         Allowed: service.Allowed,
-        Description: NormalizeOptional(service.Description));
+        Description: NormalizeOptional(service.Description),
+        Identity: service.Identity);
 
     private static string NormalizeRequired(string value, string name)
     {

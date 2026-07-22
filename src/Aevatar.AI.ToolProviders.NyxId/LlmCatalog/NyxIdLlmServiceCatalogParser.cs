@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
@@ -47,6 +48,21 @@ public static class NyxIdLlmServiceCatalogParser
         return MergeRouteCandidates(result, ParseUserKeyRouteCandidates(userKeysResponse));
     }
 
+    public static NyxIdLlmServicesResult ComposeUserServiceInventory(
+        NyxIdLlmServicesResult diagnostics,
+        NyxIdUserServices inventory)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        ArgumentNullException.ThrowIfNull(inventory);
+
+        var services = inventory.Services
+            .Where(IsEligible)
+            .OrderBy(static service => service.Id, StringComparer.Ordinal)
+            .Select(service => ComposeUserService(diagnostics.Services, service))
+            .ToArray();
+        return diagnostics with { Services = services };
+    }
+
     private static NyxIdLlmServicesResult MergeRouteCandidates(
         NyxIdLlmServicesResult result,
         IReadOnlyList<NyxIdLlmService> candidates)
@@ -72,6 +88,42 @@ public static class NyxIdLlmServiceCatalogParser
         return result with { Services = merged };
     }
 
+    private static NyxIdLlmService ComposeUserService(
+        IReadOnlyList<NyxIdLlmService> diagnostics,
+        NyxIdUserService inventoryService)
+    {
+        var diagnostic = diagnostics.FirstOrDefault(candidate =>
+            string.Equals(candidate.ServiceSlug, inventoryService.Slug, StringComparison.OrdinalIgnoreCase));
+        return new NyxIdLlmService(
+            UserServiceId: inventoryService.Id,
+            ServiceSlug: inventoryService.Slug,
+            DisplayName: FirstNonEmpty(
+                inventoryService.Label,
+                inventoryService.CatalogServiceName,
+                diagnostic?.DisplayName,
+                inventoryService.Slug),
+            RouteValue: $"/api/v1/proxy/s/{inventoryService.Slug}",
+            DefaultModel: diagnostic?.DefaultModel,
+            Models: diagnostic?.Models ?? [],
+            Status: diagnostic?.Status ?? ReadyStatus,
+            Source: NyxIdLlmProviderSource.UserService,
+            Allowed: true,
+            Description: null,
+            Identity: InventoryIdentity(inventoryService));
+    }
+
+    private static bool IsEligible(NyxIdUserService service) =>
+        service.IsActive &&
+        (service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal ||
+         service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Organization &&
+         service.CredentialSource.Allowed);
+
+    private static UserLlmServiceIdentity InventoryIdentity(NyxIdUserService service) =>
+        new(UserLlmIdentityAuthority.NyxIdUserServicesInventory, service.Id);
+
+    private static string FirstNonEmpty(params string?[] candidates) =>
+        candidates.First(candidate => !string.IsNullOrWhiteSpace(candidate))!.Trim();
+
     public static IReadOnlyList<NyxIdLlmService> ParseProxyRouteCandidates(string response)
     {
         using var document = ParseSuccessDocument(response);
@@ -88,10 +140,9 @@ public static class NyxIdLlmServiceCatalogParser
 
     /// <summary>
     /// Parses the NyxID unified key list (<c>GET /api/v1/keys</c>) into LLM route
-    /// candidates. A key is the per-user credential binding for a service, so an
-    /// active key is authoritative evidence the route is usable by this user -
-    /// unlike <c>/api/v1/proxy/services</c>, whose <c>connected</c> flag only
-    /// reflects the legacy connections store.
+    /// diagnostics. Active keys can improve readiness information relative to the
+    /// legacy connection state from <c>/api/v1/proxy/services</c>, but exact identity
+    /// and eligibility come only from the strict user-services inventory.
     /// </summary>
     public static IReadOnlyList<NyxIdLlmService> ParseUserKeyRouteCandidates(string response)
     {
