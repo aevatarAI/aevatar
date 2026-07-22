@@ -2,18 +2,20 @@
 
 This image is the one-shot workload used by Aevatar's managed `codex_exec` target. A trusted Aevatar infrastructure adapter creates the OpenSandbox sandbox, writes the workspace and prompt, starts the fixed Codex command, consumes JSONL, and kills the sandbox in `finally`.
 
-The image contains no provider configuration or credentials. For public execution, the adapter must write a run-scoped Codex provider configuration whose credential is supplied through OpenSandbox Credential Vault. Never copy a local `~/.codex/auth.json` into this image.
+> **gVisor variant.** This image implements option B of aevatarAI/aevatar#2921 (see #2922): Codex runs on a **gVisor** runtime with **no inner Codex sandbox** — the gVisor Sentry is the isolation boundary. It has no Bubblewrap, no `use_legacy_landlock`, and no Credential-Proxy MITM. The five-minute delegation token is injected directly at run time; there is no Credential Vault placeholder substitution. Do not deploy this variant against the runc + Landlock design — use the default runc image for that.
+
+The image contains no provider configuration or credentials. For public execution, the adapter writes a run-scoped Codex provider configuration whose credential is the directly-injected short-lived NyxID delegation token. Never copy a local `~/.codex/auth.json` into this image.
 
 ## Contents
 
 - Debian Bookworm-based Node.js 22 image pinned by multi-architecture digest
 - `@openai/codex` pinned to `0.144.5`
-- Git, Bash, Bubblewrap, CA certificates, and Tini
+- Git, Bash, CA certificates, and Tini
 - non-root `codex` user with UID/GID `10001`
 - writable `/workspace` and private `$CODEX_HOME`
-- `SSL_CERT_FILE=/opt/opensandbox/mitmproxy-ca-cert.pem` for Credential Proxy TLS interception
+- no Bubblewrap and no `SSL_CERT_FILE`: Codex runs no inner sandbox and reaches the NyxID gateway directly with the system CA bundle
 
-The Codex version and invocation follow the official [non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode.md). The P0 runtime explicitly selects Codex 0.144.5's deprecated legacy Landlock backend because Bubblewrap cannot create its required mounts in the deployed GKE runc tenant.
+The Codex version and invocation follow the official [non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode.md). Under gVisor, neither Codex inner-sandbox backend is available (gVisor's Sentry does not implement Landlock — `landlock_create_ruleset` returns `ENOSYS` — and Bubblewrap cannot initialize either), so Codex runs with its inner sandbox disabled and relies on the gVisor boundary.
 
 ## Build and smoke test
 
@@ -23,18 +25,15 @@ From the repository root:
 bash containers/codex-runner/smoke.sh
 ```
 
-The test builds `aevatar/codex-runner:0.144.5-r2-local`, starts the long-lived workload process expected by OpenSandbox, creates a deterministic Git baseline, verifies that no provider/control-plane credential is present in the image configuration, and proves that legacy Landlock permits writes inside `/workspace` while denying writes outside it.
+The test builds `aevatar/codex-runner:0.144.5-gvisor-local`, starts the long-lived workload process expected by OpenSandbox, creates a deterministic Git baseline, verifies that no provider/control-plane credential is present in the image configuration, and confirms Codex starts with its inner sandbox disabled (reporting `danger-full-access`) without falling back to a runc-only Landlock/Bubblewrap backend. Isolation is a property of the deployed gVisor runtime, not the image, so there is no local Landlock probe.
 
 On an ARM64 workstation, build and inspect the production-oriented AMD64 variant through emulation:
 
 ```bash
 DOCKER_DEFAULT_PLATFORM=linux/amd64 \
-CODEX_RUNNER_IMAGE=aevatar/codex-runner:0.144.5-r2-amd64-local \
-SKIP_CODEX_RUNNER_LANDLOCK_PROBE=1 \
+CODEX_RUNNER_IMAGE=aevatar/codex-runner:0.144.5-gvisor-amd64-local \
 bash containers/codex-runner/smoke.sh
 ```
-
-QEMU/Rosetta user-mode emulation does not reliably forward Landlock enforcement and can return `LandlockRestrict` even when the host kernel supports it. The explicit skip above verifies the AMD64 image structure but does not prove isolation. Native AMD64 CI and the deployed OpenSandbox direct SDK smoke must run without this override.
 
 ## P0 compatibility baseline
 
@@ -51,9 +50,9 @@ The public readiness sample uses these initial OpenSandbox limits:
 
 These values cover the `empty_git` readiness workflow, not arbitrary repository builds. Broader workloads need separately measured profiles and must not silently inherit the readiness limits.
 
-The direct SDK smoke runs a fail-closed legacy Landlock preflight before making a model request. The profile grants full-filesystem read access and write access only to the workspace. It explicitly permits `.git`, `.agents`, and `.codex` under the workspace because Codex 0.144.5's legacy Landlock model cannot preserve the built-in `workspace-write` profile's nested read-only carve-outs. This exception is limited to an empty, ephemeral Git workspace; it is not an approval for arbitrary repositories. Running Codex as root or falling back to `danger-full-access` is not accepted.
+Under the gVisor model the isolation boundary is the gVisor Sentry, so Codex runs with its inner sandbox disabled (`danger-full-access` from Codex's own perspective) — this is safe precisely because Codex is not the enforcing layer here; gVisor is. This is limited to an empty, ephemeral Git workspace and is not an approval for arbitrary repositories.
 
-The deployed OpenSandbox runtime must allow Landlock and `PR_SET_NO_NEW_PRIVS` for UID `10001`. Runner pods using Credential Vault must not also receive a transparent service-mesh sidecar because both mechanisms intercept traffic in the same network namespace. The current private PSC topology also requires `Alibaba.OpenSandbox` to use `UseServerProxy=true`.
+The deployed runtime must schedule runner pods under the `gvisor` RuntimeClass. Because there is no Credential Vault / Credential Proxy under gVisor, the short-lived NyxID delegation token is injected directly into the run-scoped Codex provider configuration; egress scoping is enforced at the platform layer (e.g. NetworkPolicy) rather than by an egress sidecar.
 
 To test a prebuilt image without rebuilding:
 
@@ -72,4 +71,4 @@ codex --ask-for-approval never exec --ephemeral --json \
   - < /workspace/.aevatar/prompt.txt
 ```
 
-The runtime-written config selects `default_permissions = "aevatar-landlock"` and `features.use_legacy_landlock = true`; callers cannot select the profile, backend, image, or flags. A successful image smoke test does not prove the deployed isolation boundary. Before public rollout, the OpenSandbox environment must separately prove Credential Vault substitution, NyxID gateway-only egress, the Landlock workspace boundary, JSONL streaming, timeout/cancellation, and `KillAsync` cleanup.
+The runtime-written config disables the Codex inner sandbox (gVisor is the boundary); callers cannot select the profile, backend, image, or flags. A successful image smoke test does not prove the deployed isolation boundary. Before public rollout, the OpenSandbox environment must separately prove direct short-lived-token injection, NyxID gateway-only egress, the gVisor isolation boundary, JSONL streaming, timeout/cancellation, and `KillAsync` cleanup.
