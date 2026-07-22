@@ -61,6 +61,10 @@ NyxID materializer 先从 route-owned tool set、当前已注册工具、既有 
 
 main、step、structured tool call、text fallback、final fallback、skill recovery、tool outcome lookup 与 direct `ToolCallLoop` 都只从当前 final request 的 `Tools` 构造 request-local `ToolManager`。`Tools = null` 表示本次请求没有工具能力，不得回查 actor-level manager；模型伪造、middleware 替换或后续 fallback 恢复出的非 exact tool call 都在执行前拒绝。
 
+AgentRun 的 per-step 主链分为两次 typed self-message。LLM executor 只返回 Protobuf `AgentRunLlmStepResult` facts，并把 middleware 后最终 `LLMRequest.Tools` 中的 exact `IAgentTool` 对象和 typed tool context 封装成 run-scoped opaque capability；actor 必须先按 active `run_id + correlation_id + attempt + step_index` 对账并持久化 LLM waterline，随后才能发布 `AgentRunToolStepRequested`。该 request 再次对账且完整 tool calls 相同后，一次性消费 actor-owned capability 并执行工具，结果通过独立的 `AgentRunToolStepResult` self-message 返回。
+
+exact tool capability 不进入 event、actor state 或其他持久化载荷，也不得转换为 CLR type、hash、fingerprint、credential、名称恢复键或进程内 ID 映射。actor 重启导致 capability 缺失、任一 fencing identity 不匹配、tool calls 被替换或重复消费时，都必须在外部工具副作用前 fail closed；不得重新 discovery 后按名称重建能力。
+
 `SHADOW` 只保留当前请求的 candidate identity 与 bounded diagnostic，权限和 prompt body 固定为 recovery，不读取、解析或注入 candidate skill body，也不解析 candidate task tool set。profile digest、classifier、registry、tool discovery、collision、capability、exact fetch、identity、integrity或正文校验任一失败，都只能降为继续取交集后的 recovery；若交集为空则保持 restricted-empty，不能退回 unrestricted。
 
 历史上已经 started 但未 completed、且没有 authority 的 bound session 只允许在正常 command 写路径前向提交一次 `RESTRICTED_EMPTY + LEGACY_AUTHORITY_MISSING`。这条路径不运行 classifier、不做 exact fetch、不扫描 journal、不 query-time replay、不 backfill，也不建立 readmodel 或进程内 authority map。

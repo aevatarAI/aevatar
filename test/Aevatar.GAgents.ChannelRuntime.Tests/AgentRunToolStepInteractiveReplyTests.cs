@@ -15,9 +15,9 @@ using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
-// Interactive tools execute in the same executor call as the LLM response so they use
-// the exact final-request capability objects while the collector scope is still active.
-// Only the typed tool result and outbound intent cross the actor continuation boundary.
+// Interactive tools execute only after the actor reconciles the LLM continuation. The
+// actor-held capability session keeps the exact final-request objects and the tool step
+// opens its own collector scope.
 public sealed class AgentRunToolStepInteractiveReplyTests
 {
     private const string ReplyArgumentsJson =
@@ -31,9 +31,13 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         var executor = CreateExecutor(collector, tool);
         var workItem = BuildLlmStepWorkItem(relay: true);
 
-        var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            BuildToolStepWorkItem(workItem, execution.Continuation),
+            execution.AuthorizedToolStep,
+            CancellationToken.None);
 
-        var toolStepResult = continuation.LlmStepResult.ToolStepResult;
+        var toolStepResult = continuation.ToolStepResult;
         toolStepResult.Should().NotBeNull();
         var resultMessage = toolStepResult!.ResultMessages.Should().ContainSingle().Subject;
         resultMessage.Content.Should().NotContain("no_active_interactive_scope");
@@ -51,9 +55,13 @@ public sealed class AgentRunToolStepInteractiveReplyTests
         var executor = CreateExecutor(collector, tool);
         var workItem = BuildLlmStepWorkItem(relay: false);
 
-        var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            BuildToolStepWorkItem(workItem, execution.Continuation),
+            execution.AuthorizedToolStep,
+            CancellationToken.None);
 
-        var toolStepResult = continuation.LlmStepResult.ToolStepResult;
+        var toolStepResult = continuation.ToolStepResult;
         toolStepResult.Should().NotBeNull();
         var resultMessage = toolStepResult!.ResultMessages.Should().ContainSingle().Subject;
         resultMessage.Content.Should().Contain("no_active_interactive_scope");
@@ -136,6 +144,20 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             stepState);
     }
 
+    private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(
+        AgentRunReplyStepExecutionRequest llmWorkItem,
+        AgentRunNextLlmStepRequestedEvent continuation)
+    {
+        var stepState = llmWorkItem.StepState.Clone();
+        stepState.NextStepIndex = continuation.StepIndex;
+        stepState.PendingToolCalls.AddRange(continuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
+        return llmWorkItem with
+        {
+            StepIndex = continuation.StepIndex,
+            StepState = stepState,
+        };
+    }
+
     private sealed class ToolCallProvider(string toolName) : ILLMProvider
     {
         public string Name => "interactive-tool-call-provider";
@@ -177,13 +199,13 @@ public sealed class AgentRunToolStepInteractiveReplyTests
             AgentToolExecutionContext? toolContext,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
 
         public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
     }
 }

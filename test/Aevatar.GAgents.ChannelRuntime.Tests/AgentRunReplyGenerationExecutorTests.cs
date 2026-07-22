@@ -28,7 +28,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
         var executor = CreateExecutor(provider);
         var workItem = BuildFinalNoToolsWorkItem();
 
-        await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
         request.Tools.Should().BeNull();
@@ -50,7 +50,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 SideEffectKind = "definition.update",
             });
 
-        await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var request = provider.Requests.Should().ContainSingle().Subject;
         request.Tools.Should().BeNull();
@@ -102,7 +102,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
             imagePart,
         ])));
 
-        await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var providerImagePart = provider.Requests.Should().ContainSingle().Subject
             .Messages.Last(message => message.Role == "user")
@@ -148,7 +148,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
                 }),
         ])));
 
-        var act = async () => await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        var act = async () => await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
         var failure = await act.Should().ThrowAsync<InvalidOperationException>();
         failure.Which.Message.Should().Contain("Referenced chat media exceeds the materialization size limit");
@@ -156,7 +156,7 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
-    public async Task BuildLlmStepContinuation_WhenProviderCallsTool_ShouldExecuteExactFinalRequestToolBeforeContinuation()
+    public async Task BuildLlmStepContinuation_WhenProviderCallsTool_ShouldReturnFactsBeforeExecutingTool()
     {
         var tool = new CountingTool("use_skill");
         var provider = new ToolCallProvider(tool.Name);
@@ -183,11 +183,12 @@ public sealed class AgentRunReplyGenerationExecutorTests
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
         var workItem = BuildToolEnabledWorkItem();
 
-        var continuation = await executor.BuildLlmStepContinuationAsync(workItem, CancellationToken.None);
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
 
-        continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
+        execution.Continuation.LlmStepResult.ToolCalls.Should().ContainSingle()
             .Which.Name.Should().Be(tool.Name);
-        tool.ExecuteCount.Should().Be(1);
+        execution.AuthorizedToolStep.Should().NotBeNull();
+        tool.ExecuteCount.Should().Be(0);
     }
 
     [Fact]
@@ -218,13 +219,19 @@ public sealed class AgentRunReplyGenerationExecutorTests
             relayOptions: null,
             NullLogger<AgentRunReplyGenerationExecutor>.Instance);
 
-        var continuation = await executor.BuildLlmStepContinuationAsync(
-            BuildToolEnabledWorkItem(),
+        var llmWorkItem = BuildToolEnabledWorkItem();
+        var execution = await executor.BuildLlmStepExecutionAsync(
+            llmWorkItem,
+            CancellationToken.None);
+        var toolWorkItem = BuildToolStepWorkItem(llmWorkItem, execution.Continuation);
+        var continuation = await executor.BuildToolStepContinuationAsync(
+            toolWorkItem,
+            execution.AuthorizedToolStep,
             CancellationToken.None);
 
         provider.Requests.Should().ContainSingle().Which.Tools.Should().BeNull();
-        continuation.LlmStepResult.ToolStepResult.Should().NotBeNull();
-        continuation.LlmStepResult.ToolStepResult!.ResultMessages.Should().ContainSingle()
+        continuation.ToolStepResult.Should().NotBeNull();
+        continuation.ToolStepResult.ResultMessages.Should().ContainSingle()
             .Which.Content.Should().Contain("not found");
         tool.ExecuteCount.Should().Be(0);
     }
@@ -326,6 +333,21 @@ public sealed class AgentRunReplyGenerationExecutorTests
             stepState);
     }
 
+    private static AgentRunReplyStepExecutionRequest BuildToolStepWorkItem(
+        AgentRunReplyStepExecutionRequest llmWorkItem,
+        AgentRunNextLlmStepRequestedEvent continuation)
+    {
+        var stepState = llmWorkItem.StepState.Clone();
+        stepState.NextStepIndex = continuation.StepIndex;
+        stepState.PendingToolCalls.Clear();
+        stepState.PendingToolCalls.AddRange(continuation.LlmStepResult.ToolCalls.Select(static call => call.Clone()));
+        return llmWorkItem with
+        {
+            StepIndex = continuation.StepIndex,
+            StepState = stepState,
+        };
+    }
+
     private sealed class RecordingProvider : ILLMProvider
     {
         public string Name => "recording-provider";
@@ -422,14 +444,14 @@ public sealed class AgentRunReplyGenerationExecutorTests
             AgentToolExecutionContext? toolContext,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
 
         public Task<ConversationReplyResult> GenerateReplyAsync(
             ChatActivity activity,
             IReadOnlyDictionary<string, string> metadata,
             IStreamingReplySink? streamingSink,
             CancellationToken ct) =>
-            throw new NotSupportedException("Per-step tests drive BuildLlmStepContinuationAsync only.");
+            throw new NotSupportedException("Per-step tests drive BuildLlmStepExecutionAsync only.");
     }
 
     private sealed class RecordingFileArtifactReadPort(ApplicationFileArtifactRef fileRef, byte[] content)

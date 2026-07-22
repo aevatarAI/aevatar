@@ -65,6 +65,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentRunGAgent> _logger;
     private readonly IAgentToolReceiptRenderer _toolReceiptRenderer;
+    private AgentRunAuthorizedToolStep? _authorizedToolStep;
 
     public AgentRunGAgent(
         IActorRuntime actorRuntime,
@@ -545,7 +546,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
     }
 
-    private Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var executionRequest = new AgentRunReplyStepExecutionRequest(
             stepState.RunId,
@@ -554,14 +555,35 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.NextStepIndex,
             request.Clone(),
             stepState.Clone());
-        StartDetachedStepExecution(
-            () => _generationExecutor.ExecuteLlmStepAsync(executionRequest, CancellationToken.None),
-            "llm",
-            executionRequest);
-        return Task.CompletedTask;
+        _authorizedToolStep = null;
+        try
+        {
+            var execution = await _generationExecutor.BuildLlmStepExecutionAsync(
+                executionRequest,
+                CancellationToken.None);
+            _authorizedToolStep = execution.AuthorizedToolStep;
+            await PublishAsync(
+                execution.Continuation,
+                TopologyAudience.Self,
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (TryBuildOwnerFallbackCommand(executionRequest, ex) is { } fallback)
+        {
+            _logger.LogWarning(
+                ex,
+                "Agent run LLM step failed before completion; retrying with bot owner LLM config and no tools: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+                executionRequest.RunId,
+                executionRequest.Request.CorrelationId,
+                executionRequest.StepIndex);
+            await PublishAsync(fallback, TopologyAudience.Self, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            await PublishStepFailureAsync(executionRequest, ex);
+        }
     }
 
-    private Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
+    private async Task DispatchToolStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {
         var executionRequest = new AgentRunReplyStepExecutionRequest(
             stepState.RunId,
@@ -570,57 +592,74 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
             stepState.NextStepIndex,
             request.Clone(),
             stepState.Clone());
-        StartDetachedStepExecution(
-            () => _generationExecutor.ExecuteToolStepAsync(executionRequest, CancellationToken.None),
-            "tool",
-            executionRequest);
-        return Task.CompletedTask;
-    }
-
-    private void StartDetachedStepExecution(
-        Func<Task> startExecution,
-        string stepKind,
-        AgentRunReplyStepExecutionRequest request)
-    {
-        Task execution;
+        var authorizedToolStep = _authorizedToolStep;
+        _authorizedToolStep = null;
         try
         {
-            execution = startExecution();
+            var continuation = await _generationExecutor.BuildToolStepContinuationAsync(
+                executionRequest,
+                authorizedToolStep,
+                CancellationToken.None);
+            await PublishAsync(
+                continuation,
+                TopologyAudience.Self,
+                CancellationToken.None);
         }
         catch (Exception ex)
         {
-            _logger.LogError(
-                ex,
-                "Failed to start detached agent run {StepKind} step executor: runId={RunId} correlation={CorrelationId} step={StepIndex}",
-                stepKind,
-                request.RunId,
-                request.Request.CorrelationId,
-                request.StepIndex);
-            return;
+            await PublishStepFailureAsync(executionRequest, ex);
         }
-
-        _ = ObserveDetachedStepExecutionAsync(execution, stepKind, request);
     }
 
-    private async Task ObserveDetachedStepExecutionAsync(
-        Task execution,
-        string stepKind,
-        AgentRunReplyStepExecutionRequest request)
+    private static AgentRunOwnerFallbackStepRequested? TryBuildOwnerFallbackCommand(
+        AgentRunReplyStepExecutionRequest request,
+        Exception ex)
     {
-        try
+        if (request.StepState.FinalNoToolsStep)
+            return null;
+        if (request.StepState.OwnerFallbackLlmControl is null &&
+            request.StepState.OwnerFallbackToolContext is null)
         {
-            await execution.ConfigureAwait(false);
+            return null;
         }
-        catch (Exception ex)
+        if (!string.IsNullOrWhiteSpace(request.StepState.AccumulatedText))
+            return null;
+        if (!LlmOwnerFallbackPolicy.IsRetryable(ex))
+            return null;
+
+        return new AgentRunOwnerFallbackStepRequested
         {
-            _logger.LogError(
-                ex,
-                "Detached agent run {StepKind} step executor failed after handoff: runId={RunId} correlation={CorrelationId} step={StepIndex}",
-                stepKind,
-                request.RunId,
-                request.Request.CorrelationId,
-                request.StepIndex);
-        }
+            RunId = request.RunId,
+            CorrelationId = request.Request.CorrelationId,
+            TargetActorId = request.Request.TargetActorId,
+            Attempt = request.Attempt,
+            StepIndex = request.StepIndex + 1,
+            Reason = ex.Message ?? string.Empty,
+            Request = request.Request.Clone(),
+        };
+    }
+
+    private async Task PublishStepFailureAsync(
+        AgentRunReplyStepExecutionRequest request,
+        Exception ex)
+    {
+        _logger.LogWarning(
+            ex,
+            "Agent run reply step executor failed: runId={RunId} correlation={CorrelationId} step={StepIndex}",
+            request.RunId,
+            request.Request.CorrelationId,
+            request.StepIndex);
+        await PublishAsync(new AgentRunReplyGenerationFailed
+        {
+            RunId = request.RunId,
+            CorrelationId = request.Request.CorrelationId,
+            TargetActorId = request.Request.TargetActorId,
+            ErrorCode = "llm_reply_failed",
+            ErrorSummary = ex.Message,
+            FailedAtUnixMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            Attempt = request.Attempt,
+            Request = request.Request.Clone(),
+        }, TopologyAudience.Self, CancellationToken.None);
     }
 
     private async Task CompletePerStepReplyAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
@@ -892,11 +931,13 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
         ArgumentNullException.ThrowIfNull(command);
         var hasResult = command.LlmStepResult is not null;
-        var completedToolStep = command.LlmStepResult?.ToolStepResult is not null;
         if (hasResult)
         {
             if (!IsCurrentStepResult(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
+            {
+                ClearAuthorizedToolStep(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex);
                 return;
+            }
 
             await PersistStepStateAsync(ApplyLlmStepResult(State.GenerationStep!, command.LlmStepResult!, command.StepIndex));
         }
@@ -912,7 +953,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         if (stepState is null)
             return;
 
-        if (!completedToolStep && ShouldCompleteAfterLlmStep(stepState, hasResult))
+        if (ShouldCompleteAfterLlmStep(stepState, hasResult))
         {
             if (hasResult && ShouldRecoverEmptyLlmStep(stepState))
             {
@@ -948,7 +989,15 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
 
         if (stepState.PendingToolCalls.Count > 0)
         {
-            await DispatchToolStepExecutorAsync(request, stepState);
+            await PublishAsync(new AgentRunNextToolStepRequestedEvent
+            {
+                RunId = stepState.RunId,
+                CorrelationId = stepState.CorrelationId,
+                TargetActorId = stepState.TargetActorId,
+                Attempt = stepState.Attempt,
+                StepIndex = stepState.NextStepIndex,
+                Request = request.Clone(),
+            }, TopologyAudience.Self, CancellationToken.None);
             return;
         }
 
@@ -1009,6 +1058,7 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         }
         else if (!IsCurrentStepRequest(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex))
         {
+            ClearAuthorizedToolStep(command.RunId, command.CorrelationId, command.Attempt, command.StepIndex);
             return;
         }
 
@@ -1017,6 +1067,12 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         var stepState = State.GenerationStep;
         if (stepState is null)
             return;
+
+        if (!hasResult)
+        {
+            await DispatchToolStepExecutorAsync(request, stepState);
+            return;
+        }
 
         if (stepState.Round >= stepState.MaxToolRounds && !stepState.FinalNoToolsStep)
             stepState = await AdvanceToFinalNoToolsStepAsync(stepState);
@@ -1068,10 +1124,22 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
                 next.AppendedHistory.Add(AgentRunReplyStepMappers.ToConversationHistoryEntry(message));
         }
 
-        if (result.ToolStepResult is not null)
-            next = ApplyToolStepResult(next, result.ToolStepResult, completedStepIndex + 1);
-
         return next;
+    }
+
+    private void ClearAuthorizedToolStep(string runId, string correlationId, int attempt, int stepIndex)
+    {
+        if (_authorizedToolStep is not { } authorizedToolStep)
+            return;
+        if (!string.Equals(authorizedToolStep.RunId, runId, StringComparison.Ordinal) ||
+            !string.Equals(authorizedToolStep.CorrelationId, correlationId, StringComparison.Ordinal) ||
+            authorizedToolStep.Attempt != attempt ||
+            authorizedToolStep.StepIndex != stepIndex)
+        {
+            return;
+        }
+
+        _authorizedToolStep = null;
     }
 
     // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
