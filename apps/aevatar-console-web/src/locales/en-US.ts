@@ -50,6 +50,8 @@ const enUSMessages = {
   'pages.chat.index.emptyDescription':
     'Describe the Team, Member, or Workflow you want to create.',
   'pages.chat.index.historyStoredLocally': 'History is stored in this browser.',
+  'pages.chat.index.historySynchronizing':
+    'Conversation history is still synchronizing. Try again shortly.',
   'pages.chat.index.newChat': 'New chat',
   'pages.chat.index.newChatAction': 'New Chat',
   'pages.chat.index.noChatHistory': 'No chat history',
