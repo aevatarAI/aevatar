@@ -80,6 +80,8 @@ curl -i -X DELETE \
 
 After status is active, run the public Ornn skill `aevatar-codex-exec-workflow-sample` and its `codex-exec-check` workflow as that user. Configuration checks and a standalone chrono smoke do not prove workflow identity propagation.
 
+The public skill invoke endpoint uses the same trusted caller-credential extraction path as workflow chat. It resolves the authenticated NyxID subject and binding into typed `WorkflowCallerNyxIdAuthority` independently of the observatory `scopeId`; a bearer-only workflow credential is a deployment regression.
+
 The workflow must finish with:
 
 - `status=succeeded`
