@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -19,6 +20,9 @@ internal static class StudioMemberAutomationEndpoints
 {
     private const string BasePath =
         "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
+    private const string LoggerCategory = "Aevatar.Studio.MemberAutomation";
+    private static readonly EventId CreateAcceptedEventId =
+        new(6201, "StudioMemberAutomationCreateAccepted");
 
     public static void Map(IEndpointRouteBuilder app)
     {
@@ -72,6 +76,7 @@ internal static class StudioMemberAutomationEndpoints
         StudioMemberAutomationMutationRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -89,6 +94,20 @@ internal static class StudioMemberAutomationEndpoints
                 ConfirmedPolicyVersion = body.ConfirmedPolicyVersion,
             };
             var result = await schedules.CreateAsync(request, body.ConfirmedPermissionDigest, ct);
+            if (result.Success)
+            {
+                loggerFactory.CreateLogger(LoggerCategory).LogInformation(
+                    CreateAcceptedEventId,
+                    "Accepted Studio member automation create for scope {ScopeId}, team {TeamId}, member {MemberId}, " +
+                    "schedule {ScheduleId}, operation {OperationId}, and verified binding {BindingId}.",
+                    scopeId,
+                    teamId,
+                    memberId,
+                    result.ScheduleId,
+                    result.OperationId,
+                    owner.Context.VerifiedBindingId);
+            }
+
             return Results.Accepted(value: new StudioMemberAutomationMutationReceipt(
                 result.Success,
                 result.Status,
