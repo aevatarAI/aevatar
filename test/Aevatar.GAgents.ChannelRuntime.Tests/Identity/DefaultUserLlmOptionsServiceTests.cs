@@ -1,0 +1,167 @@
+using Aevatar.GAgents.Channel.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgents.NyxidChat.LlmSelection;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using StudioConfig = Aevatar.Studio.Application.Studio.Abstractions.UserConfig;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
+
+public sealed class DefaultUserLlmOptionsServiceTests
+{
+    private const string SharedRoute = "/api/v1/proxy/s/shared-llm";
+
+    [Fact]
+    public async Task GetOptionsAsync_WithTypedServiceMissingIdAndGatewayRoute_ShouldHaveNoCurrentOption()
+    {
+        var selection = new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            UserConfigLlmRouteDefaults.Gateway,
+            " ",
+            "shared-llm");
+
+        var view = await GetOptionsAsync(Config(selection), GatewayService(), InventoryService("us-alpha"));
+
+        view.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetOptionsAsync_WithTypedServiceMissingIdAndDuplicateRoute_ShouldNotMatchByRoute()
+    {
+        var selection = new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            SharedRoute,
+            string.Empty,
+            "shared-llm");
+
+        var view = await GetOptionsAsync(
+            Config(selection),
+            InventoryService("us-alpha"),
+            InventoryService("us-beta"));
+
+        view.Current.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetOptionsAsync_WithTypedGatewayAndServiceRouteSnapshot_ShouldResolveCanonicalGatewayOnly()
+    {
+        var selection = new UserLlmSelectionValue(
+            UserLlmSelectionKind.Gateway,
+            SharedRoute,
+            "us-alpha",
+            "shared-llm");
+
+        var view = await GetOptionsAsync(Config(selection), GatewayService(), InventoryService("us-alpha"));
+
+        view.Current.Should().NotBeNull();
+        view.Current!.RouteValue.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        view.Current.Identity.Should().BeNull();
+        view.CurrentRouteValue.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+    }
+
+    [Fact]
+    public async Task GetOptionsAsync_WithValidTypedServiceAndDuplicateRoute_ShouldResolveExactInventoryId()
+    {
+        var selection = new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            SharedRoute,
+            "us-beta",
+            "shared-llm");
+
+        var view = await GetOptionsAsync(
+            Config(selection),
+            InventoryService("us-alpha"),
+            InventoryService("us-beta"));
+
+        view.Current.Should().NotBeNull();
+        view.Current!.Identity!.NyxIdUserServiceId.Should().Be("us-beta");
+    }
+
+    private static StudioConfig Config(UserLlmSelectionValue selection) => new(
+        DefaultModel: "gpt-5.5",
+        PreferredLlmRoute: selection.RouteValue,
+        LlmSelection: selection);
+
+    private static async Task<UserLlmOptionsView> GetOptionsAsync(
+        StudioConfig config,
+        params NyxIdLlmService[] services)
+    {
+        using var provider = new ServiceCollection()
+            .AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort(config))
+            .BuildServiceProvider();
+        var service = new DefaultUserLlmOptionsService(
+            new StubCatalogClient(new NyxIdLlmServicesResult(services, null)),
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        return await service.GetOptionsAsync(
+            new UserLlmOptionsQuery(
+                new BindingId { Value = "bnd-alpha" },
+                new ExternalSubjectRef
+                {
+                    Platform = "lark",
+                    Tenant = "tenant-alpha",
+                    ExternalUserId = "user-alpha",
+                },
+                "scope-alpha"),
+            CancellationToken.None);
+    }
+
+    private static NyxIdLlmService GatewayService() => new(
+        CatalogEntryId: null,
+        ServiceSlug: "gateway",
+        DisplayName: "NyxID Gateway",
+        RouteValue: UserConfigLlmRouteDefaults.Gateway,
+        DefaultModel: "gpt-5.5",
+        Models: ["gpt-5.5"],
+        Status: UserLlmRouteStatus.Ready,
+        Source: UserLlmRouteSource.GatewayProvider,
+        Allowed: true,
+        Description: null);
+
+    private static NyxIdLlmService InventoryService(string id) => new(
+        CatalogEntryId: null,
+        ServiceSlug: "shared-llm",
+        DisplayName: $"Service {id}",
+        RouteValue: SharedRoute,
+        DefaultModel: "gpt-5.5",
+        Models: ["gpt-5.5"],
+        Status: UserLlmRouteStatus.Ready,
+        Source: UserLlmRouteSource.UserService,
+        Allowed: true,
+        Description: null,
+        Identity: new UserLlmServiceIdentity(
+            UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            id));
+
+    private sealed class StubCatalogClient(NyxIdLlmServicesResult result) : INyxIdLlmServiceCatalogClient
+    {
+        public Task<NyxIdLlmServicesResult> GetServicesAsync(
+            UserLlmOptionsQuery query,
+            string accessToken,
+            CancellationToken ct) =>
+            Task.FromResult(result);
+
+        public Task<UserLlmSetupHint> GetSetupHintAsync(
+            UserLlmOptionsQuery query,
+            string accessToken,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<NyxIdLlmService> ProvisionAsync(
+            UserLlmSelectionContext context,
+            string accessToken,
+            string provisionEndpointId,
+            CancellationToken ct) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class StubUserConfigQueryPort(StudioConfig config) : IUserConfigQueryPort
+    {
+        public Task<StudioConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) =>
+            Task.FromResult(config);
+
+        public Task<StudioConfig> GetAsync(CancellationToken ct = default) =>
+            Task.FromResult(config);
+    }
+}

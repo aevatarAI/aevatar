@@ -2,6 +2,18 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserLlmPreferenceWriteCore
 {
+    public static bool IsGatewayWriteAlias(string? routeValue)
+    {
+        if (routeValue is null)
+            return false;
+
+        var normalized = routeValue.Trim();
+        return normalized.Length == 0 ||
+               string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, UserConfigLlmRouteDefaults.Gateway, StringComparison.Ordinal);
+    }
+
     public static UserLlmOption RequireInventoryOption(
         IReadOnlyList<UserLlmOption> options,
         string userServiceId)

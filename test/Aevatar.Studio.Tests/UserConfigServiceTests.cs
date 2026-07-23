@@ -90,7 +90,9 @@ public sealed class UserConfigServiceTests
     [InlineData("")]
     [InlineData("auto")]
     [InlineData("gateway")]
+    [InlineData(" GATEWAY ")]
     [InlineData(UserConfigLlmRouteDefaults.Gateway)]
+    [InlineData(" /api/v1/llm/gateway/v1 ")]
     public async Task SaveLlmPreferenceAsync_WithGatewayAlias_ShouldDispatchWithoutCatalogCall(string routeValue)
     {
         var commands = new RecordingUserConfigCommandService();
@@ -107,6 +109,27 @@ public sealed class UserConfigServiceTests
         var update = commands.Updates.Should().ContainSingle().Which.Update;
         update.DefaultModel.Should().Be("gpt-5.5");
         update.LlmSelection.Should().Be(UserLlmPreferenceWriteCore.BuildGatewaySelection());
+    }
+
+    [Theory]
+    [InlineData("https://evil.example.com/path")]
+    [InlineData("//evil.example.com/path")]
+    public async Task SaveLlmPreferenceAsync_WithExternalRouteWithoutId_ShouldRejectWithoutDispatch(string routeValue)
+    {
+        var commands = new RecordingUserConfigCommandService();
+        var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([], null));
+        var writer = new UserLlmPreferenceWriter(commands, catalog);
+
+        var act = () => writer.SaveAsync(
+            UserConfigResourceKey.ForOwnerScope("scope-alpha"),
+            bearerToken: null,
+            new SaveUserLlmPreferenceCommand(RouteValue: routeValue),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("userServiceId is required for a NyxID service selection.");
+        catalog.GetServicesCalls.Should().Be(0);
+        commands.Updates.Should().BeEmpty();
     }
 
     [Fact]
@@ -166,8 +189,13 @@ public sealed class UserConfigServiceTests
         update.LlmSelection.Should().Be(UserLlmPreferenceWriteCore.BuildGatewaySelection());
     }
 
-    [Fact]
-    public async Task SaveLlmPreferenceAsync_WithUserServiceIdAndGateway_ShouldRejectWithoutCatalogCall()
+    [Theory]
+    [InlineData("")]
+    [InlineData("auto")]
+    [InlineData(" GATEWAY ")]
+    [InlineData(UserConfigLlmRouteDefaults.Gateway)]
+    public async Task SaveLlmPreferenceAsync_WithUserServiceIdAndGateway_ShouldRejectWithoutCatalogCall(
+        string routeValue)
     {
         var commands = new RecordingUserConfigCommandService();
         var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult([], null));
@@ -178,7 +206,7 @@ public sealed class UserConfigServiceTests
             "bearer",
             new SaveUserLlmPreferenceCommand(
                 UserServiceId: "us-alpha",
-                RouteValue: UserConfigLlmRouteDefaults.Gateway),
+                RouteValue: routeValue),
             CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidOperationException>();
@@ -221,7 +249,12 @@ public sealed class UserConfigServiceTests
     public async Task Preset_ProvisionThenUse_ShouldReloadInventoryAndOmitMissingModel()
     {
         var commands = new RecordingUserConfigCommandService();
-        var provisioned = InventoryService("us-provisioned", "provisioned", defaultModel: null);
+        var refreshed = InventoryService("us-provisioned", "provisioned", defaultModel: null);
+        var provisioned = refreshed with
+        {
+            CatalogEntryId = "us-provisioned",
+            Identity = null,
+        };
         var preset = new UserLlmPreset(
             "provision",
             "Provision",
@@ -232,7 +265,7 @@ public sealed class UserConfigServiceTests
                 [],
                 new UserLlmSetupHint("https://nyxid.example/services", [preset])),
             provisioned,
-            new NyxIdLlmServicesResult([provisioned], null));
+            new NyxIdLlmServicesResult([refreshed], null));
         var writer = new UserLlmPreferenceWriter(commands, catalog);
 
         await writer.SaveAsync(
@@ -247,6 +280,46 @@ public sealed class UserConfigServiceTests
         recorded.Resource.Should().Be(UserConfigResourceKey.ForChannelBinding("binding-alpha"));
         recorded.Update.DefaultModel.Should().BeNull();
         recorded.Update.LlmSelection!.NyxIdUserServiceId.Should().Be("us-provisioned");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("us-other")]
+    public async Task Preset_ProvisionThenUse_WithoutExactRefreshedInventoryIdentity_ShouldRejectWithoutDispatch(
+        string? refreshedId)
+    {
+        var commands = new RecordingUserConfigCommandService();
+        var provisioned = InventoryService("ignored", "provisioned") with
+        {
+            CatalogEntryId = "us-provisioned",
+            Identity = null,
+        };
+        var preset = new UserLlmPreset(
+            "provision",
+            "Provision",
+            "Provision service",
+            new ProvisionThenUse("catalog/provision"));
+        var refreshedServices = refreshedId is null
+            ? Array.Empty<NyxIdLlmService>()
+            : [InventoryService(refreshedId, "provisioned")];
+        var catalog = new StubUserLlmCatalogPort(
+            new NyxIdLlmServicesResult(
+                [],
+                new UserLlmSetupHint("https://nyxid.example/services", [preset])),
+            provisioned,
+            new NyxIdLlmServicesResult(refreshedServices, null));
+        var writer = new UserLlmPreferenceWriter(commands, catalog);
+
+        var act = () => writer.SaveAsync(
+            UserConfigResourceKey.ForOwnerScope("scope-alpha"),
+            "bearer",
+            new SaveUserLlmPreferenceCommand(PresetId: "provision"),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("LLM user service 'us-provisioned' is not selectable.");
+        catalog.GetServicesCalls.Should().Be(2);
+        commands.Updates.Should().BeEmpty();
     }
 
     [Fact]

@@ -13,6 +13,27 @@ namespace Aevatar.Studio.Tests;
 public sealed class NyxIdLlmServiceCatalogUserKeyMergeTests
 {
     [Fact]
+    public void ParseProvisionedService_ShouldKeepResponseIdDiagnosticOnly()
+    {
+        var service = NyxIdLlmServiceCatalogParser.ParseProvisionedService("""
+            {
+              "service": {
+                "user_service_id": "us-provisioned",
+                "service_slug": "chrono-llm",
+                "display_name": "Chrono LLM",
+                "route_value": "/api/v1/proxy/s/chrono-llm",
+                "status": "ready",
+                "source": "user_service",
+                "allowed": true
+              }
+            }
+            """);
+
+        service.CatalogEntryId.Should().Be("us-provisioned");
+        service.Identity.Should().BeNull();
+    }
+
+    [Fact]
     public void ComposeInventory_ShouldMintOnlyInventoryIdsAndPreserveDuplicateSlugs()
     {
         var diagnostics = new NyxIdLlmServicesResult(

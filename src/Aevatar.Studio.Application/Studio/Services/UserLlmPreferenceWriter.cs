@@ -59,10 +59,7 @@ public sealed class UserLlmPreferenceWriter
         if (userServiceId is not null)
         {
             if (command.RouteValue is not null &&
-                string.Equals(
-                    UserConfigLlmRoute.Normalize(command.RouteValue),
-                    UserConfigLlmRouteDefaults.Gateway,
-                    StringComparison.Ordinal))
+                UserLlmPreferenceWriteCore.IsGatewayWriteAlias(command.RouteValue))
             {
                 throw new InvalidOperationException("userServiceId cannot be combined with the Gateway route.");
             }
@@ -78,8 +75,7 @@ public sealed class UserLlmPreferenceWriter
 
         if (command.RouteValue is not null)
         {
-            var routeValue = UserConfigLlmRoute.Normalize(command.RouteValue);
-            if (!string.Equals(routeValue, UserConfigLlmRouteDefaults.Gateway, StringComparison.Ordinal))
+            if (!UserLlmPreferenceWriteCore.IsGatewayWriteAlias(command.RouteValue))
                 throw new InvalidOperationException("userServiceId is required for a NyxID service selection.");
             if (prefixedModel is not null)
                 throw new InvalidOperationException("userServiceId is required for a route-prefixed model selection.");
@@ -187,14 +183,9 @@ public sealed class UserLlmPreferenceWriter
         var provisioned = await _catalogPort
             .ProvisionAsync(bearerToken, provisionEndpointId, ct)
             .ConfigureAwait(false);
-        var userServiceId = provisioned.Identity is
-            {
-                Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
-            } identity
-            ? UserLlmPreferenceWriteCore.NormalizeOptional(identity.NyxIdUserServiceId)
-            : null;
-        if (userServiceId is null)
-            throw new InvalidOperationException("Provisioned LLM service did not return an inventory identity.");
+        var userServiceId = UserLlmPreferenceWriteCore.NormalizeOptional(provisioned.CatalogEntryId) ??
+                            throw new InvalidOperationException(
+                                "Provisioned LLM service did not return a user service ID candidate.");
 
         var refreshed = await LoadOptionsAsync(bearerToken, ct).ConfigureAwait(false);
         return UserLlmPreferenceWriteCore.RequireInventoryOption(refreshed, userServiceId);

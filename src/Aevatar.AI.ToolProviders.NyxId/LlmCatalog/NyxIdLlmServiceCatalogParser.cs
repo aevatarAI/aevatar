@@ -162,20 +162,10 @@ public static class NyxIdLlmServiceCatalogParser
     {
         using var document = ParseSuccessDocument(response);
         var root = document.RootElement;
-        var parsed = root.ValueKind == JsonValueKind.Object &&
+        return root.ValueKind == JsonValueKind.Object &&
             TryGetProperty(root, "service") is { } service
             ? ParseService(service)
             : ParseService(root);
-        var userServiceId = parsed.CatalogEntryId ??
-                            throw new InvalidOperationException(
-                                "NyxID provisioned LLM service did not include a user service ID.");
-
-        return parsed with
-        {
-            Identity = new UserLlmServiceIdentity(
-                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
-                userServiceId),
-        };
     }
 
     private static IEnumerable<JsonElement> EnumerateProxyServiceEntries(JsonElement root)

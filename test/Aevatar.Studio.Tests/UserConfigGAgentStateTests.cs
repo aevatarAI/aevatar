@@ -1,3 +1,5 @@
+using System.Reflection;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
@@ -7,6 +9,18 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class UserConfigGAgentStateTests
 {
+    [Fact]
+    public void EventEndpoints_ShouldExposeOnlyConfigDelta()
+    {
+        var endpointNames = typeof(UserConfigGAgent)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Select(method => method.GetCustomAttribute<EventHandlerAttribute>())
+            .Where(attribute => attribute is not null)
+            .Select(attribute => attribute!.EndpointName);
+
+        endpointNames.Should().BeEquivalentTo(["updateConfigDelta"]);
+    }
+
     [Fact]
     public void ResourceKeys_WithSimilarOpaqueValues_ShouldRemainDistinct()
     {
