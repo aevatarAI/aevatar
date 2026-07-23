@@ -25,16 +25,12 @@ internal sealed class StudioUserConfigOwnerLlmConfigSource : IOwnerLlmConfigSour
         if (config is null)
             return OwnerLlmConfig.Empty;
 
-        // OwnerLlmConfig uses null to leave the provider's default gateway route unpinned.
-        // Normalize first so all gateway aliases and invalid external routes collapse to the
-        // canonical gateway value, then translate that value to the AI-layer null sentinel.
-        var normalizedRoute = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute);
-        var preferredRoute = string.Equals(
-            normalizedRoute,
-            UserConfigLlmRouteDefaults.Gateway,
-            StringComparison.OrdinalIgnoreCase)
-            ? null
-            : NormalizeOptional(normalizedRoute);
+        var preferredRoute = config.LlmSelection?.Kind switch
+        {
+            UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
+            UserLlmSelectionKind.NyxIdUserService => NormalizeOptional(config.LlmSelection.RouteValue),
+            _ => null,
+        };
 
         return new OwnerLlmConfig(
             DefaultModel: NormalizeOptional(config.DefaultModel),

@@ -16,6 +16,7 @@ namespace Aevatar.AI.LLMProviders.NyxId;
 /// </summary>
 public sealed class NyxIdLLMProvider : ILLMProvider
 {
+    private const string GatewayRoute = "/api/v1/llm/gateway/v1";
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1/";
     private static readonly LLMProviderCapabilities ProviderCapabilities = new()
     {
@@ -266,8 +267,13 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
         var (accessToken, tokenSource) = ResolveAccessTokenWithSource(normalizedRequest);
-        var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
-        var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
+        var requestedRoutePreference = ResolveRoutePreference(normalizedRequest);
+        var routePreference = NormalizeRoutePreference(requestedRoutePreference);
+        var route = ResolvePreferredRoute(
+            normalizedRequest,
+            accessToken,
+            routePreference,
+            requestedRoutePreference is not null);
 
         // Credential-source probe for the 2026-06-12 empty-reply incident: source + length only.
         _logger.LogInformation(
@@ -284,11 +290,12 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private NyxIdResolvedRoute ResolvePreferredRoute(
         LLMRequest request,
         string accessToken,
-        string routePreference)
+        string routePreference,
+        bool hasRequestRoutePreference)
     {
         if (string.IsNullOrWhiteSpace(routePreference))
         {
-            if (!string.IsNullOrWhiteSpace(_defaultRoutePreference))
+            if (!hasRequestRoutePreference && !string.IsNullOrWhiteSpace(_defaultRoutePreference))
             {
                 var defaultEndpoint = new Uri(_authorityBase, _defaultRoutePreference.TrimStart('/'));
                 return new NyxIdResolvedRoute(_defaultRoutePreference, defaultEndpoint, request, accessToken);
@@ -421,9 +428,14 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private static string NormalizeRoutePreference(string? value)
     {
         var normalized = value?.Trim() ?? string.Empty;
+        if (string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized.TrimEnd('/'), GatewayRoute, StringComparison.OrdinalIgnoreCase))
+        {
+            return GatewayRoute;
+        }
+
         if (string.IsNullOrWhiteSpace(normalized) ||
-            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase))
+            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
         }

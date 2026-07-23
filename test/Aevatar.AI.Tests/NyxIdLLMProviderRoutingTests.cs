@@ -30,15 +30,15 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
-    public async Task ResolveRouteAsync_ShouldUseDefaultGateway_WhenRoutePreferenceIsGateway()
+    public async Task ResolveRouteAsync_ShouldUseCanonicalGateway_WhenRoutePreferenceIsGateway()
     {
         var provider = CreateProvider();
 
         var route = await provider.ResolveRouteAsync(
             CreateRequest(routePreference: "gateway"));
 
-        route.RouteName.Should().Be("nyxid");
-        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1/"));
+        route.RouteName.Should().Be("/api/v1/llm/gateway/v1");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1"));
     }
 
     [Fact]
@@ -351,14 +351,26 @@ public sealed class NyxIdLLMProviderRoutingTests
     }
 
     [Fact]
-    public async Task ResolveRouteAsync_ShouldUseDefaultRoutePreference_WhenRequestPreferenceIsGatewayAlias()
+    public async Task ResolveRouteAsync_ExplicitGatewayAlias_ShouldBeatConfiguredProxyDefault()
     {
         var provider = CreateProviderWithDefaultRoute("chrono-llm-public");
 
         var route = await provider.ResolveRouteAsync(CreateRequest(routePreference: "gateway"));
 
-        route.RouteName.Should().Be("/api/v1/proxy/s/chrono-llm-public");
-        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/proxy/s/chrono-llm-public"));
+        route.RouteName.Should().Be("/api/v1/llm/gateway/v1");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1"));
+    }
+
+    [Fact]
+    public async Task ResolveRouteAsync_ExplicitGateway_ShouldBeatConfiguredProxyDefault()
+    {
+        var provider = CreateProviderWithDefaultRoute("chrono-llm-public");
+
+        var route = await provider.ResolveRouteAsync(
+            CreateRequest(routePreference: "/api/v1/llm/gateway/v1"));
+
+        route.RouteName.Should().Be("/api/v1/llm/gateway/v1");
+        route.Endpoint.Should().Be(new Uri("https://nyx.example.com/api/v1/llm/gateway/v1"));
     }
 
     [Fact]

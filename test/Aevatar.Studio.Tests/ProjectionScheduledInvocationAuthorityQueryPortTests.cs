@@ -4,15 +4,12 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.ConnectorCatalog;
-using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Projection.QueryPorts;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
-using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Tests;
 
@@ -89,7 +86,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
     }
 
     [Fact]
-    public async Task SourcePorts_ShouldUseOwnedDocumentsAndMapTypedEvidence()
+    public async Task ConnectorPort_ShouldUseOwnedDocumentAndMapTypedEvidence()
     {
         var connectorState = new ConnectorCatalogState();
         connectorState.Connectors.Add(new ConnectorDefinitionEntry
@@ -108,201 +105,161 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
                 StateVersion = 7,
                 StateRoot = Any.Pack(connectorState),
             });
-        var ownerLlmReader = new RecordingReader<UserConfigCurrentStateDocument>(
-            new UserConfigCurrentStateDocument
-            {
-                StateVersion = 11,
-                PreferredLlmRoute = "/api/v1/proxy/s/provider-alpha",
-            });
-
         var connector = await new ProjectionScheduledInvocationConnectorQueryPort(connectorReader)
-            .GetAsync(" scope-alpha ");
-        var ownerLlm = await new ProjectionScheduledInvocationOwnerLLMQueryPort(ownerLlmReader)
             .GetAsync(" scope-alpha ");
 
         connectorReader.Key.Should().Be("connector-catalog-scope-alpha");
-        ownerLlmReader.Key.Should().Be("user-config-scope-alpha");
         connector!.StateVersion.Should().Be(7);
         connector.ConnectorCapabilityRefs.Should().Equal("calendar");
+    }
+
+    [Fact]
+    public async Task OwnerLlmPort_WithTypedService_ShouldMapExactProjectedIdentity()
+    {
+        var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
+        {
+            StateVersion = 11,
+            PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
+            LlmSelection = new UserLlmSelection
+            {
+                RouteKind = UserLlmRouteKind.NyxIdUserService,
+                RouteValue = "/api/v1/proxy/s/provider-alpha",
+                NyxIdUserServiceId = "us-provider-alpha",
+                ServiceSlugSnapshot = "provider-alpha",
+            },
+        });
+
+        var ownerLlm = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync(" scope-alpha ");
+
+        reader.Key.Should().Be("user-config-scope-alpha");
         ownerLlm!.StateVersion.Should().Be(11);
         ownerLlm.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
+        ownerLlm.NyxIdServiceId.Should().Be("us-provider-alpha");
         ownerLlm.NyxIdServiceSlug.Should().Be("provider-alpha");
-        ownerLlm.NyxIdRoute.Should().Be("/api/v1/proxy/s/provider-alpha");
-        ownerLlm.NyxIdServiceId.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task OwnerLlmResolver_WithVerifiedOwnerContext_ShouldResolveExactServiceIdFromReadyCatalogRoute()
-    {
-        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
-        var catalogPort = new RecordingUserLlmCatalogPort([
-            new NyxIdLlmService(
-                "disabled-service-alpha",
-                "provider-alpha",
-                "Disabled Provider Alpha",
-                "/api/v1/proxy/s/provider-alpha",
-                null,
-                [],
-                "disabled",
-                NyxIdLlmProviderSource.UserService,
-                true,
-                null),
-            new NyxIdLlmService(
-                "user-service-alpha",
-                "provider-alpha",
-                "Provider Alpha",
-                "/api/v1/proxy/s/provider-alpha",
-                null,
-                [],
-                "ready",
-                NyxIdLlmProviderSource.UserService,
-                true,
-                null),
-        ]);
-        var resolver = new StudioOwnerLLMServiceIdentityResolver(tokenProvider, catalogPort);
-        var ownerContext = new AuthenticatedAuthorizationOwnerContext(
-            new AuthorizationOwnerIdentity
-            {
-                Authority = NyxIdAuthorizationAuthorities.NyxId,
-                OwnerKind = AuthorizationOwnerKind.Personal,
-                OwnerSubject = "owner-alpha",
-            },
-            "lark",
-            "tenant-alpha",
-            "sender-alpha",
-            "binding-alpha");
-
-        var result = await resolver.ResolveAsync(
-            new ScheduledInvocationOwnerLLMEvidence(
-                12,
-                string.Empty,
-                "provider-alpha",
-                AuthorizationGrantRequirement.Required,
-                "/api/v1/proxy/s/provider-alpha"),
-            ownerContext);
-
-        result.Should().Be("user-service-alpha");
-        tokenProvider.Authorities.Should().ContainSingle().Which.Should().BeEquivalentTo(new WorkflowCallerNyxIdAuthority
-        {
-            Platform = "lark",
-            Tenant = "tenant-alpha",
-            ExternalUserId = "sender-alpha",
-            Scope = "proxy",
-            BindingId = "binding-alpha",
-        });
-        catalogPort.BearerTokens.Should().ContainSingle().Which.Should().Be("issued-token-alpha");
-    }
-
-    [Fact]
-    public async Task OwnerLlmResolver_WithRouteEvidence_ShouldNotFallbackToSlugMismatch()
-    {
-        var resolver = new StudioOwnerLLMServiceIdentityResolver(
-            new RecordingWorkflowCallerAccessTokenProvider(),
-            new RecordingUserLlmCatalogPort([
-                new NyxIdLlmService(
-                    "user-service-alpha",
-                    "provider-alpha",
-                    "Provider Alpha",
-                    "/api/v1/proxy/s/other-provider",
-                    null,
-                    [],
-                    "ready",
-                    NyxIdLlmProviderSource.UserService,
-                    true,
-                    null),
-            ]));
-        var ownerContext = new AuthenticatedAuthorizationOwnerContext(
-            new AuthorizationOwnerIdentity
-            {
-                Authority = NyxIdAuthorizationAuthorities.NyxId,
-                OwnerKind = AuthorizationOwnerKind.Personal,
-                OwnerSubject = "owner-alpha",
-            },
-            "lark",
-            "tenant-alpha",
-            "sender-alpha",
-            "binding-alpha");
-
-        var result = await resolver.ResolveAsync(
-            new ScheduledInvocationOwnerLLMEvidence(
-                12,
-                string.Empty,
-                "provider-alpha",
-                AuthorizationGrantRequirement.Required,
-                "/api/v1/proxy/s/provider-alpha"),
-            ownerContext);
-
-        result.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task OwnerLlmPort_ShouldResolveEmptyPreferenceToEffectiveHostDefaultRoute()
+    public async Task OwnerLlmPort_WithTypedGateway_ShouldRequireNoServiceGrant()
     {
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 12,
-            PreferredLlmRoute = string.Empty,
-        });
-        var port = new ProjectionScheduledInvocationOwnerLLMQueryPort(
-            reader,
-            Options.Create(new ScheduledInvocationOwnerLLMRouteOptions
+            PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
+            LlmSelection = new UserLlmSelection
             {
-                DefaultRoutePreference = "chrono-llm-public",
-            }));
+                RouteKind = UserLlmRouteKind.Gateway,
+                RouteValue = "/api/v1/llm/gateway/v1",
+            },
+        });
 
-        var result = await port.GetAsync("scope-alpha");
+        var result = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync("scope-alpha");
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(12);
-        result.NyxIdServiceSlug.Should().Be("chrono-llm-public");
-        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
+        result.NyxIdServiceId.Should().BeEmpty();
+        result.NyxIdServiceSlug.Should().BeEmpty();
+        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.NotRequired);
     }
 
-    [Theory]
-    [InlineData("gateway")]
-    [InlineData("auto")]
-    [InlineData("/api/v1/llm/gateway/v1")]
-    public async Task OwnerLlmPort_ShouldRequireNoUserServiceGrantForBareGateway(string defaultRoute)
+    [Fact]
+    public async Task OwnerLlmPort_WithLegacyProxyRoute_ShouldRequireUnavailableExactIdentity()
     {
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 13,
+            PreferredLlmRoute = "/api/v1/proxy/s/provider-alpha",
         });
-        var port = new ProjectionScheduledInvocationOwnerLLMQueryPort(
-            reader,
-            Options.Create(new ScheduledInvocationOwnerLLMRouteOptions
-            {
-                DefaultRoutePreference = defaultRoute,
-            }));
 
-        var result = await port.GetAsync("scope-alpha");
+        var result = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync("scope-alpha");
 
-        result!.NyxIdServiceSlug.Should().BeEmpty();
-        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.NotRequired);
+        result.Should().NotBeNull();
+        result!.StateVersion.Should().Be(13);
+        result.NyxIdServiceId.Should().BeEmpty();
+        result.NyxIdServiceSlug.Should().Be("provider-alpha");
+        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
     }
 
     [Theory]
-    [InlineData("gateway")]
-    [InlineData("auto")]
     [InlineData("")]
-    public async Task OwnerLlmPort_ShouldApplyServiceDefaultWhenUserPreferenceSelectsDefault(string preference)
+    [InlineData("gateway")]
+    [InlineData("/api/v1/llm/gateway/v1")]
+    public async Task OwnerLlmPort_WithoutTypedSelection_ShouldFailClosed(string legacyRoute)
     {
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 14,
-            PreferredLlmRoute = preference,
+            PreferredLlmRoute = legacyRoute,
         });
-        var port = new ProjectionScheduledInvocationOwnerLLMQueryPort(
-            reader,
-            Options.Create(new ScheduledInvocationOwnerLLMRouteOptions
+
+        var result = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync("scope-alpha");
+
+        result.Should().NotBeNull();
+        result!.StateVersion.Should().Be(14);
+        result.NyxIdServiceId.Should().BeEmpty();
+        result.NyxIdServiceSlug.Should().BeEmpty();
+        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Unspecified);
+    }
+
+    [Theory]
+    [InlineData(UserLlmRouteKind.Unspecified, "/api/v1/llm/gateway/v1", "", "")]
+    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/proxy/s/provider-alpha", "", "")]
+    [InlineData(UserLlmRouteKind.Gateway, "/api/v1/llm/gateway/v1", "us-alpha", "provider-alpha")]
+    [InlineData(UserLlmRouteKind.NyxIdUserService, "", "us-alpha", "provider-alpha")]
+    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "", "provider-alpha")]
+    [InlineData(UserLlmRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-alpha", "us-alpha", "")]
+    public async Task OwnerLlmPort_WithInvalidTypedSelection_ShouldFailClosed(
+        UserLlmRouteKind routeKind,
+        string routeValue,
+        string serviceId,
+        string serviceSlug)
+    {
+        var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
+        {
+            StateVersion = 15,
+            PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
+            LlmSelection = new UserLlmSelection
             {
-                DefaultRoutePreference = "chrono-llm-public",
-            }));
+                RouteKind = routeKind,
+                RouteValue = routeValue,
+                NyxIdUserServiceId = serviceId,
+                ServiceSlugSnapshot = serviceSlug,
+            },
+        });
 
-        var result = await port.GetAsync("scope-alpha");
+        var result = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync("scope-alpha");
 
-        result!.NyxIdServiceSlug.Should().Be("chrono-llm-public");
-        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
+        result.Should().NotBeNull();
+        result!.StateVersion.Should().Be(15);
+        result.NyxIdServiceId.Should().BeEmpty();
+        result.NyxIdServiceSlug.Should().BeEmpty();
+        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Unspecified);
+    }
+
+    [Fact]
+    public async Task OwnerLlmPort_ShouldUseOwnerScopeKeyWithoutCallerBindingContext()
+    {
+        var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
+        {
+            StateVersion = 16,
+            LlmSelection = new UserLlmSelection
+            {
+                RouteKind = UserLlmRouteKind.NyxIdUserService,
+                RouteValue = "/api/v1/proxy/s/provider-alpha",
+                NyxIdUserServiceId = "us-alpha",
+                ServiceSlugSnapshot = "provider-alpha",
+            },
+        });
+
+        var result = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync(" scope-binding-alpha ");
+
+        reader.Key.Should().Be("user-config-scope-binding-alpha");
+        result!.NyxIdServiceId.Should().Be("us-alpha");
     }
 
     [Fact]
@@ -312,25 +269,23 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         var incompleteMember = new RecordingReader<StudioMemberCurrentStateDocument>(new());
         var missingWorkflow = new RecordingRevisionCatalogReader(null);
         var missingConnector = new RecordingReader<ConnectorCatalogCurrentStateDocument>(null);
-        var missingOwnerLlm = new RecordingReader<UserConfigCurrentStateDocument>(null);
 
         (await new ProjectionScheduledInvocationMemberQueryPort(missingMember).GetAsync("s", "m")).Should().BeNull();
         (await new ProjectionScheduledInvocationMemberQueryPort(incompleteMember).GetAsync("s", "m")).Should().BeNull();
         (await new ProjectionScheduledInvocationWorkflowQueryPort(missingWorkflow)
             .GetAsync("s", "svc", "rev")).Should().BeNull();
         (await new ProjectionScheduledInvocationConnectorQueryPort(missingConnector).GetAsync("s")).Should().BeNull();
-        var missingOwnerResult = await new ProjectionScheduledInvocationOwnerLLMQueryPort(
-            missingOwnerLlm,
-            Options.Create(new ScheduledInvocationOwnerLLMRouteOptions
-            {
-                DefaultRoutePreference = "chrono-llm-public",
-            })).GetAsync("s");
-        missingOwnerResult.Should().BeEquivalentTo(new ScheduledInvocationOwnerLLMEvidence(
-            0,
-            string.Empty,
-            "chrono-llm-public",
-            AuthorizationGrantRequirement.Required,
-            "/api/v1/proxy/s/chrono-llm-public"));
+    }
+
+    [Fact]
+    public async Task OwnerLlmPort_WithMissingDocument_ShouldReturnNull()
+    {
+        var reader = new RecordingReader<UserConfigCurrentStateDocument>(null);
+
+        var missingOwnerResult = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync("s");
+
+        missingOwnerResult.Should().BeNull();
     }
 
     private static ServiceRevisionCatalogSnapshot CreateWorkflowRevisionCatalog(
@@ -366,34 +321,6 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             ],
             DateTimeOffset.UtcNow,
             StateVersion: 5);
-    }
-
-    private sealed class RecordingWorkflowCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
-    {
-        public List<WorkflowCallerNyxIdAuthority> Authorities { get; } = [];
-
-        public Task<string> IssueAsync(WorkflowCallerNyxIdAuthority authority, CancellationToken ct = default)
-        {
-            Authorities.Add(authority.Clone());
-            return Task.FromResult("issued-token-alpha");
-        }
-    }
-
-    private sealed class RecordingUserLlmCatalogPort(IReadOnlyList<NyxIdLlmService> services) : IUserLlmCatalogPort
-    {
-        public List<string> BearerTokens { get; } = [];
-
-        public Task<NyxIdLlmServicesResult> GetServicesAsync(string bearerToken, CancellationToken ct)
-        {
-            BearerTokens.Add(bearerToken);
-            return Task.FromResult(new NyxIdLlmServicesResult(services, null));
-        }
-
-        public Task<NyxIdLlmService> ProvisionAsync(
-            string bearerToken,
-            string provisionEndpointId,
-            CancellationToken ct) =>
-            throw new NotSupportedException();
     }
 
     private sealed class RecordingRevisionCatalogReader(ServiceRevisionCatalogSnapshot? snapshot)

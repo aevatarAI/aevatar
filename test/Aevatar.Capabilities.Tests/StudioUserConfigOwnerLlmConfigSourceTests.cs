@@ -9,15 +9,17 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class StudioUserConfigOwnerLlmConfigSourceTests
 {
     [Fact]
-    public async Task GetForScopeAsync_ShouldReturnExplicitlySavedRoute()
+    public async Task GetForScopeAsync_ShouldReturnTypedServiceRouteInsteadOfLegacyCompatibilityRoute()
     {
-        // The happy path: the bot owner saved a custom NyxID service route. The bridge passes
-        // it through verbatim so OwnerLlmConfigApplier pins NyxIdRoutePreference and the LLM
-        // provider proxies through the user's `chrono-llm` service.
         var config = new UserConfig(
             DefaultModel: "gpt-5.5",
-            PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm",
-            MaxToolRounds: 7);
+            PreferredLlmRoute: "/api/v1/proxy/s/legacy-provider",
+            MaxToolRounds: 7,
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.NyxIdUserService,
+                "/api/v1/proxy/s/chrono-llm",
+                "us-chrono-alpha",
+                "chrono-llm"));
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
@@ -29,26 +31,21 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
     }
 
     [Theory]
-    [InlineData("")]                         // ProjectionUserConfigQueryPort default
-    [InlineData("   ")]                      // whitespace
-    [InlineData("gateway")]                  // explicit "use the gateway" sentinel
-    [InlineData("auto")]                     // auto sentinel
-    [InlineData("GATEWAY")]                  // case-insensitive
-    [InlineData("//evil.example.com/path")]  // protocol-relative; Normalize rejects
-    [InlineData("https://evil.example.com")] // absolute URI; Normalize rejects
-    public async Task GetForScopeAsync_ShouldCollapseGatewaySentinelsToNull(string savedRoute)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetForScopeAsync_ShouldIgnoreLegacyRouteWithoutTypedSelection(bool useUnspecifiedSelection)
     {
-        // Codex flagged on PR #509 that ProjectionUserConfigQueryPort fills PreferredLlmRoute
-        // with UserConfigLlmRouteDefaults.Gateway when the user has no saved route, and worried
-        // the bridge would leak that sentinel into outbound metadata. The bridge runs the value
-        // through Studio's UserConfigLlmRoute.Normalize so any "use the default gateway" form
-        // — empty / whitespace / "auto" / "gateway" / invalid URI — collapses to null. The
-        // applier's null-or-whitespace guard then leaves NyxIdRoutePreference unset and the
-        // LLM provider's compile-time gateway path takes over.
         var config = new UserConfig(
             DefaultModel: "gpt-5.5",
-            PreferredLlmRoute: savedRoute,
-            MaxToolRounds: 0);
+            PreferredLlmRoute: "/api/v1/proxy/s/legacy-provider",
+            MaxToolRounds: 0,
+            LlmSelection: useUnspecifiedSelection
+                ? new UserLlmSelectionValue(
+                    UserLlmSelectionKind.Unspecified,
+                    "/api/v1/proxy/s/legacy-provider",
+                    "us-legacy",
+                    "legacy-provider")
+                : null);
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
@@ -58,22 +55,23 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
     }
 
     [Fact]
-    public async Task GetForScopeAsync_ShouldNormalizeBareSlugIntoProxyPath()
+    public async Task GetForScopeAsync_ShouldReturnCanonicalRouteForTypedGateway()
     {
-        // UserConfigLlmRoute.Normalize turns a bare slug "chrono-llm" into the proxy path
-        // "/api/v1/proxy/s/chrono-llm". The bridge passes that normalized form through so the
-        // applier can pin a valid relative path against the NyxID authority — no sentinel,
-        // no broken URI.
         var config = new UserConfig(
             DefaultModel: string.Empty,
-            PreferredLlmRoute: "chrono-llm",
-            MaxToolRounds: 0);
+            PreferredLlmRoute: "/api/v1/proxy/s/legacy-provider",
+            MaxToolRounds: 0,
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.Gateway,
+                UserConfigLlmRouteDefaults.Gateway,
+                string.Empty,
+                string.Empty));
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
         var result = await source.GetForScopeAsync("scope-1");
 
-        result.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
+        result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
     }
 
     [Fact]
@@ -82,14 +80,19 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
         var config = new UserConfig(
             DefaultModel: "chrono-llm/gpt-5.5",
             PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
-            MaxToolRounds: 7);
+            MaxToolRounds: 7,
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.Gateway,
+                UserConfigLlmRouteDefaults.Gateway,
+                string.Empty,
+                string.Empty));
 
         var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
 
         var result = await source.GetForScopeAsync("scope-1");
 
         result.DefaultModel.Should().Be("chrono-llm/gpt-5.5");
-        result.PreferredLlmRoute.Should().BeNull();
+        result.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         result.MaxToolRounds.Should().Be(7);
     }
 

@@ -5,9 +5,9 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgents.ConnectorCatalog;
+using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Abstractions;
-using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
 
@@ -88,83 +88,86 @@ public sealed class ProjectionScheduledInvocationConnectorQueryPort(
     }
 }
 
-public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort
+public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
+    IProjectionDocumentReader<UserConfigCurrentStateDocument, string> reader)
     : IScheduledInvocationOwnerLLMEvidenceQueryPort
 {
     private const string NyxIdProxyRoutePrefix = "/api/v1/proxy/s/";
     private const string NyxIdGatewayRoute = "/api/v1/llm/gateway/v1";
-    private readonly IProjectionDocumentReader<UserConfigCurrentStateDocument, string> _reader;
-    private readonly string _defaultRoutePreference;
-
-    public ProjectionScheduledInvocationOwnerLLMQueryPort(
-        IProjectionDocumentReader<UserConfigCurrentStateDocument, string> reader,
-        IOptions<ScheduledInvocationOwnerLLMRouteOptions>? options = null)
-    {
-        _reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        _defaultRoutePreference = options?.Value.DefaultRoutePreference?.Trim() ?? string.Empty;
-    }
 
     public async Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
         string scopeId,
-        AuthenticatedAuthorizationOwnerContext? ownerContext = null,
         CancellationToken ct = default)
     {
-        var document = await _reader.GetAsync($"user-config-{scopeId.Trim()}", ct);
-        var stateVersion = document?.StateVersion ?? 0;
-        var route = NormalizeRoutePreference(document?.PreferredLlmRoute);
-        if (route.Length == 0)
-            route = NormalizeRoutePreference(_defaultRoutePreference);
+        var document = await reader.GetAsync($"user-config-{scopeId.Trim()}", ct);
+        if (document == null)
+            return null;
 
-        if (route.Length == 0 ||
-            string.Equals(route.TrimEnd('/'), NyxIdGatewayRoute, StringComparison.OrdinalIgnoreCase))
-        {
-            return new ScheduledInvocationOwnerLLMEvidence(
-                stateVersion,
-                string.Empty,
-                string.Empty,
-                AuthorizationGrantRequirement.NotRequired);
-        }
-
-        var serviceSlug = ResolveServiceSlug(route);
-        if (serviceSlug.Length == 0 || serviceSlug.Contains('/'))
-        {
-            return new ScheduledInvocationOwnerLLMEvidence(
-                stateVersion,
-                string.Empty,
-                string.Empty,
-                AuthorizationGrantRequirement.Unspecified);
-        }
-
-        return new ScheduledInvocationOwnerLLMEvidence(
-            stateVersion,
-            string.Empty,
-            serviceSlug,
-            AuthorizationGrantRequirement.Required,
-            route);
+        return document.LlmSelection == null
+            ? MapLegacyEvidence(document)
+            : MapTypedEvidence(document.StateVersion, document.LlmSelection);
     }
 
-    private static string ResolveServiceSlug(string route) =>
-        route.StartsWith(NyxIdProxyRoutePrefix, StringComparison.Ordinal)
-            ? route[NyxIdProxyRoutePrefix.Length..].Trim('/')
-            : route.Trim('/');
-
-    private static string NormalizeRoutePreference(string? value)
+    private static ScheduledInvocationOwnerLLMEvidence MapTypedEvidence(
+        long stateVersion,
+        UserLlmSelection selection)
     {
-        var normalized = value?.Trim() ?? string.Empty;
-        if (normalized.Length == 0 ||
-            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("//", StringComparison.Ordinal) ||
-            normalized.Contains("://", StringComparison.Ordinal))
+        var route = selection.RouteValue?.Trim() ?? string.Empty;
+        var serviceId = selection.NyxIdUserServiceId?.Trim() ?? string.Empty;
+        var serviceSlug = selection.ServiceSlugSnapshot?.Trim() ?? string.Empty;
+
+        if (selection.RouteKind == UserLlmRouteKind.Gateway &&
+            string.Equals(route.TrimEnd('/'), NyxIdGatewayRoute, StringComparison.Ordinal) &&
+            serviceId.Length == 0 &&
+            serviceSlug.Length == 0)
         {
-            return string.Empty;
+            return Evidence(stateVersion, AuthorizationGrantRequirement.NotRequired);
         }
 
-        return normalized.StartsWith("/", StringComparison.Ordinal)
-            ? normalized
-            : $"{NyxIdProxyRoutePrefix}{normalized.Trim('/')}";
+        if (selection.RouteKind == UserLlmRouteKind.NyxIdUserService &&
+            serviceId.Length > 0 &&
+            IsExactProxyRoute(route, serviceSlug))
+        {
+            return new ScheduledInvocationOwnerLLMEvidence(
+                stateVersion,
+                serviceId,
+                serviceSlug,
+                AuthorizationGrantRequirement.Required);
+        }
+
+        return Evidence(stateVersion, AuthorizationGrantRequirement.Unspecified);
     }
 
-    private static string? NormalizeOptional(string? value) =>
-        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static ScheduledInvocationOwnerLLMEvidence MapLegacyEvidence(
+        UserConfigCurrentStateDocument document)
+    {
+        var route = document.PreferredLlmRoute?.Trim() ?? string.Empty;
+        var serviceSlug = ResolveProxyServiceSlug(route);
+        return serviceSlug.Length == 0
+            ? Evidence(document.StateVersion, AuthorizationGrantRequirement.Unspecified)
+            : new ScheduledInvocationOwnerLLMEvidence(
+                document.StateVersion,
+                string.Empty,
+                serviceSlug,
+                AuthorizationGrantRequirement.Required);
+    }
+
+    private static ScheduledInvocationOwnerLLMEvidence Evidence(
+        long stateVersion,
+        AuthorizationGrantRequirement requirement) =>
+        new(stateVersion, string.Empty, string.Empty, requirement);
+
+    private static bool IsExactProxyRoute(string route, string serviceSlug) =>
+        serviceSlug.Length > 0 &&
+        !serviceSlug.Contains('/') &&
+        string.Equals(route, $"{NyxIdProxyRoutePrefix}{serviceSlug}", StringComparison.Ordinal);
+
+    private static string ResolveProxyServiceSlug(string route)
+    {
+        if (!route.StartsWith(NyxIdProxyRoutePrefix, StringComparison.Ordinal))
+            return string.Empty;
+
+        var serviceSlug = route[NyxIdProxyRoutePrefix.Length..].Trim();
+        return serviceSlug.Length == 0 || serviceSlug.Contains('/') ? string.Empty : serviceSlug;
+    }
 }
