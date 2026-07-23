@@ -111,6 +111,38 @@ public sealed class StudioTeamRosterFanoutMaterializerTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldDispatchDeletedMemberRemovalToPreviousTeam()
+    {
+        var bootstrap = new RecordingBootstrap();
+        var dispatch = new RecordingDispatchPort();
+        var materializer = new StudioTeamRosterFanoutMaterializer(
+            bootstrap,
+            CreateCommandDispatch(dispatch));
+        var deletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-09T06:45:00Z"));
+
+        await materializer.ProjectAsync(
+            NewContext(),
+            WrapCommitted(new StudioMemberDeletedEvent
+            {
+                ScopeId = "scope-1",
+                MemberId = "m-1",
+                PreviousTeamId = "t-old",
+                PublishedServiceId = "member-m-1",
+                DeletedAtUtc = deletedAt,
+            }, version: 10, eventId: "evt-10"));
+
+        bootstrap.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("studio-team:scope-1:t-old");
+        var payload = dispatch.Dispatches.Should().ContainSingle().Subject
+            .Envelope.Payload.Unpack<StudioMemberReassignedEvent>();
+        payload.MemberId.Should().Be("m-1");
+        payload.ScopeId.Should().Be("scope-1");
+        payload.FromTeamId.Should().Be("t-old");
+        payload.HasToTeamId.Should().BeFalse();
+        payload.ReassignedAtUtc.Should().Be(deletedAt);
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldRejectNullArguments()
     {
         var materializer = new StudioTeamRosterFanoutMaterializer(

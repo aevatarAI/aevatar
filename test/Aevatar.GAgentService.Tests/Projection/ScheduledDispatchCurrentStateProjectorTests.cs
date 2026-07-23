@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -40,6 +41,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
 
         var document = await store.GetAsync("schedule-1");
         document.Should().NotBeNull();
+        (await store.GetAsync("scheduled-dispatch:schedule-1")).Should().BeNull();
         document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
         document.ServiceId.Should().Be("svc");
         document.ServiceEndpointId.Should().Be("chat");
@@ -121,7 +123,156 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.Should().NotBeNull();
         document!.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8("durable-run-key").ToByteArray()).Should().Be(-1);
         document.ToString().Should().NotContain("durable-run-key");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.LegacyDurableSenderBearer.ToString());
         document.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        document.StateVersion.Should().Be(10);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldMaterializeCredentialRequirementFacts()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-workflow", identity);
+        state.ScheduleKind = ScheduledDispatchScheduleKindState.Workflow;
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            SenderNyxId = new ScheduledServiceInvocationNyxIdCredentialSourceState
+            {
+                Subject = new ScheduledServiceInvocationNyxIdSubjectRefState
+                {
+                    Platform = "nyxid",
+                    ExternalUserId = "owner-1",
+                },
+                Scope = "proxy",
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-workflow"),
+            WrapCommitted(
+                state,
+                version: 13,
+                eventId: "evt-credential",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:45:00+00:00")));
+
+        var document = await store.GetAsync("schedule-workflow");
+        document.Should().NotBeNull();
+        document!.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService.ToString());
+        document.CredentialSourceKind.Should().Be(ScheduledDispatchCredentialSourceKind.SenderNyxId.ToString());
+        document.StateVersion.Should().Be(13);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotProjectDurableCredentialReference()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-durable-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            Durable = new ScheduledServiceInvocationDurableCredentialReferenceState
+            {
+                CredentialId = "credential-projector-1",
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-projector-1",
+                    Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                    OwnerScopeKey = "owner-scope-projector",
+                    Fingerprint = "fp-projector",
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-durable-reference"),
+            WrapCommitted(
+                state,
+                version: 11,
+                eventId: "evt-durable-reference",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:20:00+00:00")));
+
+        var document = await store.GetAsync("schedule-durable-reference");
+        document.Should().NotBeNull();
+        AssertDocumentDoesNotContain(document!, "credential-projector-1");
+        AssertDocumentDoesNotContain(document!, "sec-projector-1");
+        AssertDocumentDoesNotContain(document!, "owner-scope-projector");
+        AssertDocumentDoesNotContain(document!, "fp-projector");
+        AssertDocumentDoesNotContain(document!, "resolved-full-key");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.DurableCredentialReference.ToString());
+        document!.ServiceKey.Should().Be(ServiceKeys.Build(identity));
+        document.StateVersion.Should().Be(11);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldNotProjectScheduledInvocationAgentKeySecretReference()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var identity = new ServiceIdentity
+        {
+            TenantId = "tenant",
+            AppId = "app",
+            Namespace = "default",
+            ServiceId = "svc",
+        };
+        var state = CreateServiceInvocationState("schedule-reference", identity);
+        state.Target.ServiceInvocation.Auth = new ScheduledServiceInvocationAuthState
+        {
+            ScheduledInvocationAgentKey = new ScheduledInvocationAgentKeyCredentialReferenceState
+            {
+                SecretReference = new SecretReference
+                {
+                    Ref = "sec-sensitive-reference",
+                    Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    OwnerScopeKey = "owner-scope-key",
+                    Fingerprint = "sha256:sensitive-fingerprint",
+                    Version = 1,
+                    ExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+                },
+                ApiKeyId = "api-key-sensitive-id",
+                KeyExpiresAtUnixMs = DateTimeOffset.Parse("2026-07-18T00:00:00+00:00").ToUnixTimeMilliseconds(),
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-reference"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-reference",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-reference");
+        document.Should().NotBeNull();
+        AssertDocumentDoesNotContain(document!, "sec-sensitive-reference");
+        AssertDocumentDoesNotContain(document!, "api-key-sensitive-id");
+        AssertDocumentDoesNotContain(document!, "sensitive-fingerprint");
+        document.CredentialSourceKind.Should()
+            .Be(ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey.ToString());
         document.StateVersion.Should().Be(10);
     }
 
@@ -200,6 +351,111 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.LastOverdueFireAt.Should().Be(lastOverdueFireAt);
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldProjectTeamOwnerAndHealthWithoutCredentialReferences()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-16T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-schedule",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            CurrentTeamId = "team-alpha",
+        };
+        state.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
+        state.TeamAutomationOperationId = "operation-alpha";
+        state.TeamAutomationPermissionDigest = "digest-alpha";
+        state.TeamCredentialGeneration = 3;
+        state.LastAuthorizationErrorCode = "vault_revoke_pending";
+        state.TeamCredentialExpiresAt = Timestamp.FromDateTimeOffset(
+            DateTimeOffset.Parse("2026-08-16T00:00:00+00:00"));
+        state.PendingRevocationTeamCredential = new ScheduledInvocationAgentKeyCredentialReferenceState
+        {
+            ApiKeyId = "api-key-sensitive-id",
+            KeyExpiresAtUnixMs = DateTimeOffset.Parse("2026-08-16T00:00:00+00:00")
+                .ToUnixTimeMilliseconds(),
+            SecretReference = new SecretReference
+            {
+                Ref = "sec-sensitive-reference",
+                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                OwnerScopeKey = "scope-alpha:member-alpha",
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-schedule"),
+            WrapCommitted(
+                state,
+                version: 17,
+                eventId: "evt-team",
+                observedAt: DateTimeOffset.Parse("2026-07-16T01:00:00+00:00")));
+
+        var document = await store.GetAsync("team-schedule");
+        document.Should().NotBeNull();
+        document!.TeamOwned.Should().BeTrue();
+        document.TeamAutomationOwner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerDocument
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+        });
+        document.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusDocument.RevocationPending);
+        document.RevocationPending.Should().BeTrue();
+        document.StateVersion.Should().Be(17);
+        AssertDocumentDoesNotContain(document, "api-key-sensitive-id");
+        AssertDocumentDoesNotContain(document, "sec-sensitive-reference");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldExposeNeedsAuthorizationWithStableCredentialFailureCode()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-16T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-needs-authorization",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+        };
+        state.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.NeedsAuthorization;
+        state.LastAuthorizationErrorCode = "credential_unresolvable";
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-needs-authorization"),
+            WrapCommitted(
+                state,
+                version: 18,
+                eventId: "evt-needs-authorization",
+                observedAt: DateTimeOffset.Parse("2026-07-16T02:00:00+00:00")));
+
+        var document = await store.GetAsync("team-needs-authorization");
+        document.Should().NotBeNull();
+        document!.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusDocument.NeedsAuthorization);
+        document.LastAuthorizationErrorCode.Should().Be("credential_unresolvable");
+        document.StateVersion.Should().Be(18);
+    }
+
     private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>
         new()
         {
@@ -250,4 +506,10 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
                 StateRoot = Any.Pack(state),
             }),
         };
+
+    private static void AssertDocumentDoesNotContain(ScheduledDispatchDocument document, string value)
+    {
+        document.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8(value).ToByteArray()).Should().Be(-1);
+        document.ToString().Should().NotContain(value);
+    }
 }

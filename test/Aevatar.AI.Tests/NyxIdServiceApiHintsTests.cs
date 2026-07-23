@@ -9,7 +9,7 @@ public class NyxIdServiceApiHintsTests
     [InlineData("bot-telegram-mybot", "Telegram Bot")]
     [InlineData("api-github", "GitHub API")]
     [InlineData("llm-openai", "OpenAI API")]
-    [InlineData("chrono-sandbox-service", "Chrono Sandbox")]
+    [InlineData("chrono-sandbox", "Chrono Sandbox")]
     [InlineData("api-slack", "Slack API")]
     [InlineData("api-discord", "Discord API")]
     public void GetHint_KnownSlug_ReturnsHint(string slug, string expectedContains)

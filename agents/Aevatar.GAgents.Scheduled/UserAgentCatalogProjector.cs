@@ -7,9 +7,7 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Scheduled;
 
-// Refactor (iter94/cluster-094a):
-//   Old: catalog projection/query surfaces could carry runner execution facts beside membership facts.
-//   New: this projector only materializes UserAgentCatalog authority membership; SkillRunner execution has its own projector/read port.
+// Catalog projection only materializes UserAgentCatalog authority membership.
 public sealed class UserAgentCatalogProjector
     : ICurrentStateProjectionMaterializer<UserAgentCatalogMaterializationContext>
 {
@@ -96,13 +94,20 @@ public sealed class UserAgentCatalogProjector
         document.ActorId = UserAgentCatalogGAgent.WellKnownId;
         document.UpdatedAt = updatedAt;
         document.CreatedAt = entry.CreatedAt != null ? entry.CreatedAt.ToDateTimeOffset() : updatedAt;
-        document.LarkReceiveId = entry.LarkReceiveId ?? string.Empty;
-        document.LarkReceiveIdType = entry.LarkReceiveIdType ?? string.Empty;
-        document.LarkReceiveIdFallback = entry.LarkReceiveIdFallback ?? string.Empty;
-        document.LarkReceiveIdTypeFallback = entry.LarkReceiveIdTypeFallback ?? string.Empty;
         document.OutputFormat = entry.OutputFormat;
         document.SharingGrant = entry.SharingGrant?.Clone();
         document.TargetPlatform = entry.TargetPlatform ?? string.Empty;
+#pragma warning disable CS0612 // deprecated entry fields are read only as a channel_address compatibility bridge
+        document.ChannelAddress = UserAgentCatalogChannelAddress.ToProto(
+            entry.ChannelAddress,
+            entry.TargetPlatform,
+            entry.NyxProviderSlug,
+            entry.ConversationId,
+            entry.LarkReceiveId,
+            entry.LarkReceiveIdType,
+            entry.LarkReceiveIdFallback,
+            entry.LarkReceiveIdTypeFallback);
+#pragma warning restore CS0612
 
         // Project owner_scope verbatim from the upserted entry. Per issue #466 the entry
         // is the authoritative source for ownership; the projector materializes it for

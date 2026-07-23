@@ -45,6 +45,10 @@ import {
   STUDIO_GRAPH_CATEGORIES,
 } from "@/shared/studio/graph";
 import { isStudioApiStatus, studioApi } from "@/shared/studio/api";
+import {
+  isStudioWorkflowDraftIdentity,
+  resolveStudioMemberDraftWorkflowId,
+} from "@/shared/studio/memberWorkflowIdentity";
 import { normalizeStudioMemberLifecycleStage } from "@/shared/studio/models";
 import type {
   StudioExecutionDetail,
@@ -52,6 +56,7 @@ import type {
   StudioMemberBindingRunStatusResponse,
   StudioMemberDetail,
   StudioSaveAndBindWorkflowAcceptedResult,
+  StudioValidationFinding,
   StudioWorkflowDraftCreateAcceptedReceipt,
   StudioWorkflowDocument,
   StudioWorkflowFile,
@@ -64,6 +69,7 @@ type WorkflowExecutionStatus = "idle" | "running" | "succeeded" | "failed";
 
 type SaveWorkflowDraftVariables = {
   readonly document: StudioWorkflowDocument;
+  readonly draftRevision: number;
   readonly layout: unknown;
   readonly title: string;
   readonly workflow: StudioWorkflowFile;
@@ -85,6 +91,7 @@ type RunCurrentDraftVariables = {
 
 type PublishWorkflowVariables = {
   readonly document: StudioWorkflowDocument;
+  readonly draftRevision: number;
   readonly layout: unknown;
   readonly title: string;
   readonly workflow: StudioWorkflowFile;
@@ -184,23 +191,16 @@ type TeamMemberWorkflowStudioState = {
   readonly navigateToPublishedRuns: () => void;
   readonly navigateToAutomations: () => void;
   readonly navigateToTeams: () => void;
-  readonly closeYamlImportPanel: () => void;
-  readonly pasteYaml: (yaml: string) => Promise<void>;
-  readonly yamlImportError: string;
-  readonly yamlImportPanelOpen: boolean;
-  readonly pasteYamlPending: boolean;
   readonly teamHref: string;
   readonly teamsHref: string;
   readonly canOpenDraftRunPanel: boolean;
   readonly canRunCurrentDraft: boolean;
   readonly canSave: boolean;
-  readonly canViewYaml: boolean;
+  readonly canEditYaml: boolean;
+  readonly applyYamlEdit: () => Promise<void>;
   readonly closeNodeLibrary: () => void;
   readonly closeYamlPanel: () => void;
   readonly connectNodes: (sourceNodeId: string, targetNodeId: string) => void;
-  readonly currentYaml: string;
-  readonly currentYamlError: string;
-  readonly currentYamlPending: boolean;
   readonly deleteSelectedConnection: () => void;
   readonly deleteSelectedNode: () => void;
   readonly dirty: boolean;
@@ -219,7 +219,10 @@ type TeamMemberWorkflowStudioState = {
   readonly removeDraftRunFile: (index: number) => void;
   readonly graph: ReturnType<typeof buildStudioGraphElements>;
   readonly insertNode: (stepType: string) => void;
+  readonly linkedWorkflowLoadFailed: boolean;
+  readonly linkedWorkflowLoadFailureDescription: string;
   readonly linkedWorkflowMissing: boolean;
+  readonly linkedWorkflowMissingDescription: string;
   readonly loading: boolean;
   readonly moveNodes: (nodes: ReturnType<typeof buildStudioGraphElements>["nodes"]) => void;
   readonly mode: TeamMemberWorkflowStudioMode;
@@ -227,9 +230,7 @@ type TeamMemberWorkflowStudioState = {
   readonly nodeLibraryOpen: boolean;
   readonly openNodeLibrary: () => void;
   readonly openDraftRunPanel: () => void;
-  readonly openYamlImportPanel: () => void;
   readonly openYamlPanel: () => void;
-  readonly retryYaml: () => void;
   readonly save: () => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason: string;
@@ -248,6 +249,16 @@ type TeamMemberWorkflowStudioState = {
   readonly setWorkflowTitle: (title: string) => void;
   readonly teamName: string;
   readonly workflowTitle: string;
+  readonly setYamlEditBuffer: (yaml: string) => void;
+  readonly yamlEditApplying: boolean;
+  readonly yamlEditBuffer: string;
+  readonly yamlEditDiagnostics: readonly StudioValidationFinding[];
+  readonly yamlEditError: string;
+  readonly yamlEditHasBlockingFindings: boolean;
+  readonly yamlEditHasConflict: boolean;
+  readonly yamlEditHasUnappliedChanges: boolean;
+  readonly yamlEditOpening: boolean;
+  readonly yamlEditPending: boolean;
   readonly yamlPanelOpen: boolean;
 };
 
@@ -263,6 +274,8 @@ const WORKFLOW_DRAFT_MATERIALIZATION_DELAY_MS = 900;
 const SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_ATTEMPTS = 12;
 const SAVE_AND_BIND_WORKFLOW_MATERIALIZATION_DELAY_MS = 1_000;
 const SAVED_WORKFLOW_QUERY_STALE_MS = 30_000;
+const YAML_EDIT_VALIDATE_DEBOUNCE_MS =
+  typeof process !== "undefined" && process.env.NODE_ENV === "test" ? 0 : 350;
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -452,10 +465,6 @@ function resolveNewWorkflowDirectoryId(input: {
   );
 }
 
-function isWorkflowDraftRouteId(value: string): boolean {
-  return Boolean(value && !/\s/.test(value));
-}
-
 function readWorkflowSourceSignature(
   workflow: StudioWorkflowFile | null | undefined,
 ): WorkflowSourceSignature | null {
@@ -590,6 +599,12 @@ function waitForSaveAndBindWorkflowMaterializationTick(): Promise<void> {
 
 function workflowYamlMatches(left: string | null | undefined, right: string): boolean {
   return String(left || "").trim() === right.trim();
+}
+
+function describeWorkflowDraftLoadError(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : "Unknown error";
 }
 
 async function waitForSaveAndBindWorkflowMaterialized(input: {
@@ -861,6 +876,63 @@ function confirmDiscardUnsavedChanges(): boolean {
   );
 }
 
+function confirmDiscardYamlEdits(): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+
+  return window.confirm(
+    "You have unapplied YAML edits. Discard them and return to the canvas?",
+  );
+}
+
+function normalizeFindingLevel(
+  level: StudioValidationFinding["level"],
+): "error" | "warning" | "info" {
+  if (typeof level === "number") {
+    return level >= 2 ? "error" : level === 1 ? "warning" : "info";
+  }
+
+  const normalized = String(level || "").trim().toLowerCase();
+  if (normalized === "2" || normalized === "error") {
+    return "error";
+  }
+
+  if (normalized === "1" || normalized === "warning" || normalized === "warn") {
+    return "warning";
+  }
+
+  return "info";
+}
+
+function hasBlockingFindings(
+  findings: readonly StudioValidationFinding[] | null | undefined,
+): boolean {
+  return Boolean(
+    findings?.some((finding) => normalizeFindingLevel(finding.level) === "error"),
+  );
+}
+
+function formatBlockingFindingsMessage(
+  findings: readonly StudioValidationFinding[] | null | undefined,
+): string {
+  const firstError = findings?.find(
+    (finding) => normalizeFindingLevel(finding.level) === "error",
+  );
+  return (
+    firstError?.message ||
+    "Resolve error-level workflow diagnostics before continuing."
+  );
+}
+
+function assertNoBlockingFindings(
+  findings: readonly StudioValidationFinding[] | null | undefined,
+): void {
+  if (hasBlockingFindings(findings)) {
+    throw new Error(formatBlockingFindingsMessage(findings));
+  }
+}
+
 async function saveWorkflowDraft(input: {
   readonly document: StudioWorkflowDocument;
   readonly layout: unknown;
@@ -879,6 +951,7 @@ async function saveWorkflowDraft(input: {
     document: documentWithTitle,
     availableStepTypes: AVAILABLE_STEP_TYPES,
   });
+  assertNoBlockingFindings(serialized.findings);
   const savedDocument =
     cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
   const graphForLayout = buildStudioGraphElements(savedDocument, layout);
@@ -942,6 +1015,7 @@ async function saveAndBindPublishedWorkflowDraft(input: {
     document: documentWithTitle,
     availableStepTypes: AVAILABLE_STEP_TYPES,
   });
+  assertNoBlockingFindings(serialized.findings);
   const savedDocument =
     cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
   const graphForLayout = buildStudioGraphElements(savedDocument, layout);
@@ -1029,25 +1103,71 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [publishErrorVisible, setPublishErrorVisible] = React.useState(true);
   const [nodeLibraryOpen, setNodeLibraryOpen] = React.useState(false);
   const [draftRunPanelOpen, setDraftRunPanelOpen] = React.useState(false);
-  const [yamlImportPanelOpen, setYamlImportPanelOpen] = React.useState(false);
-  const [yamlImportError, setYamlImportError] = React.useState("");
   const [yamlPanelOpen, setYamlPanelOpen] = React.useState(false);
-  const [currentYaml, setCurrentYaml] = React.useState("");
-  const [currentYamlError, setCurrentYamlError] = React.useState("");
-  const [currentYamlPending, setCurrentYamlPending] = React.useState(false);
+  const [yamlEditBuffer, setYamlEditBufferState] = React.useState("");
+  const [yamlEditSnapshot, setYamlEditSnapshot] = React.useState("");
+  const [yamlEditDiagnostics, setYamlEditDiagnostics] = React.useState<
+    StudioValidationFinding[]
+  >([]);
+  const [yamlEditError, setYamlEditError] = React.useState("");
+  const [yamlEditOpening, setYamlEditOpening] = React.useState(false);
+  const [yamlEditPending, setYamlEditPending] = React.useState(false);
+  const [yamlEditApplying, setYamlEditApplying] = React.useState(false);
+  const yamlEditApplyingRef = React.useRef(false);
+  const [yamlEditParsedDocument, setYamlEditParsedDocument] =
+    React.useState<StudioWorkflowDocument | null>(null);
+  const [yamlEditValidatedBuffer, setYamlEditValidatedBuffer] =
+    React.useState("");
+  const [yamlEditBaseRevision, setYamlEditBaseRevision] = React.useState(0);
+  const [yamlEditBaseSourceKey, setYamlEditBaseSourceKey] = React.useState("");
   const [selectedEdgeId, setSelectedEdgeId] = React.useState("");
   const [selectedNodeId, setSelectedNodeId] = React.useState("");
   const [selectedStepConfigurationError, setSelectedStepConfigurationError] =
     React.useState("");
   const [workflowTitle, setWorkflowTitleState] =
     React.useState("Untitled member");
-  const sourceKeyRef = React.useRef("");
-  const yamlSourceSignatureRef = React.useRef("");
-  const yamlInFlightSignatureRef = React.useRef("");
-  const yamlRequestIdRef = React.useRef(0);
+  const [draftRevision, setDraftRevision] = React.useState(0);
+  const draftRevisionRef = React.useRef(0);
+  const appliedSourceKeyRef = React.useRef("");
+  const yamlEditRequestIdRef = React.useRef(0);
+  const yamlEditValidationRequestIdRef = React.useRef(0);
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
+  const latestSourceKeyRef = React.useRef("");
   const teamsHref = buildTeamsHref();
+  const advanceDraftRevision = React.useCallback(() => {
+    const nextRevision = draftRevisionRef.current + 1;
+    draftRevisionRef.current = nextRevision;
+    setDraftRevision(nextRevision);
+    return nextRevision;
+  }, []);
+  const markDraftDirty = React.useCallback(() => {
+    const nextRevision = advanceDraftRevision();
+    setDirty(true);
+    return nextRevision;
+  }, [advanceDraftRevision]);
+  const markDraftClean = React.useCallback(() => {
+    const nextRevision = advanceDraftRevision();
+    setDirty(false);
+    return nextRevision;
+  }, [advanceDraftRevision]);
+  const yamlEditHasUnappliedChanges = Boolean(
+    yamlPanelOpen && yamlEditBuffer !== yamlEditSnapshot,
+  );
+  const yamlEditHasBlockingFindings = hasBlockingFindings(yamlEditDiagnostics);
+  const closeYamlPanelWithConfirmation = React.useCallback(() => {
+    if (yamlEditHasUnappliedChanges && !confirmDiscardYamlEdits()) {
+      return false;
+    }
+
+    yamlEditRequestIdRef.current += 1;
+    yamlEditValidationRequestIdRef.current += 1;
+    setYamlPanelOpen(false);
+    setYamlEditOpening(false);
+    setYamlEditPending(false);
+    setYamlEditError("");
+    return true;
+  }, [yamlEditHasUnappliedChanges]);
   const closeDraftRunPanel = React.useCallback(() => {
     setDraftRunPanelOpen(false);
   }, []);
@@ -1151,20 +1271,26 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   });
   const routeDraftWorkflowId =
     route.mode === "existing" &&
-    isWorkflowDraftRouteId(trimOptional(route.workflowId))
+    isStudioWorkflowDraftIdentity(trimOptional(route.workflowId))
       ? trimOptional(route.workflowId)
       : "";
+  const memberDraftWorkflowId =
+    route.mode === "existing"
+      ? resolveStudioMemberDraftWorkflowId(memberQuery.data)
+      : "";
+  const activeRouteDraftWorkflowId =
+    routeDraftWorkflowId || memberDraftWorkflowId;
   const shouldLoadPublishedWorkflow =
     route.mode === "existing" && route.workflowSource === "published";
   const workflowQueryKey = getTeamMemberWorkflowStudioWorkflowQueryKey(
     route.scopeId,
-    routeDraftWorkflowId,
+    activeRouteDraftWorkflowId,
     shouldLoadPublishedWorkflow ? "published" : "draft",
   );
   const workflowQuery = useQuery({
     enabled: Boolean(
       route.scopeId &&
-        routeDraftWorkflowId &&
+        activeRouteDraftWorkflowId &&
         !memberQuery.isLoading,
     ),
     queryKey: workflowQueryKey,
@@ -1172,16 +1298,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       shouldLoadPublishedWorkflow
         ? loadPublishedWorkflowWithDraftFallback({
             scopeId: route.scopeId,
-            workflowId: routeDraftWorkflowId,
+            workflowId: activeRouteDraftWorkflowId,
           })
-        : studioApi.getWorkflow(routeDraftWorkflowId, route.scopeId),
+        : studioApi.getWorkflow(activeRouteDraftWorkflowId, route.scopeId),
     staleTime: SAVED_WORKFLOW_QUERY_STALE_MS,
     retry: false,
   });
   const activeDraftWorkflowId =
     trimOptional(workflowQuery.data?.workflowId) ||
-    (route.mode === "existing" && routeDraftWorkflowId
-      ? routeDraftWorkflowId
+    (route.mode === "existing" && activeRouteDraftWorkflowId
+      ? activeRouteDraftWorkflowId
       : "");
   const teamMembersReturnHref = buildTeamDetailHref({
     memberId: route.memberId || undefined,
@@ -1207,7 +1333,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       "team-member-workflow-studio",
       "parse-yaml",
       route.scopeId,
-      workflowQuery.data?.workflowId ?? routeDraftWorkflowId,
+      workflowQuery.data?.workflowId ?? activeRouteDraftWorkflowId,
       workflowQuery.data?.yaml,
     ],
     queryFn: () =>
@@ -1236,11 +1362,47 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     routeFallbackTitle;
   const teamName =
     trimOptional(teamQuery.data?.displayName) || route.teamId || "Current team";
+  const memberHasCompletedBinding = hasCurrentCompletedMemberBinding(
+    memberQuery.data,
+  );
   const linkedWorkflowMissing =
     route.mode === "existing" &&
     !memberQuery.isLoading &&
-    (!routeDraftWorkflowId || workflowQuery.isError) &&
+    !activeRouteDraftWorkflowId &&
     Boolean(memberQuery.data);
+  const linkedWorkflowLoadFailed =
+    route.mode === "existing" &&
+    !memberQuery.isLoading &&
+    Boolean(activeRouteDraftWorkflowId) &&
+    workflowQuery.isError &&
+    Boolean(memberQuery.data);
+  const linkedWorkflowMissingDescription =
+    linkedWorkflowMissing && memberHasCompletedBinding
+      ? t(
+          "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription",
+          "This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.",
+        )
+      : t(
+          "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description",
+          "You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.",
+        );
+  const linkedWorkflowLoadFailureDescription = linkedWorkflowLoadFailed
+    ? t(
+        "teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description",
+        "Studio resolved draft workflow {workflowId}, but loading it failed: {reason}",
+        {
+          reason: describeWorkflowDraftLoadError(workflowQuery.error),
+          workflowId: activeRouteDraftWorkflowId,
+        },
+      )
+    : "";
+  const canCreateDraftForUnlinkedMember = Boolean(
+    linkedWorkflowMissing && !memberHasCompletedBinding,
+  );
+  const workflowDraftEditingBlocked = Boolean(
+    linkedWorkflowLoadFailed ||
+      (linkedWorkflowMissing && memberHasCompletedBinding),
+  );
   const sourceDocument =
     route.mode === "new"
       ? buildBlankWorkflowDocument("Untitled member")
@@ -1263,9 +1425,22 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         : linkedWorkflowMissing
           ? `missing:${route.scopeId}:${route.memberId}`
           : "";
+  latestSourceKeyRef.current = sourceKey;
+  const yamlEditBaseIsCurrent =
+    yamlEditBaseRevision === draftRevision &&
+    yamlEditBaseSourceKey === sourceKey;
+  const yamlEditHasConflict = Boolean(
+    yamlPanelOpen &&
+      yamlEditHasUnappliedChanges &&
+      !yamlEditBaseIsCurrent,
+  );
 
   React.useEffect(() => {
-    if (!sourceDocument || !sourceKey || sourceKeyRef.current === sourceKey) {
+    if (!sourceDocument || !sourceKey || appliedSourceKeyRef.current === sourceKey) {
+      return;
+    }
+
+    if (yamlEditHasUnappliedChanges && !confirmDiscardYamlEdits()) {
       return;
     }
 
@@ -1277,7 +1452,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       workflowSourceSignaturesMatch(sourceSignature, suppressedSourceSignature)
     ) {
       suppressedSourceSignatureRef.current = null;
-      sourceKeyRef.current = sourceKey;
+      appliedSourceKeyRef.current = sourceKey;
+      if (yamlPanelOpen && !yamlEditHasUnappliedChanges) {
+        setYamlEditBaseSourceKey(sourceKey);
+      }
       return;
     }
 
@@ -1288,7 +1466,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       workflowDraftTitle ||
       trimOptional(nextDocument.name) ||
       routeFallbackTitle;
-    sourceKeyRef.current = sourceKey;
+    appliedSourceKeyRef.current = sourceKey;
     setEditableDocument({
       ...nextDocument,
       name: nextTitle,
@@ -1298,17 +1476,28 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setSelectedEdgeId("");
     setSelectedNodeId("");
     closeDraftRunPanel();
-    setYamlImportPanelOpen(false);
-    setYamlImportError("");
+    yamlEditRequestIdRef.current += 1;
+    yamlEditValidationRequestIdRef.current += 1;
     setYamlPanelOpen(false);
-    setDirty(false);
+    setYamlEditOpening(false);
+    setYamlEditPending(false);
+    setYamlEditBufferState("");
+    setYamlEditSnapshot("");
+    setYamlEditDiagnostics([]);
+    setYamlEditError("");
+    setYamlEditParsedDocument(null);
+    setYamlEditValidatedBuffer("");
+    markDraftClean();
   }, [
+    markDraftClean,
     routeFallbackTitle,
     sourceDocument,
     sourceKey,
     workflowDraftTitle,
     workflowQuery.data?.layout,
     closeDraftRunPanel,
+    yamlPanelOpen,
+    yamlEditHasUnappliedChanges,
   ]);
 
   const graph = React.useMemo(
@@ -1363,8 +1552,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setEditableDocument(cloneWorkflowDocument(saved.document));
     setEditableLayout(saved.layout);
     setWorkflowTitleState(saved.title);
-    setDirty(false);
-  }, []);
+    markDraftClean();
+  }, [markDraftClean]);
   const cacheSavedWorkflowDraft = React.useCallback(
     (
       saved: SavedWorkflowDraft,
@@ -1411,8 +1600,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     (
       saved: SavedWorkflowDraft,
       sources?: readonly ("draft" | "published")[],
+      savedDraftRevision?: number,
     ) => {
       cacheSavedWorkflowDraft(saved, sources);
+
+      if (
+        typeof savedDraftRevision === "number" &&
+        draftRevisionRef.current !== savedDraftRevision
+      ) {
+        return;
+      }
 
       setEditableDocument((currentDocument) =>
         currentDocument
@@ -1425,10 +1622,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           : cloneWorkflowDocument(saved.document),
       );
       setWorkflowTitleState(saved.title);
-      setDirty(false);
+      markDraftClean();
     },
     [
       cacheSavedWorkflowDraft,
+      markDraftClean,
     ],
   );
   const renameExistingMemberFromTitle = React.useCallback(
@@ -1489,8 +1687,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         error instanceof Error ? error.message : "Failed to save workflow draft.",
       );
     },
-    onSuccess: (saved) => {
-      markSavedDraft(saved);
+    onSuccess: (saved, variables) => {
+      markSavedDraft(saved, undefined, variables.draftRevision);
       void message.success("Workflow draft saved.");
     },
   });
@@ -1515,8 +1713,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           : "Failed to save and publish workflow.",
       );
     },
-    onSuccess: ({ materializedWorkflow, savedDraft }) => {
-      markSavedDraft(savedDraft, ["published"]);
+    onSuccess: ({ materializedWorkflow, savedDraft }, variables) => {
+      markSavedDraft(savedDraft, ["published"], variables.draftRevision);
       void memberQuery.refetch();
       if (materializedWorkflow) {
         void message.success("Published workflow saved.");
@@ -1731,64 +1929,328 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       void message.success("Workflow draft saved.");
     },
   });
-  const pasteYamlMutation = useMutation({
-    mutationFn: async (yaml: string) => {
-      const normalizedYaml = yaml.trim();
-      if (!normalizedYaml) {
-        throw new Error("Paste workflow YAML before importing it.");
-      }
-
+  const parseYamlEditBuffer = React.useCallback(
+    async (yaml: string) => {
       const parsed = await studioApi.parseYaml({
-        yaml: normalizedYaml,
+        yaml,
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
       const parsedDocument = cloneWorkflowDocument(parsed.document);
       if (!parsedDocument) {
-        const findingMessage = parsed.findings
-          .map((finding) => finding.message)
-          .filter(Boolean)
-          .join(" ");
         throw new Error(
-          findingMessage ||
-            "The pasted YAML did not produce a workflow document.",
+          formatBlockingFindingsMessage(parsed.findings) ||
+            "The YAML did not produce a workflow document.",
         );
       }
 
-      return parsedDocument;
+      assertNoBlockingFindings(parsed.findings);
+      return {
+        document: parsedDocument,
+        findings: parsed.findings,
+      };
     },
-    onError: (error) => {
-      const errorMessage =
-        error instanceof Error ? error.message : "Failed to import workflow YAML.";
-      setYamlImportError(errorMessage);
-      void message.error(errorMessage);
-    },
-    onSuccess: (parsedDocument) => {
+    [],
+  );
+  const openYamlEditor = React.useCallback(async () => {
+    setSelectedEdgeId("");
+    setSelectedNodeId("");
+    setSelectedStepConfigurationError("");
+    closeDraftRunPanel();
+    setYamlEditError("");
+
+    if (!editableDocument) {
+      setYamlEditBufferState("");
+      setYamlEditSnapshot("");
+      setYamlEditDiagnostics([]);
+      setYamlEditParsedDocument(null);
+      setYamlEditValidatedBuffer("");
+      setYamlEditError("Load the workflow draft before editing YAML.");
+      setYamlPanelOpen(true);
+      return;
+    }
+
+    const normalizedTitle =
+      trimOptional(workflowTitle) ||
+      trimOptional(editableDocument.name) ||
+      routeFallbackTitle;
+    const requestId = yamlEditRequestIdRef.current + 1;
+    yamlEditRequestIdRef.current = requestId;
+    const baseRevision = draftRevisionRef.current;
+    const baseSourceKey = appliedSourceKeyRef.current;
+    const shouldResetEditor = !yamlPanelOpen;
+    yamlEditValidationRequestIdRef.current += 1;
+    setYamlEditOpening(true);
+    setYamlEditPending(false);
+    if (shouldResetEditor) {
+      setYamlEditBufferState("");
+      setYamlEditSnapshot("");
+      setYamlEditDiagnostics([]);
+      setYamlEditParsedDocument(null);
+      setYamlEditValidatedBuffer("");
+    }
+    setYamlEditBaseRevision(baseRevision);
+    setYamlEditBaseSourceKey(baseSourceKey);
+    setYamlPanelOpen(true);
+
+    try {
+      const serialized = await studioApi.serializeYaml({
+        document: {
+          ...editableDocument,
+          name: normalizedTitle,
+        },
+        availableStepTypes: AVAILABLE_STEP_TYPES,
+      });
+      if (yamlEditRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const serializedDocument =
+        cloneWorkflowDocument(serialized.document) ?? {
+          ...editableDocument,
+          name: normalizedTitle,
+        };
+      setYamlEditBufferState(serialized.yaml);
+      setYamlEditSnapshot(serialized.yaml);
+      setYamlEditDiagnostics([...(serialized.findings ?? [])]);
+      setYamlEditParsedDocument(serializedDocument);
+      setYamlEditValidatedBuffer(serialized.yaml);
+      setYamlEditBaseRevision(baseRevision);
+      setYamlEditBaseSourceKey(baseSourceKey);
+      setYamlEditError("");
+    } catch (error) {
+      if (yamlEditRequestIdRef.current === requestId) {
+        setYamlEditError(
+          error instanceof Error
+            ? error.message
+            : "Failed to build workflow YAML.",
+        );
+        setYamlPanelOpen(true);
+      }
+    } finally {
+      if (yamlEditRequestIdRef.current === requestId) {
+        setYamlEditOpening(false);
+      }
+    }
+  }, [
+    closeDraftRunPanel,
+    editableDocument,
+    routeFallbackTitle,
+    yamlPanelOpen,
+    workflowTitle,
+  ]);
+  React.useEffect(() => {
+    if (
+      !yamlPanelOpen ||
+      yamlEditHasUnappliedChanges ||
+      yamlEditOpening ||
+      yamlEditPending ||
+      yamlEditApplying ||
+      yamlEditBaseIsCurrent ||
+      yamlEditBaseSourceKey !== sourceKey
+    ) {
+      return;
+    }
+
+    void openYamlEditor();
+  }, [
+    openYamlEditor,
+    sourceKey,
+    yamlEditApplying,
+    yamlEditBaseIsCurrent,
+    yamlEditBaseSourceKey,
+    yamlEditHasUnappliedChanges,
+    yamlEditOpening,
+    yamlEditPending,
+    yamlPanelOpen,
+  ]);
+  const applyYamlEdit = React.useCallback(async () => {
+    if (yamlEditApplyingRef.current) {
+      return;
+    }
+
+    const yaml = yamlEditBuffer;
+    const baseIsCurrent = () =>
+      yamlEditBaseRevision === draftRevisionRef.current &&
+      yamlEditBaseSourceKey === latestSourceKeyRef.current;
+    if (!yaml.trim()) {
+      setYamlEditError("Enter workflow YAML before applying it to the draft.");
+      return;
+    }
+
+    if (!baseIsCurrent()) {
+      setYamlEditError(
+        "This YAML buffer was based on an older draft. Reopen Edit YAML from the current canvas before applying.",
+      );
+      return;
+    }
+
+    yamlEditApplyingRef.current = true;
+    setYamlEditApplying(true);
+    setYamlEditError("");
+
+    try {
+      const parsed =
+        yamlEditValidatedBuffer === yaml && yamlEditParsedDocument
+          ? {
+              document: yamlEditParsedDocument,
+              findings: yamlEditDiagnostics,
+            }
+          : await parseYamlEditBuffer(yaml);
+
+      assertNoBlockingFindings(parsed.findings);
+      const parsedDocument =
+        cloneWorkflowDocument(parsed.document) ?? parsed.document;
       const nextTitle =
         trimOptional(parsedDocument.name) ||
         trimOptional(workflowTitle) ||
         routeFallbackTitle;
-      const nextDocument: StudioWorkflowDocument = {
+      const documentWithTitle: StudioWorkflowDocument = {
         ...parsedDocument,
         name: nextTitle,
       };
+      const serialized = await studioApi.serializeYaml({
+        document: documentWithTitle,
+        availableStepTypes: AVAILABLE_STEP_TYPES,
+      });
+      assertNoBlockingFindings(serialized.findings);
+      if (!baseIsCurrent()) {
+        throw new Error(
+          "This YAML buffer was based on an older draft. Reopen Edit YAML from the current canvas before applying.",
+        );
+      }
+
+      const nextDocument =
+        cloneWorkflowDocument(serialized.document) ?? documentWithTitle;
       const nextGraph = buildStudioGraphElements(nextDocument, editableLayout);
-      setEditableDocument(nextDocument);
-      setEditableLayout(
-        buildStudioWorkflowLayout(nextTitle, nextGraph.nodes, editableLayout),
+      const nextLayout = buildStudioWorkflowLayout(
+        nextTitle,
+        nextGraph.nodes,
+        editableLayout,
       );
+      const nextRevision = markDraftDirty();
+
+      setEditableDocument(nextDocument);
+      setEditableLayout(nextLayout);
       setWorkflowTitleState(nextTitle);
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      closeDraftRunPanel();
-      setYamlImportPanelOpen(false);
-      setYamlImportError("");
-      setYamlPanelOpen(false);
       setNodeLibraryOpen(false);
-      setDirty(true);
-      void message.success("Workflow YAML imported.");
-    },
-  });
+      setYamlEditBufferState(serialized.yaml);
+      setYamlEditSnapshot(serialized.yaml);
+      setYamlEditDiagnostics([...(serialized.findings ?? [])]);
+      setYamlEditParsedDocument(nextDocument);
+      setYamlEditValidatedBuffer(serialized.yaml);
+      setYamlEditBaseRevision(nextRevision);
+      setYamlEditBaseSourceKey(latestSourceKeyRef.current);
+      void message.success("Workflow YAML applied to the draft.");
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to apply workflow YAML.";
+      setYamlEditError(errorMessage);
+      void message.error(errorMessage);
+    } finally {
+      yamlEditApplyingRef.current = false;
+      setYamlEditApplying(false);
+    }
+  }, [
+    editableLayout,
+    markDraftDirty,
+    parseYamlEditBuffer,
+    routeFallbackTitle,
+    workflowTitle,
+    yamlEditBuffer,
+    yamlEditBaseRevision,
+    yamlEditBaseSourceKey,
+    yamlEditDiagnostics,
+    yamlEditParsedDocument,
+    yamlEditValidatedBuffer,
+  ]);
+  React.useEffect(() => {
+    if (!yamlPanelOpen || yamlEditOpening) {
+      return;
+    }
+
+    const yaml = yamlEditBuffer;
+    const requestId = yamlEditValidationRequestIdRef.current + 1;
+    yamlEditValidationRequestIdRef.current = requestId;
+
+    if (!yaml.trim()) {
+      setYamlEditPending(false);
+      setYamlEditDiagnostics([
+        {
+          level: "error",
+          path: "/",
+          message: t(
+            "teamMemberWorkflowStudio.yamlPanel.emptyYaml",
+            "Workflow YAML is empty.",
+          ),
+          code: "empty_yaml",
+        },
+      ]);
+      setYamlEditParsedDocument(null);
+      setYamlEditValidatedBuffer(yaml);
+      return;
+    }
+
+    setYamlEditPending(true);
+    const timerId = window.setTimeout(() => {
+      void studioApi
+        .parseYaml({
+          yaml,
+          availableStepTypes: AVAILABLE_STEP_TYPES,
+        })
+        .then((parsed) => {
+          if (
+            yamlEditValidationRequestIdRef.current !== requestId ||
+            yamlEditBuffer !== yaml
+          ) {
+            return;
+          }
+
+          setYamlEditDiagnostics([...(parsed.findings ?? [])]);
+          setYamlEditParsedDocument(cloneWorkflowDocument(parsed.document));
+          setYamlEditValidatedBuffer(yaml);
+          setYamlEditError("");
+        })
+        .catch((error) => {
+          if (
+            yamlEditValidationRequestIdRef.current !== requestId ||
+            yamlEditBuffer !== yaml
+          ) {
+            return;
+          }
+
+          setYamlEditDiagnostics([
+            {
+              level: "error",
+              path: "/",
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to validate workflow YAML.",
+              code: "parse_failed",
+            },
+          ]);
+          setYamlEditParsedDocument(null);
+          setYamlEditValidatedBuffer(yaml);
+          setYamlEditError(
+            error instanceof Error
+              ? error.message
+              : "Failed to validate workflow YAML.",
+          );
+        })
+        .finally(() => {
+          if (yamlEditValidationRequestIdRef.current === requestId) {
+            setYamlEditPending(false);
+          }
+        });
+    }, YAML_EDIT_VALIDATE_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [yamlEditBuffer, yamlEditOpening, yamlPanelOpen]);
   const currentDraftRunMutation = useMutation({
     mutationFn: async ({
       document,
@@ -1809,6 +2271,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         },
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
+      assertNoBlockingFindings(serialized.findings);
       const startedAtUtc = new Date().toISOString();
       const executionScopeKey = trimOptional(route.memberId) || "current-workflow";
       const executionId = `draft-run:${executionScopeKey}:${Date.now().toString(36)}`;
@@ -1949,6 +2412,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         },
         availableStepTypes: AVAILABLE_STEP_TYPES,
       });
+      assertNoBlockingFindings(serialized.findings);
       await renameExistingMemberFromTitle(titleForPublish);
       const receipt = await studioApi.bindMemberWorkflow({
         scopeId: route.scopeId,
@@ -2002,8 +2466,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setPublishErrorVisible(true);
       setPublishBindingRun(null);
     },
-    onSuccess: ({ run, savedDraft }) => {
-      if (savedDraft) {
+    onSuccess: ({ run, savedDraft }, variables) => {
+      if (savedDraft && draftRevisionRef.current === variables.draftRevision) {
         applySavedDraft(savedDraft);
       }
       setPublishBindingRun(run);
@@ -2023,7 +2487,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const workflowLoading =
     route.mode === "existing" &&
     (memberQuery.isLoading ||
-      (routeDraftWorkflowId &&
+      (activeRouteDraftWorkflowId &&
         (workflowQuery.isLoading || parseQuery.isLoading)));
   const workflowHasSteps = Boolean(editableDocument?.steps?.length);
   const canCreateUnlinkedMemberDraft = Boolean(
@@ -2032,8 +2496,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       route.scopeId &&
       route.teamId &&
       route.memberId &&
-      !routeDraftWorkflowId &&
+      !activeRouteDraftWorkflowId &&
       editableDocument &&
+      canCreateDraftForUnlinkedMember &&
       dirty &&
       workflowHasSteps &&
       !selectedStepConfigurationError &&
@@ -2246,7 +2711,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     }
 
     const memberResult = await memberQuery.refetch();
-    if (routeDraftWorkflowId) {
+    if (activeRouteDraftWorkflowId) {
       await workflowQuery.refetch();
     }
 
@@ -2303,107 +2768,23 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     }
 
     void message.info("No published member status is visible yet.");
-  }, [memberQuery, route.memberId, route.mode, route.scopeId, routeDraftWorkflowId, workflowQuery]);
+  }, [activeRouteDraftWorkflowId, memberQuery, route.memberId, route.mode, route.scopeId, workflowQuery]);
   const executionStatus = currentDraftRunMutation.isPending
     ? "running"
     : resolveWorkflowExecutionStatus(executionDetail);
-  const serializeCurrentYaml = React.useCallback(async (options?: {
-    readonly force?: boolean;
-  }) => {
-    if (!editableDocument) {
-      yamlSourceSignatureRef.current = "";
-      yamlInFlightSignatureRef.current = "";
-      setCurrentYaml("");
-      setCurrentYamlError("Load the workflow draft before viewing YAML.");
-      setCurrentYamlPending(false);
-      return;
-    }
-
-    const normalizedTitle =
-      trimOptional(workflowTitle) ||
-      trimOptional(editableDocument.name) ||
-      routeFallbackTitle;
-    const sourceSignature = JSON.stringify({
-      document: {
-        ...editableDocument,
-        name: normalizedTitle,
-      },
-    });
-    if (
-      !options?.force &&
-      yamlSourceSignatureRef.current === sourceSignature &&
-      currentYaml.trim()
-    ) {
-      setCurrentYamlPending(false);
-      return;
-    }
-
-    if (
-      !options?.force &&
-      yamlInFlightSignatureRef.current === sourceSignature
-    ) {
-      return;
-    }
-
-    const requestId = yamlRequestIdRef.current + 1;
-    yamlRequestIdRef.current = requestId;
-    yamlInFlightSignatureRef.current = sourceSignature;
-    setCurrentYamlPending(true);
-    setCurrentYamlError("");
-
-    try {
-      const serialized = await studioApi.serializeYaml({
-        document: {
-          ...editableDocument,
-          name: normalizedTitle,
-        },
-        availableStepTypes: AVAILABLE_STEP_TYPES,
-      });
-      if (yamlRequestIdRef.current === requestId) {
-        yamlSourceSignatureRef.current = sourceSignature;
-        setCurrentYaml(serialized.yaml);
-        setCurrentYamlError("");
-      }
-    } catch (error) {
-      if (yamlRequestIdRef.current === requestId) {
-        setCurrentYamlError(
-          error instanceof Error
-            ? error.message
-            : "Failed to build workflow YAML.",
-        );
-      }
-    } finally {
-      if (yamlInFlightSignatureRef.current === sourceSignature) {
-        yamlInFlightSignatureRef.current = "";
-      }
-      if (yamlRequestIdRef.current === requestId) {
-        setCurrentYamlPending(false);
-      }
-    }
-  }, [
-    currentYaml,
-    editableDocument,
-    routeFallbackTitle,
-    workflowTitle,
-  ]);
-  React.useEffect(() => {
-    if (!yamlPanelOpen) {
-      return;
-    }
-
-    void serializeCurrentYaml();
-  }, [serializeCurrentYaml, yamlPanelOpen]);
   const canRunCurrentDraft = Boolean(
     route.scopeId &&
       editableDocument &&
       workflowHasSteps &&
       !selectedStepConfigurationError &&
+      !workflowDraftEditingBlocked &&
       !currentDraftRunMutation.isPending,
   );
   const canOpenDraftRunPanel = Boolean(
     route.scopeId &&
       editableDocument &&
       !selectedStepConfigurationError &&
+      !workflowDraftEditingBlocked &&
       !workflowLoading,
   );
   const currentDraftRunPlaceholderReason =
@@ -2417,8 +2798,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
             ? selectedStepConfigurationError
           : !workflowHasSteps
             ? "Add at least one step before running this workflow draft."
-            : linkedWorkflowMissing
+            : canCreateDraftForUnlinkedMember
               ? "Run the local draft sketch. Saving remains limited until a stable workflow draft is linked."
+              : workflowDraftEditingBlocked
+                ? "Resolve the linked workflow draft before running it."
               : route.mode === "new"
                 ? "Run the current unsaved workflow draft."
                 : "Run the current workflow draft.";
@@ -2437,12 +2820,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           ? "No changes to save."
         : selectedStepConfigurationError
           ? selectedStepConfigurationError
-        : linkedWorkflowMissing
+        : canCreateDraftForUnlinkedMember
           ? !workflowHasSteps
             ? "Add at least one step before saving a workflow draft."
-            : routeDraftWorkflowId
+            : activeRouteDraftWorkflowId
               ? "Load the workflow draft before saving."
               : "Save creates a reusable workflow draft for this editor."
+        : workflowDraftEditingBlocked
+          ? "Resolve the linked workflow draft before saving."
         : !workflowQuery.data
           ? "Load a workflow member before saving."
           : memberPublished
@@ -2506,10 +2891,18 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       ...(currentDocument ?? buildBlankWorkflowDocument(title || "Untitled member")),
       name: title,
     }));
-    setDirty(true);
-  }, []);
+    markDraftDirty();
+  }, [markDraftDirty]);
   const insertNode = React.useCallback(
     (stepType: string) => {
+      if (workflowDraftEditingBlocked) {
+        return;
+      }
+
+      if (!closeYamlPanelWithConfirmation()) {
+        return;
+      }
+
       const currentDocument =
         editableDocument ??
         buildBlankWorkflowDocument(trimOptional(workflowTitle) || "Untitled member");
@@ -2540,16 +2933,16 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setSelectedEdgeId("");
       setSelectedNodeId(result.nodeId);
       setNodeLibraryOpen(false);
-      setYamlImportPanelOpen(false);
-      setYamlPanelOpen(false);
-      setDirty(true);
+      markDraftDirty();
     },
     [
+      closeYamlPanelWithConfirmation,
       editableDocument,
       editableLayout,
       graph.roles,
       routeFallbackTitle,
       selectedNodeId,
+      workflowDraftEditingBlocked,
       workflowTitle,
     ],
   );
@@ -2573,9 +2966,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       setEditableDocument(result.document);
       setSelectedEdgeId("");
       setSelectedNodeId(result.nodeId);
-      setDirty(true);
+      markDraftDirty();
     },
-    [editableDocument],
+    [editableDocument, markDraftDirty],
   );
   const moveNodes = React.useCallback(
     (nodes: ReturnType<typeof buildStudioGraphElements>["nodes"]) => {
@@ -2585,9 +2978,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         editableLayout,
       );
       setEditableLayout(nextLayout);
-      setDirty(true);
+      markDraftDirty();
     },
-    [editableLayout, workflowTitle],
+    [editableLayout, markDraftDirty, workflowTitle],
   );
   const deleteSelectedNode = React.useCallback(() => {
     if (!editableDocument || !selectedNodeId) {
@@ -2603,8 +2996,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setEditableDocument(result.document);
     setSelectedEdgeId("");
     setSelectedNodeId(result.nodeId);
-    setDirty(true);
-  }, [editableDocument, selectedNodeId]);
+    markDraftDirty();
+  }, [editableDocument, markDraftDirty, selectedNodeId]);
   const deleteSelectedConnection = React.useCallback(() => {
     if (!editableDocument || !selectedEdgeId) {
       return;
@@ -2624,8 +3017,8 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setEditableDocument(result.document);
     setSelectedEdgeId("");
     setSelectedNodeId("");
-    setDirty(true);
-  }, [editableDocument, selectedEdgeId]);
+    markDraftDirty();
+  }, [editableDocument, markDraftDirty, selectedEdgeId]);
   const updateSelectedStepConfiguration = React.useCallback(
     (parametersText: string) => {
       if (!editableDocument || !selectedStepDraft) {
@@ -2645,7 +3038,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         setSelectedEdgeId("");
         setSelectedNodeId(result.nodeId);
         setSelectedStepConfigurationError("");
-        setDirty(true);
+        markDraftDirty();
       } catch (error) {
         setSelectedStepConfigurationError(
           error instanceof Error
@@ -2654,7 +3047,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         );
       }
     },
-    [editableDocument, selectedStepDraft],
+    [editableDocument, markDraftDirty, selectedStepDraft],
   );
   const selectExecutionLog = React.useCallback(
     (index: number | null) => {
@@ -2690,6 +3083,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       ) {
         publishMutation.mutate({
           document: editableDocument,
+          draftRevision: draftRevisionRef.current,
           layout:
             editableLayout ??
             buildStudioWorkflowLayout(workflowTitle, graph.nodes, workflowQuery.data.layout),
@@ -2709,62 +3103,72 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     showRefreshPublishStatus,
     backHref,
     navigateToTeam: () => {
-      if (!dirty || confirmDiscardUnsavedChanges()) {
+      if (
+        (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
+        (!dirty || confirmDiscardUnsavedChanges())
+      ) {
         history.push(teamHref);
       }
     },
     navigateToTeams: () => {
-      if (!dirty || confirmDiscardUnsavedChanges()) {
+      if (
+        (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
+        (!dirty || confirmDiscardUnsavedChanges())
+      ) {
         history.push(teamsHref);
       }
     },
     navigateToInvoke: () => {
-      if (canOpenInvoke && (!dirty || confirmDiscardUnsavedChanges())) {
+      if (
+        canOpenInvoke &&
+        (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
+        (!dirty || confirmDiscardUnsavedChanges())
+      ) {
         history.push(invokeHref);
       }
     },
     navigateToPublishedRuns: () => {
-      if (canOpenPublishedRuns && (!dirty || confirmDiscardUnsavedChanges())) {
+      if (
+        canOpenPublishedRuns &&
+        (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
+        (!dirty || confirmDiscardUnsavedChanges())
+      ) {
         history.push(publishedRunsHref);
       }
     },
     navigateToAutomations: () => {
-      if (canOpenAutomations && (!dirty || confirmDiscardUnsavedChanges())) {
+      if (
+        canOpenAutomations &&
+        (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
+        (!dirty || confirmDiscardUnsavedChanges())
+      ) {
         history.push(automationsHref);
       }
     },
-    pasteYaml: async (yaml: string) => {
-      await pasteYamlMutation.mutateAsync(yaml);
-    },
-    pasteYamlPending: pasteYamlMutation.isPending,
-    closeYamlImportPanel: () => {
-      if (!pasteYamlMutation.isPending) {
-        setYamlImportPanelOpen(false);
-        setYamlImportError("");
-      }
-    },
-    yamlImportError,
-    yamlImportPanelOpen,
     teamHref,
     teamsHref,
+    applyYamlEdit,
     canOpenDraftRunPanel,
     canRunCurrentDraft,
     canSave,
-    canViewYaml: Boolean(editableDocument && !workflowLoading),
+    canEditYaml: Boolean(
+      editableDocument && !workflowLoading && !workflowDraftEditingBlocked,
+    ),
     closeNodeLibrary: () => setNodeLibraryOpen(false),
-    closeYamlPanel: () => setYamlPanelOpen(false),
+    closeYamlPanel: () => {
+      closeYamlPanelWithConfirmation();
+    },
     connectNodes,
-    currentYaml,
-    currentYamlError,
-    currentYamlPending,
     deleteSelectedConnection,
     deleteSelectedNode,
     dirty,
     emptyDescription:
       route.mode === "new"
         ? "Build the draft locally first, then save it as a linked Team workflow member."
-        : linkedWorkflowMissing
-          ? "No workflow draft is linked to this member yet. Build or paste a workflow, then save to create a reusable draft."
+        : canCreateDraftForUnlinkedMember
+          ? "No workflow draft is linked to this member yet. Build or edit YAML, then save to create a reusable draft."
+          : workflowDraftEditingBlocked
+            ? "Resolve the linked workflow draft before editing this workflow."
           : "Start this workflow by adding the first step.",
     runCurrentDraft: () => {
       if (
@@ -2772,6 +3176,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         !editableDocument ||
         !workflowHasSteps ||
         selectedStepConfigurationError ||
+        workflowDraftEditingBlocked ||
         currentDraftRunMutation.isPending
       ) {
         return;
@@ -2825,55 +3230,53 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     graph: graphWithExecution,
     insertNode,
+    linkedWorkflowLoadFailed,
+    linkedWorkflowLoadFailureDescription,
     linkedWorkflowMissing,
+    linkedWorkflowMissingDescription,
     loading: Boolean(workflowLoading),
     mode: route.mode,
     moveNodes,
     navigateBack: () => {
-      if (!dirty || confirmDiscardUnsavedChanges()) {
+      if (
+        (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
+        (!dirty || confirmDiscardUnsavedChanges())
+      ) {
         history.push(backHref);
       }
     },
     nodeLibraryOpen,
-    openNodeLibrary: () => setNodeLibraryOpen(true),
+    openNodeLibrary: () => {
+      if (workflowDraftEditingBlocked) {
+        return;
+      }
+
+      if (closeYamlPanelWithConfirmation()) {
+        setNodeLibraryOpen(true);
+      }
+    },
     openDraftRunPanel: () => {
       if (!canOpenDraftRunPanel) {
+        return;
+      }
+
+      if (!closeYamlPanelWithConfirmation()) {
         return;
       }
 
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
-      setYamlImportPanelOpen(false);
-      setYamlImportError("");
-      setYamlPanelOpen(false);
       setDraftRunPanelOpen(true);
     },
-    openYamlImportPanel: () => {
-      setSelectedEdgeId("");
-      setSelectedNodeId("");
-      setSelectedStepConfigurationError("");
-      closeDraftRunPanel();
-      setYamlPanelOpen(false);
-      setYamlImportError("");
-      setYamlImportPanelOpen(true);
-    },
     openYamlPanel: () => {
-      setSelectedEdgeId("");
-      setSelectedNodeId("");
-      setSelectedStepConfigurationError("");
-      closeDraftRunPanel();
-      setYamlImportPanelOpen(false);
-      setYamlImportError("");
-      setYamlPanelOpen(true);
-    },
-    retryYaml: () => {
-      void serializeCurrentYaml({ force: true });
+      void openYamlEditor();
     },
     save: () => {
       if (route.mode === "new" && editableDocument) {
         createWorkflowMemberMutation.mutate({
           document: editableDocument,
+          draftRevision: draftRevisionRef.current,
           layout:
             editableLayout ??
             buildStudioWorkflowLayout(workflowTitle, graph.nodes),
@@ -2882,9 +3285,14 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         return;
       }
 
-      if (linkedWorkflowMissing && editableDocument && !routeDraftWorkflowId) {
+      if (
+        canCreateDraftForUnlinkedMember &&
+        editableDocument &&
+        !activeRouteDraftWorkflowId
+      ) {
         createUnlinkedMemberDraftMutation.mutate({
           document: editableDocument,
+          draftRevision: draftRevisionRef.current,
           layout:
             editableLayout ??
             buildStudioWorkflowLayout(workflowTitle, graph.nodes),
@@ -2898,6 +3306,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
 
         mutation.mutate({
           document: editableDocument,
+          draftRevision: draftRevisionRef.current,
           layout:
             editableLayout ??
             buildStudioWorkflowLayout(workflowTitle, graph.nodes, workflowQuery.data.layout),
@@ -2918,27 +3327,33 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     selectedStepDraft,
     selectedStepConfigurationError,
     selectCanvas: () => {
+      if (!closeYamlPanelWithConfirmation()) {
+        return;
+      }
+
       setSelectedEdgeId("");
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
       setActiveExecutionLogIndex(null);
       closeDraftRunPanel();
-      setYamlImportPanelOpen(false);
-      setYamlImportError("");
-      setYamlPanelOpen(false);
     },
     selectEdge: (edgeId: string) => {
+      if (!closeYamlPanelWithConfirmation()) {
+        return;
+      }
+
       setSelectedEdgeId(edgeId);
       setSelectedNodeId("");
       setSelectedStepConfigurationError("");
       setActiveExecutionLogIndex(null);
       closeDraftRunPanel();
-      setYamlImportPanelOpen(false);
-      setYamlImportError("");
-      setYamlPanelOpen(false);
     },
     selectExecutionLog,
     selectNode: (nodeId: string) => {
+      if (!closeYamlPanelWithConfirmation()) {
+        return;
+      }
+
       setSelectedEdgeId("");
       setSelectedNodeId(nodeId);
       setSelectedStepConfigurationError("");
@@ -2949,9 +3364,6 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           : null,
       );
       closeDraftRunPanel();
-      setYamlImportPanelOpen(false);
-      setYamlImportError("");
-      setYamlPanelOpen(false);
     },
     setExecutionRunMessage,
     setSelectedStepConfigurationError,
@@ -2959,6 +3371,31 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     teamName,
     updateSelectedStepConfiguration,
     workflowTitle,
+    setYamlEditBuffer: (yaml: string) => {
+      if (yamlEditApplyingRef.current) {
+        return;
+      }
+
+      setYamlEditBufferState(yaml);
+      setYamlEditError("");
+      setYamlEditDiagnostics([]);
+      setYamlEditPending(Boolean(yaml.trim()));
+      setYamlEditParsedDocument(null);
+      setYamlEditValidatedBuffer("");
+    },
+    yamlEditApplying,
+    yamlEditBuffer,
+    yamlEditDiagnostics,
+    yamlEditError:
+      yamlEditError ||
+      (yamlEditHasConflict
+        ? "This YAML buffer is stale because the canvas or source draft changed."
+        : ""),
+    yamlEditHasBlockingFindings,
+    yamlEditHasConflict,
+    yamlEditHasUnappliedChanges,
+    yamlEditOpening,
+    yamlEditPending,
     yamlPanelOpen,
   };
 }

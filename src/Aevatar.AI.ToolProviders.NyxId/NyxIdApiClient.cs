@@ -57,6 +57,21 @@ internal sealed record NyxIdApiErrorEnvelope(
     int? RawErrorCode,
     TimeSpan? RetryAfter);
 
+internal sealed record NyxIdProxyError(
+    int HttpStatus,
+    string ErrorKey,
+    int ErrorCode,
+    string Message)
+{
+    public bool IsAuthorizationRequired =>
+        (HttpStatus == 401 &&
+         ErrorCode == 1001 &&
+         string.Equals(ErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase)) ||
+        (HttpStatus == 403 &&
+         ErrorCode == 1002 &&
+         string.Equals(ErrorKey, "forbidden", StringComparison.OrdinalIgnoreCase));
+}
+
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
 public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 {
@@ -78,6 +93,48 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     private readonly ILogger _logger;
     private readonly bool _ownsHttpClient;
 
+    internal static bool TryParseProxyError(string? response, out NyxIdProxyError? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
+
+        try
+        {
+            using var outerDocument = JsonDocument.Parse(response);
+            var outer = outerDocument.RootElement;
+            if (outer.ValueKind != JsonValueKind.Object ||
+                !outer.TryGetProperty("error", out var errorMarker) ||
+                errorMarker.ValueKind != JsonValueKind.True ||
+                !outer.TryGetProperty("status", out var statusProperty) ||
+                !statusProperty.TryGetInt32(out var status) ||
+                !outer.TryGetProperty("body", out var bodyProperty) ||
+                bodyProperty.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var body = bodyProperty.GetString();
+            if (string.IsNullOrWhiteSpace(body))
+                return false;
+
+            using var bodyDocument = JsonDocument.Parse(body);
+            var bodyRoot = bodyDocument.RootElement;
+            var errorKey = TryGetString(bodyRoot, "error");
+            var errorCode = TryGetInt(bodyRoot, "error_code");
+            var message = TryGetString(bodyRoot, "message");
+            if (string.IsNullOrWhiteSpace(errorKey) || errorCode is null || message is null)
+                return false;
+
+            error = new NyxIdProxyError(status, errorKey, errorCode.Value, message);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     public NyxIdApiClient(
         NyxIdToolOptions options,
         HttpClient? httpClient = null,
@@ -97,7 +154,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> GetCurrentUserAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/users/me", ct);
 
-    // 06-20-observatory-admin-cross-scope: platform admin/operator-gated user search (email -> user id).
+    // Admin-gated user search (email -> user id).
     // Existing NyxID route; case-insensitive regex match on email. Returns {"users":[{id,email,role,...}],...}.
     public Task<string> SearchAdminUsersAsync(string token, string email, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/admin/users?search={Uri.EscapeDataString(email)}", ct);
@@ -206,7 +263,7 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         // sends, and HttpClient sends none by default, so without this every GitHub call lands
         // as 403 "Request forbidden by administrative rules". Inject a default for *all* proxy
         // targets — non-GitHub services don't care about UA either way, and pinning it at the
-        // proxy boundary means SkillRunner / agent-builder / preflight all benefit without
+        // proxy boundary means scheduled agents, agent-builder, and preflight all benefit without
         // every call site remembering to pass it.
         if (!callerSpecifiedUserAgent)
             request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
@@ -356,6 +413,18 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> ListApiKeysAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/api-keys", ct);
+
+    public Task<string> ListApiKeysAsync(
+        string token,
+        string organizationOwnerId,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(organizationOwnerId);
+        return GetAsync(
+            token,
+            "/api/v1/api-keys?org_id=" + Uri.EscapeDataString(organizationOwnerId.Trim()),
+            ct);
+    }
 
     public Task<string> CreateApiKeyAsync(string token, string requestBody, CancellationToken ct) =>
         PostAsync(token, "/api/v1/api-keys", requestBody, ct);

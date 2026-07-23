@@ -48,7 +48,7 @@ After `#308`, the supported production path is:
 
 Concretely:
 
-- supported provisioning is `register_lark_via_nyx`
+- supported provisioning is `register_channel_via_nyx` with an explicit `platform`
 - supported inbound webhook contract is Nyx relay ingress
 - supported reply contract is Nyx-backed reply delivery
 - registration contracts keep non-secret Nyx handles such as channel bot / api-key / route identifiers

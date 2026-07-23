@@ -7,6 +7,11 @@
     <RootNamespace>Aevatar.GAgentService.Abstractions</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.GAgentService.Application" />
+    <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
+    <InternalsVisibleTo Include="Aevatar.Studio.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.CQRS.Core.Abstractions\Aevatar.CQRS.Core.Abstractions.csproj" />
     <ProjectReference Include="..\..\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
@@ -30,6 +35,8 @@
     <Protobuf Include="Protos/service_serving.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_invocation_catalog.proto" GrpcServices="None" ProtoRoot="Protos" />
     <Protobuf Include="Protos/service_runs.proto" GrpcServices="None" ProtoRoot="Protos" />
-    <Protobuf Include="Protos/llm_sessions.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions" />
+    <Protobuf Include="Protos/llm_sessions.proto" GrpcServices="None" ProtoRoot="Protos" AdditionalImportDirs="..\..\Aevatar.AI.Abstractions;..\..\Aevatar.Foundation.VoicePresence.Abstractions;..\..\Aevatar.Foundation.Abstractions" />
+    <Protobuf Include="Protos/scheduled_invocation_authorization_evidence.proto" GrpcServices="None" ProtoRoot="Protos" />
+    <Protobuf Include="Protos/scheduled_invocation_authorization_plan.proto" GrpcServices="None" ProtoRoot="Protos" />
   </ItemGroup>
 </Project>

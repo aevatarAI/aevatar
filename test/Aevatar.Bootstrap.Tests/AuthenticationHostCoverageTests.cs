@@ -178,7 +178,7 @@ public class AuthenticationHostCoverageTests
                 new Claim("session_id", "session-1"),
                 new Claim("order_id", "order-1"),
             })
-            .Should().ContainSingle(c => c.Type == AevatarStandardClaimTypes.ScopeId && c.Value == "order-1");
+            .Should().BeEmpty("scope must come from a known claim, never an arbitrary *_id");
     }
 
     [Fact]

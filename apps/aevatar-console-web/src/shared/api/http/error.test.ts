@@ -1,4 +1,4 @@
-import { readResponseError } from "./error";
+import { readResponseError, readResponseErrorDetails } from "./error";
 
 describe("readResponseError", () => {
   it("includes ASP.NET validation problem details", async () => {
@@ -20,5 +20,23 @@ describe("readResponseError", () => {
     ).resolves.toBe(
       "One or more validation errors occurred.: $.serviceInvocation.payload.value: The JSON value could not be converted to Google.Protobuf.ByteString.",
     );
+  });
+
+  it("reads machine error codes from the backend error field", async () => {
+    await expect(
+      readResponseErrorDetails({
+        status: 502,
+        statusText: "Bad Gateway",
+        text: async () =>
+          JSON.stringify({
+            error: "issued_binding_invalid",
+            detail: "The issued binding could not be adopted.",
+          }),
+      }),
+    ).resolves.toEqual({
+      code: "issued_binding_invalid",
+      message: "issued_binding_invalid",
+      status: 502,
+    });
   });
 });

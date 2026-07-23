@@ -5,6 +5,7 @@ public sealed class NyxIdToolOptions
 {
     public const long DefaultProxyFileArtifactMaxBytes = 25L * 1024 * 1024;
     public const long HardProxyFileArtifactMaxBytes = 100L * 1024 * 1024;
+    public const string DefaultSandboxServiceSlug = "chrono-sandbox";
 
     /// <summary>
     /// The single default NyxID base URL (the identity/OIDC authority AND the proxy host — the
@@ -18,6 +19,13 @@ public sealed class NyxIdToolOptions
     public string? BaseUrl { get; set; } = DefaultBaseUrl;
 
     /// <summary>
+    /// NyxID service slug used by <c>code_execute</c>. Hosts that expose the
+    /// tool through a per-user OAuth binding must request this same service as
+    /// an RFC 8707 resource.
+    /// </summary>
+    public string SandboxServiceSlug { get; set; } = DefaultSandboxServiceSlug;
+
+    /// <summary>
     /// When <c>true</c>, expose the <c>ssh_exec</c> tool to the LLM. Off by default
     /// because <c>ssh_exec</c> can run arbitrary commands on a remote host: hosts
     /// without an approval middleware in their tool execution pipeline would let
@@ -26,6 +34,13 @@ public sealed class NyxIdToolOptions
     /// like the share-ops Lark bot) opt in by setting this to <c>true</c>.
     /// </summary>
     public bool EnableSshExecTool { get; set; }
+
+    /// <summary>
+    /// When <c>true</c>, expose the managed-sandbox target of <c>codex_exec</c>.
+    /// A matching <c>ICodexExecutionPort</c> must be registered by the host; endpoint,
+    /// image, credential, and admission policy remain operator-owned configuration.
+    /// </summary>
+    public bool EnableManagedCodexExecTool { get; set; }
 
     /// <summary>
     /// When <c>true</c>, <c>ssh_exec</c> returns <c>RequiresApproval=false</c> so the

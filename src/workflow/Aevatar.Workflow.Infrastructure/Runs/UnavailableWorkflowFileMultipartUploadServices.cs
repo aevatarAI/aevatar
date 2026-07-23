@@ -7,7 +7,7 @@ public sealed class UnavailableWorkflowFileMultipartUploadPolicyResolver
 {
     public ValueTask<WorkflowFileMultipartUploadPolicyResolution> ResolveAsync(
         WorkflowFileMultipartUploadCandidate candidate,
-        WorkflowFileRef descriptor,
+        FileArtifactRef descriptor,
         WorkflowFileMultipartUploadExecutionContext context,
         CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(WorkflowFileMultipartUploadPolicyResolution.Denied(

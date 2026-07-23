@@ -73,16 +73,17 @@ owner: eanzhao
 
 #### JSON Chat Input
 
-`application/json` body 是 `ChatInput`：
+`application/json` body is `HttpChatInput`:
 
 ```json
 {
   "prompt": "describe the release plan",
   "workflow": "direct",
-  "sessionId": "session-1",
-  "scopeId": "scope-1"
+  "sessionId": "session-1"
 }
 ```
+
+`scopeId` is resolved from the authenticated principal and must not be provided in the request body.
 
 常用 source 字段：
 
@@ -107,11 +108,10 @@ owner: eanzhao
 
 | Field | Meaning |
 |---|---|
-| `payload` | 可选 `ChatInput` JSON；不得包含 `inputParts[].inlineFile`、`inputParts[].fileRef` 或 `inputParts[].dataBase64`。 |
+| `payload` | Optional `HttpChatInput` JSON; must not contain `inputParts[].inlineFile`, `inputParts[].fileRef`, or `inputParts[].dataBase64`. |
 | `prompt` | 覆盖或补充 payload 中的 prompt。 |
 | `workflow` | 覆盖或补充 payload 中的 workflow name。 |
 | `sessionId` | 覆盖或补充 payload 中的 session id。 |
-| `scopeId` | 覆盖或补充 payload 中的 workflow scope id，同时传给 file ingress owner scope。 |
 | `workflowYaml` | legacy single inline YAML field。 |
 | `workflowYamls` | inline YAML bundle；同名 form field 可重复。 |
 

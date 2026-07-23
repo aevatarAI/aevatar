@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -177,6 +178,49 @@ public class NyxIdConnectedServiceToolSourceTests
         handler.ProxyRequests.Should().BeEmpty("a missing required path parameter must not reach the proxy");
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, "unauthorized", 1001, "NYXID_UNAUTHORIZED")]
+    [InlineData(HttpStatusCode.Forbidden, "forbidden", 1002, "NYXID_FORBIDDEN")]
+    public async Task ExecuteTool_AuthorizationError_ShouldCreateCredentialFreeTypedReceipt(
+        HttpStatusCode status,
+        string errorKey,
+        int errorCode,
+        string reasonCode)
+    {
+        var handler = new FakeNyxIdHandler
+        {
+            ProxyResponseFactory = () => new HttpResponseMessage(status)
+            {
+                Content = new StringContent(
+                    $$"""{"error":"{{errorKey}}","error_code":{{errorCode}},"message":"credential bearer-secret rejected"}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            },
+        };
+        handler.ServicesByToken["user-token"] = """[{ "slug": "api-shop", "id": "svc-1" }]""";
+        handler.SpecsByServiceId["svc-1"] = ShopSpec;
+        var (source, _) = CreateSource(handler);
+
+        using var _scope = PushContext("user-token");
+        var tool = (await source.DiscoverToolsAsync())
+            .Single(candidate => candidate.Name == "nyxid_api-shop__get_order");
+        var result = await tool.ExecuteAsync("""{ "orderId": "o-1" }""");
+        var receipt = tool.CreateResultReceipt(
+            "call-1",
+            tool.Name,
+            """{ "orderId": "o-1" }""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.AuthorizationRequired);
+        receipt.AuthorizationRequired.Should().NotBeNull();
+        receipt.AuthorizationRequired.ServiceSlug.Should().Be("api-shop");
+        receipt.AuthorizationRequired.ResourceUri.Should().Be("/orders/o-1");
+        receipt.AuthorizationRequired.ReasonCode.Should().Be(reasonCode);
+        receipt.AuthorizationRequired.SafeMessage.Should().NotBeNullOrWhiteSpace();
+        receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
+    }
+
     [Fact]
     public async Task DiscoverToolsAsync_ToolNameConflict_DropsDuplicate()
     {
@@ -260,6 +304,7 @@ public class NyxIdConnectedServiceToolSourceTests
         public Dictionary<string, string> SpecsByServiceId { get; } = new(StringComparer.Ordinal);
         public List<ProxyRequestRecord> ProxyRequests { get; } = [];
         public int DiscoveryRequests { get; private set; }
+        public Func<HttpResponseMessage>? ProxyResponseFactory { get; init; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -295,7 +340,7 @@ public class NyxIdConnectedServiceToolSourceTests
                         token));
                 }
 
-                return Json("""{ "ok": true }""");
+                return ProxyResponseFactory?.Invoke() ?? Json("""{ "ok": true }""");
             }
 
             return Json($$"""{ "error": "unexpected", "path": "{{path}}" }""");

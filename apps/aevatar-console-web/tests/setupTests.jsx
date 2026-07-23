@@ -4,6 +4,12 @@ import { TextDecoder, TextEncoder } from 'node:util';
 
 defaultConfig.hashed = false;
 
+// Browser auth tests run without deployment env injection in CI.
+process.env.NYXID_BASE_URL ??= 'https://nyx.test';
+process.env.NYXID_CLIENT_ID ??= 'console-test-client';
+process.env.NYXID_SCOPE ??=
+  'openid profile email offline_access urn:nyxid:scope:broker_binding proxy';
+
 // React 19 expects the test environment to opt into act-aware updates.
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 

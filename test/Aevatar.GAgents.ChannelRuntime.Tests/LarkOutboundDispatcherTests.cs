@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.Platform.Lark;
-using Aevatar.GAgents.Scheduled;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -175,6 +174,41 @@ public sealed class LarkOutboundDispatcherTests
         result.LarkCode.Should().Be(LarkBotErrorCodes.OpenIdCrossApp);
         result.Detail.Should().Contain("open_id cross app");
         handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task UpdateMessageAsync_ShouldPutMessageEdit()
+    {
+        var handler = new SequencedHandler(OkResponse);
+        var dispatcher = CreateDispatcher(handler);
+
+        var result = await dispatcher.UpdateMessageAsync(
+            new LarkUpdateMessageRequest(
+                "nyx-api-key",
+                "api-lark-bot",
+                "om_stream",
+                "text",
+                """{"text":"hello updated"}"""),
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(result.Detail);
+        result.MessageId.Should().Be("om_stream");
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Method.Method.Should().Be("PUT");
+        handler.Requests[0].RequestUri!.AbsolutePath
+            .Should().Be("/api/v1/proxy/s/api-lark-bot/open-apis/im/v1/messages/om_stream");
+
+        using var body = JsonDocument.Parse(handler.Bodies[0]!);
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+        body.RootElement.GetProperty("content").GetString().Should().Be("""{"text":"hello updated"}""");
+    }
+
+    [Fact]
+    public void LarkSendNewMessageRequest_UsesNyxApiKeySemanticName()
+    {
+        var request = CreateRequest();
+
+        request.NyxApiKey.Should().Be("nyx-api-key");
     }
 
     private static LarkOutboundDispatcher CreateDispatcher(HttpMessageHandler handler)

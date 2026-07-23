@@ -11,7 +11,7 @@ public sealed record WorkflowFileMultipartUploadExecutionContext(
     string IdempotencyKey);
 
 public sealed record WorkflowFileMultipartUploadCandidate(
-    WorkflowFileRef FileRef,
+    FileArtifactRef FileRef,
     string ServiceSlug,
     string Path,
     string Method,
@@ -87,7 +87,7 @@ public interface IWorkflowFileMultipartUploadPolicyResolver
 {
     ValueTask<WorkflowFileMultipartUploadPolicyResolution> ResolveAsync(
         WorkflowFileMultipartUploadCandidate candidate,
-        WorkflowFileRef descriptor,
+        FileArtifactRef descriptor,
         WorkflowFileMultipartUploadExecutionContext context,
         CancellationToken cancellationToken = default);
 }

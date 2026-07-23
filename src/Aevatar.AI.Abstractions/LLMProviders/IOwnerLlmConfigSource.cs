@@ -3,7 +3,7 @@ namespace Aevatar.AI.Abstractions.LLMProviders;
 /// <summary>
 /// Narrow port for reading the bot owner's pre-configured LLM model + route + max-tool-rounds
 /// before pinning them onto outbound LLM request metadata. Both scheduled agents
-/// (SkillRunnerGAgent, WorkflowAgentGAgent) and channel-bot turn runners (NyxidChat) consume
+/// scheduled workflow agents and channel-bot turn runners (NyxidChat) consume
 /// this contract via <see cref="OwnerLlmConfigApplier"/>; the host (Mainnet, CLI, demos)
 /// supplies the implementation by bridging whichever upstream config store it composes
 /// (typically <c>IUserConfigQueryPort</c> from the Studio.Application package). Lives in the

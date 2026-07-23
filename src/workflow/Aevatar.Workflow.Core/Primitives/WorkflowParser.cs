@@ -5,7 +5,9 @@
 
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
+using YamlDotNet.RepresentationModel;
 using Aevatar.Foundation.Abstractions.Interactions;
+using Aevatar.Workflow.Abstractions.Workflows;
 using Aevatar.Workflow.Core.Agreement;
 using System.Collections;
 using System.Globalization;
@@ -83,6 +85,7 @@ public sealed class WorkflowParser
     /// <exception cref="InvalidOperationException">YAML 为空或缺少必填字段时抛出。</exception>
     public WorkflowDefinition Parse(string yaml)
     {
+        ValidateRootSchema(yaml);
         var raw = D.Deserialize<Raw>(yaml) ?? throw new InvalidOperationException("YAML 为空");
         return new WorkflowDefinition
         {
@@ -97,6 +100,29 @@ public sealed class WorkflowParser
             },
             OnFailure = MapOnFailure(raw.OnFailure),
         };
+    }
+
+    private static void ValidateRootSchema(string yaml)
+    {
+        YamlStream stream = new();
+        using var reader = new StringReader(yaml);
+        stream.Load(reader);
+
+        if (stream.Documents.Count == 0)
+            return;
+
+        if (stream.Documents[0].RootNode is not YamlMappingNode root)
+            return;
+
+        foreach (var key in root.Children.Keys.OfType<YamlScalarNode>())
+        {
+            var rootField = key.Value;
+            if (WorkflowYamlRootSchema.IsAcceptedRootField(rootField))
+                continue;
+
+            throw new InvalidOperationException(
+                $"Unsupported workflow YAML root field '{rootField}'. Allowed root fields: {WorkflowYamlRootSchema.FormatAcceptedRootFields()}.");
+        }
     }
 
     private static RoleDefinition MapRole(RawRole role)
@@ -168,6 +194,7 @@ public sealed class WorkflowParser
             AgentToolScope = agentToolScope,
             HumanApprovalOptions = MapHumanApprovalOptions(canonicalType, parameters),
             ExternalApprovalOptions = MapExternalApprovalOptions(canonicalType, parameters),
+            ConnectorApprovalOptions = MapConnectorApprovalOptions(canonicalType, parameters),
             Next = s.Next,
             Compensation = NormalizeText(s.Compensation),
             Children = s.Children?.Select(MapStep).ToList(),
@@ -1020,6 +1047,58 @@ public sealed class WorkflowParser
             RequestId = GetParameter(parameters, "external_approval.request_id", "request_id").Trim(),
         };
     }
+
+    private static ConnectorApprovalOptionsDefinition? MapConnectorApprovalOptions(
+        string canonicalType,
+        IReadOnlyDictionary<string, string> parameters)
+    {
+        if (canonicalType is not ("connector_call" or "secure_connector_call"))
+            return null;
+
+        var policy = NormalizeEnumToken(GetParameter(
+            parameters,
+            "approval.policy",
+            "approval_policy",
+            "approval_required"));
+        if (policy is not ("required" or "always" or "true"))
+            return null;
+
+        var expirationSeconds = ParseNonNegativeInt(GetParameter(
+            parameters,
+            "approval.expiration_seconds",
+            "approval_expiration_seconds"));
+        var statusCheckIntervalSeconds = ParseNonNegativeInt(GetParameter(
+            parameters,
+            "approval.status_check_interval_seconds",
+            "approval_status_check_interval_seconds"));
+
+        return new ConnectorApprovalOptionsDefinition
+        {
+            ServiceRef = GetParameter(parameters, "approval.service_ref", "approval_service_ref").Trim(),
+            NodeId = GetParameter(parameters, "approval.node_id", "approval_node_id").Trim(),
+            HttpVerb = GetParameter(parameters, "approval.http_verb", "approval_http_verb").Trim(),
+            Resource = GetParameter(parameters, "approval.resource", "approval_resource").Trim(),
+            PermissionScope = GetParameter(parameters, "approval.permission_scope", "approval_permission_scope").Trim(),
+            ExpirationSeconds = expirationSeconds,
+            StatusCheckIntervalSeconds = statusCheckIntervalSeconds == 0
+                ? ConnectorApprovalOptionsDefinition.DefaultStatusCheckIntervalSeconds
+                : statusCheckIntervalSeconds,
+            Destructive = ParseBool(GetParameter(parameters, "approval.destructive", "approval_destructive")),
+            TeamId = GetParameter(parameters, "approval.team_id", "approval_team_id").Trim(),
+            MemberId = GetParameter(parameters, "approval.member_id", "approval_member_id").Trim(),
+            WorkflowId = GetParameter(parameters, "approval.workflow_id", "approval_workflow_id").Trim(),
+            PublishedServiceId = GetParameter(
+                parameters,
+                "approval.published_service_id",
+                "approval_published_service_id").Trim(),
+            PolicyReason = GetParameter(parameters, "approval.policy_reason", "approval_policy_reason").Trim(),
+        };
+    }
+
+    private static int ParseNonNegativeInt(string? value) =>
+        int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
+            ? parsed
+            : 0;
 
     private static TransformOperationKind ParseTransformOperationKind(string? value) =>
         NormalizeEnumToken(value) switch

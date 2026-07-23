@@ -5,7 +5,6 @@ import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPa
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
-import WorkflowStudioPasteYamlPanel from "./components/WorkflowStudioPasteYamlPanel";
 import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioYamlPanel from "./components/WorkflowStudioYamlPanel";
 import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
@@ -57,8 +56,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
   const [executionPanelHeight, setExecutionPanelHeight] = React.useState(
     EXECUTION_PANEL_DEFAULT_HEIGHT,
   );
-  const sidePanelOpen =
-    studio.draftRunPanelOpen || studio.yamlImportPanelOpen || studio.yamlPanelOpen;
+  const sidePanelOpen = studio.draftRunPanelOpen || studio.yamlPanelOpen;
   const executionPanelOpen = Boolean(studio.executionDetail || studio.executionError);
 
   React.useEffect(
@@ -247,7 +245,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         showRefreshPublishStatus={studio.showRefreshPublishStatus}
         canOpenDraftRunPanel={studio.canOpenDraftRunPanel}
         canSave={studio.canSave}
-        canViewYaml={studio.canViewYaml}
+        canEditYaml={studio.canEditYaml}
         dirty={studio.dirty}
         currentDraftRunPlaceholderReason={studio.currentDraftRunPlaceholderReason}
         onOpenAutomations={studio.navigateToAutomations}
@@ -259,14 +257,12 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         onDeleteConnection={studio.deleteSelectedConnection}
         onDeleteNode={studio.deleteSelectedNode}
         onOpenDraftRunPanel={studio.openDraftRunPanel}
-        onOpenPasteYaml={studio.openYamlImportPanel}
-        onViewYaml={studio.openYamlPanel}
+        onEditYaml={studio.openYamlPanel}
         onNavigateBack={studio.navigateBack}
         onNavigateToTeam={studio.navigateToTeam}
         onNavigateToTeams={studio.navigateToTeams}
         onSave={studio.save}
         onTitleChange={studio.setWorkflowTitle}
-        pasteYamlPending={studio.pasteYamlPending}
         savePending={studio.savePending}
         savePlaceholderReason={studio.savePlaceholderReason}
         selectedEdgeId={studio.selectedEdgeId}
@@ -283,11 +279,19 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title",
             "No workflow draft is linked to this member yet.",
           )}
-          description={t(
-            "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description",
-            "You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.",
-          )}
+          description={studio.linkedWorkflowMissingDescription}
           type="warning"
+        />
+      ) : null}
+      {studio.linkedWorkflowLoadFailed ? (
+        <Alert
+          banner
+          message={t(
+            "teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title",
+            "Workflow draft could not be loaded.",
+          )}
+          description={studio.linkedWorkflowLoadFailureDescription}
+          type="error"
         />
       ) : null}
       <section
@@ -388,25 +392,23 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           runMessage={studio.executionRunMessage}
           width={sidePanelWidth}
         />
-        <WorkflowStudioPasteYamlPanel
-          error={studio.yamlImportError}
-          onClose={studio.closeYamlImportPanel}
-          onImport={studio.pasteYaml}
-          open={studio.yamlImportPanelOpen}
-          pending={studio.pasteYamlPending}
-          width={sidePanelWidth}
-        />
         <WorkflowStudioYamlPanel
-          error={studio.currentYamlError}
-          loading={studio.currentYamlPending}
+          applying={studio.yamlEditApplying}
+          buffer={studio.yamlEditBuffer}
+          diagnostics={studio.yamlEditDiagnostics}
+          error={studio.yamlEditError}
+          hasBlockingFindings={studio.yamlEditHasBlockingFindings}
+          hasConflict={studio.yamlEditHasConflict}
+          hasUnappliedChanges={studio.yamlEditHasUnappliedChanges}
+          editorLoading={studio.yamlEditOpening}
+          loading={studio.yamlEditOpening || studio.yamlEditPending}
+          onApply={studio.applyYamlEdit}
+          onBufferChange={studio.setYamlEditBuffer}
           onClose={studio.closeYamlPanel}
-          onRetry={studio.retryYaml}
           open={studio.yamlPanelOpen}
           width={sidePanelWidth}
-          yaml={studio.currentYaml}
         />
         {studio.draftRunPanelOpen ||
-        studio.yamlImportPanelOpen ||
         studio.yamlPanelOpen ? null : (
           <WorkflowStudioNodeDetailPanel
             error={studio.selectedStepConfigurationError}

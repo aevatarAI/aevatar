@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.Configuration;
 using Aevatar.Workflow.Application.DependencyInjection;
 using Aevatar.Workflow.Core;
@@ -44,7 +45,12 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.AddWorkflowApplication();
         services.AddWorkflowScheduleExtensions();
         services.AddOptions<WorkflowWebhookIngressOptions>()
-            .Bind(configuration.GetSection(WorkflowWebhookIngressOptions.SectionName));
+            .Bind(configuration.GetSection(WorkflowWebhookIngressOptions.SectionName))
+            .Validate(
+                static options => !options.Enabled
+                    || options.Bindings.All(static binding => HasSufficientHmacSecret(binding.HmacSecret)),
+                $"Every enabled {WorkflowWebhookIngressOptions.SectionName} binding must configure an HMAC secret of at least {MinHmacSecretByteLength} UTF-8 bytes.")
+            .ValidateOnStart();
         services.AddOptions<WorkflowMultipartFileIngressOptions>()
             .Bind(configuration.GetSection(WorkflowMultipartFileIngressOptions.SectionName));
         services.AddOptions<WorkflowFormFileIngressOptions>()
@@ -52,7 +58,12 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.TryAddSingleton<WorkflowMultipartFileInputParser>();
         services.TryAddSingleton<WorkflowMultipartChatRequestParser>();
         services.AddOptions<WorkflowExternalApprovalCallbackOptions>()
-            .Bind(configuration.GetSection(WorkflowExternalApprovalCallbackOptions.SectionName));
+            .Bind(configuration.GetSection(WorkflowExternalApprovalCallbackOptions.SectionName))
+            .Validate(
+                static options => !options.Enabled
+                    || options.Bindings.All(static binding => HasSufficientHmacSecret(binding.HmacSecret)),
+                $"Every enabled {WorkflowExternalApprovalCallbackOptions.SectionName} binding must configure an HMAC secret of at least {MinHmacSecretByteLength} UTF-8 bytes.")
+            .ValidateOnStart();
         services.TryAddSingleton<WorkflowWebhookIngressRequestBuilder>();
         services.TryAddSingleton<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowWebhookReplayAdmissionPort, WorkflowWebhookReplayAdmissionPort>();
         var webhookReplayRedisConnectionString = configuration[$"{WorkflowWebhookIngressOptions.SectionName}:RedisConnectionString"];
@@ -78,6 +89,18 @@ public static class WorkflowCapabilityServiceCollectionExtensions
             configuration);
         services.TryAddSingleton<WorkflowCapabilityRegistrationsMarker>();
         return services;
+    }
+
+    internal const int MinHmacSecretByteLength = 32;
+
+    private static bool HasSufficientHmacSecret(string? hmacSecret)
+    {
+        if (string.IsNullOrWhiteSpace(hmacSecret))
+        {
+            return false;
+        }
+
+        return Encoding.UTF8.GetByteCount(hmacSecret.Trim()) >= MinHmacSecretByteLength;
     }
 
     public sealed class WorkflowCapabilityRegistrationsMarker;

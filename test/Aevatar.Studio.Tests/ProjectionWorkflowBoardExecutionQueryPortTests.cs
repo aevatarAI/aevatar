@@ -56,6 +56,7 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
                     RunningNodes = 1,
                     WaitingOrPendingNodes = 1,
                     FailedNodes = 1,
+                    DefinitionStepCount = 15,
                 },
                 NodeEntries =
                 {
@@ -116,7 +117,7 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
             .Which.NodeId.Should().Be("node-failed");
         snapshot.LastNodeUpdatedAt.Should().Be(DateTimeOffset.Parse("2026-06-24T13:20:00Z"));
         snapshot.ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Running);
-        snapshot.Summary.Should().Be(new WorkflowBoardExecutionSummary(1, 1, 1, 1));
+        snapshot.Summary.Should().Be(new WorkflowBoardExecutionSummary(1, 1, 1, 1, 15));
         snapshot.Revision.Should().Be("state-version-9:event-evt-9");
     }
 
@@ -143,6 +144,7 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
                     RunningNodes = 0,
                     WaitingOrPendingNodes = 1,
                     FailedNodes = 0,
+                    DefinitionStepCount = 15,
                 },
                 NodeEntries =
                 {
@@ -179,7 +181,7 @@ public sealed class ProjectionWorkflowBoardExecutionQueryPortTests
         snapshot.PendingNodes.Should().ContainSingle()
             .Which.NodeId.Should().Be("wait_for_board_signal");
         snapshot.ExecutionStatus.Should().Be(WorkflowBoardMemberExecutionStatus.Waiting);
-        snapshot.Summary.Should().Be(new WorkflowBoardExecutionSummary(0, 0, 1, 0));
+        snapshot.Summary.Should().Be(new WorkflowBoardExecutionSummary(0, 0, 1, 0, 15));
         serviceRuns.Queries.Should().ContainSingle()
             .Which.Should().Be(new ServiceRunQuery("scope-alpha", "svc-alpha", 1));
     }

@@ -14,6 +14,8 @@ public sealed record AgentToolExecutionContext(
     LLMRequestRoutingContext Routing,
     AgentToolConnectedServicesContext ConnectedServices,
     AgentWorkflowRuntimeContext WorkflowRuntime,
+    AgentToolScheduleContext Schedule,
+    AgentToolCredentialSource CredentialSource,
     AgentSkillRecoveryContext SkillRecovery,
     IReadOnlyDictionary<string, string> ExternalMetadata)
 {
@@ -36,12 +38,44 @@ public sealed record AgentToolExecutionContext(
             Routing,
             ConnectedServices,
             AgentWorkflowRuntimeContext.Empty,
+            AgentToolScheduleContext.Empty,
+            AgentToolCredentialSource.Unspecified,
+            SkillRecovery,
+            ExternalMetadata)
+    {
+    }
+
+    public AgentToolExecutionContext(
+        AgentToolRequestIdentity Request,
+        AgentToolCredentials Credentials,
+        AgentToolCallerContext Caller,
+        AgentToolChannelContext Channel,
+        AgentToolSenderBindingContext SenderBinding,
+        LLMRequestRoutingContext Routing,
+        AgentToolConnectedServicesContext ConnectedServices,
+        AgentWorkflowRuntimeContext WorkflowRuntime,
+        AgentSkillRecoveryContext SkillRecovery,
+        IReadOnlyDictionary<string, string> ExternalMetadata)
+        : this(
+            Request,
+            Credentials,
+            Caller,
+            Channel,
+            SenderBinding,
+            Routing,
+            ConnectedServices,
+            WorkflowRuntime,
+            AgentToolScheduleContext.Empty,
+            AgentToolCredentialSource.Unspecified,
             SkillRecovery,
             ExternalMetadata)
     {
     }
 
     public AgentToolVisibilityScope ToolVisibility { get; init; } = AgentToolVisibilityScope.Unrestricted;
+
+    public AgentToolNyxIdAuthorityContext NyxIdAuthority { get; init; } =
+        AgentToolNyxIdAuthorityContext.Empty;
 
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
@@ -52,6 +86,8 @@ public sealed record AgentToolExecutionContext(
         LLMRequestRoutingContext.Empty,
         AgentToolConnectedServicesContext.Empty,
         AgentWorkflowRuntimeContext.Empty,
+        AgentToolScheduleContext.Empty,
+        AgentToolCredentialSource.Unspecified,
         AgentSkillRecoveryContext.Empty,
         new Dictionary<string, string>(StringComparer.Ordinal));
 
@@ -111,9 +147,32 @@ public sealed record AgentToolCredentials(
     public static AgentToolCredentials Empty { get; } = new(null, null, null);
 }
 
-public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubject, string? ResponseId)
+public enum AgentToolCredentialSource
+{
+    Unspecified = 0,
+    NyxIdAssertion = 1,
+    BearerToken = 2,
+    ChannelRegistration = 3,
+    ScheduledRun = 4,
+    System = 5,
+    ServiceAccount = 6,
+}
+
+public sealed record AgentToolCallerContext(string? ScopeId, string? OwnerSubject, string? ResponseId, string? OwnerScopeId = null)
 {
     public static AgentToolCallerContext Empty { get; } = new(null, null, null);
+}
+
+public sealed record AgentToolNyxIdAuthorityContext(
+    string? Platform,
+    string? Tenant,
+    string? ExternalUserId)
+{
+    public static AgentToolNyxIdAuthorityContext Empty { get; } = new(null, null, null);
+
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(Platform) &&
+        !string.IsNullOrWhiteSpace(ExternalUserId);
 }
 
 public sealed record AgentToolChannelContext(
@@ -123,9 +182,10 @@ public sealed record AgentToolChannelContext(
     string? MessageId,
     string? PlatformMessageId,
     string? DeliveryTargetId = null,
-    string? DurableReplyCredentialRef = null)
+    ChannelWorkflowResultDeliveryCredential? WorkflowResultDeliveryCredential = null,
+    string? BotRegistrationId = null)
 {
-    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null);
+    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null);
 }
 
 public sealed record AgentToolSenderBindingContext(string? BindingId, string? NyxUserId = null, string? SenderTenant = null)
@@ -151,6 +211,11 @@ public sealed record AgentWorkflowRuntimeContext(
         !string.IsNullOrWhiteSpace(ParentActorId) &&
         !string.IsNullOrWhiteSpace(ParentRunId) &&
         !string.IsNullOrWhiteSpace(ParentStepId);
+}
+
+public sealed record AgentToolScheduleContext(string? ScheduleId)
+{
+    public static AgentToolScheduleContext Empty { get; } = new((string?)null);
 }
 
 public sealed record AgentSkillRecoveryContext(

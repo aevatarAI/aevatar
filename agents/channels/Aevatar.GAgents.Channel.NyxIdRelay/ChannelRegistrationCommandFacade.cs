@@ -143,7 +143,8 @@ public sealed record ChannelRelayRegistrationRequest(
     string Label,
     string NyxProviderSlug,
     NyxChannelLarkCredentials? Lark = null,
-    IReadOnlyDictionary<string, string>? Credentials = null)
+    IReadOnlyDictionary<string, string>? Credentials = null,
+    string DefaultSkillName = "")
 {
     public NyxChannelBotProvisioningRequest ToProvisioningRequest(string platform)
     {
@@ -158,7 +159,8 @@ public sealed record ChannelRelayRegistrationRequest(
             Label: Label,
             NyxProviderSlug: NyxProviderSlug,
             Lark: Lark,
-            Credentials: Credentials);
+            Credentials: Credentials,
+            DefaultSkillName: DefaultSkillName);
     }
 }
 

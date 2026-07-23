@@ -7,26 +7,32 @@ namespace Aevatar.Workflow.Infrastructure.CapabilityApi;
 internal sealed class WorkflowMultipartChatRequestParser
 {
     private readonly WorkflowMultipartFileInputParser _fileInputParser;
-    private readonly IWorkflowFileIngressPort _fileIngressPort;
+    private readonly IFileArtifactIngressPort _fileIngressPort;
 
     public WorkflowMultipartChatRequestParser(
         WorkflowMultipartFileInputParser fileInputParser,
-        IWorkflowFileIngressPort fileIngressPort)
+        IFileArtifactIngressPort fileIngressPort)
     {
         _fileInputParser = fileInputParser;
         _fileIngressPort = fileIngressPort;
     }
 
     internal WorkflowMultipartChatRequestParser(
-        IWorkflowFileIngressPort fileIngressPort,
+        IFileArtifactIngressPort fileIngressPort,
         Microsoft.Extensions.Options.IOptions<WorkflowMultipartFileIngressOptions> multipartOptions,
         Microsoft.Extensions.Options.IOptions<WorkflowFormFileIngressOptions>? formOptions = null)
         : this(new WorkflowMultipartFileInputParser(multipartOptions, formOptions), fileIngressPort)
     {
     }
 
+    public ValueTask<WorkflowMultipartChatRequestParseResult> ParseAsync(
+        HttpContext http,
+        CancellationToken cancellationToken = default) =>
+        ParseAsync(http, ownerScopeId: null, cancellationToken);
+
     public async ValueTask<WorkflowMultipartChatRequestParseResult> ParseAsync(
         HttpContext http,
+        string? ownerScopeId = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(http);
@@ -44,19 +50,24 @@ internal sealed class WorkflowMultipartChatRequestParser
         if (!payloadResult.Succeeded)
             return WorkflowMultipartChatRequestParseResult.Failed(payloadResult.Error!.Value);
 
-        var source = payloadResult.Input ?? new ChatInput();
+        var source = payloadResult.Input ?? new HttpChatInput();
         if (ContainsActorFacingFilePayload(source))
             return WorkflowMultipartChatRequestParseResult.Failed(WorkflowMultipartChatRequestParseError.InvalidFileInput);
 
-        var ownerScopeId = form.ResolveScalar("scopeId");
+        if (form.ResolveScalar("scopeId") != null)
+            return WorkflowMultipartChatRequestParseResult.Failed(WorkflowMultipartChatRequestParseError.InvalidRequest);
+
+        var normalizedOwnerScopeId = string.IsNullOrWhiteSpace(ownerScopeId)
+            ? null
+            : ownerScopeId.Trim();
         var inputParts = new List<ChatInputContentPart>(source.InputParts ?? []);
         foreach (var file in form.PendingFiles)
         {
-            WorkflowFileIngressResult ingressResult;
+            FileArtifactIngressResult ingressResult;
             try
             {
                 ingressResult = await _fileIngressPort.IngestAsync(
-                    WorkflowMultipartFileInputParser.BuildIngressRequest(file, ownerScopeId),
+                    WorkflowMultipartFileInputParser.BuildIngressRequest(file, normalizedOwnerScopeId),
                     cancellationToken);
             }
             catch (ArgumentException)
@@ -83,7 +94,6 @@ internal sealed class WorkflowMultipartChatRequestParser
             Prompt = form.ResolveScalar("prompt") ?? source.Prompt,
             Workflow = form.ResolveScalar("workflow") ?? source.Workflow,
             SessionId = form.ResolveScalar("sessionId") ?? source.SessionId,
-            ScopeId = ownerScopeId ?? source.ScopeId,
             WorkflowYaml = form.ResolveScalar("workflowYaml") ?? source.WorkflowYaml,
             WorkflowYamls = form.ResolveRepeatedScalars("workflowYamls") ?? source.WorkflowYamls,
             InputParts = inputParts,
@@ -98,7 +108,7 @@ internal sealed class WorkflowMultipartChatRequestParser
         try
         {
             return PayloadParseResult.Success(
-                JsonSerializer.Deserialize<ChatInput>(payload, ChatWebSocketProtocol.JsonOptions));
+                JsonSerializer.Deserialize<HttpChatInput>(payload, ChatWebSocketProtocol.JsonOptions));
         }
         catch (JsonException)
         {
@@ -106,7 +116,7 @@ internal sealed class WorkflowMultipartChatRequestParser
         }
     }
 
-    private static bool ContainsActorFacingFilePayload(ChatInput input) =>
+    private static bool ContainsActorFacingFilePayload(HttpChatInput input) =>
         input.InputParts?.Any(static part =>
             part.DataBase64 != null ||
             part.InlineFile != null ||
@@ -115,18 +125,18 @@ internal sealed class WorkflowMultipartChatRequestParser
     private static WorkflowMultipartChatRequestParseError ToChatError(WorkflowMultipartFileInputParseError error) =>
         new(error.StatusCode, error.Code, error.Message);
 
-    private readonly record struct PayloadParseResult(ChatInput? Input, WorkflowMultipartChatRequestParseError? Error)
+    private readonly record struct PayloadParseResult(HttpChatInput? Input, WorkflowMultipartChatRequestParseError? Error)
     {
         public bool Succeeded => Error == null;
 
-        public static PayloadParseResult Success(ChatInput? input) => new(input, null);
+        public static PayloadParseResult Success(HttpChatInput? input) => new(input, null);
 
         public static PayloadParseResult Failed(WorkflowMultipartChatRequestParseError error) => new(null, error);
     }
 }
 
 internal readonly record struct WorkflowMultipartChatRequestParseResult(
-    ChatInput? Input,
+    HttpChatInput? Input,
     WorkflowMultipartChatRequestParseError? Error)
 {
     public bool Succeeded => Error == null && Input != null;
@@ -137,7 +147,7 @@ internal readonly record struct WorkflowMultipartChatRequestParseResult(
 
     public string Message => Error?.Message ?? string.Empty;
 
-    public static WorkflowMultipartChatRequestParseResult Success(ChatInput input) => new(input, null);
+    public static WorkflowMultipartChatRequestParseResult Success(HttpChatInput input) => new(input, null);
 
     public static WorkflowMultipartChatRequestParseResult Failed(WorkflowMultipartChatRequestParseError error) =>
         new(null, error);

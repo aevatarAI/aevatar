@@ -51,13 +51,13 @@ public sealed class ConversationGAgentLarkCardDeliveryCompletionTests
         delivery.ProducedAtVersion.Should().Be(deliveryRecord.Version);
         delivery.RequestId.Should().Be("llm:corr-card-success");
         delivery.SourceEventId.Should().Be("corr-card-success");
-        delivery.LarkMessageId.Should().Be("lark-card-stream:om-card-success");
+        delivery.ProviderMessageId.Should().Be("lark-card-stream:om-card-success");
         delivery.CardId.Should().BeEmpty();
         delivery.Target.Channel.Value.Should().Be("lark");
         delivery.Target.ConversationKey.Should().Be("conv:lark:grp");
         delivery.Target.Platform.Should().Be("lark");
-        delivery.Target.ReceiveId.Should().Be("relay-msg-success");
-        delivery.Target.ReceiveIdType.Should().BeEmpty();
+        delivery.Target.AddressId.Should().Be("relay-msg-success");
+        delivery.Target.AddressType.Should().BeEmpty();
         delivery.Target.ConversationId.Should().Be("conv:lark:grp");
         delivery.Target.ReplyMessageId.Should().Be("relay-msg-success");
 
@@ -78,10 +78,10 @@ public sealed class ConversationGAgentLarkCardDeliveryCompletionTests
         agent.State.RecentDeliveries.Should().ContainSingle();
         agent.State.RecentDeliveries[0].RequestId.Should().Be("llm:corr-card-success");
         agent.State.RecentDeliveries[0].Status.Should().Be(DeliveryStatus.Succeeded);
-        agent.State.RecentDeliveries[0].LarkMessageId.Should().Be("lark-card-stream:om-card-success");
+        agent.State.RecentDeliveries[0].ProviderMessageId.Should().Be("lark-card-stream:om-card-success");
         agent.State.LastSuccessfulDelivery.Should().NotBeNull();
         agent.State.LastSuccessfulDelivery!.RequestId.Should().Be("llm:corr-card-success");
-        agent.State.LastSuccessfulDelivery.LarkMessageId.Should().Be("lark-card-stream:om-card-success");
+        agent.State.LastSuccessfulDelivery.ProviderMessageId.Should().Be("lark-card-stream:om-card-success");
     }
 
     [Fact]
@@ -133,13 +133,13 @@ public sealed class ConversationGAgentLarkCardDeliveryCompletionTests
         delivery.ProducedAtVersion.Should().Be(deliveryRecord.Version);
         delivery.RequestId.Should().Be("llm:corr-card-failure");
         delivery.SourceEventId.Should().Be("corr-card-failure");
-        delivery.LarkMessageId.Should().Be("lark-card-stream:om-card-failure");
+        delivery.ProviderMessageId.Should().Be("lark-card-stream:om-card-failure");
         delivery.CardId.Should().BeEmpty();
         delivery.Target.Channel.Value.Should().Be("lark");
         delivery.Target.ConversationKey.Should().Be("conv:lark:grp");
         delivery.Target.Platform.Should().Be("lark");
-        delivery.Target.ReceiveId.Should().Be("relay-msg-failure");
-        delivery.Target.ReceiveIdType.Should().BeEmpty();
+        delivery.Target.AddressId.Should().Be("relay-msg-failure");
+        delivery.Target.AddressType.Should().BeEmpty();
         delivery.Target.ConversationId.Should().Be("conv:lark:grp");
         delivery.Target.ReplyMessageId.Should().Be("relay-msg-failure");
         agent.State.RecentDeliveries.Should().ContainSingle();
@@ -296,6 +296,7 @@ public sealed class ConversationGAgentLarkCardDeliveryCompletionTests
         public Task<ConversationStreamChunkResult> RunStreamChunkAsync(
             LlmReplyStreamChunkEvent chunk,
             string? currentPlatformMessageId,
+            NyxRelayTextOperationKind operation,
             ConversationTurnRuntimeContext runtimeContext,
             CancellationToken ct) =>
             Task.FromResult(ConversationStreamChunkResult.Succeeded(currentPlatformMessageId ?? "om"));

@@ -167,7 +167,8 @@ public sealed record WorkflowBoardExecutionSummary(
     int? CompletedSteps,
     int? RunningNodes,
     int? WaitingOrPendingNodes,
-    int? FailedNodes);
+    int? FailedNodes,
+    int? DefinitionStepCount);
 
 public interface IWorkflowBoardSnapshotQueryPort
 {

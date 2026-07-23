@@ -140,6 +140,13 @@ public sealed record StudioMemberBindingContractResponse(
     DateTimeOffset BoundAt,
     string? ExpectedActorId = null);
 
+public sealed record StudioMemberPublishedBindingRecordRequest(
+    string PublishedServiceId,
+    string RevisionId,
+    string ImplementationKind,
+    StudioMemberImplementationRefResponse ImplementationRef,
+    string? ExpectedActorId = null);
+
 /// <summary>
 /// Wrapper returned from <c>GET /members/{memberId}/binding</c> so the
 /// response is always a JSON object — distinguishes "exists but never
@@ -239,6 +246,7 @@ public static class StudioMemberCommandStatusNames
 {
     public const string Accepted = "accepted";
     public const string NoChange = "no_change";
+    public const string DeleteAccepted = "delete_accepted";
 }
 
 public sealed record StudioMemberCommandResponse(

@@ -34,6 +34,21 @@ internal sealed class WorkflowExecutionContextAdapter :
 
     public string ScopeId => _stateHost.ScopeId;
 
+    public string ScheduleId => _stateHost.ScheduleId;
+
+    public WorkflowCallerNyxIdAuthority? CallerNyxIdAuthority
+    {
+        get
+        {
+            var source = _stateHost.ExecutionContextSnapshot.CallerCredential?.NyxIdAuthority;
+            return WorkflowRunExecutionContextStateAccess.TryNormalizeCallerNyxIdAuthority(
+                source,
+                out var authority)
+                ? authority
+                : null;
+        }
+    }
+
     public WorkflowExecutionRuntimeContext RuntimeContext => _stateHost.RuntimeContext;
 
     public IWorkflowExecutionStateHost StateHost => _stateHost;

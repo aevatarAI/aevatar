@@ -26,7 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddOptions<WorkflowRunReportExportOptions>();
         if (configureReportExport != null)
             services.Configure(configureReportExport);
-        services.AddOptions<FileSystemWorkflowFileIngressOptions>();
+        services.AddOptions<FileSystemFileArtifactOptions>();
         var artifactOptions = services.AddOptions<WorkflowFileArtifactOptions>();
         if (configuration != null)
         {
@@ -79,10 +79,10 @@ public static class ServiceCollectionExtensions
         var backend = ResolveWorkflowFileArtifactBackend(configuration);
         if (string.Equals(backend, "External", StringComparison.OrdinalIgnoreCase))
         {
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileIngressPort>(services);
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactReadPort>(services);
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactOwnershipPort>(services);
-            EnsureWorkflowFileArtifactPortRegistered<IWorkflowFileArtifactCleanupPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactIngressPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactReadPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactOwnershipPort>(services);
+            EnsureWorkflowFileArtifactPortRegistered<IFileArtifactCleanupPort>(services);
             return;
         }
 
@@ -92,15 +92,15 @@ public static class ServiceCollectionExtensions
                 "WorkflowFileArtifacts:Backend must be either FileSystem or External.");
         }
 
-        services.TryAddSingleton<FileSystemWorkflowFileIngressPort>();
-        services.TryAddSingleton<IWorkflowFileIngressPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactReadPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactOwnershipPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
-        services.TryAddSingleton<IWorkflowFileArtifactCleanupPort>(sp =>
-            sp.GetRequiredService<FileSystemWorkflowFileIngressPort>());
+        services.TryAddSingleton<FileSystemFileArtifactPort>();
+        services.TryAddSingleton<IFileArtifactIngressPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
+        services.TryAddSingleton<IFileArtifactReadPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
+        services.TryAddSingleton<IFileArtifactOwnershipPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
+        services.TryAddSingleton<IFileArtifactCleanupPort>(sp =>
+            sp.GetRequiredService<FileSystemFileArtifactPort>());
     }
 
     private static string ResolveWorkflowFileArtifactBackend(IConfiguration? configuration)

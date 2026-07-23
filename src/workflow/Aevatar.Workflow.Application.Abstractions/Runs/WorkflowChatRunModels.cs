@@ -13,7 +13,7 @@ public enum WorkflowChatInputPartKind
     File = 5,
 }
 
-public enum WorkflowFileSourceKind
+public enum FileArtifactSourceKind
 {
     Unspecified = 0,
     ChatInput = 1,
@@ -23,11 +23,11 @@ public enum WorkflowFileSourceKind
     Generated = 5,
 }
 
-public sealed record WorkflowFileRef
+public sealed record FileArtifactRef
 {
     public string? FileId { get; init; }
     public string? ArtifactId { get; init; }
-    public WorkflowFileSourceKind SourceKind { get; init; }
+    public FileArtifactSourceKind SourceKind { get; init; }
     public string? SourceMessageId { get; init; }
     public string? SourceResourceKey { get; init; }
     public string? FileName { get; init; }
@@ -48,7 +48,7 @@ public sealed record WorkflowChatInputPart
     public string? MediaType { get; init; }
     public string? Uri { get; init; }
     public string? Name { get; init; }
-    public WorkflowFileRef? FileRef { get; init; }
+    public FileArtifactRef? FileRef { get; init; }
 }
 
 public sealed record WorkflowLlmControl(
@@ -58,7 +58,15 @@ public sealed record WorkflowLlmControl(
     string? RoutePreference = null,
     string? SenderNyxIdAccessToken = null);
 
-public sealed record WorkflowCallerCredential(string? BearerToken = null);
+public sealed record WorkflowCallerNyxIdAuthority(
+    string Platform,
+    string Tenant,
+    string ExternalUserId,
+    string Scope);
+
+public sealed record WorkflowCallerCredential(
+    string? BearerToken = null,
+    WorkflowCallerNyxIdAuthority? NyxIdAuthority = null);
 
 public sealed record WorkflowExternalIngressContext(
     string RouteKey,
@@ -69,6 +77,32 @@ public sealed record WorkflowExternalIngressContext(
     string? PayloadFingerprint = null,
     string? AuthScheme = null,
     string? PrincipalSubject = null);
+
+public enum WorkflowChatConversationIntentKind
+{
+    None = 0,
+    Create = 1,
+    Continue = 2,
+}
+
+public sealed record WorkflowChatConversationIntent(
+    WorkflowChatConversationIntentKind Intent,
+    string? ConversationId = null)
+{
+    public static WorkflowChatConversationIntent None() =>
+        new(WorkflowChatConversationIntentKind.None);
+
+    public static WorkflowChatConversationIntent Create() =>
+        new(WorkflowChatConversationIntentKind.Create);
+
+    public static WorkflowChatConversationIntent Continue(string conversationId) =>
+        new(WorkflowChatConversationIntentKind.Continue, conversationId);
+}
+
+public sealed record WorkflowCompletionNotificationTarget(
+    string ActorId,
+    string DeliveryId,
+    long ExpiresAtUnixMs);
 
 public sealed record WorkflowChatRunForkSeed(
     string SourceRunId,
@@ -188,7 +222,9 @@ public sealed record WorkflowChatRunRequest(
     string? CorrelationIdSeed = null,
     WorkflowChatRunForkSeed? ForkSeed = null,
     WorkflowExternalIngressContext? ExternalIngress = null,
-    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null) : ICommandContextSeed
+    WorkflowChatConversationIntent? ChatConversation = null,
+    [property: JsonIgnore] WorkflowRunTargetSeed? TargetSeed = null,
+    [property: JsonIgnore] WorkflowCompletionNotificationTarget? CompletionNotificationTarget = null) : ICommandContextSeed
 {
     string? ICommandContextSeed.CommandId => CommandIdSeed;
 
@@ -218,6 +254,10 @@ public enum WorkflowChatRunStartError
     ProjectionUnavailable = 10,
     InvalidCallerCredential = 11,
     InvalidFileInput = 12,
+    InvalidConversationInput = 14,
+    InvalidConversationId = 15,
+    ConversationNotFound = 16,
+    ChatHistoryReservationUnavailable = 17,
 }
 
 public enum WorkflowProjectionCompletionStatus
@@ -236,3 +276,17 @@ public sealed record WorkflowChatRunAcceptedReceipt(
     string WorkflowName,
     string CommandId,
     string CorrelationId);
+
+public sealed record WorkflowChatContext(
+    string ScopeId,
+    string ConversationId,
+    string TurnId);
+
+public sealed record WorkflowChatInteractionAcceptedReceipt(
+    WorkflowChatRunAcceptedReceipt Run,
+    WorkflowChatContext? ChatContext)
+{
+    public static implicit operator WorkflowChatInteractionAcceptedReceipt(
+        WorkflowChatRunAcceptedReceipt run) =>
+        new(run, null);
+}

@@ -398,6 +398,44 @@ steps:
       tool: "web_search"
 ```
 
+#### NyxID `codex_exec` 工具
+
+`codex_exec` 是 NyxID tool provider 暴露的受限执行路由，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。它只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 `danger-full-access`。
+
+- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 直连 OpenSandbox，固定使用 operator-owned digest 镜像、`empty_git` workspace、Landlock profile、NyxID Responses gateway 和最长 `180s` timeout。调用者必须有 authenticated NyxID authority、有效 broker binding、可签发 `llm:proxy` 的 capability grant，并位于部署 allowlist；`llm:proxy` 不进入 interactive OAuth authorize scope。
+- `private_ssh`：`target.private_ssh.service` 是 NyxID SSH UserService 的 slug/UUID，不是 `node_id`；`principal` 是该 service 允许的 Unix principal。Codex 登录态、workspace 与 sandbox policy 由目标机固定 wrapper 负责，最长 `300s`。
+- prompt 最多 `6000` UTF-8 bytes，只通过 stdin/file boundary 进入固定命令，不参与 shell command 拼接。
+- managed target 返回包含 `status/target/output/exit_code/diagnostic_id/elapsed_ms` 的 JSON；private SSH target 保留 NyxID SSH executor 的结构化结果。
+- 配置检查、node online 或 OpenSandbox health 只证明局部依赖；必须运行真实 sample 并得到精确 `CODEX_EXEC_READY` 才能声明可用。
+
+Managed sample 不接收调用者路由参数：
+
+```yaml
+steps:
+  - id: verify_managed_codex
+    type: tool_call
+    timeout_ms: 200000
+    parameters:
+      tool: codex_exec
+      arguments: >-
+        {"target":{"kind":"managed_sandbox"},"workspace":{"kind":"empty_git"},"prompt":"Reply with exactly CODEX_EXEC_READY","timeout_secs":180}
+```
+
+Private SSH sample 使用 nested target，禁止继续使用旧的 root-level `service/principal`：
+
+```yaml
+steps:
+  - id: implement_change
+    type: tool_call
+    timeout_ms: 320000
+    parameters:
+      tool: codex_exec
+      arguments: >-
+        {"target":{"kind":"private_ssh","private_ssh":{"service":"${json(input.service)}","principal":"${json(input.principal)}"}},"prompt":"${json(input.prompt)}","timeout_secs":300}
+```
+
+完整架构边界见 [Managed Codex Execution](managed-codex-execution.md)，部署与 tenant smoke 见 [managed codex_exec rollout runbook](../operations/2026-07-16-managed-codex-exec-rollout.md)。
+
 #### Lark approval status 工具
 
 `lark_approvals_get` 是只读 Lark 审批实例查询工具，输入使用 `instance_code`，可选 `locale` 与 `user_id_type`。工作流不得手工拼接 NyxID proxy path；需要等待审批时，先调用该 typed tool，再基于稳定控制字段分支。
@@ -641,6 +679,11 @@ steps:
 - 作用：调用外部 connector（HTTP/CLI/MCP 等），支持重试和降级策略。
 - 常用参数：`connector`、`operation`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
 - `connector_call` / `secure_connector_call` side effect 是 at-least-once。workflow actor 按 logical run id + step id + logical attempt 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 connector request。connector physical retry / pending replay 复用同一个 key；HTTP connector 会在 key 非空时发送 `Idempotency-Key` header，其他 connector 可按自身边界使用或忽略。该 key 不提供 engine-side dedup 或 exactly-once。
+- `approval.policy: required` enables actor-owned durable approval coordination before connector dispatch. The step must provide `approval.service_ref`, `approval.node_id`, `approval.http_verb`, `approval.resource`, `approval.permission_scope`, `approval.expiration_seconds`, and a stable `idempotency_key`. `approval.status_check_interval_seconds` defaults to 2.
+- The exact payload, input, parameters, and execution options are stored as protected Protobuf material and bound to the safe approval plan by SHA-256. They are absent from approval records, committed projections, logs, and public APIs.
+- Approval state survives restart through actor state plus durable self callbacks. NyxID submission or status uncertainty fails closed; an indeterminate submission is not retried because NyxID creates a unique request for each submission.
+- Approved execution revalidates the remote binding, action, digest, caller authority, scope, node, service, permission scope, and effective expiry immediately before dispatch. HTTP approvals also require the approved verb/resource to match the concrete connector method/path. Dispatch replay and connector retries reuse the same physical `idempotency_key`; approval success and connector success remain separate persisted facts.
+- The Actor persists a dispatch acknowledgement and keeps the exact pending `StepCompletedEvent` as protected Protobuf until publication succeeds. Restart recovery can therefore redispatch an unacknowledged invocation or republish an acknowledged external result without copying response content into audit facts or public read models.
 - Ergonomic 说明（统一归一化到 `connector_call`）：
   - `http_get`/`http_post`/`http_put`/`http_delete`：自动补 `method=GET/POST/PUT/DELETE`（若未显式提供）。
   - `mcp_call`：若只写 `tool` 且未写 `operation/action`，会自动补 `operation=<tool>`。
@@ -667,6 +710,28 @@ steps:
     parameters:
       connector: "internal_http"
       path: "/healthz"
+```
+
+```yaml
+steps:
+  - id: create_resource
+    type: connector_call
+    target_role: coordinator
+    idempotency_key: "${input.idempotency_key}"
+    parameters:
+      connector: "service_proxy"
+      operation: "create_resource"
+      method: "POST"
+      path: "/resources/alpha"
+      approval.policy: "required"
+      approval.service_ref: "service-alpha"
+      approval.node_id: "node-alpha"
+      approval.http_verb: "POST"
+      approval.resource: "/resources/alpha"
+      approval.permission_scope: "resources.write"
+      approval.expiration_seconds: "300"
+      approval.status_check_interval_seconds: "2"
+      approval.destructive: "true"
 ```
 
 ### `emit`（别名：`publish`）

@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Net.Http.Headers;
+using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.Authentication.ScopeServiceTokens;
 using Microsoft.AspNetCore.Authentication;
@@ -8,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -18,6 +21,7 @@ namespace Aevatar.Authentication.Hosting;
 public static class AevatarAuthenticationHostExtensions
 {
     internal const string DisabledAuthenticationScheme = "AevatarDisabled";
+    private static readonly object RawAccessTokenItemKey = new();
 
     /// <summary>
     /// Registers JWT Bearer authentication by default.
@@ -53,6 +57,10 @@ public static class AevatarAuthenticationHostExtensions
         if (scopeTokenOptions.Enabled)
             builder.Services.AddScopeServiceTokens(builder.Configuration);
 
+        // Bind options so the DPoP OnTokenValidated hook can read DPoP settings at request time.
+        builder.Services.AddOptions<AevatarAuthenticationOptions>()
+            .Bind(builder.Configuration.GetSection(AevatarAuthenticationOptions.SectionName));
+
         builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(jwt =>
             {
@@ -61,10 +69,32 @@ public static class AevatarAuthenticationHostExtensions
 
                 jwt.TokenValidationParameters.ValidAudience = options.Audience;
                 jwt.TokenValidationParameters.ValidateAudience = !string.IsNullOrWhiteSpace(options.Audience);
+
+                // Pin the accepted signing algorithms to block alg=none and downgrade attacks.
+                // Default is a safe superset covering every algorithm actually accepted; when
+                // scope service tokens are enabled it also allows their HS256/RS256 keys.
+                jwt.TokenValidationParameters.ValidAlgorithms =
+                    ResolveValidAlgorithms(options, scopeTokenOptions.Enabled);
+
                 jwt.Events = new JwtBearerEvents
                 {
+                    OnTokenValidated = OnTokenValidatedValidateDPoP,
                     OnMessageReceived = context =>
                     {
+                        var authorization = context.Request.Headers.Authorization.FirstOrDefault();
+                        if (AuthenticationHeaderValue.TryParse(authorization, out var header) &&
+                            !string.IsNullOrWhiteSpace(header.Parameter))
+                        {
+                            if (string.Equals(header.Scheme, "DPoP", StringComparison.OrdinalIgnoreCase))
+                                context.Token = header.Parameter.Trim();
+
+                            if (string.Equals(header.Scheme, "DPoP", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(header.Scheme, "Bearer", StringComparison.OrdinalIgnoreCase))
+                            {
+                                context.HttpContext.Items[RawAccessTokenItemKey] = header.Parameter.Trim();
+                            }
+                        }
+
                         if (context.Request.Path.StartsWithSegments("/ws/voice") ||
                             context.Request.Path.StartsWithSegments("/whip/offer"))
                         {
@@ -76,6 +106,7 @@ public static class AevatarAuthenticationHostExtensions
                             if (!string.IsNullOrWhiteSpace(subprotocolToken))
                             {
                                 context.Token = subprotocolToken;
+                                context.HttpContext.Items[RawAccessTokenItemKey] = subprotocolToken;
                             }
                             // Fallback: legacy ?access_token= query param (older clients). The
                             // request-log redactor scrubs it from logs; new clients should use
@@ -84,7 +115,10 @@ public static class AevatarAuthenticationHostExtensions
                             {
                                 var accessToken = accessTokenValues.FirstOrDefault();
                                 if (!string.IsNullOrWhiteSpace(accessToken))
+                                {
                                     context.Token = accessToken.Trim();
+                                    context.HttpContext.Items[RawAccessTokenItemKey] = context.Token;
+                                }
                             }
                         }
 
@@ -98,6 +132,19 @@ public static class AevatarAuthenticationHostExtensions
                 .Configure<IScopeServiceTokenKeyProvider>((jwt, keyProvider) =>
                     ConfigureScopeServiceTokenValidation(jwt, options, keyProvider));
         }
+
+        // DPoP (RFC 9449) sender-constraint validation. Hosts enabling it must replace the
+        // no-op replay guard with a shared atomic implementation; the startup validator below
+        // fails closed if that production requirement is missed.
+        builder.Services.TryAddSingleton<IDPoPReplayGuard, NoOpDPoPReplayGuard>();
+        builder.Services.TryAddSingleton<DPoPProofValidator>();
+        builder.Services.AddHostedService<DPoPReplayGuardStartupValidator>();
+
+        // Audience defense: warn (never fail closed) when audience validation is silently off
+        // outside Development. Emitted once at startup via a hosted service so a real logger is
+        // available; ValidateAudience itself stays config-driven.
+        if (string.IsNullOrWhiteSpace(options.Audience) && !builder.Environment.IsDevelopment())
+            builder.Services.AddHostedService<AudienceValidationDisabledWarning>();
 
         // When authentication is enabled, endpoints default to requiring an authenticated caller.
         // Public endpoints must opt out with [AllowAnonymous] / .AllowAnonymous().
@@ -124,11 +171,30 @@ public static class AevatarAuthenticationHostExtensions
             issuers.Add(authority);
             issuers.Add(authority.TrimEnd('/'));
         }
+        if (issuers.Contains(keyProvider.Issuer, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Scope service token issuer must be distinct from the OIDC authority issuer.");
+        }
+
+        var authorityIssuers = issuers.Distinct(StringComparer.Ordinal).ToArray();
         issuers.Add(keyProvider.Issuer);
 
         jwt.TokenValidationParameters.ValidIssuers = issuers.Distinct(StringComparer.Ordinal).ToArray();
         var signingKeys = keyProvider.ValidationKeys.Select(key => key.ValidationKey).ToArray();
         jwt.TokenValidationParameters.IssuerSigningKeys = signingKeys;
+
+        // Bind scope tokens to local scope keys and authority tokens to discovery keys. Unknown
+        // issuers receive no keys, so signature resolution itself preserves the issuer boundary.
+        var resolver = new PerIssuerSigningKeyResolver(
+            authorityIssuers,
+            [keyProvider.Issuer],
+            signingKeys);
+        jwt.TokenValidationParameters.IssuerSigningKeyResolver = null;
+        jwt.TokenValidationParameters.IssuerSigningKeyResolverUsingConfiguration = resolver.Resolve;
+        jwt.TokenValidationParameters.IssuerValidator = null;
+        jwt.TokenValidationParameters.IssuerValidatorUsingConfiguration = resolver.ValidateIssuer;
+        jwt.TokenValidationParameters.ValidateIssuer = true;
 
         if (!string.IsNullOrWhiteSpace(keyProvider.Audience))
         {
@@ -139,6 +205,96 @@ public static class AevatarAuthenticationHostExtensions
         }
 
         jwt.TokenValidationParameters.ClockSkew = keyProvider.ClockSkew;
+    }
+
+    // Asymmetric OIDC algorithms every legitimate NyxID/OIDC token may be signed with. Kept a
+    // superset so a valid token is never rejected for a legitimately-used algorithm; alg=none
+    // and symmetric downgrade are excluded by omission.
+    private static readonly string[] AsymmetricOidcAlgorithms =
+    [
+        "RS256", "RS384", "RS512", "ES256", "ES384", "PS256",
+    ];
+
+    internal static string[] ResolveValidAlgorithms(
+        AevatarAuthenticationOptions options,
+        bool scopeServiceTokensEnabled)
+    {
+        // Explicit override wins (deployment knows its exact set).
+        if (options.ValidAlgorithms is { Length: > 0 })
+            return options.ValidAlgorithms;
+
+        var algorithms = new HashSet<string>(AsymmetricOidcAlgorithms, StringComparer.Ordinal);
+
+        // Scope service tokens are signed with HS256 or RS256 (see ScopeServiceTokenAlgorithms).
+        if (scopeServiceTokensEnabled)
+        {
+            algorithms.Add("HS256");
+            algorithms.Add("RS256");
+        }
+
+        return algorithms.ToArray();
+    }
+
+    // No-op unless DPoP is enabled: default bearer behavior is unchanged. When enabled and the
+    // validated access token carries a cnf.jkt confirmation, a matching DPoP proof header is
+    // required (RFC 9449). Access tokens without cnf.jkt are left untouched (plain bearer).
+    private static async Task OnTokenValidatedValidateDPoP(TokenValidatedContext context)
+    {
+        var options = context.HttpContext.RequestServices
+            .GetService<IOptions<AevatarAuthenticationOptions>>()?.Value;
+        if (options is null || !options.DPoP.Enabled)
+            return;
+
+        var confirmationThumbprint = ExtractConfirmationThumbprint(context.Principal);
+        if (confirmationThumbprint is null)
+            return; // Not a sender-constrained token; nothing to enforce.
+
+        var proofToken = context.Request.Headers["DPoP"].FirstOrDefault();
+        var accessToken = context.HttpContext.Items.TryGetValue(RawAccessTokenItemKey, out var rawToken)
+            ? rawToken as string
+            : null;
+        var validator = context.HttpContext.RequestServices.GetRequiredService<DPoPProofValidator>();
+        var request = context.Request;
+        var requestUri = $"{request.Scheme}://{request.Host}{request.PathBase}{request.Path}";
+
+        var result = await validator.ValidateAsync(
+            proofToken,
+            accessToken,
+            confirmationThumbprint,
+            request.Method,
+            requestUri,
+            options.DPoP.IatSkewSeconds,
+            context.HttpContext.RequestAborted);
+
+        if (!result.Succeeded)
+            context.Fail($"DPoP validation failed: {result.ErrorCode}");
+    }
+
+    private static string? ExtractConfirmationThumbprint(ClaimsPrincipal? principal)
+    {
+        // RFC 9449/7800: the access token carries a "cnf" claim whose "jkt" member is the
+        // JWK thumbprint of the sender's proof key. The JWT handler surfaces the cnf object as
+        // a JSON string claim; parse it and read jkt.
+        var cnf = principal?.FindFirst("cnf")?.Value;
+        if (string.IsNullOrWhiteSpace(cnf))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(cnf);
+            if (document.RootElement.TryGetProperty("jkt", out var jkt) &&
+                jkt.ValueKind == JsonValueKind.String)
+            {
+                var value = jkt.GetString();
+                return string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
     }
 
     internal static bool ResolveAuthenticationEnabled(string? configuredValue, IHostEnvironment environment)
@@ -157,6 +313,60 @@ public static class AevatarAuthenticationHostExtensions
 
         return enabled;
     }
+}
+
+internal sealed class DPoPReplayGuardStartupValidator : IHostedService
+{
+    private readonly IOptions<AevatarAuthenticationOptions> _options;
+    private readonly IDPoPReplayGuard _replayGuard;
+
+    public DPoPReplayGuardStartupValidator(
+        IOptions<AevatarAuthenticationOptions> options,
+        IDPoPReplayGuard replayGuard)
+    {
+        _options = options;
+        _replayGuard = replayGuard;
+    }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (_options.Value.DPoP.Enabled && _replayGuard is NoOpDPoPReplayGuard)
+        {
+            throw new InvalidOperationException(
+                "DPoP is enabled but no shared IDPoPReplayGuard is registered. " +
+                "Configure an atomic TTL-backed replay guard before starting the host.");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+}
+
+/// <summary>
+/// Emits a single startup WARNING when JWT audience validation is disabled (empty
+/// <c>Audience</c>) outside Development. Advisory only — the host does not fail closed; it
+/// surfaces that any audience-scoped token is accepted so the operator can decide.
+/// </summary>
+internal sealed class AudienceValidationDisabledWarning : IHostedService
+{
+    private readonly ILogger<AudienceValidationDisabledWarning> _logger;
+
+    public AudienceValidationDisabledWarning(ILogger<AudienceValidationDisabledWarning> logger)
+    {
+        _logger = logger;
+    }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "JWT audience validation is disabled: {SectionName}:Audience is empty. Tokens minted " +
+            "for any audience will be accepted. Set an Audience to enforce audience binding.",
+            AevatarAuthenticationOptions.SectionName);
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 internal sealed class DisabledAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>

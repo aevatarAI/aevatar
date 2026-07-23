@@ -153,7 +153,10 @@ export async function readResponseErrorDetails(
     const message =
       readResponseErrorFromPayload(payload, response) || normalizeWhitespace(text);
     return {
-      code: readJsonErrorText(payload.code) ?? undefined,
+      code:
+        readJsonErrorText(payload.code) ??
+        readJsonErrorText(payload.error) ??
+        undefined,
       message,
       status: response.status,
     };

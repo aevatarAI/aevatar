@@ -48,10 +48,10 @@ through a local mirror repair surface.
 Provision again through the supported path:
 
 ```bash
-aevatar-cli chat "Run channel_registrations action=register_lark_via_nyx with:
-- app_id=<lark app id>
-- app_secret=<lark app secret>
-- verification_token=<verification token when available>
+aevatar-cli chat "Run channel_registrations action=register_channel_via_nyx platform=lark with:
+- lark.app_id=<lark app id>
+- lark.app_secret=<lark app secret>
+- lark.verification_token=<verification token when available>
 - webhook_base_url=https://<aevatar-host>"
 ```
 

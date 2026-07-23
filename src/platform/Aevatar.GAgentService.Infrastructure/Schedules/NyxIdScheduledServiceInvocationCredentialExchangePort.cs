@@ -1,5 +1,3 @@
-using Aevatar.Foundation.Abstractions;
-using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -20,12 +18,16 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<ScheduledServiceInvocationCredentialExchangeResult> IssueSenderNyxIdAsync(
+    public async Task<ScheduledServiceInvocationCredentialExchangeResult> IssueNyxIdAsync(
         ScheduledServiceInvocationNyxIdCredentialSource source,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ct.ThrowIfCancellationRequested();
+        if (source.Subject == null)
+            throw new ArgumentException(
+                $"Schedule {ToErrorSubject(source.Role)} NyxID subject is required for credential exchange.",
+                nameof(source));
 
         var subject = new ExternalSubjectRef
         {
@@ -46,22 +48,31 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
                     "NyxID credential exchange returned an empty access token.");
             }
 
-            return ScheduledServiceInvocationCredentialExchangeResult.Success(handle.AccessToken);
+            return ScheduledServiceInvocationCredentialExchangeResult.Success(
+                handle.AccessToken,
+                handle.ExpiresAtUnix > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(handle.ExpiresAtUnix)
+                    : null);
         }
         catch (BindingNotFoundException)
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "NyxID binding was not found for the scheduled subject.");
+                $"NyxID binding was not found for the scheduled {ToErrorSubject(source.Role)}.");
         }
         catch (BindingRevokedException)
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
-                "NyxID binding was revoked for the scheduled subject.");
+                $"NyxID binding was revoked for the scheduled {ToErrorSubject(source.Role)}.");
         }
         catch (BindingScopeMismatchException)
         {
             return ScheduledServiceInvocationCredentialExchangeResult.Failure(
                 "NyxID binding does not grant the requested schedule scope.");
+        }
+        catch (BindingServiceAccessMismatchException)
+        {
+            return ScheduledServiceInvocationCredentialExchangeResult.Failure(
+                "NyxID binding does not grant the required Aevatar service.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -71,27 +82,6 @@ public sealed class NyxIdScheduledServiceInvocationCredentialExchangePort : ISch
         }
     }
 
-    public Task<ScheduledServiceInvocationCredentialExchangeResult> IssueScopeOwnerNyxIdAsync(
-        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source,
-        ServiceIdentity serviceIdentity,
-        CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(serviceIdentity);
-        ct.ThrowIfCancellationRequested();
-
-        var ownerSubject = new ScheduledServiceInvocationNyxIdCredentialSource(
-            ResolveScopeOwnerSubject(source),
-            source.Scope);
-        return IssueSenderNyxIdAsync(ownerSubject, ct);
-    }
-
-    private static ScheduledServiceInvocationNyxIdSubjectRef ResolveScopeOwnerSubject(
-        ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource source)
-    {
-        if (source.OwnerSubject == null)
-            throw new ArgumentException("Schedule scope owner NyxID subject is required for scope owner credential exchange.", nameof(source));
-
-        return source.OwnerSubject;
-    }
+    private static string ToErrorSubject(ScheduledServiceInvocationNyxIdCredentialRole role) =>
+        role == ScheduledServiceInvocationNyxIdCredentialRole.ScopeOwner ? "scope owner" : "subject";
 }

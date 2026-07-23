@@ -605,6 +605,136 @@ public sealed class StudioMemberGAgentStateTests
     }
 
     [Fact]
+    public async Task HandleDeleteRequested_ShouldCommitOnlyDeletedEvent_WhenAssigned()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var current = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var eventSourcing = new RecordingEventSourcing(current);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(current, eventSourcing, publisher);
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(2));
+
+        await agent.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = deletedAt,
+        });
+
+        var deleted = eventSourcing.RaisedEvents.Should().ContainSingle().Subject
+            .Should().BeOfType<StudioMemberDeletedEvent>().Subject;
+        deleted.MemberId.Should().Be("m-1");
+        deleted.ScopeId.Should().Be("scope-1");
+        deleted.PreviousTeamId.Should().Be("team-1");
+        deleted.PublishedServiceId.Should().Be("member-m-1");
+        deleted.DeletedAtUtc.Should().Be(deletedAt);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleDeleteRequested_ShouldFailActiveBindingRunBeforeDeletedEvent()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var pending = StartScriptBindingRun(NewCreatedScriptMember(now), "bind-delete", now.AddSeconds(1));
+        var eventSourcing = new RecordingEventSourcing(pending);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(pending, eventSourcing, publisher);
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(4));
+
+        await agent.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = deletedAt,
+        });
+
+        eventSourcing.RaisedEvents.Should().HaveCount(2);
+        var failed = eventSourcing.RaisedEvents[0]
+            .Should().BeOfType<StudioMemberBindingFailedEvent>().Subject;
+        failed.BindingRunId.Should().Be("bind-delete");
+        failed.Failure.Code.Should().Be("STUDIO_MEMBER_DELETED");
+        failed.Failure.FailedAtUtc.Should().Be(deletedAt);
+
+        var deleted = eventSourcing.RaisedEvents[1]
+            .Should().BeOfType<StudioMemberDeletedEvent>().Subject;
+        deleted.MemberId.Should().Be("m-1");
+        deleted.ScopeId.Should().Be("scope-1");
+        deleted.DeletedAtUtc.Should().Be(deletedAt);
+
+        var sent = publisher.SentMessages.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be(StudioMemberConventions.BuildBindingRunActorId("bind-delete"));
+        var ack = sent.Event.Should().BeOfType<StudioMemberBindingTerminalAcknowledged>().Subject;
+        ack.BindingRunId.Should().Be("bind-delete");
+        ack.Status.Should().Be(StudioMemberBindingRunStatus.Failed);
+    }
+
+    [Fact]
+    public void DeletedEvent_ShouldTombstoneStateAndClearTeamId()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var assigned = _agent.Apply(
+            NewCreatedScriptMember(now),
+            new StudioMemberReassignedEvent
+            {
+                MemberId = "m-1",
+                ScopeId = "scope-1",
+                ToTeamId = "team-1",
+                ReassignedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+            });
+        var deletedAt = Timestamp.FromDateTimeOffset(now.AddSeconds(2));
+
+        var deleted = _agent.Apply(assigned, new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            PreviousTeamId = "team-1",
+            PublishedServiceId = "member-m-1",
+            DeletedAtUtc = deletedAt,
+        });
+
+        deleted.Deleted.Should().BeTrue();
+        deleted.DeletedAtUtc.Should().Be(deletedAt);
+        deleted.HasTeamId.Should().BeFalse();
+        deleted.PublishedServiceId.Should().Be("member-m-1");
+        deleted.UpdatedAtUtc.Should().Be(deletedAt);
+    }
+
+    [Fact]
+    public async Task HandleDeleteRequested_ShouldNoOp_WhenAlreadyDeleted()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var deleted = _agent.Apply(NewCreatedScriptMember(now), new StudioMemberDeletedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            PublishedServiceId = "member-m-1",
+            DeletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(1)),
+        });
+        var eventSourcing = new RecordingEventSourcing(deleted);
+        var publisher = new RecordingEventPublisher();
+        var agent = NewHandlerAgent(deleted, eventSourcing, publisher);
+
+        await agent.HandleDeleteRequested(new StudioMemberDeleteRequested
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            RequestedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(2)),
+        });
+
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+        eventSourcing.ConfirmCallCount.Should().Be(0);
+        publisher.SentMessages.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Bound_ShouldCaptureLastBindingAndAdvanceLifecycle()
     {
         var now = DateTimeOffset.UtcNow;
@@ -633,6 +763,143 @@ public sealed class StudioMemberGAgentStateTests
         bound.LastBinding.PublishedServiceId.Should().Be("member-m-1");
         bound.LastBinding.RevisionId.Should().Be("rev-7");
         bound.PublishedServiceId.Should().Be("member-m-1");
+    }
+
+    [Fact]
+    public void PublishedBindingRecorded_ShouldRefreshLastBindingAndClearStaleCurrentRun()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var created = _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(now),
+        });
+        var pending = StartWorkflowBindingRun(created, "bind-first", now.AddSeconds(1));
+        var completed = _agent.Apply(pending, new StudioMemberBindingCompletedEvent
+        {
+            BindingRunId = "bind-first",
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-first",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            CompletedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(4)),
+        });
+
+        var recorded = _agent.Apply(completed, new StudioMemberPublishedBindingRecordedEvent
+        {
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-updated",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef
+                {
+                    WorkflowId = "workflow-1",
+                    WorkflowRevision = "rev-updated",
+                },
+            },
+            RecordedAtUtc = Timestamp.FromDateTimeOffset(now.AddSeconds(10)),
+            ExpectedActorId = "workflow-definition:workflow-1",
+        });
+
+        recorded.LifecycleStage.Should().Be(StudioMemberLifecycleStage.BindReady);
+        recorded.LastBinding.Should().NotBeNull();
+        recorded.LastBinding.PublishedServiceId.Should().Be("member-m-1");
+        recorded.LastBinding.RevisionId.Should().Be("rev-updated");
+        recorded.LastBinding.ExpectedActorId.Should().Be("workflow-definition:workflow-1");
+        recorded.ImplementationRef.Workflow.WorkflowId.Should().Be("workflow-1");
+        recorded.ImplementationRef.Workflow.WorkflowRevision.Should().Be("rev-updated");
+        recorded.Binding.CurrentBindingRunId.Should().BeEmpty();
+        recorded.Binding.CurrentStatus.Should().Be(StudioMemberBindingRunStatus.Unspecified);
+        recorded.Binding.LastTerminalBindingRunId.Should().Be("bind-first");
+        recorded.Binding.LastFailure.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandlePublishedBindingRecorded_ShouldRejectMismatchedPublishedServiceId()
+    {
+        var current = NewCreatedWorkflowMember(DateTimeOffset.UtcNow);
+        var eventSourcing = new RecordingEventSourcing(current);
+        var agent = NewHandlerAgent(current, eventSourcing, new RecordingEventPublisher());
+
+        var act = () => agent.HandlePublishedBindingRecorded(new StudioMemberPublishedBindingRecordedEvent
+        {
+            PublishedServiceId = "different-service",
+            RevisionId = "rev-1",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Workflow = new StudioMemberWorkflowRef
+                {
+                    WorkflowId = "workflow-1",
+                    WorkflowRevision = "rev-1",
+                },
+            },
+            RecordedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not match member 'm-1' publishedServiceId 'member-m-1'*");
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandlePublishedBindingRecorded_ShouldRejectMismatchedImplementationKind()
+    {
+        var current = NewCreatedWorkflowMember(DateTimeOffset.UtcNow);
+        var eventSourcing = new RecordingEventSourcing(current);
+        var agent = NewHandlerAgent(current, eventSourcing, new RecordingEventPublisher());
+
+        var act = () => agent.HandlePublishedBindingRecorded(new StudioMemberPublishedBindingRecordedEvent
+        {
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-1",
+            ImplementationKind = StudioMemberImplementationKind.Script,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Script = new StudioMemberScriptRef
+                {
+                    ScriptId = "script-1",
+                    ScriptRevision = "rev-1",
+                },
+            },
+            RecordedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not match member kind 'Workflow'*");
+        eventSourcing.RaisedEvents.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandlePublishedBindingRecorded_ShouldRejectImplementationRefForDifferentKind()
+    {
+        var current = NewCreatedWorkflowMember(DateTimeOffset.UtcNow);
+        var eventSourcing = new RecordingEventSourcing(current);
+        var agent = NewHandlerAgent(current, eventSourcing, new RecordingEventPublisher());
+
+        var act = () => agent.HandlePublishedBindingRecorded(new StudioMemberPublishedBindingRecordedEvent
+        {
+            PublishedServiceId = "member-m-1",
+            RevisionId = "rev-1",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
+            ImplementationRef = new StudioMemberImplementationRef
+            {
+                Script = new StudioMemberScriptRef
+                {
+                    ScriptId = "script-1",
+                    ScriptRevision = "rev-1",
+                },
+            },
+            RecordedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("published binding record must include a resolved implementation reference for its implementation kind.");
+        eventSourcing.RaisedEvents.Should().BeEmpty();
     }
 
     [Fact]
@@ -1301,6 +1568,17 @@ public sealed class StudioMemberGAgentStateTests
             ScopeId = "scope-1",
             DisplayName = "Original",
             ImplementationKind = StudioMemberImplementationKind.Script,
+            PublishedServiceId = "member-m-1",
+            CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
+        });
+
+    private StudioMemberState NewCreatedWorkflowMember(DateTimeOffset createdAt) =>
+        _agent.Apply(new StudioMemberState(), new StudioMemberCreatedEvent
+        {
+            MemberId = "m-1",
+            ScopeId = "scope-1",
+            DisplayName = "Original",
+            ImplementationKind = StudioMemberImplementationKind.Workflow,
             PublishedServiceId = "member-m-1",
             CreatedAtUtc = Timestamp.FromDateTimeOffset(createdAt),
         });

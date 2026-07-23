@@ -34,6 +34,10 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             ScopeId = scopeId?.Trim() ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
         };
+        var compilation = EvaluateWorkflowCompilation(bindDefinitionEvent.WorkflowYaml);
+        if (compilation.Compiled)
+            bindDefinitionEvent.AuthorizationDependencies =
+                WorkflowAuthorizationDependencyEvaluator.Evaluate(compilation.Workflow!);
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
@@ -90,12 +94,21 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         next.SourceKind = string.IsNullOrWhiteSpace(evt.SourceKind)
             ? "builtin"
             : evt.SourceKind.Trim();
+        next.AuthorizationDependencies = evt.AuthorizationDependencies?.Clone();
 
         var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
         next.Compiled = compileResult.Compiled;
         next.CompilationError = compileResult.CompilationError;
         next.Version = current.Version + 1;
         return next;
+    }
+
+    internal WorkflowAuthorizationDependencies? EvaluateAuthorizationDependencies(string workflowYaml)
+    {
+        var compilation = EvaluateWorkflowCompilation(workflowYaml);
+        return compilation.Compiled
+            ? WorkflowAuthorizationDependencyEvaluator.Evaluate(compilation.Workflow!)
+            : null;
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

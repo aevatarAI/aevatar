@@ -10,9 +10,9 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 /// <summary>
 /// Service-level tests for <see cref="NyxChannelBotDeprovisioningService"/>. These drive a real
-/// <see cref="NyxIdApiClient"/> over a canned <see cref="HttpMessageHandler"/> so the "404 = already
-/// gone = success" classification is exercised against the actual client envelope contract
-/// (non-2xx is returned as <c>{"error":true,"status":...}</c>, not thrown).
+/// <see cref="NyxIdApiClient"/> over a canned <see cref="HttpMessageHandler"/> so the successful
+/// <c>204 No Content</c> and "404 = already gone = success" classifications are exercised against
+/// the actual client contract (non-2xx is returned as <c>{"error":true,"status":...}</c>, not thrown).
 /// </summary>
 public sealed class NyxChannelBotDeprovisioningServiceTests
 {
@@ -37,6 +37,23 @@ public sealed class NyxChannelBotDeprovisioningServiceTests
         result.ChannelBotRemoved.Should().BeTrue();
         result.Warnings.Should().BeEmpty();
 
+        handler.DeletedPaths.Should().Equal(RoutePath, ChannelBotPath, ApiKeyPath);
+    }
+
+    [Fact]
+    public async Task DeprovisionAsync_204NoContentOnEveryResource_IsTreatedAsSuccess()
+    {
+        var handler = new StatusRoutingHandler();
+        handler.Set(HttpMethod.Delete, RoutePath, HttpStatusCode.NoContent, string.Empty);
+        handler.Set(HttpMethod.Delete, ChannelBotPath, HttpStatusCode.NoContent, string.Empty);
+        handler.Set(HttpMethod.Delete, ApiKeyPath, HttpStatusCode.NoContent, string.Empty);
+
+        var result = await CreateService(handler).DeprovisionAsync(
+            "token", "route-1", "bot-1", "key-1", CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.ChannelBotRemoved.Should().BeTrue();
+        result.Warnings.Should().BeEmpty();
         handler.DeletedPaths.Should().Equal(RoutePath, ChannelBotPath, ApiKeyPath);
     }
 

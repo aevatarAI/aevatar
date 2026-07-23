@@ -24,8 +24,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
     private readonly IServiceGovernanceCommandPort _serviceGovernanceCommandPort;
     private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
-    private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
-    private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
+    private readonly IScopeScriptQueryPort? _scopeScriptQueryPort;
+    private readonly IScriptDefinitionSnapshotPort? _scriptDefinitionSnapshotPort;
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
     private readonly IServiceExternalExposureIntentPort _externalExposureIntentPort;
     private readonly IAgentKindRegistry? _agentKindRegistry;
@@ -36,8 +36,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
         IServiceGovernanceCommandPort serviceGovernanceCommandPort,
         IServiceGovernanceQueryPort serviceGovernanceQueryPort,
-        IScopeScriptQueryPort scopeScriptQueryPort,
-        IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
+        IScopeScriptQueryPort? scopeScriptQueryPort,
+        IScriptDefinitionSnapshotPort? scriptDefinitionSnapshotPort,
         IWorkflowDefinitionParser workflowDefinitionParser,
         IOptions<ScopeWorkflowCapabilityOptions> options,
         IAgentKindRegistry? agentKindRegistry = null,
@@ -47,8 +47,10 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
         _serviceGovernanceCommandPort = serviceGovernanceCommandPort ?? throw new ArgumentNullException(nameof(serviceGovernanceCommandPort));
         _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
-        _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
-        _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
+        // Nullable by design: the scripting capability is optional. Hosts composed without it
+        // resolve these ports to null, and script bindings are rejected in BuildScriptBindingAsync.
+        _scopeScriptQueryPort = scopeScriptQueryPort;
+        _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort;
         _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
         _externalExposureIntentPort = externalExposureIntentPort ?? new ServiceCommandExternalExposureIntentPort(serviceCommandPort);
         _agentKindRegistry = agentKindRegistry;
@@ -244,6 +246,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceRevisionSpec revisionSpec,
         CancellationToken ct)
     {
+        if (_scriptDefinitionSnapshotPort is not { } scriptDefinitionSnapshotPort)
+        {
+            throw new InvalidOperationException(
+                "Scripting capability is not enabled on this host; implementationKind 'scripting' is not supported.");
+        }
+
         var identity = revisionSpec.Identity
             ?? throw new InvalidOperationException("service identity is required.");
         var scriptingSpec = revisionSpec.ScriptingSpec
@@ -251,7 +259,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (string.IsNullOrWhiteSpace(scriptingSpec.DefinitionActorId))
             throw new InvalidOperationException("scripting definition_actor_id is required.");
 
-        var snapshot = await _scriptDefinitionSnapshotPort.GetRequiredAsync(
+        var snapshot = await scriptDefinitionSnapshotPort.GetRequiredAsync(
             scriptingSpec.DefinitionActorId,
             scriptingSpec.Revision,
             ct);
@@ -429,10 +437,17 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceIdentity identity,
         CancellationToken ct)
     {
+        if (_scopeScriptQueryPort is not { } scopeScriptQueryPort ||
+            _scriptDefinitionSnapshotPort is not { } scriptDefinitionSnapshotPort)
+        {
+            throw new InvalidOperationException(
+                "Scripting capability is not enabled on this host; implementationKind 'scripting' is not supported.");
+        }
+
         var script = request.Script
             ?? throw new InvalidOperationException("script is required for implementationKind 'scripting'.");
         var normalizedScriptId = ScopeWorkflowCapabilityOptions.NormalizeRequired(script.ScriptId, nameof(script.ScriptId));
-        var scriptSummary = await _scopeScriptQueryPort.GetByScriptIdAsync(normalizedScopeId, normalizedScriptId, ct)
+        var scriptSummary = await scopeScriptQueryPort.GetByScriptIdAsync(normalizedScopeId, normalizedScriptId, ct)
             ?? throw new InvalidOperationException(
                 $"Scope '{normalizedScopeId}' does not have an active script '{normalizedScriptId}'.");
         var requestedScriptRevision = ScopeWorkflowCapabilityConventions.NormalizeOptional(script.ScriptRevision);
@@ -443,7 +458,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Scope script '{normalizedScriptId}' is currently at revision '{scriptSummary.ActiveRevision}', but got '{requestedScriptRevision}'.");
         }
 
-        var snapshot = await _scriptDefinitionSnapshotPort.GetRequiredAsync(
+        var snapshot = await scriptDefinitionSnapshotPort.GetRequiredAsync(
             scriptSummary.DefinitionActorId,
             scriptSummary.ActiveRevision,
             ct);

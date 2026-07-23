@@ -334,11 +334,54 @@ public sealed class NyxIdChatProjectionSessionTests
         published.Event.Custom.Payload.Is(Struct.Descriptor).Should().BeTrue();
         var fields = published.Event.Custom.Payload.Unpack<Struct>().Fields;
         fields["requestId"].StringValue.Should().Be("approval-1");
-        fields["sessionId"].StringValue.Should().Be("session-1");
+        fields["turnId"].StringValue.Should().Be("session-1");
+        fields.Should().NotContainKey("sessionId");
         fields["toolName"].StringValue.Should().Be("shell");
         fields["toolCallId"].StringValue.Should().Be("call-approval");
         fields["argumentsJson"].StringValue.Should().Be("{\"cmd\":\"pwd\"}");
         fields["isDestructive"].BoolValue.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Projector_ShouldIgnorePendingAndCompletionFactsFromDifferentTurn()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "turn-a",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new PendingToolApprovalPersistedEvent
+                {
+                    Pending = new PendingToolApprovalState
+                    {
+                        RequestId = "approval-b",
+                        SessionId = "turn-b",
+                        ToolName = "shell",
+                        ToolCallId = "call-b",
+                    },
+                }),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = "turn-b",
+                    Content = "other turn",
+                    Outcome = RoleChatSessionOutcome.Completed,
+                }),
+            CancellationToken.None);
+
+        hub.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -371,6 +414,41 @@ public sealed class NyxIdChatProjectionSessionTests
             AGUIEvent.EventOneofCase.TextMessageEnd,
             AGUIEvent.EventOneofCase.RunFinished);
         hub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldEmitTerminalForEachRepeatedCommittedCompletionFact()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "turn-idempotent",
+            ProjectionKind = "nyxid-chat-session",
+        };
+        var completed = new RoleChatSessionCompletedEvent
+        {
+            SessionId = context.SessionId,
+            Prompt = "same prompt",
+            Content = "cached answer",
+            Outcome = RoleChatSessionOutcome.Completed,
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(context.RootActorId, completed),
+            CancellationToken.None);
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(context.RootActorId, completed),
+            CancellationToken.None);
+
+        hub.Published
+            .Where(static entry => entry.Event.EventCase == AGUIEvent.EventOneofCase.RunFinished)
+            .Should()
+            .HaveCount(2)
+            .And.OnlyContain(entry => entry.Event.RunFinished.RunId == context.SessionId);
     }
 
     [Fact]
@@ -428,6 +506,81 @@ public sealed class NyxIdChatProjectionSessionTests
         published.Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunError);
         published.Event.RunError.Message.Should().Be("provider exploded");
         published.Event.RunError.RunId.Should().Be("session-1");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldEmitTypedTerminalFromCommittedTurnConflict()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "turn-client-request-1",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionConflictEvent
+                {
+                    SessionId = context.SessionId,
+                    Reason = RoleChatSessionConflictReason.PromptMismatch,
+                    SafeMessage = "This client request id was already used for different input.",
+                }),
+            CancellationToken.None);
+
+        var terminal = hub.Published.Should().ContainSingle().Which.Event;
+        terminal.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunError);
+        terminal.RunError.RunId.Should().Be(context.SessionId);
+        terminal.RunError.Code.Should().Be("IDEMPOTENCY_CONFLICT");
+        terminal.RunError.Message.Should().Be("This client request id was already used for different input.");
+    }
+
+    [Fact]
+    public async Task Projector_ShouldEmitAuthorizationCustomThenBlockedTerminal()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "chat-actor-1",
+            SessionId = "turn-blocked",
+            ProjectionKind = "nyxid-chat-session",
+        };
+        var blocker = new NyxIdAuthorizationRequiredEvent
+        {
+            ServiceSlug = "api-github",
+            ServiceLabel = "GitHub",
+            ResourceUri = "/repos/private",
+            ReasonCode = "NYXID_FORBIDDEN",
+            SafeMessage = "Connect or reauthorize api-github to continue.",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new RoleChatSessionCompletedEvent
+                {
+                    SessionId = context.SessionId,
+                    Outcome = RoleChatSessionOutcome.Blocked,
+                    AuthorizationRequired = blocker,
+                }),
+            CancellationToken.None);
+
+        hub.Published.Select(entry => entry.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.Custom,
+            AGUIEvent.EventOneofCase.RunFinished);
+        hub.Published[0].Event.Custom.Name.Should().Be("nyxid.authorization.required");
+        hub.Published[0].Event.Custom.Payload.Unpack<NyxIdAuthorizationRequiredEvent>()
+            .Should().BeEquivalentTo(blocker);
+        hub.Published[1].Event.RunFinished.RunId.Should().Be(context.SessionId);
+        hub.Published[1].Event.RunFinished.Status.Should().Be(RunCompletionStatus.Blocked);
+        hub.Published[1].Event.RunFinished.Result.Unpack<NyxIdAuthorizationRequiredEvent>()
+            .Should().BeEquivalentTo(blocker);
     }
 
     [Fact]

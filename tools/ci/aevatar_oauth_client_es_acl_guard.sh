@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-allowed_document_files_regex='^(agents/Aevatar\.GAgents\.Channel\.Identity/(DependencyInjection/IdentityServiceCollectionExtensions\.cs|Provisioning/AevatarOAuthClient(Document\.Partial|DocumentMetadataProvider|EsAclOptions|EsAclStartupGuard|ProjectionProvider|Projector)\.cs|protos/aevatar_oauth_client\.proto)|src/Aevatar\.Mainnet\.Host\.Api/Hosting/MainnetAgentProjectionDocumentStoresExtensions\.cs|test/)'
+allowed_document_files_regex='^(agents/Aevatar\.GAgents\.Channel\.Identity/(DependencyInjection/IdentityServiceCollectionExtensions\.cs|Provisioning/AevatarOAuthClient(Document\.Partial|DocumentMetadataProvider|EsAclOptions|EsAclStartupGuard|ProjectionProvider|Projector)\.cs|protos/aevatar_oauth_client\.proto)|src/Aevatar\.Mainnet\.Host\.Api/Hosting/(MainnetAgentProjectionDocumentStoresExtensions|HttpOAuthClientEsAclProbe)\.cs|test/)'
 
 document_hits="$(
   rg -n "AevatarOAuthClientDocument|IProjectionDocumentReader<AevatarOAuthClientDocument|IProjectionDocumentWriter<AevatarOAuthClientDocument" \
@@ -28,6 +28,7 @@ event_store_hits="$(
     | xargs rg -n "IEventStore|ReadEventsAsync|Replay|EventStore" \
     | rg -v "agents/Aevatar.GAgents.Channel.Identity/Provisioning/AevatarOAuthClientGAgent.cs:.*EventStoreOptimisticConcurrencyException" \
     | rg -v "GrantMatchesGrainEventStoreInternal|grain/event-store internal|AevatarOAuthClient ES ACL startup guard" \
+    | rg -v "MainnetHostBuilderExtensions.cs:.*IdentityAssertionReplayGuard" \
     || true
 )"
 
@@ -57,7 +58,7 @@ if ! grep -q "AevatarOAuthClientEsAclStartupGuard" <<<"${guard_registration_hits
    ! grep -q "GrantMatchesGrainEventStoreInternal" <<<"${guard_registration_hits}" ||
    ! grep -q "AevatarOAuthClientEsAclOptions" <<<"${guard_registration_hits}"; then
   echo "${guard_registration_hits}"
-  echo "Mainnet Host must own the AevatarOAuthClient ES ACL startup guard and explicit ACL assertion."
+  echo "Mainnet Host must own the AevatarOAuthClient ES ACL startup guard and operator-configurable enforcement policy."
   exit 1
 fi
 

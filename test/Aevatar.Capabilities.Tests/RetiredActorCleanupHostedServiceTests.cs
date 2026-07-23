@@ -20,6 +20,8 @@ namespace Aevatar.Capabilities.Tests;
 
 public sealed class RetiredActorCleanupHostedServiceTests
 {
+    private const string RetiredSkillRunnerAgentType = "skill_runner";
+
     [Fact]
     public async Task StartAsync_ShouldDestroyRetiredActors_RemoveRelays_AndResetEventStreams()
     {
@@ -107,10 +109,10 @@ public sealed class RetiredActorCleanupHostedServiceTests
     {
         var eventStore = new InMemoryEventStore();
         var documents = new RecordingProjectionStore<UserAgentCatalogDocument>(
-            CatalogDocument("skill-runner-old", SkillRunnerDefaults.AgentType),
+            CatalogDocument("skill-runner-old", RetiredSkillRunnerAgentType),
             CatalogDocument("workflow-agent-old", "workflow_agent"),
-            CatalogDocument("skill-runner-current", SkillRunnerDefaults.AgentType),
-            CatalogDocument("skill-runner-proxy", SkillRunnerDefaults.AgentType),
+            CatalogDocument("skill-runner-current", RetiredSkillRunnerAgentType),
+            CatalogDocument("skill-runner-proxy", RetiredSkillRunnerAgentType),
             new UserAgentCatalogDocument
             {
                 Id = "skill-runner-prefix-only",
@@ -204,7 +206,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             {
                 Id = "skill-runner-snapshotted",
                 ActorId = "agent-registry-store",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = RetiredSkillRunnerAgentType,
             },
             new UserAgentCatalogDocument
             {
@@ -279,7 +281,7 @@ public sealed class RetiredActorCleanupHostedServiceTests
             new UserAgentCatalogEntry
             {
                 AgentId = "skill-runner-recent",
-                AgentType = SkillRunnerDefaults.AgentType,
+                AgentType = RetiredSkillRunnerAgentType,
             },
         ]);
         await AppendSingleEventAsync(eventStore, "skill-runner-recent");

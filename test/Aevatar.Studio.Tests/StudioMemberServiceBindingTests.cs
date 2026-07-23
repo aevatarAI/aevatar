@@ -422,6 +422,16 @@ public sealed class StudioMemberServiceBindingTests
             return Task.CompletedTask;
         }
 
+        public Task RecordPublishedBindingAsync(
+            string scopeId,
+            string memberId,
+            StudioMemberPublishedBindingRecordRequest request,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("RecordPublishedBinding");
+            return Task.CompletedTask;
+        }
+
         public Task RenameAsync(
             string scopeId,
             string memberId,
@@ -446,6 +456,15 @@ public sealed class StudioMemberServiceBindingTests
             CancellationToken ct = default)
         {
             OperationsInOrder.Add("PatchTeamAssignment");
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(
+            string scopeId,
+            string memberId,
+            CancellationToken ct = default)
+        {
+            OperationsInOrder.Add("Delete");
             return Task.CompletedTask;
         }
     }

@@ -162,6 +162,7 @@ public class WorkflowRoleGAgent(
         }
         toolContext = ApplyToolVisibility(intent.AgentToolScope, toolContext);
         toolContext = ApplyRunScopeToCaller(intent.ScopeId, toolContext);
+        toolContext = ApplySchedule(intent.ScheduleId, toolContext);
 
         var request = new ChatRequestEvent
         {
@@ -260,6 +261,16 @@ public class WorkflowRoleGAgent(
                     : toolContext.Caller.OwnerSubject,
             },
         };
+    }
+
+    private static AgentToolExecutionContext ApplySchedule(
+        string? scheduleId,
+        AgentToolExecutionContext toolContext)
+    {
+        var normalizedScheduleId = Normalize(scheduleId);
+        return normalizedScheduleId is null
+            ? toolContext
+            : toolContext with { Schedule = new AgentToolScheduleContext(normalizedScheduleId) };
     }
 
     private static void CopyWorkflowIntentMetadata(

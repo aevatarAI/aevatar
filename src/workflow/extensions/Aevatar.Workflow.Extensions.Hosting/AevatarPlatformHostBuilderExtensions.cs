@@ -20,7 +20,9 @@ public sealed class AevatarPlatformCompositionOptions
 
     public bool EnableWorkflowCapability { get; set; } = true;
 
-    public bool EnableScriptingCapability { get; set; } = true;
+    // Security lockdown (2026-07): scripting executes tenant-supplied C# in-process via Roslyn.
+    // The capability is disabled by default; a host must opt in explicitly to compose it.
+    public bool EnableScriptingCapability { get; set; }
 
     public bool EnableMakerExtensions { get; set; }
 

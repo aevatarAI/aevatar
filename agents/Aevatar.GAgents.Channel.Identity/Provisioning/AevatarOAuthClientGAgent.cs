@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -13,12 +14,10 @@ using Microsoft.Extensions.Logging;
 namespace Aevatar.GAgents.Channel.Identity;
 
 /// <summary>
-/// Cluster-singleton actor that owns the aevatar host's OAuth client
-/// registration against NyxID. Holds <see cref="AevatarOAuthClientState"/>
-/// (client_id + HMAC key + observed broker capability) so the entire silo
-/// fleet shares one provisioning record — no IConfiguration / appsettings /
-/// secrets store needed. See cluster bootstrap service for the startup
-/// signal wiring.
+/// Cluster-singleton actor that materializes the configured OAuth client and
+/// owns its HMAC key plus observed broker capability. Deployment configuration
+/// owns the client id; committed actor state keeps the fleet coherent and
+/// auditable.
 /// </summary>
 [GAgent("channel.identity.aevatar-oauth-client")]
 public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientState>
@@ -43,6 +42,14 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     internal static readonly TimeSpan MaxRetryDelay = TimeSpan.FromMinutes(30);
 
     private const string ProvisioningRetryCallbackPrefix = "aevatar-oauth-client-provisioning-retry";
+
+    /// <summary>
+    /// True when the actor already holds an HMAC key in either shape: a vault
+    /// reference (new writes) or legacy plaintext bytes (pre-migration state).
+    /// The seed guards must treat a ref-backed key as "present" or they would
+    /// re-seed on every command since ref-backed writes leave [hmac_key] empty.
+    /// </summary>
+    private bool HasHmacKey => State.HmacKey.Length > 0 || State.HmacKeyRef is not null;
 
     /// <inheritdoc />
     /// <remarks>
@@ -153,7 +160,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         var redirectUriListDrifted = sameClient
             && (State.RedirectUris.Count == 0
                 || !RedirectUriListsEqual(State.RedirectUris, expectedRedirectUris));
-        var oauthScopeDrifted = sameClient && !AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope);
+        var oauthScopeDrifted = sameClient
+            && !AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(State.OauthScope);
 
         if (sameClient && !forceReprovision && !redirectUriDrifted && !redirectUriListDrifted && !oauthScopeDrifted)
         {
@@ -162,9 +170,9 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             // Returning here is intentional: HmacKeyRotatedEvent itself
             // publishes the committed state root, so the projector materializes the
             // readmodel without needing an additional rebuild trigger.
-            if (State.HmacKey.Length == 0)
+            if (!HasHmacKey)
             {
-                await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+                await PersistDomainEventAsync(await BuildHmacKeyRotatedEventAsync());
                 await ClearProvisioningRetryAsync("hmac_seeded_existing_client");
                 Logger.LogInformation("Seeded HMAC key for aevatar OAuth client (existing client_id)");
                 return;
@@ -283,7 +291,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             cmd.NyxidAuthority,
             string.Join(",", expectedRedirectUris));
 
-        if (State.HmacKey.Length == 0)
+        if (!HasHmacKey)
         {
             // Distinct race shape from the DCR commit OCC: this handler
             // ALREADY successfully committed Provisioned, so
@@ -293,7 +301,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             // without orphan messaging when the post-replay state has a
             // non-empty HMAC.
             await PersistDomainEventAsync(
-                BuildHmacKeyRotatedEvent(),
+                await BuildHmacKeyRotatedEventAsync(),
                 onOptimisticConcurrencyConflict: AbsorbPeerHmacSeedAsync);
             Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
         }
@@ -373,8 +381,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
         && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
         && RedirectUriListsEqual(State.RedirectUris, NormalizeProvisioningRedirectUris(cmd.RedirectUris, cmd.RedirectUri))
-        && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
-        && State.HmacKey.Length > 0;
+        && AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(State.OauthScope)
+        && HasHmacKey;
 
     private async Task ScheduleProvisioningRetryAsync(
         EnsureAevatarOAuthClientProvisionedCommand cmd,
@@ -559,8 +567,8 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             && string.Equals(State.NyxidAuthority, cmd.NyxidAuthority, StringComparison.Ordinal)
             && string.Equals(State.RedirectUri, cmd.RedirectUri, StringComparison.Ordinal)
             && RedirectUriListsEqual(State.RedirectUris, expectedRedirectUris)
-            && AevatarOAuthClientScopes.ContainsRequiredScopes(State.OauthScope)
-            && State.HmacKey.Length > 0;
+            && AevatarOAuthClientScopes.ContainsRequiredAuthorizationScopes(State.OauthScope)
+            && HasHmacKey;
 
         if (peerHealed)
         {
@@ -591,7 +599,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
 
     private Task<bool> AbsorbPeerHmacSeedAsync(EventStoreOptimisticConcurrencyException occ)
     {
-        if (State.HmacKey.Length > 0)
+        if (HasHmacKey)
         {
             Logger.LogWarning(
                 "Aevatar OAuth client HMAC-seed OCC race absorbed: peer activation already seeded a key. "
@@ -612,23 +620,17 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     }
 
     /// <summary>
-    /// Manual override path: persists a caller-supplied client_id without
-    /// calling NyxID DCR. Tests + manual operator scripts use this; the
-    /// production bootstrap path uses
-    /// <see cref="HandleEnsureProvisioned"/> instead so the actor (not the
-    /// caller) mediates the DCR call. Idempotent: re-issuing the same
+    /// Persists the configured client_id without calling NyxID DCR. Production
+    /// bootstrap and the operator rebuild endpoint both use this command.
+    /// Idempotent: re-issuing the same
     /// snapshot (client_id + authority + redirect_uri + oauth_scope) is a
     /// no-op. Always seeds a fresh HMAC key when the state has none —
     /// bootstrap and provisioning are single-step.
     /// </summary>
     /// <remarks>
     /// The same-snapshot check covers redirect_uri + oauth_scope on top of
-    /// client_id + authority because the operator-rebuild path
-    /// (<c>POST /api/oauth/aevatar-client/rebuild</c>, issue #549) must be
-    /// able to heal a wedged actor whose state has the right client_id but
-    /// stale or empty redirect_uri / oauth_scope — leaving those drifted
-    /// would let the next bootstrap re-DCR and replace the operator's
-    /// freshly-pinned client_id with a new (orphan-creating) one.
+    /// client_id + authority so configured bootstrap and operator reconcile
+    /// can repair a partial snapshot without appending duplicate events.
     /// </remarks>
     [EventHandler]
     public async Task HandleProvision(ProvisionAevatarOAuthClientCommand cmd)
@@ -650,9 +652,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         // ProvisionAevatarOAuthClientCommand v1 wire-compatibility, manual
         // operator scripts that only know client_id + authority) would
         // overwrite previously-persisted redirect_uri / oauth_scope with
-        // "" — and the next bootstrap pass would observe the cleared
-        // value, detect drift, re-DCR the freshly-pinned client, and
-        // rotate it away. Codex P1 on PR #570.
+        // "". Empty means "not supplied", not "clear the configured fact".
         var redirectUri = string.IsNullOrEmpty(cmd.RedirectUri) ? State.RedirectUri : cmd.RedirectUri;
         var oauthScope = string.IsNullOrEmpty(cmd.OauthScope) ? State.OauthScope : cmd.OauthScope;
         var redirectUris = cmd.RedirectUris.Count == 0
@@ -683,11 +683,13 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
                 redirectUris.Length == 0 ? "<unspecified>" : string.Join(",", redirectUris));
         }
 
-        if (State.HmacKey.Length == 0)
+        if (!HasHmacKey)
         {
-            await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+            await PersistDomainEventAsync(await BuildHmacKeyRotatedEventAsync());
             Logger.LogInformation("Seeded HMAC key for aevatar OAuth client");
         }
+
+        await ClearProvisioningRetryAsync("configured_client_provisioned");
     }
 
     /// <summary>
@@ -699,7 +701,7 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
     public async Task HandleRotateHmacKey(RotateAevatarOAuthClientHmacKeyCommand cmd)
     {
         ArgumentNullException.ThrowIfNull(cmd);
-        await PersistDomainEventAsync(BuildHmacKeyRotatedEvent());
+        await PersistDomainEventAsync(await BuildHmacKeyRotatedEventAsync());
         Logger.LogInformation("Rotated HMAC key for aevatar OAuth client");
     }
 
@@ -725,20 +727,36 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         Logger.LogInformation("Observed broker_capability_enabled on aevatar OAuth client");
     }
 
-    private AevatarOAuthClientHmacKeyRotatedEvent BuildHmacKeyRotatedEvent()
+    private async Task<AevatarOAuthClientHmacKeyRotatedEvent> BuildHmacKeyRotatedEventAsync()
     {
         var keyBytes = new byte[HmacKeyBytes];
         RandomNumberGenerator.Fill(keyBytes);
         var now = DateTimeOffset.UtcNow;
         var nextKid = NextKid(State.HmacKid, now);
 
+        // Store the new key material in the secret vault and persist only a
+        // reference. The plaintext [hmac_key] field stays empty for new
+        // writes; the projection provider resolves the bytes from the vault
+        // at read time (dual-read migration keeps legacy plaintext readable).
+        var secretVault = Services.GetRequiredService<ISecretVault>();
+        var stored = await secretVault.PutAsync(
+            new StoreSecretRequest(
+                CredentialSecretPurposes.OAuthStateTokenHmacKey,
+                WellKnownId,
+                WellKnownId,
+                Convert.ToBase64String(keyBytes),
+                "identity.oauth.hmac-rotate"))
+            .ConfigureAwait(false);
+
         // Demote the current key to the grace-window slot so any state token
         // signed with it (TTL ≤ 5 min) keeps verifying. Initial seed has no
-        // current key yet, so the demoted fields stay empty.
-        var demotingExisting = State.HmacKey.Length > 0;
-        return new AevatarOAuthClientHmacKeyRotatedEvent
+        // current key yet, so the demoted fields stay empty. Demotion carries
+        // both the ref (for ref-backed current keys) and the legacy bytes (for
+        // legacy plaintext current keys) so either shape keeps verifying.
+        var demotingExisting = State.HmacKey.Length > 0 || State.HmacKeyRef is not null;
+        var evt = new AevatarOAuthClientHmacKeyRotatedEvent
         {
-            HmacKey = ByteString.CopyFrom(keyBytes),
+            HmacKeyRef = stored.Reference,
             HmacKid = nextKid,
             RotatedAtUnix = now.ToUnixTimeSeconds(),
             PersistedAt = Timestamp.FromDateTimeOffset(now),
@@ -746,6 +764,9 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
             PreviousHmacKid = demotingExisting ? State.HmacKid : string.Empty,
             PreviousHmacDemotedAtUnix = demotingExisting ? now.ToUnixTimeSeconds() : 0,
         };
+        if (demotingExisting && State.HmacKeyRef is not null)
+            evt.PreviousHmacKeyRef = State.HmacKeyRef;
+        return evt;
     }
 
     private static string NextKid(string? currentKid, DateTimeOffset now)
@@ -799,9 +820,15 @@ public sealed class AevatarOAuthClientGAgent : GAgentBase<AevatarOAuthClientStat
         AevatarOAuthClientHmacKeyRotatedEvent evt)
     {
         var next = current.Clone();
+        // Copy both the ref (new writes) and legacy bytes (empty for new,
+        // populated for replayed legacy events) so the reducer stays pure and
+        // replay-safe — no vault call happens here; the Put already ran in the
+        // async builder at command time.
+        next.HmacKeyRef = evt.HmacKeyRef;
         next.HmacKey = evt.HmacKey ?? ByteString.Empty;
         next.HmacKeyRotatedAtUnix = evt.RotatedAtUnix;
         next.HmacKid = string.IsNullOrEmpty(evt.HmacKid) ? InitialHmacKid : evt.HmacKid;
+        next.PreviousHmacKeyRef = evt.PreviousHmacKeyRef;
         next.PreviousHmacKey = evt.PreviousHmacKey ?? ByteString.Empty;
         next.PreviousHmacKid = evt.PreviousHmacKid ?? string.Empty;
         next.PreviousHmacDemotedAtUnix = evt.PreviousHmacDemotedAtUnix;

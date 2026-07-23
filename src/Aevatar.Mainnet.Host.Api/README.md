@@ -84,6 +84,10 @@ bash src/Aevatar.Mainnet.Host.Api/boot.sh
 ```bash
 ASPNETCORE_ENVIRONMENT=Development \
 Aevatar__Authentication__Enabled=false \
+Audit__ActorIdentityHasher__ActiveKeyId=local-development-key \
+Audit__ActorIdentityHasher__Keys__0__KeyId=local-development-key \
+Audit__ActorIdentityHasher__Keys__0__Key=local-development-audit-identity-key \
+ChannelIdentity__OAuthClient__Bootstrap__Enabled=false \
 GAgentService__Demo__Enabled=false \
 Projection__Document__Providers__Elasticsearch__Enabled=false \
 Projection__Document__Providers__InMemory__Enabled=true \
@@ -92,10 +96,13 @@ Projection__Graph__Providers__InMemory__Enabled=true \
 Projection__Policies__Environment=Development \
 Projection__Policies__DenyInMemoryDocumentReadStore=false \
 Projection__Policies__DenyInMemoryGraphFactStore=false \
-ActorRuntime__OrleansStreamBackend=InMemory \
-ActorRuntime__OrleansPersistenceBackend=InMemory \
+ActorRuntime__Provider=InMemory \
+ActorRuntime__SecretStoreBackend=InMemory \
 dotnet run --project src/Aevatar.Mainnet.Host.Api --no-build
 ```
+
+上述审计 key 只用于本机临时开发数据，不得用于共享或生产环境。日常本地启动优先使用
+`bash src/Aevatar.Mainnet.Host.Api/boot.sh`，脚本会注入同一组 Development-only 默认值。
 
 如果只是想避免本地 scope workflow / actor state 因后端重启而完全丢失，而当前机器又没有 Kafka / Elasticsearch / Neo4j，可以使用仓库内置的 `PersistentLocal` 环境：
 

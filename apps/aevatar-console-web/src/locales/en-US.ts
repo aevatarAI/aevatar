@@ -45,22 +45,40 @@ const enUSMessages = {
     'Describe the workflow you want, or ask about the current setup...',
   'pages.chat.index.confirmAndCreate': 'Confirm and create',
   'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
-  'pages.chat.index.conversationTitle': 'Conversation title',
+  'pages.chat.index.cancel': 'Cancel',
+  'pages.chat.index.delete': 'Delete',
   'pages.chat.index.deleteChat': 'Delete {title}',
+  'pages.chat.index.deleteChatDescription':
+    'Delete "{title}" permanently? This conversation cannot be recovered.',
+  'pages.chat.index.deleteChatFailed': 'Conversation could not be deleted',
+  'pages.chat.index.deleteChatTitle': 'Delete conversation?',
   'pages.chat.index.emptyDescription':
     'Describe the Team, Member, or Workflow you want to create.',
-  'pages.chat.index.historyStoredLocally': 'History is stored in this browser.',
+  'pages.chat.index.failedToLoadConversation': 'Conversation could not be loaded',
+  'pages.chat.index.failedToLoadHistory': 'Chat history could not be loaded',
+  'pages.chat.index.historyStoredInWorkspace':
+    'History is saved to this workspace.',
+  'pages.chat.index.chatRequiresAuthentication':
+    'Starting or continuing a chat requires a trusted authenticated scope. Existing chat history remains available to manage.',
+  'pages.chat.index.historyTitle': 'Chat history',
+  'pages.chat.index.loadingConversation': 'Loading conversation',
+  'pages.chat.index.loadingHistory': 'Loading chat history',
+  'pages.chat.index.missingChatHistoryContext':
+    'Chat completed without a conversation context.',
   'pages.chat.index.newChat': 'New chat',
   'pages.chat.index.newChatAction': 'New Chat',
   'pages.chat.index.noChatHistory': 'No chat history',
   'pages.chat.index.noScope':
     'No usable scope was resolved for this account. Refresh and try again.',
   'pages.chat.index.openTeam': 'Open Team',
+  'pages.chat.index.openHistory': 'Open chat history',
   'pages.chat.index.openWorkflowStudio': 'Open Workflow Studio',
-  'pages.chat.index.renameChat': 'Rename {title}',
-  'pages.chat.index.renameChatTitle': 'Rename chat',
   'pages.chat.index.resolvingScope': 'Resolving scope',
+  'pages.chat.index.retry': 'Retry',
+  'pages.chat.index.retryHistory': 'Retry chat history',
   'pages.chat.index.reviewPlan': 'Review the plan before creating resources.',
+  'pages.chat.index.scopeMismatch':
+    'Requested scope {requestedScopeId} does not match authenticated scope {authenticatedScopeId}. Open Chat from the active workspace or sign in again.',
   'pages.chat.index.scopeValue': 'Scope {scopeId}',
   'pages.chat.index.status.completed': 'Completed',
   'pages.chat.index.status.creating': 'Creating',
@@ -76,6 +94,8 @@ const enUSMessages = {
   'pages.chat.index.title': 'Chat',
   'pages.chat.index.tokenSplit': '{input} in / {output} out',
   'pages.chat.index.totalTokens': '{count} tokens',
+  'pages.chat.index.unknownRole': 'Message',
+  'pages.chat.index.turnCount': '{count} turns',
   'pages.gagents.index.teamMembersBreadcrumb': 'Team members',
   'pages.missioncontrol.index.missionControlBreadcrumb': 'Mission Control',
   'pages.missioncontrol.index.platformBreadcrumb': 'Platform',
@@ -201,10 +221,6 @@ const enUSMessages = {
   'teams.home.actions.createTeam': 'Create team',
   'teams.home.actions.createMember': 'Create member',
   'teams.home.actions.createWorkflowMember': 'Create workflow member',
-  'teams.home.actions.debugEntryWorkflow': 'Debug entry workflow',
-  'teams.home.actions.debugWorkflow': 'Debug workflow',
-  'teams.home.actions.editEntryMember': 'Edit entry member',
-  'teams.home.actions.editMember': 'Edit member',
   'teams.home.actions.manageMembers': 'Manage members',
   'teams.home.actions.viewMembers': 'View members',
   'teams.home.actions.viewTeam': 'View team',
@@ -1062,9 +1078,15 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.selectPublishedRun': 'Select a published run',
   'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
-    'You can build or paste the workflow here. Saving creates a reusable workflow draft until the member link is materialized.',
+    'You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
@@ -1132,6 +1154,9 @@ const enUSMessages = {
     'Service ready',
   'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.graph.branchCount.one': '1 branch',
+  'teamMemberWorkflowStudio.graph.branchCount.other': '{count} branches',
+  'teamMemberWorkflowStudio.graph.role': 'Role',
   'teamMemberWorkflowStudio.header.activateAria': 'Activate workflow member',
   'teamMemberWorkflowStudio.header.activation.active': 'Active',
   'teamMemberWorkflowStudio.header.activation.error': 'Error',
@@ -1170,7 +1195,10 @@ const enUSMessages = {
     'Workflow draft and node actions',
   'teamMemberWorkflowStudio.header.openAutomations':
     'Open recurring work for this member',
-  'teamMemberWorkflowStudio.header.pasteYaml': 'Paste YAML',
+  'teamMemberWorkflowStudio.header.editYaml': 'Edit YAML',
+  'teamMemberWorkflowStudio.header.editYamlTitle': 'Edit workflow YAML',
+  'teamMemberWorkflowStudio.header.editYamlUnavailable':
+    'Load the workflow draft before editing YAML.',
   'teamMemberWorkflowStudio.header.primaryActionsAria':
     'Workflow primary actions',
   'teamMemberWorkflowStudio.header.prepareDraftRun': 'Prepare draft run',
@@ -1204,15 +1232,9 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.header.publishMemberShort': 'Publish member',
   'teamMemberWorkflowStudio.header.teamBreadcrumb': 'Team',
   'teamMemberWorkflowStudio.header.unsavedChanges': 'Unsaved changes',
-  'teamMemberWorkflowStudio.header.viewYaml': 'View YAML',
-  'teamMemberWorkflowStudio.header.viewYamlUnavailable':
-    'Load the workflow draft before viewing YAML.',
   'teamMemberWorkflowStudio.header.viewsAria': 'Workflow views',
   'teamMemberWorkflowStudio.header.workflowTitleAria': 'Workflow title',
   'teamMemberWorkflowStudio.header.yaml': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActions': 'YAML',
-  'teamMemberWorkflowStudio.header.yamlActionsTitle':
-    'View or import workflow YAML',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfiguration':
     'Advanced raw configuration',
   'teamMemberWorkflowStudio.nodeDetail.advancedRawConfigurationDescription':
@@ -1291,29 +1313,27 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.runsPanel.sectionAria': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.title': 'Member runs',
   'teamMemberWorkflowStudio.runsPanel.unknownStatus': 'unknown',
-  'teamMemberWorkflowStudio.yamlImportPanel.cancel': 'Cancel',
-  'teamMemberWorkflowStudio.yamlImportPanel.closeAria':
-    'Close paste YAML panel',
-  'teamMemberWorkflowStudio.yamlImportPanel.import': 'Import',
-  'teamMemberWorkflowStudio.yamlImportPanel.placeholder':
-    'name: Untitled workflow\nsteps:\n  - id: triage\n    type: llm_call',
-  'teamMemberWorkflowStudio.yamlImportPanel.sectionAria':
-    'Paste workflow YAML panel',
-  'teamMemberWorkflowStudio.yamlImportPanel.subtitle':
-    'Import into the current draft',
-  'teamMemberWorkflowStudio.yamlImportPanel.textareaAria': 'Workflow YAML',
-  'teamMemberWorkflowStudio.yamlImportPanel.title': 'Paste YAML',
-  'teamMemberWorkflowStudio.yamlPanel.closeAria': 'Close YAML panel',
+  'teamMemberWorkflowStudio.yamlPanel.apply': 'Apply to draft',
+  'teamMemberWorkflowStudio.yamlPanel.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.yamlPanel.closeAria': 'Close YAML editor',
+  'teamMemberWorkflowStudio.yamlPanel.conflictTitle':
+    'Reopen Edit YAML from the current canvas before applying.',
   'teamMemberWorkflowStudio.yamlPanel.copy': 'Copy',
   'teamMemberWorkflowStudio.yamlPanel.copyFailed': 'Failed to copy YAML.',
   'teamMemberWorkflowStudio.yamlPanel.copySuccess': 'YAML copied.',
-  'teamMemberWorkflowStudio.yamlPanel.empty':
-    'No YAML is available for this draft.',
-  'teamMemberWorkflowStudio.yamlPanel.retry': 'Retry',
+  'teamMemberWorkflowStudio.yamlPanel.diagnosticsAria': 'YAML diagnostics',
+  'teamMemberWorkflowStudio.yamlPanel.emptyYaml': 'Workflow YAML is empty.',
+  'teamMemberWorkflowStudio.yamlPanel.editorAria': 'Workflow YAML editor',
+  'teamMemberWorkflowStudio.yamlPanel.error': 'Error',
+  'teamMemberWorkflowStudio.yamlPanel.fixErrors':
+    'Resolve error-level diagnostics before applying.',
+  'teamMemberWorkflowStudio.yamlPanel.info': 'Info',
+  'teamMemberWorkflowStudio.yamlPanel.line': 'Line {line}',
   'teamMemberWorkflowStudio.yamlPanel.sectionAria': 'Workflow YAML panel',
-  'teamMemberWorkflowStudio.yamlPanel.subtitle': 'Current draft source',
-  'teamMemberWorkflowStudio.yamlPanel.textareaAria': 'Current workflow YAML',
-  'teamMemberWorkflowStudio.yamlPanel.title': 'Workflow YAML',
+  'teamMemberWorkflowStudio.yamlPanel.subtitle': 'Draft source buffer',
+  'teamMemberWorkflowStudio.yamlPanel.title': 'Edit YAML',
+  'teamMemberWorkflowStudio.yamlPanel.unapplied': 'Unapplied',
+  'teamMemberWorkflowStudio.yamlPanel.warning': 'Warning',
   'pages.studio.studiomembercurrentrunpanel.details': 'Details',
   'pages.studio.studiomemberinvokeinspector.copy':
     'Endpoint, payload, run events, and recent history are available here without taking over the task page.',
@@ -1490,10 +1510,34 @@ const enUSMessages = {
   'pages.studio.studiobuildpanels.script.promotion.version.summary':
     'Script promotion version summary',
   'pages.studio.studiobuildpanels.version.ready': 'version ready',
+  'pages.studio.studiofilesdetailpane.chat.author.assistant': 'Assistant',
+  'pages.studio.studiofilesdetailpane.chat.author.unknown': 'Unknown author',
+  'pages.studio.studiofilesdetailpane.chat.author.user': 'User',
+  'pages.studio.studiofilesdetailpane.chat.message.error': 'Error',
+  'pages.studio.studiofilesdetailpane.chat.message.thinking': 'Thinking',
+  'pages.studio.studiofilesdetailpane.chat.status.complete': 'Complete',
+  'pages.studio.studiofilesdetailpane.chat.status.error': 'Error',
+  'pages.studio.studiofilesdetailpane.chat.status.unknown': 'Unknown',
+  'pages.studio.studiofilesdetailpane.conversation.turn.count.many':
+    '{count} turns',
+  'pages.studio.studiofilesdetailpane.conversation.turn.count.one': '1 turn',
+  'pages.studio.studiofilesdetailpane.conversation.turn.meta':
+    '{turnCount} · {serviceKind} · {updatedAt}',
+  'pages.studio.studiofilesdetailpane.delete.conversation.confirmation.description':
+    '{title} will be removed from chat history and cannot be recovered from this view.',
+  'pages.studio.studiofilesdetailpane.delete.conversation.confirmation.title':
+    'Delete this conversation?',
+  'pages.studio.studiofilesdetailpane.delete.conversation.now': 'Delete now',
   'pages.studio.studiofilesdetailpane.draft': 'Draft',
+  'pages.studio.studiofilesdetailpane.keep.conversation': 'Keep conversation',
   'pages.studio.studiofilesdetailpane.version.ready': 'Version ready',
   'pages.studio.studiofilespage.chat.history': 'Chat history',
+  'pages.studio.studiofilespage.chat.history.turn.count.many': '{count} turns',
+  'pages.studio.studiofilespage.chat.history.turn.count.one': '1 turn',
   'pages.studio.studiofilespage.draft': 'Draft',
+  'pages.studio.studiofilespage.failed.to.load.conversations':
+    'Failed to load conversations',
+  'pages.studio.studiofilespage.retry.conversations': 'Retry conversations',
   'pages.studio.studiofilespage.version.ready': 'Version ready',
   'pages.studio.studioinvokediagnosticsdrawer.endpoint.ready': 'Endpoint ready',
   'pages.studio.studiomemberinvokeinspector.service.ready': 'Service ready',

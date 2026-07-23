@@ -59,9 +59,9 @@ public sealed class ScopeWorkflowsGetTool : IAgentTool
             if (string.IsNullOrWhiteSpace(workflowId))
                 return JsonDefaults.Error("'workflow_id' is required");
 
-            var scopeId = AgentToolRequestContext.ScopeId;
+            var scopeId = ToolOwnerScopeResolver.Resolve();
             if (string.IsNullOrWhiteSpace(scopeId))
-                return JsonDefaults.Error("scope_id not available in request context");
+                return JsonDefaults.Error(ToolOwnerScopeResolver.MissingMessage);
 
             var lookup = await _queryPort.LookupByWorkflowIdAsync(scopeId.Trim(), workflowId.Trim(), ct);
             if (!lookup.IsRunnable)

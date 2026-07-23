@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Security;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf;
 
@@ -9,7 +11,7 @@ namespace Aevatar.Workflow.Core;
 internal static class WorkflowArtifactFactBuilder
 {
     // O1 (06-19-workflow-run-observatory): tool args/results may carry secrets; redact at the
-    // materialization boundary the same way step output_preview is truncated.
+    // materialization boundary before truncating to ToolDetailMaxLength.
     private const int ToolDetailMaxLength = 2000;
 
     public static bool TryBuild(
@@ -116,8 +118,8 @@ internal static class WorkflowArtifactFactBuilder
             RoleActorId = publisherActorId,
             RoleId = publisherActorId,
             SessionId = completed.SessionId ?? string.Empty,
-            Content = completed.Content ?? string.Empty,
-            ReasoningContent = completed.ReasoningContent ?? string.Empty,
+            Content = SanitizeArtifactText(completed.Content),
+            ReasoningContent = SanitizeArtifactText(completed.ReasoningContent),
             ContentEmitted = completed.Success,
         };
 
@@ -154,8 +156,8 @@ internal static class WorkflowArtifactFactBuilder
             RoleActorId = publisherActorId,
             RoleId = roleId,
             SessionId = completed.SessionId ?? string.Empty,
-            Content = completed.Content ?? string.Empty,
-            ReasoningContent = completed.ReasoningContent ?? string.Empty,
+            Content = SanitizeArtifactText(completed.Content),
+            ReasoningContent = SanitizeArtifactText(completed.ReasoningContent),
             ContentEmitted = completed.ContentEmitted,
         };
         evt.ToolCalls.AddRange(BuildEnrichedToolCalls(completed));
@@ -186,12 +188,12 @@ internal static class WorkflowArtifactFactBuilder
             {
                 ToolName = toolCall.ToolName ?? string.Empty,
                 CallId = callId,
-                ArgumentsJson = Redact(toolCall.ArgumentsJson),
+                ArgumentsJson = SanitizeToolDetail(toolCall.ArgumentsJson),
             };
 
             if (callId.Length > 0 && receiptsByCallId.TryGetValue(callId, out var receipt))
             {
-                enriched.ResultJson = Redact(receipt.ResultJson);
+                enriched.ResultJson = SanitizeToolDetail(receipt.ResultJson);
                 enriched.Success = receipt.Status == AgentToolReceiptStatus.Success;
                 enriched.Error = ResolveReceiptError(receipt);
             }
@@ -205,20 +207,28 @@ internal static class WorkflowArtifactFactBuilder
     private static string ResolveReceiptError(AgentToolReceipt receipt)
     {
         if (!string.IsNullOrWhiteSpace(receipt.ErrorMessage))
-            return Redact(receipt.ErrorMessage);
+            return SanitizeToolDetail(receipt.ErrorMessage);
         if (!string.IsNullOrWhiteSpace(receipt.ErrorCode))
-            return receipt.ErrorCode.Trim();
+            return WorkflowAuditTextSanitizer.Sanitize(receipt.ErrorCode);
 
         return string.Empty;
     }
 
-    private static string Redact(string? value)
+    private static string SanitizeToolDetail(string? value)
+    {
+        return SanitizeArtifactText(value);
+    }
+
+    private static string SanitizeArtifactText(string? value)
     {
         if (string.IsNullOrEmpty(value))
             return string.Empty;
 
-        return value.Length <= ToolDetailMaxLength
-            ? value
-            : value[..ToolDetailMaxLength] + "...";
+        var scrubbed = SecretScrubber.Scrub(value);
+        var sanitized = WorkflowAuditTextSanitizer.SanitizeForDisplay(scrubbed, ToolDetailMaxLength);
+
+        return scrubbed.Contains(SecretScrubber.Marker, StringComparison.Ordinal)
+            ? sanitized.Replace(WorkflowAuditTextSanitizer.RedactedValue, SecretScrubber.Marker, StringComparison.Ordinal)
+            : sanitized;
     }
 }

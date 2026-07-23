@@ -119,7 +119,7 @@ public sealed class NyxIdProxyToolFileArtifactTests
             ingress.Requests.Should().ContainSingle();
             var ingressRequest = ingress.Requests[0];
             ingressRequest.Content.ToArray().Should().Equal(body);
-            ingressRequest.SourceKind.Should().Be(WorkflowFileSourceKind.ConnectedServiceResource);
+            ingressRequest.SourceKind.Should().Be(FileArtifactSourceKind.ConnectedServiceResource);
             ingressRequest.SourceMessageId.Should().Be("nyxid_proxy:storage");
             ingressRequest.SourceResourceKey.Should().Be("/reports/1");
             ingressRequest.FileName.Should().Be("report.csv");
@@ -556,17 +556,17 @@ public sealed class NyxIdProxyToolFileArtifactTests
             _exception = exception;
         }
 
-        public List<WorkflowFileIngressRequest> Requests { get; } = [];
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
 
-        public ValueTask<WorkflowFileIngressResult> IngestAsync(
-            WorkflowFileIngressRequest request,
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
             if (_exception != null)
                 throw _exception;
 
-            return ValueTask.FromResult(new WorkflowFileIngressResult(new WorkflowFileRef
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
             {
                 FileId = "file-1",
                 ArtifactId = "artifact-1",
