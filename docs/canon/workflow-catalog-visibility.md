@@ -25,6 +25,15 @@ owner: eanzhao
 - **公共目录 readmodel 不携带 `scope_id` 字段**：它不是 scope 归属的事实源；scope 归属由 scope 私有资源的独立 readmodel/端点承载。
 - **后端合约强制，不依赖 prompt**：可见性由投影边界 + 端点 scope guard + 工具目录合约共同保证，模型提示词不作为权限手段。
 
+## Definition / Run 写边界
+
+- **Definition provisioning 是唯一正常写入口**：文件导入、startup materialization、service revision activation 等明确拥有 Definition 生命周期的流程通过 `EnsureDefinitionAsync` 创建或更新 Definition。
+- **Run 入口不更新已有 Definition**：`CreateRunAsync`、`EnsureRunAsync`、`EnsureRunAndDispatchAsync` 对非空 `DefinitionActorId` 只验证并复用已有 Definition，禁止写回 YAML、inline YAML、scope、source kind 或 admission plan，也禁止在请求路径修复 binding readmodel。
+- **临时 Definition 只来自空 ID**：inline YAML、draft、fork 等确实需要临时 Definition 的入口必须传空 `DefinitionActorId`，由 Run provisioning 创建与该 Run 关联的隔离 Definition。
+- **Run scope 与 Definition owner scope 分离**：调用 scope 始终写入 Run binding/execution context。global catalog Definition 的 owner scope 为空；scope-owned service revision Definition 的 owner scope 为其 tenant，二者不能因一次 Run 请求互相转换。
+- **Admission 差异不授予写权限**：Run 请求复用已有 Definition 时只校验 workflow name、root YAML 和 inline YAML。request-side 缺少 startup admission digest 不构成重绑理由；admission plan 只能由 Definition provisioning 更新。
+- **空 scope 修复使用 protobuf presence**：`BindWorkflowDefinitionEvent.scope_id` 是 optional 字段。字段缺席表示保留历史 scope，present-empty 表示由 Definition owner 显式清空。startup materializer 对公共目录 Definition 必须发送 present-empty。
+
 ## 公共目录合约（showInLibrary）
 
 公共目录内部区分“可浏览模板”与“内部 primitive/demo 示例”：

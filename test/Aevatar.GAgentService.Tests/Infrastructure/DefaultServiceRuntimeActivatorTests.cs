@@ -45,6 +45,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         var runtime = new RecordingActorRuntime();
         runtime.MarkExisting("workflow-definition-1:deployment-actor:r1");
         var workflowPort = new RecordingWorkflowRunActorPort();
+        var identity = GAgentServiceTestKit.CreateIdentity();
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
             new RecordingScriptDefinitionSnapshotPort(),
@@ -68,7 +69,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
 
         var result = await activator.ActivateAsync(
             new ServiceRuntimeActivationRequest(
-                GAgentServiceTestKit.CreateIdentity(),
+                identity,
                 artifact,
                 "r1",
                 "deployment-actor"));
@@ -77,6 +78,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
         workflowPort.BindCalls.Should().ContainSingle();
         workflowPort.ExplicitBindCalls.Should().BeEmpty();
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("workflow-definition-1:deployment-actor:r1");
+        workflowPort.DefinitionBindings.Should().ContainSingle()
+            .Which.ScopeId.Should().Be(identity.TenantId);
     }
 
     [Fact]

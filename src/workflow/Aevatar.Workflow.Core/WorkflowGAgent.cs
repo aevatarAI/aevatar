@@ -32,9 +32,10 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
         {
             WorkflowName = workflowName ?? string.Empty,
             WorkflowYaml = workflowYaml ?? string.Empty,
-            ScopeId = scopeId?.Trim() ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
         };
+        if (scopeId is not null)
+            bindDefinitionEvent.ScopeId = scopeId.Trim();
         if (inlineWorkflowYamls != null)
         {
             foreach (var (key, value) in inlineWorkflowYamls)
@@ -65,7 +66,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             request.WorkflowYaml,
             request.WorkflowName,
             request.InlineWorkflowYamls,
-            request.ScopeId,
+            request.HasScopeId ? request.ScopeId : null,
             request.SourceKind,
             request.CapabilityAdmissionPlan);
 
@@ -107,7 +108,7 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             : evt.WorkflowName.Trim();
         if (!string.IsNullOrWhiteSpace(incomingWorkflowName))
             next.WorkflowName = incomingWorkflowName;
-        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
+        if (evt.HasScopeId)
             next.ScopeId = evt.ScopeId.Trim();
         next.SourceKind = string.IsNullOrWhiteSpace(evt.SourceKind)
             ? "builtin"

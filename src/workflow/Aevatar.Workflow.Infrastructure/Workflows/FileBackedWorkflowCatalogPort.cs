@@ -87,6 +87,7 @@ internal sealed class FileBackedWorkflowCatalogPort
             {
                 WorkflowName = definition.WorkflowName ?? string.Empty,
                 WorkflowYaml = definition.WorkflowYaml ?? string.Empty,
+                ScopeId = string.Empty,
                 SourceKind = string.IsNullOrWhiteSpace(definition.SourceKind)
                     ? "builtin"
                     : definition.SourceKind.Trim(),
