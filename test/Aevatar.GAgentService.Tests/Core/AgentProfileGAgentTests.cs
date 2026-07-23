@@ -19,7 +19,7 @@ public sealed class AgentProfileGAgentTests
         var (agent, store, publisher) = await CreateActorAsync();
         var command = InitializeCommand();
 
-        await agent.HandleInitializeAsync(command);
+        await DispatchInitializeAsync(agent, command);
         command.Identity.ProfileId = "mutated-after-commit";
         command.InitialContent.DisplayName = "Mutated after commit";
 
@@ -41,16 +41,31 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
+    public async Task Initialize_ShouldRejectSpoofedEnvelopePublisherBeforeCommit()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand(operationId: "op-initialize-spoofed-publisher");
+
+        var act = () => DispatchInitializeAsync(agent, command, "namespace-spoof");
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PROTOCOL_PUBLISHER_MISMATCH");
+        agent.State.Identity.Should().BeNull();
+        (await store.GetEventsAsync(agent.Id)).Should().BeEmpty();
+        publisher.Sends.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Initialize_IdenticalOperationReplayShouldResendContinuationWithoutNewEvent()
     {
         var (agent, store, publisher) = await CreateActorAsync();
         var command = InitializeCommand();
-        await agent.HandleInitializeAsync(command);
+        await DispatchInitializeAsync(agent, command);
         var replay = command.Clone();
         replay.Operation.CommandId = "cmd-initialize-retry";
         replay.Operation.CorrelationId = "corr-initialize-retry";
 
-        await agent.HandleInitializeAsync(replay);
+        await DispatchInitializeAsync(agent, replay);
 
         (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
         publisher.Sends.Should().HaveCount(2);
@@ -66,7 +81,7 @@ public sealed class AgentProfileGAgentTests
         var command = InitializeCommand();
         var initialDraftSha256 = AgentProfileDeterminism.ComputeDraftSha256(command.InitialContent);
 
-        var initialize = () => agent.HandleInitializeAsync(command);
+        var initialize = () => DispatchInitializeAsync(agent, command);
         await initialize.Should().ThrowAsync<InvalidOperationException>();
 
         var changed = agent.State.Draft.Clone();
@@ -81,7 +96,7 @@ public sealed class AgentProfileGAgentTests
         var replay = command.Clone();
         replay.Operation.CommandId = "cmd-initialize-recovery";
         replay.Operation.CorrelationId = "corr-initialize-recovery";
-        await agent.HandleInitializeAsync(replay);
+        await DispatchInitializeAsync(agent, replay);
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
         publisher.Sends.Should().ContainSingle();
@@ -98,7 +113,7 @@ public sealed class AgentProfileGAgentTests
         publisher.SendFailuresRemaining = 1;
         var command = InitializeCommand(content: ContentWithMultipleDefaultBindings());
 
-        var initialize = () => agent.HandleInitializeAsync(command);
+        var initialize = () => DispatchInitializeAsync(agent, command);
         await initialize.Should().ThrowAsync<InvalidOperationException>();
 
         (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
@@ -106,7 +121,7 @@ public sealed class AgentProfileGAgentTests
         var replay = command.Clone();
         replay.Operation.CommandId = "cmd-initialize-rejection-recovery";
         replay.Operation.CorrelationId = "corr-initialize-rejection-recovery";
-        await agent.HandleInitializeAsync(replay);
+        await DispatchInitializeAsync(agent, replay);
 
         (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
         publisher.Sends.Should().ContainSingle();
@@ -147,7 +162,7 @@ public sealed class AgentProfileGAgentTests
         var sendCountBeforeRejection = publisher.Sends.Count;
         publisher.SendFailuresRemaining = 1;
 
-        var initialize = () => agent.HandleInitializeAsync(command);
+        var initialize = () => DispatchInitializeAsync(agent, command);
         await initialize.Should().ThrowAsync<InvalidOperationException>();
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCountBeforeRejection + 1);
@@ -157,7 +172,7 @@ public sealed class AgentProfileGAgentTests
         replay.Operation.CommandId = $"cmd-{rejection}-rejection-retry";
         replay.Operation.CorrelationId = $"corr-{rejection}-rejection-retry";
 
-        await agent.HandleInitializeAsync(replay);
+        await DispatchInitializeAsync(agent, replay);
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCountBeforeRejection + 1);
         publisher.Sends.Should().HaveCount(sendCountBeforeRejection + 1);
@@ -191,13 +206,13 @@ public sealed class AgentProfileGAgentTests
         };
         if (rejection == "input-digest")
             command.Operation.InputSha256 = Digest(0x72);
-        await agent.HandleInitializeAsync(command);
+        await DispatchInitializeAsync(agent, command);
         var committedVersion = agent.EventSourcing!.CurrentVersion;
         var sendCount = publisher.Sends.Count;
         var drifted = command.Clone();
         drifted.InitialContent.DisplayName = "Drifted initialization content";
 
-        var act = () => agent.HandleInitializeAsync(drifted);
+        var act = () => DispatchInitializeAsync(agent, drifted);
 
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
@@ -212,12 +227,12 @@ public sealed class AgentProfileGAgentTests
         var (agent, store, publisher) = await CreateActorAsync();
         var command = InitializeCommand();
         command.InitialContent.DisplayName = string.Empty;
-        await agent.HandleInitializeAsync(command);
+        await DispatchInitializeAsync(agent, command);
         var replay = command.Clone();
         replay.Operation.CommandId = "cmd-initialize-invalid-content-retry";
         replay.Operation.CorrelationId = "corr-initialize-invalid-content-retry";
 
-        await agent.HandleInitializeAsync(replay);
+        await DispatchInitializeAsync(agent, replay);
 
         (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
         agent.State.Operations.Should().ContainSingle();
@@ -248,7 +263,7 @@ public sealed class AgentProfileGAgentTests
                 break;
         }
 
-        var act = () => agent.HandleInitializeAsync(command);
+        var act = () => DispatchInitializeAsync(agent, command);
 
         await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         (await store.GetEventsAsync(agent.Id)).Should().BeEmpty();
@@ -260,11 +275,11 @@ public sealed class AgentProfileGAgentTests
     public async Task InitializeSuccess_ShouldPreserveEarlierRejectedOperationFacts()
     {
         var (agent, store, _) = await CreateActorAsync();
-        await agent.HandleInitializeAsync(InitializeCommand(
+        await DispatchInitializeAsync(agent, InitializeCommand(
             content: ContentWithMultipleDefaultBindings(),
             operationId: "op-initialize-rejected"));
 
-        await agent.HandleInitializeAsync(InitializeCommand(operationId: "op-initialize-valid"));
+        await DispatchInitializeAsync(agent, InitializeCommand(operationId: "op-initialize-valid"));
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
         agent.State.Identity.Should().NotBeNull();
@@ -277,16 +292,16 @@ public sealed class AgentProfileGAgentTests
     {
         var (agent, store, publisher) = await CreateActorAsync();
         var command = InitializeCommand();
-        await agent.HandleInitializeAsync(command);
+        await DispatchInitializeAsync(agent, command);
         var drifted = InitializeCommand(
             content: GAgentServiceTestKit.CreateAgentProfileContent(displayName: "Drifted"));
         var otherIdentity = GAgentServiceTestKit.CreateAgentProfileIdentity(profileId: "prof-other");
         var changedIdentity = InitializeCommand(otherIdentity, operationId: "op-initialize-other");
 
-        var driftedAct = () => agent.HandleInitializeAsync(drifted);
+        var driftedAct = () => DispatchInitializeAsync(agent, drifted);
         var exception = await driftedAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
-        await agent.HandleInitializeAsync(changedIdentity);
+        await DispatchInitializeAsync(agent, changedIdentity);
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
         publisher.Sends.Should().HaveCount(2);
@@ -818,6 +833,43 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
+    public async Task Publish_ShouldValidateAuthoritativeRevisionWithinSnapshotLimit()
+    {
+        var content = GAgentServiceTestKit.CreateAgentProfileContent();
+        content.SkillBindings.Add(Enumerable.Range(1, 17).Select(index => Binding(
+            $"bind-{index:D2}",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidAlpha, "skill-alpha"))));
+        var (agent, store, _) = await CreateInitializedActorAsync(content: content);
+        var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+        for (var index = 0; index < 16; index++)
+        {
+            snapshot.SkillBindings[index].Skill.Package.Assets.Add(new AgentProfileNamedTextAsset
+            {
+                Path = "asset.txt",
+                Content = new string((char)('a' + index), 250_000),
+            });
+        }
+        var padding = new AgentProfileNamedTextAsset { Path = "padding.txt" };
+        snapshot.SkillBindings[^1].Skill.Package.Assets.Add(padding);
+        FitSnapshotToSerializedSize(
+            snapshot,
+            padding,
+            AgentProfileValidationLimits.PublishedSnapshotMaxSerializedBytes);
+        snapshot.CalculateSize().Should().Be(
+            AgentProfileValidationLimits.PublishedSnapshotMaxSerializedBytes);
+
+        await agent.HandlePublishAsync(PublishCommand(
+            agent,
+            snapshot,
+            "op-publish-authoritative-revision-size"));
+
+        agent.State.Published.Should().BeNull();
+        agent.State.LastMutation.Diagnostic.Code.Should().Be("PUBLISHED_SNAPSHOT_TOO_LARGE");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task Publish_ShouldRequireExactDraftBindingMatch()
     {
         var content = GAgentServiceTestKit.CreateAgentProfileContent();
@@ -968,6 +1020,195 @@ public sealed class AgentProfileGAgentTests
         agent.State.Published.SnapshotSha256.Should().Equal(second.SnapshotSha256);
     }
 
+    [Theory]
+    [InlineData("update")]
+    [InlineData("upsert")]
+    [InlineData("remove")]
+    [InlineData("publish")]
+    public async Task CanonicalMutationBadDigest_ExactReplayShouldIgnoreCallerDigest(
+        string mutation)
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var command = CanonicalMutationCommand(agent, mutation, "alpha", $"op-bad-digest-{mutation}");
+        var authoritativeDigest = CanonicalMutationInputSha256(command);
+        command = CloneMutation(command);
+        MutationOperation(command).InputSha256 = Digest(0x81);
+        authoritativeDigest.Should().NotEqual(MutationOperation(command).InputSha256);
+        await DispatchMutationAsync(agent, command);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        var replay = CloneMutation(command);
+        MutationOperation(replay).InputSha256 = Digest(0x82);
+        MutationOperation(replay).CommandId = $"cmd-bad-digest-{mutation}-retry";
+        MutationOperation(replay).CorrelationId = $"corr-bad-digest-{mutation}-retry";
+
+        await DispatchMutationAsync(agent, replay);
+
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+        agent.State.LastMutation.Diagnostic.Code.Should().Be("OPERATION_INPUT_SHA256_MISMATCH");
+    }
+
+    [Theory]
+    [InlineData("update")]
+    [InlineData("upsert")]
+    [InlineData("remove")]
+    [InlineData("publish")]
+    public async Task CanonicalMutationDigestAlias_ShouldNotReplayDifferentPayload(
+        string mutation)
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var operationId = $"op-digest-alias-{mutation}";
+        var first = CanonicalMutationCommand(agent, mutation, "alpha", operationId);
+        var second = CanonicalMutationCommand(agent, mutation, "beta", operationId);
+        var secondDigest = CanonicalMutationInputSha256(second);
+        CanonicalMutationInputSha256(first).Should().NotEqual(secondDigest);
+        MutationOperation(first).InputSha256 = secondDigest;
+        await DispatchMutationAsync(agent, first);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => DispatchMutationAsync(agent, second);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Theory]
+    [InlineData("update", "upsert")]
+    [InlineData("upsert", "remove")]
+    [InlineData("remove", "publish")]
+    [InlineData("publish", "update")]
+    public async Task MutationOperationIdReuseAcrossCommandFamilies_ShouldConflict(
+        string firstMutation,
+        string secondMutation)
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var operationId = $"op-cross-family-{firstMutation}-{secondMutation}";
+        var first = CanonicalMutationCommand(agent, firstMutation, "alpha", operationId);
+        var second = CanonicalMutationCommand(agent, secondMutation, "beta", operationId);
+        MutationOperation(first).InputSha256 = CanonicalMutationInputSha256(second);
+        await DispatchMutationAsync(agent, first);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => DispatchMutationAsync(agent, second);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Fact]
+    public async Task InitializeBadDigest_ExactReplayShouldIgnoreCallerDigestAndRejectPayloadAlias()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var identity = GAgentServiceTestKit.CreateAgentProfileIdentity();
+        var firstContent = GAgentServiceTestKit.CreateAgentProfileContent(displayName: "First");
+        var secondContent = GAgentServiceTestKit.CreateAgentProfileContent(displayName: "Second");
+        var command = InitializeCommand(identity, firstContent, "op-initialize-bad-digest-authority");
+        command.Operation.InputSha256 =
+            AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, secondContent);
+        await DispatchInitializeAsync(agent, command);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        var replay = command.Clone();
+        replay.Operation.InputSha256 = Digest(0x83);
+
+        await DispatchInitializeAsync(agent, replay);
+
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        publisher.Sends.Should().HaveCount(2);
+        var drifted = InitializeCommand(identity, secondContent, command.Operation.OperationId);
+        var act = () => DispatchInitializeAsync(agent, drifted);
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Fact]
+    public async Task InitializeOperationIdReuseForMutation_ShouldConflict()
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var update = UpdateCommand(
+            agent.State.Identity,
+            GAgentServiceTestKit.CreateAgentProfileContent(displayName: "Changed"),
+            "op-initialize-update-cross-family",
+            agent.EventSourcing!.CurrentVersion);
+        var initialize = InitializeCommand(
+            agent.State.Identity,
+            agent.State.Draft,
+            update.Operation.OperationId);
+        initialize.Operation.InputSha256 = update.Operation.InputSha256;
+        await DispatchInitializeAsync(agent, initialize);
+        var rejectedVersion = agent.EventSourcing.CurrentVersion;
+
+        var act = () => agent.HandleUpdateDraftAsync(update);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Fact]
+    public async Task MissingInitializeContent_ShouldCommitReplayAndDistinguishPresentEmpty()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand(operationId: "op-missing-initialize-content");
+        command.InitialContent = null!;
+        command.Operation.InputSha256 = Digest(0x84);
+
+        await DispatchInitializeAsync(agent, command);
+
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        agent.State.Operations.Single().InitializationRejection.Continuation.Diagnostic.Code
+            .Should().Be("MISSING_PROFILE_CONTENT");
+        var replay = command.Clone();
+        replay.Operation.InputSha256 = Digest(0x85);
+        await DispatchInitializeAsync(agent, replay);
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        publisher.Sends.Should().HaveCount(2);
+        var drifted = command.Clone();
+        drifted.InitialContent = new AgentProfileContent();
+        var act = () => DispatchInitializeAsync(agent, drifted);
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Theory]
+    [InlineData("update", "MISSING_PROFILE_CONTENT")]
+    [InlineData("upsert", "MISSING_SKILL_BINDING")]
+    [InlineData("publish", "MISSING_PUBLISHED_SNAPSHOT")]
+    public async Task MissingMutationPayload_ShouldCommitReplayAndDistinguishPresentEmpty(
+        string mutation,
+        string expectedCode)
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var command = CanonicalMutationCommand(
+            agent,
+            mutation,
+            "missing",
+            $"op-missing-{mutation}-payload");
+        ClearNestedMutationPayload(command);
+        MutationOperation(command).InputSha256 = Digest(0x86);
+
+        await DispatchMutationAsync(agent, command);
+
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        agent.State.LastMutation.Diagnostic.Code.Should().Be(expectedCode);
+        var replay = CloneMutation(command);
+        MutationOperation(replay).InputSha256 = Digest(0x87);
+        await DispatchMutationAsync(agent, replay);
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        var drifted = CloneMutation(command);
+        SetPresentEmptyNestedMutationPayload(drifted);
+        var act = () => DispatchMutationAsync(agent, drifted);
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
     private static async Task<(AgentProfileGAgent Agent, InMemoryEventStore Store, RecordingProfileEventPublisher Publisher)>
         CreateActorAsync()
     {
@@ -989,8 +1230,130 @@ public sealed class AgentProfileGAgentTests
             AgentProfileContent? content = null)
     {
         var fixture = await CreateActorAsync();
-        await fixture.Agent.HandleInitializeAsync(InitializeCommand(identity, content));
+        await DispatchInitializeAsync(fixture.Agent, InitializeCommand(identity, content));
         return fixture;
+    }
+
+    private static Task DispatchInitializeAsync(
+        AgentProfileGAgent agent,
+        InitializeAgentProfileCommand command,
+        string publisherActorId = AgentProfileActorIds.Namespace) =>
+        GAgentServiceTestKit.DispatchAsync(agent, command, publisherActorId);
+
+    private static IMessage CanonicalMutationCommand(
+        AgentProfileGAgent agent,
+        string mutation,
+        string variant,
+        string operationId)
+    {
+        if (mutation == "publish")
+        {
+            var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+            snapshot.Purpose = $"Purpose {variant}";
+            snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+            return PublishCommand(agent, snapshot, operationId);
+        }
+
+        return mutation switch
+        {
+            "update" => UpdateCommand(
+                agent.State.Identity,
+                GAgentServiceTestKit.CreateAgentProfileContent(displayName: $"Changed {variant}"),
+                operationId,
+                agent.EventSourcing!.CurrentVersion),
+            "upsert" => UpsertCommand(
+                agent,
+                Binding(
+                    $"bind-{variant}",
+                    AgentProfileSkillActivationMode.Routed,
+                    ExactReference(SkillGuidAlpha, "skill-alpha")),
+                operationId),
+            "remove" => RemoveCommand(agent, $"bind-{variant}", operationId),
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null),
+        };
+    }
+
+    private static ByteString CanonicalMutationInputSha256(IMessage command) =>
+        command switch
+        {
+            UpdateAgentProfileDraftCommand update =>
+                AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
+                    update.Identity,
+                    update.Content),
+            UpsertAgentProfileSkillBindingCommand upsert =>
+                AgentProfileDeterminism.ComputeUpsertAgentProfileSkillBindingInputSha256(
+                    upsert.Identity,
+                    upsert.Binding),
+            RemoveAgentProfileSkillBindingCommand remove =>
+                AgentProfileDeterminism.ComputeRemoveAgentProfileSkillBindingInputSha256(
+                    remove.Identity,
+                    remove.BindingId),
+            PublishAgentProfileCommand publish =>
+                AgentProfileDeterminism.ComputePublishAgentProfileInputSha256(
+                    publish.Identity,
+                    publish.Snapshot),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+    private static void ClearNestedMutationPayload(IMessage command)
+    {
+        switch (command)
+        {
+            case UpdateAgentProfileDraftCommand update:
+                update.Content = null!;
+                break;
+            case UpsertAgentProfileSkillBindingCommand upsert:
+                upsert.Binding = null!;
+                break;
+            case PublishAgentProfileCommand publish:
+                publish.Snapshot = null!;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(command));
+        }
+    }
+
+    private static void SetPresentEmptyNestedMutationPayload(IMessage command)
+    {
+        switch (command)
+        {
+            case UpdateAgentProfileDraftCommand update:
+                update.Content = new AgentProfileContent();
+                break;
+            case UpsertAgentProfileSkillBindingCommand upsert:
+                upsert.Binding = new AgentProfileSkillBinding();
+                break;
+            case PublishAgentProfileCommand publish:
+                publish.Snapshot = new AgentProfilePublishedSnapshot();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(command));
+        }
+    }
+
+    private static void FitSnapshotToSerializedSize(
+        AgentProfilePublishedSnapshot snapshot,
+        AgentProfileNamedTextAsset padding,
+        int targetSize)
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            foreach (var binding in snapshot.SkillBindings)
+            {
+                binding.Skill.ContentSha256 =
+                    AgentProfileDeterminism.ComputeSealedSkillSha256(binding.Skill);
+            }
+            snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+            var delta = targetSize - snapshot.CalculateSize();
+            if (delta == 0)
+                return;
+            var nextLength = checked(padding.Content.Length + delta);
+            if (nextLength < 0 || nextLength > AgentProfileValidationLimits.TextAssetMaxUtf8Bytes)
+                throw new InvalidOperationException("The snapshot boundary fixture cannot satisfy shared limits.");
+            padding.Content = new string('z', nextLength);
+        }
+
+        throw new InvalidOperationException("The snapshot boundary fixture did not converge.");
     }
 
     private static IMessage MalformedMutationCommand(

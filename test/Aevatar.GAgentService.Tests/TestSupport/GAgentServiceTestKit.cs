@@ -21,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.GAgentService.Tests.TestSupport;
 
@@ -243,6 +244,23 @@ internal static class GAgentServiceTestKit
         ArgumentNullException.ThrowIfNull(agent);
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         SetIdMethod.Invoke(agent, [actorId]);
+    }
+
+    public static Task DispatchAsync(
+        IAgent agent,
+        IMessage payload,
+        string publisherActorId,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(agent);
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentException.ThrowIfNullOrWhiteSpace(publisherActorId);
+        return agent.HandleEventAsync(new EventEnvelope
+        {
+            Id = $"test-{Guid.NewGuid():N}",
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, agent.Id),
+        }, ct);
     }
 
     private sealed class NoOpActorDispatchPort : IActorDispatchPort

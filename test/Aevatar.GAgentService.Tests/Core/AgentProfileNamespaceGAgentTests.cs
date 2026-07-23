@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
@@ -165,7 +166,7 @@ public sealed class AgentProfileNamespaceGAgentTests
         var original = CreateCommand();
         await agent.HandleCreateAsync(original);
         if (activate)
-            await agent.HandleInitializedAsync(Initialized(original));
+            await DispatchInitializedAsync(agent, Initialized(original));
         var version = agent.EventSourcing!.CurrentVersion;
         var malicious = original.Clone();
         if (boundary == "identity")
@@ -233,7 +234,7 @@ public sealed class AgentProfileNamespaceGAgentTests
         var conflict = CreateCommand(operationId: "op-profile-existing-continuation-conflict");
         await agent.HandleCreateAsync(conflict);
 
-        var act = () => agent.HandleInitializedAsync(Initialized(conflict));
+        var act = () => DispatchInitializedAsync(agent, Initialized(conflict));
 
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("PROFILE_PROVISIONING_CONTINUATION_MISMATCH");
@@ -338,7 +339,7 @@ public sealed class AgentProfileNamespaceGAgentTests
         var command = CreateCommand();
         await agent.HandleCreateAsync(command);
 
-        await agent.HandleInitializedAsync(Initialized(command));
+        await DispatchInitializedAsync(agent, Initialized(command));
 
         agent.State.Profiles.Should().ContainSingle()
             .Which.Status.Should().Be(AgentProfileProvisioningStatus.Active);
@@ -351,7 +352,7 @@ public sealed class AgentProfileNamespaceGAgentTests
         var (agent, store, publisher) = await CreateActorAsync();
         var command = CreateCommand();
         await agent.HandleCreateAsync(command);
-        await agent.HandleInitializationRejectedAsync(new AgentProfileInitializationRejectedContinuation
+        await DispatchInitializationRejectedAsync(agent, new AgentProfileInitializationRejectedContinuation
         {
             Operation = command.Operation.Clone(),
             Identity = command.Identity.Clone(),
@@ -391,11 +392,11 @@ public sealed class AgentProfileNamespaceGAgentTests
                 Path = "identity",
             },
         };
-        await agent.HandleInitializationRejectedAsync(rejected);
+        await DispatchInitializationRejectedAsync(agent, rejected);
         var changed = rejected.Clone();
         changed.Diagnostic.Code = "DIFFERENT_FAILURE";
 
-        var act = () => agent.HandleInitializationRejectedAsync(changed);
+        var act = () => DispatchInitializationRejectedAsync(agent, changed);
 
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("PROFILE_PROVISIONING_CONTINUATION_MISMATCH");
@@ -409,7 +410,7 @@ public sealed class AgentProfileNamespaceGAgentTests
         var (agent, store, publisher) = await CreateActorAsync();
         var command = CreateCommand();
         await agent.HandleCreateAsync(command);
-        await agent.HandleInitializedAsync(Initialized(command));
+        await DispatchInitializedAsync(agent, Initialized(command));
 
         await agent.HandleCreateAsync(command.Clone());
 
@@ -426,13 +427,13 @@ public sealed class AgentProfileNamespaceGAgentTests
         var unknown = Initialized(command);
         unknown.Identity.ProfileId = "prof-unknown";
 
-        var unknownAct = () => agent.HandleInitializedAsync(unknown);
+        var unknownAct = () => DispatchInitializedAsync(agent, unknown);
         var unknownException = await unknownAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
         unknownException.Which.Code.Should().Be("UNKNOWN_PROFILE_PROVISIONING");
 
         var mismatched = Initialized(command);
         mismatched.ProfileActorId = "profile-other";
-        var mismatchAct = () => agent.HandleInitializedAsync(mismatched);
+        var mismatchAct = () => DispatchInitializedAsync(agent, mismatched);
         var mismatchException = await mismatchAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
         mismatchException.Which.Code.Should().Be("PROFILE_PROVISIONING_CONTINUATION_MISMATCH");
         (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
@@ -453,7 +454,7 @@ public sealed class AgentProfileNamespaceGAgentTests
         misassociated.Identity = first.Identity.Clone();
         misassociated.ProfileActorId = first.ProfileActorId;
 
-        var act = () => agent.HandleInitializedAsync(misassociated);
+        var act = () => DispatchInitializedAsync(agent, misassociated);
 
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("PROFILE_PROVISIONING_CONTINUATION_MISMATCH");
@@ -468,13 +469,13 @@ public sealed class AgentProfileNamespaceGAgentTests
         var (agent, store, _) = await CreateActorAsync();
         var command = CreateCommand();
         await agent.HandleCreateAsync(command);
-        await agent.HandleInitializedAsync(Initialized(command));
+        await DispatchInitializedAsync(agent, Initialized(command));
         var first = Summary(command, "op-publish-one", revision: 1, digestByte: 0x31);
 
-        await agent.HandleObservePublishedSummaryAsync(first);
+        await DispatchPublishedSummaryAsync(agent, first);
         var versionAfterFirst = agent.EventSourcing!.CurrentVersion;
-        await agent.HandleObservePublishedSummaryAsync(first.Clone());
-        await agent.HandleObservePublishedSummaryAsync(
+        await DispatchPublishedSummaryAsync(agent, first.Clone());
+        await DispatchPublishedSummaryAsync(agent,
             Summary(command, "op-publish-stale", revision: 0, digestByte: 0x30));
 
         agent.EventSourcing.CurrentVersion.Should().Be(versionAfterFirst);
@@ -482,7 +483,7 @@ public sealed class AgentProfileNamespaceGAgentTests
         agent.State.Profiles[0].PublishedSummary.SnapshotSha256.Should().Equal(Digest(0x31));
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(3);
 
-        await agent.HandleObservePublishedSummaryAsync(
+        await DispatchPublishedSummaryAsync(agent,
             Summary(command, "op-publish-two", revision: 2, digestByte: 0x32));
 
         agent.State.Profiles[0].PublishedSummary.PublishedRevision.Should().Be(2);
@@ -495,15 +496,193 @@ public sealed class AgentProfileNamespaceGAgentTests
         var (agent, store, _) = await CreateActorAsync();
         var command = CreateCommand();
         await agent.HandleCreateAsync(command);
-        await agent.HandleInitializedAsync(Initialized(command));
+        await DispatchInitializedAsync(agent, Initialized(command));
         var observation = Summary(command, "op-publish-other", revision: 1, digestByte: 0x41);
         observation.Identity.ProfileId = "prof-other";
 
-        var act = () => agent.HandleObservePublishedSummaryAsync(observation);
+        var act = () => DispatchPublishedSummaryAsync(agent, observation);
 
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("PROFILE_PUBLISHED_SUMMARY_MISMATCH");
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+    }
+
+    [Theory]
+    [InlineData("initialized")]
+    [InlineData("rejected")]
+    [InlineData("summary")]
+    public async Task ProfileProtocolIngress_ShouldRejectSpoofedEnvelopePublisher(
+        string messageKind)
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var command = CreateCommand(operationId: $"op-spoof-{messageKind}");
+        await agent.HandleCreateAsync(command);
+        IMessage payload;
+        switch (messageKind)
+        {
+            case "initialized":
+                payload = Initialized(command);
+                break;
+            case "rejected":
+                payload = new AgentProfileInitializationRejectedContinuation
+                {
+                    Operation = command.Operation.Clone(),
+                    Identity = command.Identity.Clone(),
+                    ProfileActorId = command.ProfileActorId,
+                    Diagnostic = new AgentProfileSafeDiagnostic { Code = "INITIALIZATION_FAILED" },
+                };
+                break;
+            case "summary":
+                await DispatchInitializedAsync(agent, Initialized(command));
+                payload = Summary(command, "op-spoof-summary-publish", revision: 1, digestByte: 0x62);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(messageKind));
+        }
+        var version = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => GAgentServiceTestKit.DispatchAsync(agent, payload, "profile-spoof");
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PROTOCOL_PUBLISHER_MISMATCH");
+        agent.EventSourcing.CurrentVersion.Should().Be(version);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)version);
+    }
+
+    [Fact]
+    public async Task InitializationRejection_ShouldBoundEveryPersistedDiagnosticField()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var command = CreateCommand(operationId: "op-bounded-ingress-diagnostic");
+        await agent.HandleCreateAsync(command);
+        var continuation = new AgentProfileInitializationRejectedContinuation
+        {
+            Operation = command.Operation.Clone(),
+            Identity = command.Identity.Clone(),
+            ProfileActorId = command.ProfileActorId,
+            Diagnostic = new AgentProfileSafeDiagnostic
+            {
+                Code = new string('C', 600),
+                Message = new string('\u00e9', 600),
+                Path = new string('\u00e9', 600),
+            },
+        };
+
+        await DispatchInitializationRejectedAsync(agent, continuation);
+
+        var diagnostic = agent.State.Profiles.Single().Failure;
+        Encoding.UTF8.GetByteCount(diagnostic.Code).Should().BeLessThanOrEqualTo(512);
+        Encoding.UTF8.GetByteCount(diagnostic.Message).Should().BeLessThanOrEqualTo(512);
+        Encoding.UTF8.GetByteCount(diagnostic.Path).Should().BeLessThanOrEqualTo(512);
+        var persisted = (await store.GetEventsAsync(agent.Id))[^1].EventData
+            .Unpack<AgentProfileProvisioningFailedEvent>();
+        persisted.Diagnostic.Should().Be(diagnostic);
+    }
+
+    [Theory]
+    [InlineData("display_name")]
+    [InlineData("purpose")]
+    public async Task PublishedSummary_ShouldRejectOversizedMultibyteAuthoredText(string field)
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var command = CreateCommand(operationId: $"op-summary-oversized-{field}");
+        await agent.HandleCreateAsync(command);
+        await DispatchInitializedAsync(agent, Initialized(command));
+        var summary = Summary(command, $"op-summary-publish-{field}", revision: 1, digestByte: 0x63);
+        if (field == "display_name")
+            summary.Summary.DisplayName = new string('\u00e9', 129);
+        else
+            summary.Summary.Purpose = new string('\u00e9', 2_049);
+        var version = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => DispatchPublishedSummaryAsync(agent, summary);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PUBLISHED_SUMMARY_MISMATCH");
+        agent.EventSourcing.CurrentVersion.Should().Be(version);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)version);
+    }
+
+    [Fact]
+    public async Task CreateBadDigest_ExactReplayShouldIgnoreCallerDigest()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var command = CreateCommand(operationId: "op-create-bad-digest-authority");
+        command.Operation.InputSha256 = Digest(0x81);
+        await agent.HandleCreateAsync(command);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        var replay = command.Clone();
+        replay.Operation.InputSha256 = Digest(0x82);
+
+        await agent.HandleCreateAsync(replay);
+
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        agent.State.Operations.Should().ContainSingle()
+            .Which.Diagnostic.Code.Should().Be("OPERATION_INPUT_SHA256_MISMATCH");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Fact]
+    public async Task CreateDigestAlias_ShouldNotReplayDifferentPayload()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        const string operationId = "op-create-digest-alias";
+        var first = CreateCommand(operationId: operationId);
+        var second = CreateCommand(
+            GAgentServiceTestKit.CreateAgentProfileIdentity(
+                profileId: "prof-beta",
+                profileSlug: "researcher"),
+            operationId: operationId);
+        first.Operation.InputSha256 = second.Operation.InputSha256;
+        await agent.HandleCreateAsync(first);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => agent.HandleCreateAsync(second);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Fact]
+    public async Task CanonicalCreate_ShouldNotReplayPrecanonicalRejection()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        const string operationId = "op-create-precanonical-boundary";
+        var valid = CreateCommand(operationId: operationId);
+        var malformed = valid.Clone();
+        malformed.InitialContent.DisplayName = string.Empty;
+        malformed.Operation.InputSha256 = valid.Operation.InputSha256;
+        await agent.HandleCreateAsync(malformed);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => agent.HandleCreateAsync(valid);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        agent.State.Profiles.Should().BeEmpty();
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Fact]
+    public async Task CreateOperationIdReuseForPublishedSummary_ShouldConflictByKind()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var command = CreateCommand(operationId: "op-create-summary-cross-family");
+        await agent.HandleCreateAsync(command);
+        await DispatchInitializedAsync(agent, Initialized(command));
+        var summary = Summary(command, command.Operation.OperationId, revision: 1, digestByte: 0x61);
+        summary.Operation.InputSha256 = command.Operation.InputSha256;
+        var version = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => DispatchPublishedSummaryAsync(agent, summary);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(version);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)version);
     }
 
     private static async Task<(AgentProfileNamespaceGAgent Agent, InMemoryEventStore Store, RecordingProfileEventPublisher Publisher)>
@@ -519,6 +698,30 @@ public sealed class AgentProfileNamespaceGAgentTests
         await agent.ActivateAsync();
         return (agent, store, publisher);
     }
+
+    private static Task DispatchInitializedAsync(
+        AgentProfileNamespaceGAgent agent,
+        AgentProfileInitializedContinuation continuation,
+        string? publisherActorId = null) =>
+        GAgentServiceTestKit.DispatchAsync(
+            agent,
+            continuation,
+            publisherActorId ?? continuation.ProfileActorId);
+
+    private static Task DispatchInitializationRejectedAsync(
+        AgentProfileNamespaceGAgent agent,
+        AgentProfileInitializationRejectedContinuation continuation,
+        string? publisherActorId = null) =>
+        GAgentServiceTestKit.DispatchAsync(
+            agent,
+            continuation,
+            publisherActorId ?? continuation.ProfileActorId);
+
+    private static Task DispatchPublishedSummaryAsync(
+        AgentProfileNamespaceGAgent agent,
+        ObserveAgentProfilePublishedSummaryCommand command,
+        string publisherActorId = "profile-alpha") =>
+        GAgentServiceTestKit.DispatchAsync(agent, command, publisherActorId);
 
     private static CreateAgentProfileCommand CreateCommand(
         AgentProfileIdentity? identity = null,

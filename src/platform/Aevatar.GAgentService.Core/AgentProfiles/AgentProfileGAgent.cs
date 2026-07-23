@@ -20,6 +20,14 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         var namespaceActorId = AgentProfileActorInvariants.RequireActorId(
             command.NamespaceActorId,
             "namespace_actor_id");
+        AgentProfileActorInvariants.RequireProtocolPublisher(
+            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            namespaceActorId);
+        var precanonicalReplayAuthority = AgentProfileActorInvariants.PrecanonicalReplayAuthority(
+            AgentProfileOperationKind.Initialize,
+            Id,
+            namespaceActorId,
+            ComputeInitializeSemanticInputSha256(command));
 
         AgentProfileIdentity identity;
         try
@@ -41,16 +49,14 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         }
         catch (AgentProfileContractValidationException exception)
         {
-            var rejectedContentSha256 = AgentProfileDeterminism.Sha256(command.InitialContent);
             var existingRejection = FindOperation(operation.OperationId);
             if (existingRejection is not null)
             {
                 EnsureInitializationRejectionReplay(
                     existingRejection,
-                    operation,
                     identity,
                     namespaceActorId,
-                    rejectedContentSha256);
+                    precanonicalReplayAuthority);
                 await SendInitializationRejectedAsync(existingRejection, operation);
                 return;
             }
@@ -60,22 +66,24 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 operation,
                 identity,
                 AgentProfileActorInvariants.FirstDiagnostic(exception),
-                rejectedContentSha256);
+                precanonicalReplayAuthority);
             return;
         }
 
         var expectedInput = AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content);
-        var rejectedContentFingerprint = AgentProfileDeterminism.Sha256(content);
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            AgentProfileOperationKind.Initialize,
+            Id,
+            namespaceActorId,
+            expectedInput);
         var existingOperation = FindOperation(operation.OperationId);
         if (existingOperation is not null)
         {
             EnsureInitializationReplay(
                 existingOperation,
-                operation,
                 identity,
                 namespaceActorId,
-                expectedInput,
-                rejectedContentFingerprint);
+                replayAuthority);
             if (existingOperation.InitializationRejection is not null)
             {
                 await SendInitializationRejectedAsync(existingOperation, operation);
@@ -99,7 +107,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 operation,
                 identity,
                 AgentProfileActorInvariants.MultipleDefaultSkills(),
-                rejectedContentFingerprint);
+                replayAuthority);
             return;
         }
 
@@ -110,7 +118,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 operation,
                 identity,
                 AgentProfileActorInvariants.IdentityConflict(),
-                rejectedContentFingerprint);
+                replayAuthority);
             return;
         }
 
@@ -121,7 +129,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 operation,
                 identity,
                 AgentProfileActorInvariants.InputDigestMismatch(),
-                rejectedContentFingerprint);
+                replayAuthority);
             return;
         }
 
@@ -135,6 +143,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             DraftSha256 = draftSha256,
             NamespaceActorId = namespaceActorId,
             ProfileActorId = Id,
+            ReplayAuthority = replayAuthority.Clone(),
         });
         await SendInitializedAsync(namespaceActorId, operation);
     }
@@ -144,7 +153,12 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
+        var operationKind = AgentProfileOperationKind.UpdateDraft;
+        var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
+        var identity = await NormalizeMutationIdentityAsync(
+            operation,
+            command.Identity,
+            precanonicalReplayAuthority);
         if (identity is null)
             return;
 
@@ -158,30 +172,39 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.FirstDiagnostic(exception),
-                ComputeRejectedSemanticInputSha256(command));
+                precanonicalReplayAuthority);
             return;
         }
 
         var expectedInput = AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
             identity,
             content);
-        if (!await PrepareMutationAsync(operation, identity, expectedInput))
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            operationKind,
+            Id,
+            null,
+            expectedInput);
+        if (!await PrepareMutationAsync(operation, identity, replayAuthority))
             return;
         if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(content))
         {
             await PersistNewRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.MultipleDefaultSkills());
+                AgentProfileActorInvariants.MultipleDefaultSkills(),
+                replayAuthority);
             return;
         }
-        if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
+        if (!await EnsureExpectedVersionAsync(
+                operation,
+                replayAuthority,
+                command.ExpectedAuthorityStateVersion))
             return;
 
         var draftSha256 = AgentProfileDeterminism.ComputeDraftSha256(content);
         if (State.Draft.Equals(content) &&
             AgentProfileActorInvariants.DigestEquals(State.DraftSha256, draftSha256))
         {
-            await PersistNoChangeAsync(operation);
+            await PersistNoChangeAsync(operation, replayAuthority);
             return;
         }
 
@@ -199,6 +222,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             DraftRevision = outcome.DraftRevision,
             DraftSha256 = draftSha256,
             Outcome = outcome,
+            ReplayAuthority = replayAuthority.Clone(),
         });
     }
 
@@ -207,7 +231,12 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
+        var operationKind = AgentProfileOperationKind.UpsertSkillBinding;
+        var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
+        var identity = await NormalizeMutationIdentityAsync(
+            operation,
+            command.Identity,
+            precanonicalReplayAuthority);
         if (identity is null)
             return;
 
@@ -216,21 +245,35 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             binding = AgentProfileDeterminism.NormalizeSkillBinding(command.Binding);
         }
-        catch (AgentProfileContractValidationException exception)
+        catch (Exception exception) when (
+            exception is AgentProfileContractValidationException or ArgumentNullException)
         {
             await PersistUncanonicalizedRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.FirstDiagnostic(exception),
-                ComputeRejectedSemanticInputSha256(command));
+                exception is AgentProfileContractValidationException validationException
+                    ? AgentProfileActorInvariants.FirstDiagnostic(validationException)
+                    : AgentProfileActorInvariants.Diagnostic(
+                        "MISSING_SKILL_BINDING",
+                        "Profile skill binding is required.",
+                        "binding"),
+                precanonicalReplayAuthority);
             return;
         }
 
         var expectedInput = AgentProfileDeterminism.ComputeUpsertAgentProfileSkillBindingInputSha256(
             identity,
             binding);
-        if (!await PrepareMutationAsync(operation, identity, expectedInput))
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            operationKind,
+            Id,
+            null,
+            expectedInput);
+        if (!await PrepareMutationAsync(operation, identity, replayAuthority))
             return;
-        if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
+        if (!await EnsureExpectedVersionAsync(
+                operation,
+                replayAuthority,
+                command.ExpectedAuthorityStateVersion))
             return;
 
         var candidate = State.Draft.Clone();
@@ -243,14 +286,15 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             await PersistNewRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.MultipleDefaultSkills());
+                AgentProfileActorInvariants.MultipleDefaultSkills(),
+                replayAuthority);
             return;
         }
 
         var draftSha256 = AgentProfileDeterminism.ComputeDraftSha256(candidate);
         if (State.Draft.Equals(candidate))
         {
-            await PersistNoChangeAsync(operation);
+            await PersistNoChangeAsync(operation, replayAuthority);
             return;
         }
 
@@ -269,6 +313,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             DraftRevision = outcome.DraftRevision,
             DraftSha256 = draftSha256,
             Outcome = outcome,
+            ReplayAuthority = replayAuthority.Clone(),
         });
     }
 
@@ -277,7 +322,12 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
+        var operationKind = AgentProfileOperationKind.RemoveSkillBinding;
+        var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
+        var identity = await NormalizeMutationIdentityAsync(
+            operation,
+            command.Identity,
+            precanonicalReplayAuthority);
         if (identity is null)
             return;
 
@@ -293,13 +343,21 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.FirstDiagnostic(exception),
-                ComputeRejectedSemanticInputSha256(command));
+                precanonicalReplayAuthority);
             return;
         }
 
-        if (!await PrepareMutationAsync(operation, identity, expectedInput))
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            operationKind,
+            Id,
+            null,
+            expectedInput);
+        if (!await PrepareMutationAsync(operation, identity, replayAuthority))
             return;
-        if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
+        if (!await EnsureExpectedVersionAsync(
+                operation,
+                replayAuthority,
+                command.ExpectedAuthorityStateVersion))
             return;
 
         var bindingId = command.BindingId.Normalize(System.Text.NormalizationForm.FormC);
@@ -308,7 +366,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             await PersistNewRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.MissingBinding(bindingId));
+                AgentProfileActorInvariants.MissingBinding(bindingId),
+                replayAuthority);
             return;
         }
 
@@ -331,6 +390,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             DraftRevision = outcome.DraftRevision,
             DraftSha256 = draftSha256,
             Outcome = outcome,
+            ReplayAuthority = replayAuthority.Clone(),
         });
     }
 
@@ -339,7 +399,12 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
+        var operationKind = AgentProfileOperationKind.Publish;
+        var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
+        var identity = await NormalizeMutationIdentityAsync(
+            operation,
+            command.Identity,
+            precanonicalReplayAuthority);
         if (identity is null)
             return;
 
@@ -353,24 +418,32 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.FirstDiagnostic(exception),
-                ComputeRejectedSemanticInputSha256(command));
+                precanonicalReplayAuthority);
             return;
         }
 
         var expectedInput = AgentProfileDeterminism.ComputePublishAgentProfileInputSha256(
             identity,
             snapshot);
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            operationKind,
+            Id,
+            null,
+            expectedInput);
         if (!await PrepareMutationAsync(
                 operation,
                 identity,
-                expectedInput,
+                replayAuthority,
                 existing => existing.PublishedSummary is null
                     ? Task.CompletedTask
                     : SendPublishedSummaryAsync(operation, existing.PublishedSummary)))
             return;
         if (!AgentProfileActorInvariants.SameIdentity(snapshot.Identity, State.Identity))
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.IdentityConflict());
+            await PersistNewRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.IdentityConflict(),
+                replayAuthority);
             return;
         }
         var hardLimitDiagnostic = AgentProfilePolicies
@@ -378,35 +451,47 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             .FirstOrDefault();
         if (hardLimitDiagnostic is not null)
         {
-            await PersistNewRejectionAsync(operation, hardLimitDiagnostic);
+            await PersistNewRejectionAsync(operation, hardLimitDiagnostic, replayAuthority);
             return;
         }
-        if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
+        if (!await EnsureExpectedVersionAsync(
+                operation,
+                replayAuthority,
+                command.ExpectedAuthorityStateVersion))
             return;
         if (command.ExpectedDraftRevision != State.DraftRevision ||
             !AgentProfileActorInvariants.DigestEquals(command.ExpectedDraftSha256, State.DraftSha256) ||
             !AgentProfileActorInvariants.DigestEquals(snapshot.SourceDraftSha256, State.DraftSha256))
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.PublishSourceChanged());
+            await PersistNewRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.PublishSourceChanged(),
+                replayAuthority);
             return;
         }
         if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(State.Draft))
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.MultipleDefaultSkills());
+            await PersistNewRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.MultipleDefaultSkills(),
+                replayAuthority);
             return;
         }
 
         var snapshotMismatch = AgentProfileActorInvariants.ValidateSnapshotMatchesDraft(snapshot, State.Draft);
         if (snapshotMismatch is not null)
         {
-            await PersistNewRejectionAsync(operation, snapshotMismatch);
+            await PersistNewRejectionAsync(operation, snapshotMismatch, replayAuthority);
             return;
         }
 
         var expectedSnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
         if (!AgentProfileActorInvariants.DigestEquals(snapshot.SnapshotSha256, expectedSnapshotSha256))
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.SnapshotDigestMismatch());
+            await PersistNewRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.SnapshotDigestMismatch(),
+                replayAuthority);
             return;
         }
         if (snapshot.PublishedRevision != 0)
@@ -416,7 +501,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 AgentProfileActorInvariants.Diagnostic(
                     "INVALID_PUBLISHED_REVISION",
                     "Publish input must not assign the authoritative revision.",
-                    "snapshot.published_revision"));
+                    "snapshot.published_revision"),
+                replayAuthority);
             return;
         }
 
@@ -439,6 +525,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 Identity = State.Identity.Clone(),
                 Summary = summary.Clone(),
                 Outcome = noChangeOutcome,
+                ReplayAuthority = replayAuthority.Clone(),
             });
             await SendPublishedSummaryAsync(operation, summary);
             return;
@@ -446,6 +533,14 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
 
         var published = snapshot.Clone();
         published.PublishedRevision = checked(State.PublishedRevision + 1);
+        hardLimitDiagnostic = AgentProfilePolicies
+            .ValidatePublishedSnapshotHardLimits(published)
+            .FirstOrDefault();
+        if (hardLimitDiagnostic is not null)
+        {
+            await PersistNewRejectionAsync(operation, hardLimitDiagnostic, replayAuthority);
+            return;
+        }
         var outcome = AgentProfileActorInvariants.Outcome(
             State,
             operation,
@@ -456,8 +551,9 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             Operation = operation.Clone(),
             Identity = State.Identity.Clone(),
-            Snapshot = published.Clone(),
+            Snapshot = published,
             Outcome = outcome,
+            ReplayAuthority = replayAuthority.Clone(),
         });
         await SendPublishedSummaryAsync(operation, AgentProfileActorInvariants.Summary(published));
     }
@@ -479,7 +575,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     private async Task<AgentProfileIdentity?> NormalizeMutationIdentityAsync(
         AgentProfileOperationFact operation,
         AgentProfileIdentity? candidate,
-        IMessage command)
+        AgentProfileOperationReplayAuthority precanonicalReplayAuthority)
     {
         if (State.Identity is null)
         {
@@ -499,7 +595,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.IdentityConflict(),
-                ComputeRejectedSemanticInputSha256(command));
+                precanonicalReplayAuthority);
             return null;
         }
 
@@ -509,33 +605,38 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     private async Task<bool> PrepareMutationAsync(
         AgentProfileOperationFact operation,
         AgentProfileIdentity identity,
-        ByteString expectedInput,
+        AgentProfileOperationReplayAuthority replayAuthority,
         Func<AgentProfileOperationState, Task>? replay = null)
     {
         var existing = FindOperation(operation.OperationId);
         if (existing is not null)
         {
-            if (existing.RejectedSemanticInputSha256.Length > 0)
-            {
-                throw AgentProfileActorInvariants.Error(
-                    "IDEMPOTENCY_PAYLOAD_CONFLICT",
-                    "An operation id rejected before canonicalization cannot be reused with canonical input.");
-            }
-            EnsureReplay(existing, operation, expectedInput);
+            AgentProfileActorInvariants.EnsureSameReplayAuthority(
+                existing.ReplayAuthority,
+                replayAuthority,
+                "An operation id cannot be reused with a different normalized input.");
             if (replay is not null)
                 await replay(existing);
             return false;
         }
 
-        if (!AgentProfileActorInvariants.DigestEquals(operation.InputSha256, expectedInput))
+        if (!AgentProfileActorInvariants.DigestEquals(
+                operation.InputSha256,
+                replayAuthority.CanonicalSemanticInputSha256))
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.InputDigestMismatch());
+            await PersistNewRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.InputDigestMismatch(),
+                replayAuthority);
             return false;
         }
 
         if (!AgentProfileActorInvariants.SameIdentity(State.Identity, identity))
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.IdentityConflict());
+            await PersistNewRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.IdentityConflict(),
+                replayAuthority);
             return false;
         }
 
@@ -544,15 +645,21 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
 
     private async Task<bool> EnsureExpectedVersionAsync(
         AgentProfileOperationFact operation,
+        AgentProfileOperationReplayAuthority replayAuthority,
         long expectedVersion)
     {
         if (expectedVersion == CurrentStateVersion())
             return true;
-        await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.VersionConflict());
+        await PersistNewRejectionAsync(
+            operation,
+            AgentProfileActorInvariants.VersionConflict(),
+            replayAuthority);
         return false;
     }
 
-    private Task PersistNoChangeAsync(AgentProfileOperationFact operation) =>
+    private Task PersistNoChangeAsync(
+        AgentProfileOperationFact operation,
+        AgentProfileOperationReplayAuthority replayAuthority) =>
         PersistDomainEventAsync(new AgentProfileMutationNoChangeEvent
         {
             Operation = operation.Clone(),
@@ -561,89 +668,139 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 State,
                 operation,
                 AgentProfileMutationStatus.NoChange),
+            ReplayAuthority = replayAuthority.Clone(),
         });
 
     private Task PersistNewRejectionAsync(
         AgentProfileOperationFact operation,
         AgentProfileSafeDiagnostic diagnostic,
-        ByteString? rejectedSemanticInputSha256 = null)
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         var existing = FindOperation(operation.OperationId);
         if (existing is not null)
         {
-            if (AgentProfileActorInvariants.SameInput(existing.Operation, operation))
-                return Task.CompletedTask;
-            throw AgentProfileActorInvariants.Error(
-                "IDEMPOTENCY_PAYLOAD_CONFLICT",
+            AgentProfileActorInvariants.EnsureSameReplayAuthority(
+                existing.ReplayAuthority,
+                replayAuthority,
                 "An operation id cannot be reused with a different normalized input.");
+            return Task.CompletedTask;
         }
 
         return PersistDomainEventAsync(new AgentProfileMutationRejectedEvent
         {
             Operation = operation.Clone(),
             Identity = State.Identity?.Clone() ?? new AgentProfileIdentity(),
-            RejectedSemanticInputSha256 = rejectedSemanticInputSha256 ?? ByteString.Empty,
             Outcome = AgentProfileActorInvariants.Outcome(
                 State,
                 operation,
                 AgentProfileMutationStatus.Rejected,
                 diagnostic),
+            ReplayAuthority = replayAuthority.Clone(),
         });
     }
 
     private Task PersistUncanonicalizedRejectionAsync(
         AgentProfileOperationFact operation,
         AgentProfileSafeDiagnostic diagnostic,
-        ByteString rejectedSemanticInputSha256)
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         var existing = FindOperation(operation.OperationId);
         if (existing is not null)
         {
-            if (AgentProfileActorInvariants.SameInput(existing.Operation, operation) &&
-                AgentProfileActorInvariants.DigestEquals(
-                    existing.RejectedSemanticInputSha256,
-                    rejectedSemanticInputSha256))
-            {
-                return Task.CompletedTask;
-            }
-
-            throw AgentProfileActorInvariants.Error(
-                "IDEMPOTENCY_PAYLOAD_CONFLICT",
+            AgentProfileActorInvariants.EnsureSameReplayAuthority(
+                existing.ReplayAuthority,
+                replayAuthority,
                 "An operation id cannot be reused with input that cannot be canonicalized.");
+            return Task.CompletedTask;
         }
 
-        return PersistNewRejectionAsync(operation, diagnostic, rejectedSemanticInputSha256);
+        return PersistNewRejectionAsync(operation, diagnostic, replayAuthority);
     }
 
-    private static ByteString ComputeRejectedSemanticInputSha256(IMessage command)
+    private AgentProfileOperationReplayAuthority ComputeMutationPrecanonicalReplayAuthority(
+        IMessage command,
+        AgentProfileOperationKind operationKind) =>
+        AgentProfileActorInvariants.PrecanonicalReplayAuthority(
+            operationKind,
+            Id,
+            null,
+            AgentProfileDeterminism.Sha256(CreateMutationFingerprintMaterial(command)));
+
+    private static AgentProfileMutationSemanticInputFingerprintMaterial CreateMutationFingerprintMaterial(
+        IMessage command)
     {
         var material = new AgentProfileMutationSemanticInputFingerprintMaterial();
         switch (command)
         {
             case UpdateAgentProfileDraftCommand update:
+                var updateMaterial = new AgentProfileUpdateDraftSemanticInputFingerprintMaterial();
                 if (update.Identity is not null)
-                    material.Identity = update.Identity.Clone();
-                material.UpdateDraft = update.Content?.Clone() ?? new AgentProfileContent();
+                    updateMaterial.Identity = update.Identity.Clone();
+                else
+                    updateMaterial.IdentityMissing = true;
+                if (update.Content is not null)
+                    updateMaterial.Content = update.Content.Clone();
+                else
+                    updateMaterial.ContentMissing = true;
+                material.UpdateDraft = updateMaterial;
                 break;
             case UpsertAgentProfileSkillBindingCommand upsert:
+                var upsertMaterial = new AgentProfileUpsertSkillBindingSemanticInputFingerprintMaterial();
                 if (upsert.Identity is not null)
-                    material.Identity = upsert.Identity.Clone();
-                material.UpsertSkillBinding = upsert.Binding?.Clone() ?? new AgentProfileSkillBinding();
+                    upsertMaterial.Identity = upsert.Identity.Clone();
+                else
+                    upsertMaterial.IdentityMissing = true;
+                if (upsert.Binding is not null)
+                    upsertMaterial.Binding = upsert.Binding.Clone();
+                else
+                    upsertMaterial.BindingMissing = true;
+                material.UpsertSkillBinding = upsertMaterial;
                 break;
             case RemoveAgentProfileSkillBindingCommand remove:
+                var removeMaterial = new AgentProfileRemoveSkillBindingSemanticInputFingerprintMaterial
+                {
+                    BindingId = remove.BindingId,
+                };
                 if (remove.Identity is not null)
-                    material.Identity = remove.Identity.Clone();
-                material.RemoveSkillBindingId = remove.BindingId;
+                    removeMaterial.Identity = remove.Identity.Clone();
+                else
+                    removeMaterial.IdentityMissing = true;
+                material.RemoveSkillBinding = removeMaterial;
                 break;
             case PublishAgentProfileCommand publish:
+                var publishMaterial = new AgentProfilePublishSemanticInputFingerprintMaterial();
                 if (publish.Identity is not null)
-                    material.Identity = publish.Identity.Clone();
-                material.PublishSnapshot = publish.Snapshot?.Clone() ?? new AgentProfilePublishedSnapshot();
+                    publishMaterial.Identity = publish.Identity.Clone();
+                else
+                    publishMaterial.IdentityMissing = true;
+                if (publish.Snapshot is not null)
+                    publishMaterial.Snapshot = publish.Snapshot.Clone();
+                else
+                    publishMaterial.SnapshotMissing = true;
+                material.Publish = publishMaterial;
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(command));
         }
 
+        return material;
+    }
+
+    private ByteString ComputeInitializeSemanticInputSha256(InitializeAgentProfileCommand command)
+    {
+        var material = new AgentProfileInitializeSemanticInputFingerprintMaterial
+        {
+            NamespaceActorId = command.NamespaceActorId,
+            ProfileActorId = Id,
+        };
+        if (command.Identity is not null)
+            material.Identity = command.Identity.Clone();
+        else
+            material.IdentityMissing = true;
+        if (command.InitialContent is not null)
+            material.InitialContent = command.InitialContent.Clone();
+        else
+            material.InitialContentMissing = true;
         return AgentProfileDeterminism.Sha256(material);
     }
 
@@ -668,7 +825,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         AgentProfileOperationFact operation,
         AgentProfileIdentity identity,
         AgentProfileSafeDiagnostic diagnostic,
-        ByteString rejectedContentSha256)
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         await PersistDomainEventAsync(new AgentProfileInitializationRejectedEvent
         {
@@ -676,8 +833,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             Identity = identity.Clone(),
             NamespaceActorId = namespaceActorId,
             ProfileActorId = Id,
-            Diagnostic = diagnostic.Clone(),
-            RejectedContentSha256 = rejectedContentSha256,
+            Diagnostic = AgentProfilePolicies.NormalizeDiagnostic(diagnostic),
+            ReplayAuthority = replayAuthority.Clone(),
         });
         await SendInitializationRejectedAsync(
             FindOperation(operation.OperationId)
@@ -725,27 +882,11 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             "Event sourcing must be configured before mutating a Profile."))
         .CurrentVersion;
 
-    private static void EnsureReplay(
-        AgentProfileOperationState existing,
-        AgentProfileOperationFact candidate,
-        ByteString expectedInput)
-    {
-        if (!AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
-            !AgentProfileActorInvariants.DigestEquals(candidate.InputSha256, expectedInput))
-        {
-            throw AgentProfileActorInvariants.Error(
-                "IDEMPOTENCY_PAYLOAD_CONFLICT",
-                "An operation id cannot be reused with a different normalized input.");
-        }
-    }
-
     private void EnsureInitializationReplay(
         AgentProfileOperationState existing,
-        AgentProfileOperationFact candidate,
         AgentProfileIdentity identity,
         string namespaceActorId,
-        ByteString expectedInput,
-        ByteString rejectedContentSha256)
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         var storedIdentity = existing.InitializationContinuation?.Identity ??
             existing.InitializationRejection?.Continuation?.Identity;
@@ -753,16 +894,13 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             existing.InitializationRejection?.Continuation?.ProfileActorId;
         var storedNamespaceActorId = existing.InitializationRejection?.NamespaceActorId ??
             State.NamespaceActorId;
-        if (!AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
-            existing.InitializationContinuation is not null &&
-            !AgentProfileActorInvariants.DigestEquals(candidate.InputSha256, expectedInput) ||
-            !AgentProfileActorInvariants.SameIdentity(storedIdentity, identity) ||
+        AgentProfileActorInvariants.EnsureSameReplayAuthority(
+            existing.ReplayAuthority,
+            replayAuthority,
+            "An initialization operation cannot change its normalized input or Actor relation.");
+        if (!AgentProfileActorInvariants.SameIdentity(storedIdentity, identity) ||
             !string.Equals(storedProfileActorId, Id, StringComparison.Ordinal) ||
-            !string.Equals(storedNamespaceActorId, namespaceActorId, StringComparison.Ordinal) ||
-            existing.InitializationRejection is not null &&
-            !AgentProfileActorInvariants.DigestEquals(
-                existing.InitializationRejection.RejectedContentSha256,
-                rejectedContentSha256))
+            !string.Equals(storedNamespaceActorId, namespaceActorId, StringComparison.Ordinal))
         {
             throw AgentProfileActorInvariants.Error(
                 "IDEMPOTENCY_PAYLOAD_CONFLICT",
@@ -772,25 +910,24 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
 
     private void EnsureInitializationRejectionReplay(
         AgentProfileOperationState existing,
-        AgentProfileOperationFact candidate,
         AgentProfileIdentity identity,
         string namespaceActorId,
-        ByteString rejectedContentSha256)
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         var rejection = existing.InitializationRejection;
         if (rejection is null ||
-            !AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
             !AgentProfileActorInvariants.SameIdentity(rejection.Continuation?.Identity, identity) ||
             !string.Equals(rejection.Continuation?.ProfileActorId, Id, StringComparison.Ordinal) ||
-            !string.Equals(rejection.NamespaceActorId, namespaceActorId, StringComparison.Ordinal) ||
-            !AgentProfileActorInvariants.DigestEquals(
-                rejection.RejectedContentSha256,
-                rejectedContentSha256))
+            !string.Equals(rejection.NamespaceActorId, namespaceActorId, StringComparison.Ordinal))
         {
             throw AgentProfileActorInvariants.Error(
                 "IDEMPOTENCY_PAYLOAD_CONFLICT",
                 "An initialization rejection cannot change its typed input or Actor relation.");
         }
+        AgentProfileActorInvariants.EnsureSameReplayAuthority(
+            existing.ReplayAuthority,
+            replayAuthority,
+            "An initialization rejection cannot change its typed input or Actor relation.");
     }
 
     private static int FindBindingIndex(AgentProfileContent content, string bindingId)
@@ -819,6 +956,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         next.Operations.Add(new AgentProfileOperationState
         {
             Operation = evt.Operation.Clone(),
+            ReplayAuthority = evt.ReplayAuthority.Clone(),
             InitializationContinuation = new AgentProfileInitializedContinuation
             {
                 Operation = evt.Operation.Clone(),
@@ -839,6 +977,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         next.Operations.Add(new AgentProfileOperationState
         {
             Operation = evt.Operation.Clone(),
+            ReplayAuthority = evt.ReplayAuthority.Clone(),
             InitializationRejection = new AgentProfileInitializationRejectionState
             {
                 NamespaceActorId = evt.NamespaceActorId,
@@ -849,7 +988,6 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                     ProfileActorId = evt.ProfileActorId,
                     Diagnostic = evt.Diagnostic.Clone(),
                 },
-                RejectedContentSha256 = evt.RejectedContentSha256,
             },
         });
         return next;
@@ -858,31 +996,50 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     private static AgentProfileState ApplyDraftUpdated(
         AgentProfileState state,
         AgentProfileDraftUpdatedEvent evt) =>
-        ApplyDraftMutation(state, evt.Content, evt.DraftRevision, evt.DraftSha256, evt.Outcome);
+        ApplyDraftMutation(
+            state,
+            evt.Content,
+            evt.DraftRevision,
+            evt.DraftSha256,
+            evt.Outcome,
+            evt.ReplayAuthority);
 
     private static AgentProfileState ApplyBindingUpserted(
         AgentProfileState state,
         AgentProfileSkillBindingUpsertedEvent evt) =>
-        ApplyDraftMutation(state, evt.Content, evt.DraftRevision, evt.DraftSha256, evt.Outcome);
+        ApplyDraftMutation(
+            state,
+            evt.Content,
+            evt.DraftRevision,
+            evt.DraftSha256,
+            evt.Outcome,
+            evt.ReplayAuthority);
 
     private static AgentProfileState ApplyBindingRemoved(
         AgentProfileState state,
         AgentProfileSkillBindingRemovedEvent evt) =>
-        ApplyDraftMutation(state, evt.Content, evt.DraftRevision, evt.DraftSha256, evt.Outcome);
+        ApplyDraftMutation(
+            state,
+            evt.Content,
+            evt.DraftRevision,
+            evt.DraftSha256,
+            evt.Outcome,
+            evt.ReplayAuthority);
 
     private static AgentProfileState ApplyDraftMutation(
         AgentProfileState state,
         AgentProfileContent content,
         long draftRevision,
         ByteString draftSha256,
-        AgentProfileMutationOutcome outcome)
+        AgentProfileMutationOutcome outcome,
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         var next = state.Clone();
         next.Draft = content.Clone();
         next.DraftRevision = draftRevision;
         next.DraftSha256 = draftSha256;
         next.LastMutation = outcome.Clone();
-        AddOperation(next, outcome, null);
+        AddOperation(next, outcome, null, replayAuthority);
         return next;
     }
 
@@ -894,7 +1051,11 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         next.Published = evt.Snapshot.Clone();
         next.PublishedRevision = evt.Snapshot.PublishedRevision;
         next.LastMutation = evt.Outcome.Clone();
-        AddOperation(next, evt.Outcome, AgentProfileActorInvariants.Summary(evt.Snapshot));
+        AddOperation(
+            next,
+            evt.Outcome,
+            AgentProfileActorInvariants.Summary(evt.Snapshot),
+            evt.ReplayAuthority);
         return next;
     }
 
@@ -904,7 +1065,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         var next = state.Clone();
         next.LastMutation = evt.Outcome.Clone();
-        AddOperation(next, evt.Outcome, evt.Summary);
+        AddOperation(next, evt.Outcome, evt.Summary, evt.ReplayAuthority);
         return next;
     }
 
@@ -914,7 +1075,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         var next = state.Clone();
         next.LastMutation = evt.Outcome.Clone();
-        AddOperation(next, evt.Outcome, null);
+        AddOperation(next, evt.Outcome, null, evt.ReplayAuthority);
         return next;
     }
 
@@ -924,7 +1085,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         var next = state.Clone();
         next.LastMutation = evt.Outcome.Clone();
-        AddOperation(next, evt.Outcome, null, evt.RejectedSemanticInputSha256);
+        AddOperation(next, evt.Outcome, null, evt.ReplayAuthority);
         return next;
     }
 
@@ -932,13 +1093,13 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         AgentProfileState state,
         AgentProfileMutationOutcome outcome,
         AgentProfilePublishedSummary? summary,
-        ByteString? rejectedSemanticInputSha256 = null)
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         var operation = new AgentProfileOperationState
         {
             Operation = outcome.Operation.Clone(),
             Outcome = outcome.Clone(),
-            RejectedSemanticInputSha256 = rejectedSemanticInputSha256 ?? ByteString.Empty,
+            ReplayAuthority = replayAuthority.Clone(),
         };
         if (summary is not null)
             operation.PublishedSummary = summary.Clone();

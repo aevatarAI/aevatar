@@ -27,14 +27,33 @@ message AgentProfileNamespaceOperationState {
   aevatar.gagentservice.agentprofiles.AgentProfileSafeDiagnostic diagnostic = 4;
   aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 5;
   bool provisioning_started = 6;
-  bytes rejected_semantic_input_sha256 = 7;
+  aevatar.gagentservice.agentprofiles.AgentProfileOperationReplayAuthority replay_authority = 7;
   aevatar.gagentservice.agentprofiles.AgentProfileProvisioningFailureKind failure_kind = 8;
 }
 
 message AgentProfileCreateSemanticInputFingerprintMaterial {
-  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
-  aevatar.gagentservice.agentprofiles.AgentProfileContent initial_content = 2;
+  oneof identity_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+    bool identity_missing = 4;
+  }
+  oneof initial_content_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileContent initial_content = 2;
+    bool initial_content_missing = 5;
+  }
   string profile_actor_id = 3;
+}
+
+message AgentProfileInitializeSemanticInputFingerprintMaterial {
+  oneof identity_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+    bool identity_missing = 5;
+  }
+  oneof initial_content_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileContent initial_content = 2;
+    bool initial_content_missing = 6;
+  }
+  string namespace_actor_id = 3;
+  string profile_actor_id = 4;
 }
 
 message AgentProfileNamespaceState {
@@ -46,17 +65,61 @@ message AgentProfileNamespaceState {
 message AgentProfileInitializationRejectionState {
   string namespace_actor_id = 1;
   aevatar.gagentservice.agentprofiles.AgentProfileInitializationRejectedContinuation continuation = 2;
-  bytes rejected_content_sha256 = 3;
+}
+
+message AgentProfileUpdateDraftSemanticInputFingerprintMaterial {
+  oneof identity_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+    bool identity_missing = 2;
+  }
+  oneof content_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileContent content = 3;
+    bool content_missing = 4;
+  }
+}
+
+message AgentProfileUpsertSkillBindingSemanticInputFingerprintMaterial {
+  oneof identity_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+    bool identity_missing = 2;
+  }
+  oneof binding_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileSkillBinding binding = 3;
+    bool binding_missing = 4;
+  }
+}
+
+message AgentProfileRemoveSkillBindingSemanticInputFingerprintMaterial {
+  oneof identity_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+    bool identity_missing = 2;
+  }
+  string binding_id = 3;
+}
+
+message AgentProfilePublishSemanticInputFingerprintMaterial {
+  oneof identity_value {
+    aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+    bool identity_missing = 2;
+  }
+  oneof snapshot_value {
+    aevatar.gagentservice.agentprofiles.AgentProfilePublishedSnapshot snapshot = 3;
+    bool snapshot_missing = 4;
+  }
 }
 
 message AgentProfileMutationSemanticInputFingerprintMaterial {
-  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
-  oneof mutation {
-    aevatar.gagentservice.agentprofiles.AgentProfileContent update_draft = 2;
-    aevatar.gagentservice.agentprofiles.AgentProfileSkillBinding upsert_skill_binding = 3;
-    string remove_skill_binding_id = 4;
-    aevatar.gagentservice.agentprofiles.AgentProfilePublishedSnapshot publish_snapshot = 5;
+  oneof mutation_value {
+    AgentProfileUpdateDraftSemanticInputFingerprintMaterial update_draft = 1;
+    AgentProfileUpsertSkillBindingSemanticInputFingerprintMaterial upsert_skill_binding = 2;
+    AgentProfileRemoveSkillBindingSemanticInputFingerprintMaterial remove_skill_binding = 3;
+    AgentProfilePublishSemanticInputFingerprintMaterial publish = 4;
   }
+}
+
+message AgentProfilePublishedSummarySemanticInputFingerprintMaterial {
+  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+  aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary summary = 2;
 }
 
 message AgentProfileOperationState {
@@ -65,7 +128,7 @@ message AgentProfileOperationState {
   aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 3;
   aevatar.gagentservice.agentprofiles.AgentProfileInitializedContinuation initialization_continuation = 4;
   AgentProfileInitializationRejectionState initialization_rejection = 5;
-  bytes rejected_semantic_input_sha256 = 6;
+  aevatar.gagentservice.agentprofiles.AgentProfileOperationReplayAuthority replay_authority = 6;
 }
 
 message AgentProfileState {

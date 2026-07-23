@@ -20,7 +20,11 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         var profileActorId = AgentProfileActorInvariants.RequireActorId(
             command.ProfileActorId,
             "profile_actor_id");
-        var rejectedSemanticInputSha256 = ComputeCreateSemanticInputSha256(command, profileActorId);
+        var precanonicalReplayAuthority = AgentProfileActorInvariants.PrecanonicalReplayAuthority(
+            AgentProfileOperationKind.Create,
+            Id,
+            profileActorId,
+            ComputeCreateSemanticInputSha256(command, profileActorId));
         var existingOperation = FindOperation(operation.OperationId);
 
         var identityDiagnostics = AgentProfilePolicies.ValidateIdentity(command.Identity);
@@ -30,9 +34,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             {
                 EnsureCreateValidationRejectionReplay(
                     existingOperation,
-                    operation,
-                    profileActorId,
-                    rejectedSemanticInputSha256);
+                    precanonicalReplayAuthority);
                 return;
             }
             await PersistCreateFailureAsync(
@@ -40,7 +42,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 null,
                 profileActorId,
                 identityDiagnostics[0],
-                rejectedSemanticInputSha256);
+                precanonicalReplayAuthority);
             return;
         }
 
@@ -53,9 +55,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             {
                 EnsureCreateValidationRejectionReplay(
                     existingOperation,
-                    operation,
-                    profileActorId,
-                    rejectedSemanticInputSha256);
+                    precanonicalReplayAuthority);
                 return;
             }
             await PersistCreateFailureAsync(
@@ -63,15 +63,23 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 identity,
                 profileActorId,
                 contentDiagnostics[0],
-                rejectedSemanticInputSha256);
+                precanonicalReplayAuthority);
             return;
         }
 
         var content = AgentProfileDeterminism.NormalizeContent(command.InitialContent);
         var expectedInput = AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content);
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            AgentProfileOperationKind.Create,
+            Id,
+            profileActorId,
+            expectedInput);
         if (existingOperation is not null)
         {
-            EnsureReplayInput(existingOperation.Operation, operation, expectedInput);
+            AgentProfileActorInvariants.EnsureSameReplayAuthority(
+                existingOperation.ReplayAuthority,
+                replayAuthority,
+                "An operation id cannot be reused with a different normalized input.");
             if (!string.Equals(existingOperation.ProfileActorId, profileActorId, StringComparison.Ordinal))
             {
                 throw AgentProfileActorInvariants.Error(
@@ -110,7 +118,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 operation,
                 identity,
                 profileActorId,
-                AgentProfileActorInvariants.InputDigestMismatch());
+                AgentProfileActorInvariants.InputDigestMismatch(),
+                replayAuthority);
             return;
         }
 
@@ -126,7 +135,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 AgentProfileActorInvariants.Diagnostic(
                     "OWNER_HANDLE_CONFLICT",
                     "The owner already has a different committed handle.",
-                    "identity.reference.owner_handle"));
+                    "identity.reference.owner_handle"),
+                replayAuthority);
             return;
         }
 
@@ -142,7 +152,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 AgentProfileActorInvariants.Diagnostic(
                     "OWNER_HANDLE_CONFLICT",
                     "The requested owner handle is already claimed.",
-                    "identity.reference.owner_handle"));
+                    "identity.reference.owner_handle"),
+                replayAuthority);
             return;
         }
 
@@ -156,7 +167,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 AgentProfileActorInvariants.Diagnostic(
                     "PROFILE_ID_TAKEN",
                     "The Profile identity is already claimed.",
-                    "identity.profile_id"));
+                    "identity.profile_id"),
+                replayAuthority);
             return;
         }
 
@@ -170,7 +182,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 AgentProfileActorInvariants.Diagnostic(
                     "PROFILE_ACTOR_ID_TAKEN",
                     "The Profile Actor identity is already claimed.",
-                    "profile_actor_id"));
+                    "profile_actor_id"),
+                replayAuthority);
             return;
         }
 
@@ -184,7 +197,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 AgentProfileActorInvariants.Diagnostic(
                     "PROFILE_SLUG_TAKEN",
                     "The human Profile reference is already claimed.",
-                    "identity.reference.profile_slug"));
+                    "identity.reference.profile_slug"),
+                replayAuthority);
             return;
         }
 
@@ -194,6 +208,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             Identity = identity.Clone(),
             InitialContent = content.Clone(),
             ProfileActorId = profileActorId,
+            ReplayAuthority = replayAuthority.Clone(),
         });
 
         await SendInitializationAsync(
@@ -209,10 +224,17 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     {
         ArgumentNullException.ThrowIfNull(continuation);
         var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);
+        var profileActorId = AgentProfileActorInvariants.RequireActorId(
+            continuation.ProfileActorId,
+            "profile_actor_id");
+        AgentProfileActorInvariants.RequireProtocolPublisher(
+            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            profileActorId);
         var entry = RequireContinuationEntry(
             continuation.Identity,
-            continuation.ProfileActorId,
+            profileActorId,
             operation);
+        var storedOperation = FindOperation(operation.OperationId)!;
         var expectedDraftSha256 = AgentProfileDeterminism.ComputeDraftSha256(entry.InitialContent);
         if (continuation.DraftRevision != 1 ||
             !AgentProfileActorInvariants.DigestEquals(
@@ -232,6 +254,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             Operation = operation.Clone(),
             Identity = entry.Identity.Clone(),
             ProfileActorId = entry.ProfileActorId,
+            ReplayAuthority = storedOperation.ReplayAuthority.Clone(),
         });
     }
 
@@ -241,9 +264,15 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     {
         ArgumentNullException.ThrowIfNull(continuation);
         var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);
+        var profileActorId = AgentProfileActorInvariants.RequireActorId(
+            continuation.ProfileActorId,
+            "profile_actor_id");
+        AgentProfileActorInvariants.RequireProtocolPublisher(
+            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            profileActorId);
         var entry = RequireContinuationEntry(
             continuation.Identity,
-            continuation.ProfileActorId,
+            profileActorId,
             operation);
         if (continuation.Diagnostic is null || string.IsNullOrWhiteSpace(continuation.Diagnostic.Code))
         {
@@ -251,12 +280,14 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 "INVALID_PROFILE_INITIALIZATION_REJECTION",
                 "A typed initialization rejection diagnostic is required.");
         }
+        var diagnostic = AgentProfilePolicies.NormalizeDiagnostic(continuation.Diagnostic);
+        var storedOperation = FindOperation(operation.OperationId)!;
 
         if (entry.Status == AgentProfileProvisioningStatus.Active)
             return;
         if (entry.Status == AgentProfileProvisioningStatus.Failed)
         {
-            if (entry.Failure?.Equals(continuation.Diagnostic) == true)
+            if (entry.Failure?.Equals(diagnostic) == true)
                 return;
             throw AgentProfileActorInvariants.Error(
                 "PROFILE_PROVISIONING_CONTINUATION_MISMATCH",
@@ -268,7 +299,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             Operation = operation.Clone(),
             Identity = entry.Identity.Clone(),
             ProfileActorId = entry.ProfileActorId,
-            Diagnostic = continuation.Diagnostic.Clone(),
+            Diagnostic = diagnostic,
+            ReplayAuthority = storedOperation.ReplayAuthority.Clone(),
             FailureKind = AgentProfileProvisioningFailureKind.InitializationContinuation,
         });
     }
@@ -280,9 +312,11 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         AgentProfileIdentity identity;
+        AgentProfilePublishedSummary summary;
         try
         {
             identity = AgentProfileDeterminism.NormalizeIdentity(command.Identity);
+            summary = AgentProfileDeterminism.NormalizePublishedSummary(command.Summary);
         }
         catch (AgentProfileContractValidationException)
         {
@@ -295,25 +329,39 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         if (entry is null ||
             entry.Status != AgentProfileProvisioningStatus.Active ||
             !AgentProfileActorInvariants.SameIdentity(entry.Identity, identity) ||
-            command.Summary is null ||
             !AgentProfileActorInvariants.SameReference(
-                command.Summary.Reference,
-                entry.Identity.Reference) ||
-            command.Summary.SnapshotSha256.Length != 32)
+                summary.Reference,
+                entry.Identity.Reference))
         {
             throw AgentProfileActorInvariants.Error(
                 "PROFILE_PUBLISHED_SUMMARY_MISMATCH",
                 "The published summary does not belong to the mapped Profile.");
         }
+        AgentProfileActorInvariants.RequireProtocolPublisher(
+            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            entry.ProfileActorId);
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            AgentProfileOperationKind.ObservePublishedSummary,
+            Id,
+            entry.ProfileActorId,
+            AgentProfileDeterminism.Sha256(
+                new AgentProfilePublishedSummarySemanticInputFingerprintMaterial
+                {
+                    Identity = identity.Clone(),
+                    Summary = summary.Clone(),
+                }));
 
         var existingOperation = FindOperation(operation.OperationId);
         if (existingOperation is not null)
         {
-            EnsureReplayInput(existingOperation.Operation, operation);
+            AgentProfileActorInvariants.EnsureSameReplayAuthority(
+                existingOperation.ReplayAuthority,
+                replayAuthority,
+                "An operation id cannot be reused with a different published summary.");
             if (existingOperation.PublishedSummary is null ||
                 !AgentProfileActorInvariants.SameSummary(
                     existingOperation.PublishedSummary,
-                    command.Summary))
+                    summary))
             {
                 throw AgentProfileActorInvariants.Error(
                     "PROFILE_PUBLISHED_SUMMARY_MISMATCH",
@@ -325,18 +373,18 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         var current = entry.PublishedSummary;
         if (current is not null)
         {
-            if (command.Summary.PublishedRevision < current.PublishedRevision)
+            if (summary.PublishedRevision < current.PublishedRevision)
                 return;
-            if (command.Summary.PublishedRevision == current.PublishedRevision)
+            if (summary.PublishedRevision == current.PublishedRevision)
             {
-                if (AgentProfileActorInvariants.SameSummary(current, command.Summary))
+                if (AgentProfileActorInvariants.SameSummary(current, summary))
                     return;
                 throw AgentProfileActorInvariants.Error(
                     "PROFILE_PUBLISHED_SUMMARY_MISMATCH",
                     "The same published revision cannot carry a different summary.");
             }
         }
-        else if (command.Summary.PublishedRevision <= 0)
+        else if (summary.PublishedRevision <= 0)
         {
             throw AgentProfileActorInvariants.Error(
                 "PROFILE_PUBLISHED_SUMMARY_MISMATCH",
@@ -347,7 +395,8 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         {
             Operation = operation.Clone(),
             Identity = identity.Clone(),
-            Summary = command.Summary.Clone(),
+            Summary = summary,
+            ReplayAuthority = replayAuthority,
         });
     }
 
@@ -367,14 +416,14 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         AgentProfileIdentity? identity,
         string profileActorId,
         AgentProfileSafeDiagnostic diagnostic,
-        ByteString? rejectedSemanticInputSha256 = null) =>
+        AgentProfileOperationReplayAuthority replayAuthority) =>
         await PersistDomainEventAsync(new AgentProfileProvisioningFailedEvent
         {
             Operation = operation.Clone(),
             Identity = identity?.Clone() ?? new AgentProfileIdentity(),
             ProfileActorId = profileActorId,
-            Diagnostic = diagnostic.Clone(),
-            RejectedSemanticInputSha256 = rejectedSemanticInputSha256 ?? ByteString.Empty,
+            Diagnostic = AgentProfilePolicies.NormalizeDiagnostic(diagnostic),
+            ReplayAuthority = replayAuthority.Clone(),
             FailureKind = AgentProfileProvisioningFailureKind.CreateValidation,
         });
 
@@ -404,7 +453,6 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         var storedOperation = FindOperation(operation.OperationId);
         if (storedOperation is null ||
             !storedOperation.ProvisioningStarted ||
-            !AgentProfileActorInvariants.SameInput(storedOperation.Operation, operation) ||
             !AgentProfileActorInvariants.SameIdentity(entry.Identity, identity) ||
             !string.Equals(entry.ProfileActorId, profileActorId, StringComparison.Ordinal) ||
             !string.Equals(storedOperation.ProfileId, entry.Identity.ProfileId, StringComparison.Ordinal) ||
@@ -414,6 +462,17 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 "PROFILE_PROVISIONING_CONTINUATION_MISMATCH",
                 "The continuation does not match the durable provisioning operation.");
         }
+        var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
+            AgentProfileOperationKind.Create,
+            Id,
+            entry.ProfileActorId,
+            AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(
+                entry.Identity,
+                entry.InitialContent));
+        AgentProfileActorInvariants.EnsureSameReplayAuthority(
+            storedOperation.ReplayAuthority,
+            replayAuthority,
+            "The continuation operation does not match the durable provisioning authority.");
         return entry;
     }
 
@@ -425,40 +484,22 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         State.Operations.FirstOrDefault(entry =>
             string.Equals(entry.Operation?.OperationId, operationId, StringComparison.Ordinal));
 
-    private static void EnsureReplayInput(
-        AgentProfileOperationFact existing,
-        AgentProfileOperationFact candidate,
-        ByteString? expectedInput = null)
-    {
-        if (!AgentProfileActorInvariants.SameInput(existing, candidate) ||
-            expectedInput is not null &&
-            !AgentProfileActorInvariants.DigestEquals(candidate.InputSha256, expectedInput))
-        {
-            throw AgentProfileActorInvariants.Error(
-                "IDEMPOTENCY_PAYLOAD_CONFLICT",
-                "An operation id cannot be reused with a different normalized input.");
-        }
-    }
-
     private static void EnsureCreateValidationRejectionReplay(
         AgentProfileNamespaceOperationState existing,
-        AgentProfileOperationFact candidate,
-        string profileActorId,
-        ByteString rejectedSemanticInputSha256)
+        AgentProfileOperationReplayAuthority replayAuthority)
     {
         if (existing.FailureKind != AgentProfileProvisioningFailureKind.CreateValidation ||
             existing.ProvisioningStarted ||
-            existing.Diagnostic is null ||
-            !AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
-            !string.Equals(existing.ProfileActorId, profileActorId, StringComparison.Ordinal) ||
-            !AgentProfileActorInvariants.DigestEquals(
-                existing.RejectedSemanticInputSha256,
-                rejectedSemanticInputSha256))
+            existing.Diagnostic is null)
         {
             throw AgentProfileActorInvariants.Error(
                 "IDEMPOTENCY_PAYLOAD_CONFLICT",
                 "A rejected create operation cannot change its typed semantic input or Actor relation.");
         }
+        AgentProfileActorInvariants.EnsureSameReplayAuthority(
+            existing.ReplayAuthority,
+            replayAuthority,
+            "A rejected create operation cannot change its typed semantic input or Actor relation.");
     }
 
     private static ByteString ComputeCreateSemanticInputSha256(
@@ -471,8 +512,12 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         };
         if (command.Identity is not null)
             material.Identity = command.Identity.Clone();
+        else
+            material.IdentityMissing = true;
         if (command.InitialContent is not null)
             material.InitialContent = command.InitialContent.Clone();
+        else
+            material.InitialContentMissing = true;
         return AgentProfileDeterminism.Sha256(material);
     }
 
@@ -504,6 +549,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             ProfileId = evt.Identity.ProfileId,
             ProfileActorId = evt.ProfileActorId,
             ProvisioningStarted = true,
+            ReplayAuthority = evt.ReplayAuthority.Clone(),
         });
         return next;
     }
@@ -551,7 +597,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 ProfileId = evt.Identity.ProfileId,
                 ProfileActorId = evt.ProfileActorId,
                 Diagnostic = evt.Diagnostic.Clone(),
-                RejectedSemanticInputSha256 = evt.RejectedSemanticInputSha256,
+                ReplayAuthority = evt.ReplayAuthority.Clone(),
                 FailureKind = evt.FailureKind,
             });
         }
@@ -581,6 +627,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             ProfileId = evt.Identity.ProfileId,
             ProfileActorId = entry.ProfileActorId,
             PublishedSummary = evt.Summary.Clone(),
+            ReplayAuthority = evt.ReplayAuthority.Clone(),
         });
         return next;
     }

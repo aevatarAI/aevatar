@@ -38,11 +38,76 @@ internal static class AgentProfileActorInvariants
         return actorId!;
     }
 
-    public static bool SameInput(
-        AgentProfileOperationFact existing,
-        AgentProfileOperationFact candidate) =>
-        string.Equals(existing.OperationId, candidate.OperationId, StringComparison.Ordinal) &&
-        DigestEquals(existing.InputSha256, candidate.InputSha256);
+    public static AgentProfileOperationReplayAuthority CanonicalReplayAuthority(
+        AgentProfileOperationKind operationKind,
+        string authorityActorId,
+        string? counterpartyActorId,
+        ByteString semanticInputSha256) =>
+        CreateReplayAuthority(
+            operationKind,
+            authorityActorId,
+            counterpartyActorId,
+            semanticInputSha256,
+            canonical: true);
+
+    public static AgentProfileOperationReplayAuthority PrecanonicalReplayAuthority(
+        AgentProfileOperationKind operationKind,
+        string authorityActorId,
+        string? counterpartyActorId,
+        ByteString semanticInputSha256) =>
+        CreateReplayAuthority(
+            operationKind,
+            authorityActorId,
+            counterpartyActorId,
+            semanticInputSha256,
+            canonical: false);
+
+    public static void EnsureSameReplayAuthority(
+        AgentProfileOperationReplayAuthority? existing,
+        AgentProfileOperationReplayAuthority candidate,
+        string message)
+    {
+        if (!SameReplayAuthority(existing, candidate))
+            throw Error("IDEMPOTENCY_PAYLOAD_CONFLICT", message);
+    }
+
+    public static bool SameReplayAuthority(
+        AgentProfileOperationReplayAuthority? left,
+        AgentProfileOperationReplayAuthority? right) =>
+        left is not null &&
+        right is not null &&
+        left.OperationKind != AgentProfileOperationKind.Unspecified &&
+        left.OperationKind == right.OperationKind &&
+        string.Equals(left.AuthorityActorId, right.AuthorityActorId, StringComparison.Ordinal) &&
+        string.Equals(left.CounterpartyActorId, right.CounterpartyActorId, StringComparison.Ordinal) &&
+        left.SemanticFingerprintCase == right.SemanticFingerprintCase &&
+        left.SemanticFingerprintCase switch
+        {
+            AgentProfileOperationReplayAuthority.SemanticFingerprintOneofCase
+                .CanonicalSemanticInputSha256 =>
+                DigestEquals(
+                    left.CanonicalSemanticInputSha256,
+                    right.CanonicalSemanticInputSha256),
+            AgentProfileOperationReplayAuthority.SemanticFingerprintOneofCase
+                .PrecanonicalSemanticInputSha256 =>
+                DigestEquals(
+                    left.PrecanonicalSemanticInputSha256,
+                    right.PrecanonicalSemanticInputSha256),
+            _ => false,
+        };
+
+    public static void RequireProtocolPublisher(
+        string? publisherActorId,
+        string expectedPublisherActorId)
+    {
+        var expected = RequireActorId(expectedPublisherActorId, "expected_publisher_actor_id");
+        if (!string.Equals(publisherActorId, expected, StringComparison.Ordinal))
+        {
+            throw Error(
+                "PROFILE_PROTOCOL_PUBLISHER_MISMATCH",
+                "The Profile protocol envelope publisher does not match the expected Actor.");
+        }
+    }
 
     public static bool DigestEquals(ByteString? left, ByteString? right) =>
         left is not null &&
@@ -189,12 +254,12 @@ internal static class AgentProfileActorInvariants
     }
 
     public static AgentProfileSafeDiagnostic Diagnostic(string code, string message, string path) =>
-        new()
+        AgentProfilePolicies.NormalizeDiagnostic(new AgentProfileSafeDiagnostic
         {
             Code = code,
             Message = message,
             Path = path,
-        };
+        });
 
     public static AgentProfileActorInvariantException Error(string code, string message) =>
         new(code, message);
@@ -203,4 +268,38 @@ internal static class AgentProfileActorInvariants
         !string.IsNullOrWhiteSpace(value) &&
         string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
         !value.Any(char.IsControl);
+
+    private static AgentProfileOperationReplayAuthority CreateReplayAuthority(
+        AgentProfileOperationKind operationKind,
+        string authorityActorId,
+        string? counterpartyActorId,
+        ByteString semanticInputSha256,
+        bool canonical)
+    {
+        if (operationKind == AgentProfileOperationKind.Unspecified)
+            throw Error("INVALID_PROFILE_OPERATION_KIND", "A typed Profile operation kind is required.");
+
+        var authority = RequireActorId(authorityActorId, "authority_actor_id");
+        var counterparty = string.IsNullOrEmpty(counterpartyActorId)
+            ? string.Empty
+            : RequireActorId(counterpartyActorId, "counterparty_actor_id");
+        if (semanticInputSha256 is null || semanticInputSha256.Length != 32)
+        {
+            throw Error(
+                "INVALID_PROFILE_REPLAY_FINGERPRINT",
+                "A SHA-256 Profile semantic replay fingerprint is required.");
+        }
+
+        var replayAuthority = new AgentProfileOperationReplayAuthority
+        {
+            OperationKind = operationKind,
+            AuthorityActorId = authority,
+            CounterpartyActorId = counterparty,
+        };
+        if (canonical)
+            replayAuthority.CanonicalSemanticInputSha256 = semanticInputSha256;
+        else
+            replayAuthority.PrecanonicalSemanticInputSha256 = semanticInputSha256;
+        return replayAuthority;
+    }
 }

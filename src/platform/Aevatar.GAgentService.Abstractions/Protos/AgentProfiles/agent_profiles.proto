@@ -145,6 +145,27 @@ message AgentProfileOperationFact {
   string correlation_id = 4;
 }
 
+enum AgentProfileOperationKind {
+  AGENT_PROFILE_OPERATION_KIND_UNSPECIFIED = 0;
+  AGENT_PROFILE_OPERATION_KIND_CREATE = 1;
+  AGENT_PROFILE_OPERATION_KIND_INITIALIZE = 2;
+  AGENT_PROFILE_OPERATION_KIND_UPDATE_DRAFT = 3;
+  AGENT_PROFILE_OPERATION_KIND_UPSERT_SKILL_BINDING = 4;
+  AGENT_PROFILE_OPERATION_KIND_REMOVE_SKILL_BINDING = 5;
+  AGENT_PROFILE_OPERATION_KIND_PUBLISH = 6;
+  AGENT_PROFILE_OPERATION_KIND_OBSERVE_PUBLISHED_SUMMARY = 7;
+}
+
+message AgentProfileOperationReplayAuthority {
+  AgentProfileOperationKind operation_kind = 1;
+  string authority_actor_id = 2;
+  string counterparty_actor_id = 3;
+  oneof semantic_fingerprint {
+    bytes canonical_semantic_input_sha256 = 4;
+    bytes precanonical_semantic_input_sha256 = 5;
+  }
+}
+
 enum AgentProfileMutationStatus {
   AGENT_PROFILE_MUTATION_STATUS_UNSPECIFIED = 0;
   AGENT_PROFILE_MUTATION_STATUS_APPLIED = 1;
@@ -253,12 +274,14 @@ message AgentProfileProvisioningStartedEvent {
   AgentProfileIdentity identity = 2;
   AgentProfileContent initial_content = 3;
   string profile_actor_id = 4;
+  AgentProfileOperationReplayAuthority replay_authority = 5;
 }
 
 message AgentProfileProvisioningCompletedEvent {
   AgentProfileOperationFact operation = 1;
   AgentProfileIdentity identity = 2;
   string profile_actor_id = 3;
+  AgentProfileOperationReplayAuthority replay_authority = 4;
 }
 
 message AgentProfileProvisioningFailedEvent {
@@ -266,7 +289,7 @@ message AgentProfileProvisioningFailedEvent {
   AgentProfileIdentity identity = 2;
   string profile_actor_id = 3;
   AgentProfileSafeDiagnostic diagnostic = 4;
-  bytes rejected_semantic_input_sha256 = 5;
+  AgentProfileOperationReplayAuthority replay_authority = 5;
   AgentProfileProvisioningFailureKind failure_kind = 6;
 }
 
@@ -274,6 +297,7 @@ message AgentProfilePublishedSummaryObservedEvent {
   AgentProfileOperationFact operation = 1;
   AgentProfileIdentity identity = 2;
   AgentProfilePublishedSummary summary = 3;
+  AgentProfileOperationReplayAuthority replay_authority = 4;
 }
 
 message AgentProfileInitializedEvent {
@@ -284,6 +308,7 @@ message AgentProfileInitializedEvent {
   bytes draft_sha256 = 5;
   string namespace_actor_id = 6;
   string profile_actor_id = 7;
+  AgentProfileOperationReplayAuthority replay_authority = 8;
 }
 
 message AgentProfileInitializationRejectedEvent {
@@ -292,7 +317,7 @@ message AgentProfileInitializationRejectedEvent {
   string namespace_actor_id = 3;
   string profile_actor_id = 4;
   AgentProfileSafeDiagnostic diagnostic = 5;
-  bytes rejected_content_sha256 = 6;
+  AgentProfileOperationReplayAuthority replay_authority = 6;
 }
 
 message AgentProfileDraftUpdatedEvent {
@@ -302,6 +327,7 @@ message AgentProfileDraftUpdatedEvent {
   int64 draft_revision = 4;
   bytes draft_sha256 = 5;
   AgentProfileMutationOutcome outcome = 6;
+  AgentProfileOperationReplayAuthority replay_authority = 7;
 }
 
 message AgentProfileSkillBindingUpsertedEvent {
@@ -312,6 +338,7 @@ message AgentProfileSkillBindingUpsertedEvent {
   int64 draft_revision = 5;
   bytes draft_sha256 = 6;
   AgentProfileMutationOutcome outcome = 7;
+  AgentProfileOperationReplayAuthority replay_authority = 8;
 }
 
 message AgentProfileSkillBindingRemovedEvent {
@@ -322,6 +349,7 @@ message AgentProfileSkillBindingRemovedEvent {
   int64 draft_revision = 5;
   bytes draft_sha256 = 6;
   AgentProfileMutationOutcome outcome = 7;
+  AgentProfileOperationReplayAuthority replay_authority = 8;
 }
 
 message AgentProfilePublishedEvent {
@@ -329,6 +357,7 @@ message AgentProfilePublishedEvent {
   AgentProfileIdentity identity = 2;
   AgentProfilePublishedSnapshot snapshot = 3;
   AgentProfileMutationOutcome outcome = 4;
+  AgentProfileOperationReplayAuthority replay_authority = 5;
 }
 
 message AgentProfilePublishNoChangeEvent {
@@ -336,17 +365,19 @@ message AgentProfilePublishNoChangeEvent {
   AgentProfileIdentity identity = 2;
   AgentProfilePublishedSummary summary = 3;
   AgentProfileMutationOutcome outcome = 4;
+  AgentProfileOperationReplayAuthority replay_authority = 5;
 }
 
 message AgentProfileMutationNoChangeEvent {
   AgentProfileOperationFact operation = 1;
   AgentProfileIdentity identity = 2;
   AgentProfileMutationOutcome outcome = 3;
+  AgentProfileOperationReplayAuthority replay_authority = 4;
 }
 
 message AgentProfileMutationRejectedEvent {
   AgentProfileOperationFact operation = 1;
   AgentProfileIdentity identity = 2;
   AgentProfileMutationOutcome outcome = 3;
-  bytes rejected_semantic_input_sha256 = 4;
+  AgentProfileOperationReplayAuthority replay_authority = 4;
 }

@@ -290,6 +290,20 @@ public static class AgentProfileDeterminism
         return normalized;
     }
 
+    public static AgentProfilePublishedSummary NormalizePublishedSummary(
+        AgentProfilePublishedSummary summary)
+    {
+        ThrowIfInvalid(AgentProfilePolicies.ValidatePublishedSummary(summary));
+        return new AgentProfilePublishedSummary
+        {
+            Reference = NormalizeReference(summary.Reference),
+            DisplayName = NormalizeText(summary.DisplayName),
+            Purpose = NormalizeText(summary.Purpose),
+            PublishedRevision = summary.PublishedRevision,
+            SnapshotSha256 = summary.SnapshotSha256,
+        };
+    }
+
     public static ByteString ComputeDraftSha256(AgentProfileContent content) =>
         Sha256(NormalizeContent(content));
 

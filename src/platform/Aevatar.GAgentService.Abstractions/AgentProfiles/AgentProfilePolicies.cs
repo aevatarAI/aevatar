@@ -29,6 +29,15 @@ public static class AgentProfilePolicies
         "\\A(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\z",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
+    public static AgentProfileSafeDiagnostic NormalizeDiagnostic(
+        AgentProfileSafeDiagnostic? diagnostic) =>
+        new()
+        {
+            Code = BoundDiagnosticField(diagnostic?.Code),
+            Message = BoundDiagnosticField(diagnostic?.Message),
+            Path = BoundDiagnosticField(diagnostic?.Path),
+        };
+
     public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateReference(
         AgentProfileReference? reference)
     {
@@ -464,6 +473,40 @@ public static class AgentProfilePolicies
         return diagnostics;
     }
 
+    public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidatePublishedSummary(
+        AgentProfilePublishedSummary? summary)
+    {
+        if (summary is null)
+            return [Diagnostic("MISSING_PUBLISHED_SUMMARY", "Published summary is required.", "summary")];
+
+        var diagnostics = ValidateReference(summary.Reference)
+            .Select(static diagnostic => PrefixPath(diagnostic, "reference"))
+            .ToList();
+        ValidateAuthoredText(
+            diagnostics,
+            summary.DisplayName,
+            "display_name",
+            "INVALID_DISPLAY_NAME",
+            DisplayNameMaxBytes,
+            required: true);
+        ValidateAuthoredText(
+            diagnostics,
+            summary.Purpose,
+            "purpose",
+            "INVALID_PURPOSE",
+            PurposeMaxBytes,
+            required: false);
+        if (summary.SnapshotSha256.Length != 32)
+        {
+            diagnostics.Add(Diagnostic(
+                "INVALID_PUBLISHED_SNAPSHOT_SHA256",
+                "Published summary snapshot digest must be SHA-256.",
+                "snapshot_sha256"));
+        }
+
+        return diagnostics;
+    }
+
     public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidatePublishedSnapshotHardLimits(
         AgentProfilePublishedSnapshot? snapshot)
     {
@@ -735,12 +778,12 @@ public static class AgentProfilePolicies
         string code,
         string message,
         string path) =>
-        new()
+        NormalizeDiagnostic(new AgentProfileSafeDiagnostic
         {
-            Code = BoundDiagnosticField(code),
-            Message = BoundDiagnosticField(message),
-            Path = BoundDiagnosticField(path),
-        };
+            Code = code,
+            Message = message,
+            Path = path,
+        });
 
     private static string BoundDiagnosticField(string? value)
     {
