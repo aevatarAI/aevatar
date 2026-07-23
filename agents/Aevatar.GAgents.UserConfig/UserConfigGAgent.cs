@@ -27,12 +27,6 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>, IProje
         await PersistDomainEventAsync(BuildUpdatedEvent(State, command));
     }
 
-    [EventHandler(EndpointName = "updateGithubUsername")]
-    public async Task HandleGithubUsernameUpdated(UserConfigGithubUsernameUpdatedEvent evt)
-    {
-        await PersistDomainEventAsync(evt);
-    }
-
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);

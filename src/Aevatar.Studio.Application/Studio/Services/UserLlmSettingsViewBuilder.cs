@@ -209,6 +209,9 @@ internal sealed class UserLlmSettingsViewBuilder
     {
         if (saved.Kind == UserLlmSelectionKind.NyxIdUserService)
         {
+            if (saved.UserServiceId is null)
+                return null;
+
             return routeOptions.FirstOrDefault(option =>
                 string.Equals(option.UserServiceId, saved.UserServiceId, StringComparison.Ordinal));
         }
@@ -302,17 +305,22 @@ internal sealed class UserLlmSettingsViewBuilder
         UserLlmSelectionValue? selection,
         string savedRoute)
     {
-        if (selection is not null)
+        if (selection is { Kind: UserLlmSelectionKind.Gateway })
         {
             return new SavedSelection(
-                selection.Kind,
+                UserLlmSelectionKind.Gateway,
+                UserConfigLlmRouteDefaults.Gateway,
+                null,
+                null);
+        }
+
+        if (selection is { Kind: UserLlmSelectionKind.NyxIdUserService })
+        {
+            return new SavedSelection(
+                UserLlmSelectionKind.NyxIdUserService,
                 UserConfigLlmRoute.Normalize(selection.RouteValue),
-                selection.Kind == UserLlmSelectionKind.NyxIdUserService
-                    ? UserLlmPreferenceWriteCore.NormalizeOptional(selection.NyxIdUserServiceId)
-                    : null,
-                selection.Kind == UserLlmSelectionKind.NyxIdUserService
-                    ? UserLlmPreferenceWriteCore.NormalizeOptional(selection.ServiceSlugSnapshot)
-                    : null);
+                UserLlmPreferenceWriteCore.NormalizeOptional(selection.NyxIdUserServiceId),
+                UserLlmPreferenceWriteCore.NormalizeOptional(selection.ServiceSlugSnapshot));
         }
 
         var normalizedRoute = UserConfigLlmRoute.Normalize(savedRoute);

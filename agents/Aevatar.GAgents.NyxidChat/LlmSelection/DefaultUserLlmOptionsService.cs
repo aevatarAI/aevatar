@@ -40,7 +40,7 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
 
         return new UserLlmOptionsView(current, available, setupHint)
         {
-            CurrentRouteValue = UserConfigLlmRoute.Normalize(currentConfig?.PreferredLlmRoute),
+            CurrentRouteValue = ResolveCurrentRoute(currentConfig, current),
             CurrentModel = currentConfig?.DefaultModel,
         };
     }
@@ -95,25 +95,54 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         StudioUserConfig? config,
         IReadOnlyList<UserLlmOption> available)
     {
-        var savedUserServiceId = config?.LlmSelection?.Kind == UserLlmSelectionKind.NyxIdUserService
-            ? config.LlmSelection.NyxIdUserServiceId
-            : null;
-        if (!string.IsNullOrWhiteSpace(savedUserServiceId))
+        return config?.LlmSelection?.Kind switch
         {
-            return available.FirstOrDefault(option =>
-                option.Identity is
-                {
-                    Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
-                } identity &&
-                string.Equals(identity.NyxIdUserServiceId, savedUserServiceId, StringComparison.Ordinal));
-        }
+            UserLlmSelectionKind.Gateway => FindRouteOption(
+                UserConfigLlmRouteDefaults.Gateway,
+                available),
+            UserLlmSelectionKind.NyxIdUserService => FindInventoryOption(
+                config.LlmSelection.NyxIdUserServiceId,
+                available),
+            null or UserLlmSelectionKind.Unspecified => FindRouteOption(
+                config?.PreferredLlmRoute,
+                available),
+            _ => null,
+        };
+    }
 
-        var route = UserConfigLlmRoute.Normalize(config?.PreferredLlmRoute);
-        if (string.IsNullOrWhiteSpace(route))
+    private static UserLlmOption? FindInventoryOption(
+        string? userServiceId,
+        IReadOnlyList<UserLlmOption> available)
+    {
+        var normalizedId = UserLlmPreferenceWriteCore.NormalizeOptional(userServiceId);
+        if (normalizedId is null)
             return null;
+
+        return available.FirstOrDefault(option =>
+            option.Identity is
+            {
+                Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            } identity &&
+            string.Equals(identity.NyxIdUserServiceId, normalizedId, StringComparison.Ordinal));
+    }
+
+    private static UserLlmOption? FindRouteOption(
+        string? routeValue,
+        IReadOnlyList<UserLlmOption> available)
+    {
+        var route = UserConfigLlmRoute.Normalize(routeValue);
 
         return available.FirstOrDefault(option =>
             string.Equals(option.RouteValue, route, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static string ResolveCurrentRoute(StudioUserConfig? config, UserLlmOption? current) =>
+        config?.LlmSelection?.Kind switch
+        {
+            UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
+            UserLlmSelectionKind.NyxIdUserService => current?.RouteValue ??
+                                                     UserConfigLlmRoute.Normalize(config.LlmSelection.RouteValue),
+            _ => UserConfigLlmRoute.Normalize(config?.PreferredLlmRoute),
+        };
 
 }

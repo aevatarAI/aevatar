@@ -580,19 +580,25 @@ public sealed class UserConfigControllerSettingsTests
         payload.RouteFallbackActive.Should().BeTrue();
     }
 
-    [Fact]
-    public async Task SaveLlmSettings_WithGatewayRoute_ShouldPersistCanonicalSelectionWithoutRead()
+    [Theory]
+    [InlineData("")]
+    [InlineData(" auto ")]
+    [InlineData("GATEWAY")]
+    [InlineData(UserConfigLlmRouteDefaults.Gateway)]
+    public async Task SaveLlmSettings_WithGatewayAlias_ShouldPersistCanonicalSelectionWithoutReadOrCatalog(
+        string routeValue)
     {
         var commandService = new RecordingUserConfigCommandService();
         var queryPort = new StubUserConfigQueryPort(new UserConfig("old-model", "/api/v1/proxy/s/old"));
+        var httpHandler = new RecordingHttpHandler("""{"services":[]}""");
         var controller = CreateController(
             queryPort: queryPort,
             commandService: commandService,
-            httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
+            httpHandler: httpHandler,
             bearerToken: "user-token-1");
 
         var response = await controller.SaveLlmSettings(
-            new SaveUserLlmSettingsRequest(RouteValue: string.Empty, Model: " gpt-5.4 "),
+            new SaveUserLlmSettingsRequest(RouteValue: routeValue, Model: " gpt-5.4 "),
             CancellationToken.None);
 
         var accepted = response.Result.Should().BeOfType<AcceptedResult>().Subject;
@@ -603,6 +609,29 @@ public sealed class UserConfigControllerSettingsTests
         update.LlmSelection.Should().Be(UserLlmPreferenceWriteCore.BuildGatewaySelection());
         update.DefaultModel.Should().Be("gpt-5.4");
         queryPort.ReadCount.Should().Be(0);
+        httpHandler.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("https://evil.example.com/path")]
+    [InlineData("//evil.example.com/path")]
+    public async Task SaveLlmSettings_WithExternalRoute_ShouldReturnBadRequestWithoutDispatch(string routeValue)
+    {
+        var commandService = new RecordingUserConfigCommandService();
+        var httpHandler = new RecordingHttpHandler("""{"services":[]}""");
+        var controller = CreateController(
+            current: new UserConfig(string.Empty),
+            commandService: commandService,
+            httpHandler: httpHandler,
+            bearerToken: "user-token-1");
+
+        var response = await controller.SaveLlmSettings(
+            new SaveUserLlmSettingsRequest(RouteValue: routeValue),
+            CancellationToken.None);
+
+        response.Result.Should().BeOfType<BadRequestObjectResult>();
+        commandService.Updates.Should().BeEmpty();
+        httpHandler.Requests.Should().BeEmpty();
     }
 
     [Fact]
