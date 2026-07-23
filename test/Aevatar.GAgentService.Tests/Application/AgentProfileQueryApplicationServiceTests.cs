@@ -188,6 +188,73 @@ public sealed class AgentProfileQueryApplicationServiceTests
         managementPort.ProfileIds.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ResolveVisibleAsync_UserOwnedSystemReference_ShouldReturnNull()
+    {
+        var entry = UserEntry();
+        var summary = entry.PublishedSummary!;
+        summary.Reference = SystemReference();
+        entry = entry with
+        {
+            Reference = SystemReference(),
+            PublishedSummary = summary,
+        };
+        var executionPort = new RecordingExecutionQueryPort { Result = Execution() };
+        var service = new AgentProfileQueryApplicationService(
+            new RecordingNamespaceQueryPort { ReferenceResult = entry },
+            new RecordingManagementQueryPort(),
+            executionPort);
+
+        var result = await service.ResolveVisibleAsync(Caller(), SystemReference());
+
+        result.Should().BeNull();
+        executionPort.ProfileIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveVisibleAsync_MalformedPublishedSummary_ShouldReturnNull()
+    {
+        var entry = UserEntry();
+        var summary = entry.PublishedSummary!;
+        summary.DisplayName = string.Empty;
+        entry = entry with { PublishedSummary = summary };
+        var executionPort = new RecordingExecutionQueryPort { Result = Execution() };
+        var service = new AgentProfileQueryApplicationService(
+            new RecordingNamespaceQueryPort { ReferenceResult = entry },
+            new RecordingManagementQueryPort(),
+            executionPort);
+
+        var result = await service.ResolveVisibleAsync(Caller(), Reference());
+
+        result.Should().BeNull();
+        executionPort.ProfileIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ResolveVisibleAsync_ForgedMatchingSnapshotDigests_ShouldReportUnavailable()
+    {
+        var forgedDigest = Digest(0x7f);
+        var entry = UserEntry();
+        var summary = entry.PublishedSummary!;
+        summary.SnapshotSha256 = forgedDigest;
+        entry = entry with { PublishedSummary = summary };
+        var snapshot = Execution().Snapshot;
+        snapshot.SnapshotSha256 = forgedDigest;
+        var execution = new AgentProfileExecutionSnapshot(
+            14,
+            "profile-event-14",
+            snapshot);
+        var service = new AgentProfileQueryApplicationService(
+            new RecordingNamespaceQueryPort { ReferenceResult = entry },
+            new RecordingManagementQueryPort(),
+            new RecordingExecutionQueryPort { Result = execution });
+
+        var result = await service.ResolveVisibleAsync(Caller(), Reference());
+
+        result.Should().NotBeNull();
+        result!.Available.Should().BeFalse();
+    }
+
     [Theory]
     [InlineData(InaccessibleDiscoveryKind.Missing)]
     [InlineData(InaccessibleDiscoveryKind.Inactive)]
@@ -274,8 +341,17 @@ public sealed class AgentProfileQueryApplicationServiceTests
         string profileId,
         AgentProfileOwnerIdentity owner,
         string scopeId,
-        AgentProfileReference reference) =>
-        new(
+        AgentProfileReference reference)
+    {
+        var identity = new AgentProfileIdentity
+        {
+            ProfileId = profileId,
+            Owner = owner,
+            OwningScopeId = scopeId,
+            Reference = reference,
+        };
+        var snapshot = PublishedSnapshot(identity);
+        return new AgentProfileNamespaceEntrySnapshot(
             9,
             "namespace-event-9",
             profileId,
@@ -291,8 +367,9 @@ public sealed class AgentProfileQueryApplicationServiceTests
                     : "Published alpha",
                 Purpose = "Safe published purpose",
                 PublishedRevision = 3,
-                SnapshotSha256 = Digest(0x33),
+                SnapshotSha256 = snapshot.SnapshotSha256,
             });
+    }
 
     private static AgentProfileManagementSnapshot Management()
     {
@@ -323,7 +400,7 @@ public sealed class AgentProfileQueryApplicationServiceTests
             5,
             AgentProfileDeterminism.ComputeDraftSha256(draft),
             3,
-            Digest(0x33),
+            PublishedSnapshot(Identity()).SnapshotSha256,
             Digest(0x22),
             null);
     }
@@ -346,8 +423,23 @@ public sealed class AgentProfileQueryApplicationServiceTests
         return new AgentProfileExecutionSnapshot(14, "system-event-14", PublishedSnapshot(identity));
     }
 
-    private static AgentProfilePublishedSnapshot PublishedSnapshot(AgentProfileIdentity identity) =>
-        new()
+    private static AgentProfilePublishedSnapshot PublishedSnapshot(AgentProfileIdentity identity)
+    {
+        var sealedSkill = new SealedAgentProfileSkill
+        {
+            ExactReference = ExactReference(),
+            Package = new ResolvedOrnnSkillPackage
+            {
+                SkillGuid = ExactReference().SkillGuid,
+                LiteralVersion = ExactReference().LiteralVersion,
+                CanonicalName = ExactReference().ExpectedName,
+                PublisherId = ExactReference().ExpectedPublisherId,
+                UpstreamSkillHash = "upstream-hash-alpha",
+                Instructions = "sealed-package-secret",
+            },
+        };
+        sealedSkill.ContentSha256 = AgentProfileDeterminism.ComputeSkillContentSha256(sealedSkill);
+        var snapshot = new AgentProfilePublishedSnapshot
         {
             Identity = identity,
             DisplayName = identity.Reference.OwnerHandle == AgentProfilePolicies.SystemOwnerHandle
@@ -365,26 +457,15 @@ public sealed class AgentProfileQueryApplicationServiceTests
                 {
                     BindingId = "bind-alpha",
                     ActivationMode = AgentProfileSkillActivationMode.Routed,
-                    Skill = new SealedAgentProfileSkill
-                    {
-                        ExactReference = ExactReference(),
-                        Package = new ResolvedOrnnSkillPackage
-                        {
-                            SkillGuid = ExactReference().SkillGuid,
-                            LiteralVersion = ExactReference().LiteralVersion,
-                            CanonicalName = ExactReference().ExpectedName,
-                            PublisherId = ExactReference().ExpectedPublisherId,
-                            UpstreamSkillHash = "upstream-hash-alpha",
-                            Instructions = "sealed-package-secret",
-                        },
-                        ContentSha256 = Digest(0x44),
-                    },
+                    Skill = sealedSkill,
                 },
             },
             PublishedRevision = 3,
             SourceDraftSha256 = Digest(0x22),
-            SnapshotSha256 = Digest(0x33),
         };
+        snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+        return AgentProfileDeterminism.NormalizePublishedSnapshot(snapshot);
+    }
 
     private static ExactOrnnSkillReference ExactReference() =>
         new()

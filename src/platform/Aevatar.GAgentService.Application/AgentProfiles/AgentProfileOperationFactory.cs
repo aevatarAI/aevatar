@@ -61,15 +61,17 @@ public sealed class AgentProfileOperationFactory
                 identity,
                 bindingId));
 
-    public AgentProfileOperationFact CreatePublish(
+    internal PreparedPublishOperation PreparePublish(
         string profileId,
-        string? idempotencyKey,
+        string? idempotencyKey) =>
+        new(CreateMutationOperationId(PublishKind, profileId, idempotencyKey));
+
+    internal AgentProfileOperationFact CreatePublish(
+        PreparedPublishOperation prepared,
         AgentProfileIdentity identity,
         AgentProfilePublishedSnapshot snapshot) =>
-        CreateMutationAttempt(
-            PublishKind,
-            profileId,
-            idempotencyKey,
+        CreateAttempt(
+            prepared.OperationId,
             AgentProfileDeterminism.ComputePublishAgentProfileInputSha256(
                 identity,
                 snapshot));
@@ -80,6 +82,16 @@ public sealed class AgentProfileOperationFactory
         string? idempotencyKey,
         ByteString inputSha256)
     {
+        return CreateAttempt(
+            CreateMutationOperationId(operationKind, profileId, idempotencyKey),
+            inputSha256);
+    }
+
+    private static string CreateMutationOperationId(
+        string operationKind,
+        string profileId,
+        string? idempotencyKey)
+    {
         if (idempotencyKey is not null &&
             (string.IsNullOrWhiteSpace(idempotencyKey) || HasBoundaryWhitespace(idempotencyKey)))
         {
@@ -87,12 +99,10 @@ public sealed class AgentProfileOperationFactory
         }
 
         var semanticKey = idempotencyKey ?? $"implicit_{Guid.NewGuid():N}";
-        return CreateAttempt(
-            AgentProfileDeterminism.CreateOperationId(
-                operationKind,
-                profileId,
-                semanticKey),
-            inputSha256);
+        return AgentProfileDeterminism.CreateOperationId(
+            operationKind,
+            profileId,
+            semanticKey);
     }
 
     private static bool HasBoundaryWhitespace(string value) =>
@@ -109,4 +119,6 @@ public sealed class AgentProfileOperationFactory
             CommandId = AgentProfileDeterminism.CreateCommandId(),
             CorrelationId = AgentProfileDeterminism.CreateCorrelationId(),
         };
+
+    internal sealed record PreparedPublishOperation(string OperationId);
 }

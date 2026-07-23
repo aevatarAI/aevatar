@@ -57,6 +57,98 @@ public sealed class AgentProfileCommandApplicationServiceTests
         first.ResourceUrl.Should().Be($"/api/scopes/{ScopeId}/agent-profiles/{ProfileSlug}");
     }
 
+    [Fact]
+    public async Task CreateAsync_DecomposedCallerIdentity_ShouldUseCanonicalOwnerAndScope()
+    {
+        const string idempotencyKey = "unicode-caller-create";
+        const string canonicalScopeId = "scope-\u00e9";
+        var canonicalOwner = new AgentProfileUserOwnerIdentity
+        {
+            IdentityProvider = AgentProfilePolicies.NyxIdIdentityProvider,
+            SubjectId = "subject-\u00e9",
+        };
+        var caller = new AgentProfileCallerContext(
+            new AgentProfileUserOwnerIdentity
+            {
+                IdentityProvider = AgentProfilePolicies.NyxIdIdentityProvider,
+                SubjectId = "subject-e\u0301",
+            },
+            "scope-e\u0301",
+            OwnerHandle,
+            "token-alpha");
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(actorPort: actorPort);
+
+        var receipt = await service.CreateAsync(caller, CreateRequest(), idempotencyKey);
+
+        var expectedProfileId = AgentProfileDeterminism.CreateProfileId(
+            canonicalOwner,
+            canonicalScopeId,
+            idempotencyKey);
+        var command = actorPort.CreateCommands.Should().ContainSingle().Which;
+        command.Identity.ProfileId.Should().Be(expectedProfileId);
+        command.Identity.Owner.User.Should().Be(canonicalOwner);
+        command.Identity.OwningScopeId.Should().Be(canonicalScopeId);
+        receipt.ProfileId.Should().Be(expectedProfileId);
+        receipt.ResourceUrl.Should().Be(
+            $"/api/scopes/{canonicalScopeId}/agent-profiles/{ProfileSlug}");
+    }
+
+    [Fact]
+    public async Task ManagementAsync_DecomposedCallerIdentity_ShouldUseCanonicalLookupAndOwnership()
+    {
+        const string canonicalScopeId = "scope-\u00e9";
+        var canonicalOwner = new AgentProfileOwnerIdentity
+        {
+            User = new AgentProfileUserOwnerIdentity
+            {
+                IdentityProvider = AgentProfilePolicies.NyxIdIdentityProvider,
+                SubjectId = "subject-\u00e9",
+            },
+        };
+        var caller = new AgentProfileCallerContext(
+            new AgentProfileUserOwnerIdentity
+            {
+                IdentityProvider = AgentProfilePolicies.NyxIdIdentityProvider,
+                SubjectId = "subject-e\u0301",
+            },
+            "scope-e\u0301",
+            OwnerHandle,
+            "token-alpha");
+        var identity = Identity();
+        identity.Owner = canonicalOwner;
+        identity.OwningScopeId = canonicalScopeId;
+        var namespaceEntry = NamespaceEntry() with
+        {
+            Owner = canonicalOwner,
+            OwningScopeId = canonicalScopeId,
+        };
+        var namespacePort = new RecordingNamespaceQueryPort { OwnedResult = namespaceEntry };
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(
+            namespacePort,
+            new RecordingManagementQueryPort
+            {
+                Result = ManagementSnapshot() with { Identity = identity },
+            },
+            actorPort);
+
+        var receipt = await service.UpdateDraftAsync(
+            caller,
+            ProfileSlug,
+            14,
+            UpdateRequest("Canonical caller update"),
+            "unicode-caller-update");
+
+        var lookup = namespacePort.OwnedCalls.Should().ContainSingle().Which;
+        lookup.Owner.Should().Be(canonicalOwner);
+        lookup.OwningScopeId.Should().Be(canonicalScopeId);
+        actorPort.UpdateCommands.Should().ContainSingle()
+            .Which.Identity.Should().BeEquivalentTo(identity);
+        receipt.ResourceUrl.Should().Be(
+            $"/api/scopes/{canonicalScopeId}/agent-profiles/{ProfileSlug}");
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
@@ -119,6 +211,51 @@ public sealed class AgentProfileCommandApplicationServiceTests
         requestTypes.SelectMany(static type => type.GetProperties())
             .Select(static property => property.Name)
             .Should().NotContain(name => forbidden.Contains(name));
+    }
+
+    [Theory]
+    [InlineData(ManagementCommandKind.Validate, DraftDigestCorruption.MalformedLength)]
+    [InlineData(ManagementCommandKind.Validate, DraftDigestCorruption.WrongContent)]
+    [InlineData(ManagementCommandKind.Publish, DraftDigestCorruption.MalformedLength)]
+    [InlineData(ManagementCommandKind.Publish, DraftDigestCorruption.WrongContent)]
+    [InlineData(ManagementCommandKind.UpdateDraft, DraftDigestCorruption.MalformedLength)]
+    [InlineData(ManagementCommandKind.UpdateDraft, DraftDigestCorruption.WrongContent)]
+    public async Task ManagementAsync_InvalidDraftDigest_ShouldFailClosedBeforeResolutionOrDispatch(
+        ManagementCommandKind commandKind,
+        DraftDigestCorruption corruption)
+    {
+        var management = ManagementSnapshot() with
+        {
+            DraftSha256 = corruption == DraftDigestCorruption.MalformedLength
+                ? ByteString.CopyFrom(new byte[31])
+                : Digest(0x7f),
+        };
+        var resolver = SuccessResolver();
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(
+            new RecordingNamespaceQueryPort { OwnedResult = NamespaceEntry() },
+            new RecordingManagementQueryPort { Result = management },
+            actorPort,
+            resolver);
+        Func<Task> act = commandKind switch
+        {
+            ManagementCommandKind.Validate => async () =>
+                await service.ValidateAsync(Caller(), ProfileSlug),
+            ManagementCommandKind.Publish => async () =>
+                await service.PublishAsync(Caller(), ProfileSlug, 14, "invalid-draft-publish"),
+            ManagementCommandKind.UpdateDraft => async () =>
+                await service.UpdateDraftAsync(
+                    Caller(),
+                    ProfileSlug,
+                    14,
+                    UpdateRequest("Invalid draft update"),
+                    "invalid-draft-update"),
+            _ => throw new ArgumentOutOfRangeException(nameof(commandKind)),
+        };
+
+        await act.Should().ThrowAsync<AgentProfileNotFoundException>();
+        resolver.Calls.Should().Be(0);
+        actorPort.DispatchCount.Should().Be(0);
     }
 
     [Fact]
@@ -224,6 +361,53 @@ public sealed class AgentProfileCommandApplicationServiceTests
             .NotBe(actorPort.UpdateCommands[1].Operation.CorrelationId);
     }
 
+    [Theory]
+    [InlineData(14, false, true)]
+    [InlineData(13, false, false)]
+    [InlineData(15, false, false)]
+    [InlineData(15, true, false)]
+    [InlineData(13, true, true)]
+    public async Task MutationAsync_ExpectedVersionMatrix_ShouldRequireExactOrMatchingLowerRetry(
+        long expectedAuthorityStateVersion,
+        bool lastMutationMatches,
+        bool shouldDispatch)
+    {
+        const string idempotencyKey = "version-matrix-update";
+        var operationId = AgentProfileDeterminism.CreateOperationId(
+            "update-agent-profile-draft",
+            ProfileId,
+            idempotencyKey);
+        var management = ManagementSnapshot(
+            lastOperationId: lastMutationMatches ? operationId : "other-operation");
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(
+            new RecordingNamespaceQueryPort { OwnedResult = NamespaceEntry() },
+            new RecordingManagementQueryPort { Result = management },
+            actorPort);
+
+        var act = () => service.UpdateDraftAsync(
+            Caller(),
+            ProfileSlug,
+            expectedAuthorityStateVersion,
+            UpdateRequest("Version matrix update"),
+            idempotencyKey);
+
+        if (shouldDispatch)
+        {
+            var receipt = await act();
+            receipt.Accepted.Should().BeTrue();
+            actorPort.UpdateCommands.Should().ContainSingle()
+                .Which.ExpectedAuthorityStateVersion.Should().Be(expectedAuthorityStateVersion);
+        }
+        else
+        {
+            var exception = await act.Should().ThrowAsync<AgentProfilePreconditionException>();
+            exception.Which.ExpectedAuthorityStateVersion.Should().Be(expectedAuthorityStateVersion);
+            exception.Which.ObservedAuthorityStateVersion.Should().Be(14);
+            actorPort.DispatchCount.Should().Be(0);
+        }
+    }
+
     [Fact]
     public async Task UpsertAsync_ShouldDispatchStructurallyValidSecondDefaultForActorDecision()
     {
@@ -290,6 +474,70 @@ public sealed class AgentProfileCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task ValidateAsync_MixedResolutionResults_ShouldPreserveSuccessfulSummaries()
+    {
+        var resolver = new RecordingResolver(reference =>
+            reference.ExpectedName == "skill-alpha"
+                ? ExactOrnnSkillResolutionResult.Success(PackageFor(reference))
+                : ExactOrnnSkillResolutionResult.Failed(
+                    "ORNN_SKILL_NOT_FOUND",
+                    "The exact Ornn skill was not found."));
+        var service = CreateService(
+            new RecordingNamespaceQueryPort { OwnedResult = NamespaceEntry() },
+            new RecordingManagementQueryPort
+            {
+                Result = ManagementSnapshot(draft: DraftWithTwoRoutedBindings()),
+            },
+            new RecordingActorPort(),
+            resolver);
+
+        var report = await service.ValidateAsync(Caller(), ProfileSlug);
+
+        report.Valid.Should().BeFalse();
+        report.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "ORNN_SKILL_NOT_FOUND" &&
+            diagnostic.Path == "skill_bindings.bind-beta");
+        report.ResolvedSkills.Should().ContainSingle()
+            .Which.BindingId.Should().Be("bind-alpha");
+        report.ResolvedSkills[0].ExactReference.Should().BeEquivalentTo(ExactReference());
+        report.ResolvedSkills[0].ContentSha256.Should().HaveCount(32);
+        resolver.Calls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_AggregatePromptLimit_ShouldPreserveAllSuccessfulSummaries()
+    {
+        var resolver = new RecordingResolver(reference =>
+        {
+            var package = PackageFor(reference);
+            package.Instructions = new string(
+                'a',
+                AgentProfileValidationLimits.AggregatePromptMaxUtf8Bytes / 2 + 1);
+            return ExactOrnnSkillResolutionResult.Success(package);
+        });
+        var service = CreateService(
+            new RecordingNamespaceQueryPort { OwnedResult = NamespaceEntry() },
+            new RecordingManagementQueryPort
+            {
+                Result = ManagementSnapshot(draft: DraftWithTwoRoutedBindings()),
+            },
+            new RecordingActorPort(),
+            resolver);
+
+        var report = await service.ValidateAsync(Caller(), ProfileSlug);
+
+        report.Valid.Should().BeFalse();
+        report.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "AGGREGATE_PROMPT_BYTES_EXCEEDED");
+        report.Diagnostics.Should().Contain(diagnostic =>
+            diagnostic.Code == "AGGREGATE_PROMPT_TOKENS_EXCEEDED");
+        report.ResolvedSkills.Select(static skill => skill.BindingId)
+            .Should().Equal("bind-alpha", "bind-beta");
+        report.ResolvedSkills.Should().OnlyContain(skill => skill.ContentSha256.Length == 32);
+        resolver.Calls.Should().Be(2);
+    }
+
+    [Fact]
     public async Task ValidateAndPublishAsync_MultipleDefaultBindings_ShouldReportPublishOnlyInvariant()
     {
         var draft = DraftWithTwoRoutedBindings();
@@ -350,6 +598,67 @@ public sealed class AgentProfileCommandApplicationServiceTests
         receipt.AckStage.Should().Be("accepted");
         receipt.OperationId.Should().Be(command.Operation.OperationId);
         receipt.ProfileId.Should().Be(ProfileId);
+    }
+
+    [Fact]
+    public async Task PublishAsync_KnownStaleNonRetry_ShouldFailBeforeExactResolution()
+    {
+        var resolver = SuccessResolver();
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(
+            new RecordingNamespaceQueryPort { OwnedResult = NamespaceEntry() },
+            new RecordingManagementQueryPort
+            {
+                Result = ManagementSnapshot(lastOperationId: "other-operation"),
+            },
+            actorPort,
+            resolver);
+
+        var act = () => service.PublishAsync(
+            Caller(), ProfileSlug, 13, "known-stale-publish");
+
+        var exception = await act.Should().ThrowAsync<AgentProfilePreconditionException>();
+        exception.Which.ExpectedAuthorityStateVersion.Should().Be(13);
+        exception.Which.ObservedAuthorityStateVersion.Should().Be(14);
+        resolver.Calls.Should().Be(0);
+        actorPort.DispatchCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PublishAsync_MatchingStaleRetry_ShouldResolveFreshAndDispatchEachAttempt()
+    {
+        const string idempotencyKey = "stale-publish-retry";
+        var operationId = AgentProfileDeterminism.CreateOperationId(
+            "publish-agent-profile",
+            ProfileId,
+            idempotencyKey);
+        var resolver = SuccessResolver();
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(
+            new RecordingNamespaceQueryPort { OwnedResult = NamespaceEntry() },
+            new RecordingManagementQueryPort
+            {
+                Result = ManagementSnapshot(lastOperationId: operationId),
+            },
+            actorPort,
+            resolver);
+
+        await service.PublishAsync(Caller(), ProfileSlug, 13, idempotencyKey);
+        await service.PublishAsync(Caller(), ProfileSlug, 13, idempotencyKey);
+
+        resolver.Calls.Should().Be(2);
+        actorPort.PublishCommands.Should().HaveCount(2);
+        actorPort.PublishCommands.Should().OnlyContain(command =>
+            command.ExpectedAuthorityStateVersion == 13 &&
+            command.Operation.OperationId == operationId &&
+            command.Operation.InputSha256.Equals(
+                AgentProfileDeterminism.ComputePublishAgentProfileInputSha256(
+                    command.Identity,
+                    command.Snapshot)));
+        actorPort.PublishCommands[0].Operation.CommandId.Should()
+            .NotBe(actorPort.PublishCommands[1].Operation.CommandId);
+        actorPort.PublishCommands[0].Operation.CorrelationId.Should()
+            .NotBe(actorPort.PublishCommands[1].Operation.CorrelationId);
     }
 
     [Fact]
@@ -540,12 +849,13 @@ public sealed class AgentProfileCommandApplicationServiceTests
         managementPort ??= new RecordingManagementQueryPort();
         actorPort ??= new RecordingActorPort();
         resolver ??= SuccessResolver();
-        var sealer = new AgentProfileSkillSealer(resolver, new StaticToolSetRegistry([]));
+        var toolSetRegistry = new StaticToolSetRegistry([]);
+        var sealer = new AgentProfileSkillSealer(resolver, toolSetRegistry);
         return new AgentProfileCommandApplicationService(
             namespacePort,
             managementPort,
             actorPort,
-            new AgentProfileDraftValidator(sealer),
+            new AgentProfileDraftValidator(resolver, toolSetRegistry),
             sealer,
             new AgentProfileOperationFactory());
     }
@@ -713,6 +1023,19 @@ public sealed class AgentProfileCommandApplicationServiceTests
 
     private static ByteString Digest(byte value) =>
         ByteString.CopyFrom(Enumerable.Repeat(value, 32).ToArray());
+
+    public enum ManagementCommandKind
+    {
+        Validate,
+        Publish,
+        UpdateDraft,
+    }
+
+    public enum DraftDigestCorruption
+    {
+        MalformedLength,
+        WrongContent,
+    }
 
     private sealed class RecordingNamespaceQueryPort : IAgentProfileNamespaceQueryPort
     {

@@ -36,7 +36,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         string idempotencyKey,
         CancellationToken ct = default)
     {
-        ValidateCaller(caller);
+        var normalizedCaller = NormalizeCaller(caller);
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             throw new AgentProfileRequestException("IDEMPOTENCY_KEY_REQUIRED");
@@ -53,16 +53,15 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
             Instructions = request.Instructions,
             ToolPolicy = request.ToolPolicy,
         });
-        var owner = NormalizeCallerOwner(caller);
         var profileId = AgentProfileDeterminism.CreateProfileId(
-            owner.User,
-            caller.ScopeId,
+            normalizedCaller.Owner.User,
+            normalizedCaller.ScopeId,
             idempotencyKey);
         var identity = NormalizeIdentity(new AgentProfileIdentity
         {
             ProfileId = profileId,
-            Owner = owner,
-            OwningScopeId = caller.ScopeId,
+            Owner = normalizedCaller.Owner,
+            OwningScopeId = normalizedCaller.ScopeId,
             Reference = reference,
         });
         var operation = _operationFactory.CreateCreate(
@@ -81,7 +80,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         };
         var admission = await _actorPort.DispatchCreateAsync(command, ct);
         return AcceptedReceipt(
-            caller,
+            identity.OwningScopeId,
             reference.ProfileSlug,
             profileId,
             operation,
@@ -123,7 +122,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         };
         var admission = await _actorPort.DispatchUpdateDraftAsync(command, ct);
         return AcceptedReceipt(
-            caller,
+            owned.NamespaceEntry.OwningScopeId,
             owned.NamespaceEntry.Reference.ProfileSlug,
             owned.Management.ProfileId,
             operation,
@@ -162,7 +161,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         };
         var admission = await _actorPort.DispatchUpsertSkillBindingAsync(command, ct);
         return AcceptedReceipt(
-            caller,
+            owned.NamespaceEntry.OwningScopeId,
             owned.NamespaceEntry.Reference.ProfileSlug,
             owned.Management.ProfileId,
             operation,
@@ -195,7 +194,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         };
         var admission = await _actorPort.DispatchRemoveSkillBindingAsync(command, ct);
         return AcceptedReceipt(
-            caller,
+            owned.NamespaceEntry.OwningScopeId,
             owned.NamespaceEntry.Reference.ProfileSlug,
             owned.Management.ProfileId,
             operation,
@@ -225,6 +224,13 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         CancellationToken ct = default)
     {
         var owned = await ResolveOwnedOrThrowAsync(caller, profileSlug, ct);
+        var preparedOperation = _operationFactory.PreparePublish(
+            owned.Management.ProfileId,
+            idempotencyKey);
+        ThrowIfKnownStale(
+            owned.Management,
+            expectedAuthorityStateVersion,
+            preparedOperation.OperationId);
         var sealing = await _skillSealer.ResolveAndSealAsync(
             owned.Management.Identity,
             owned.Management.Draft,
@@ -235,11 +241,9 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
 
         var snapshot = sealing.Snapshot!;
         var operation = _operationFactory.CreatePublish(
-            owned.Management.ProfileId,
-            idempotencyKey,
+            preparedOperation,
             owned.Management.Identity,
             snapshot);
-        ThrowIfKnownStale(owned.Management, expectedAuthorityStateVersion, operation.OperationId);
         var command = new PublishAgentProfileCommand
         {
             Operation = operation,
@@ -251,7 +255,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         };
         var admission = await _actorPort.DispatchPublishAsync(command, ct);
         return AcceptedReceipt(
-            caller,
+            owned.NamespaceEntry.OwningScopeId,
             owned.NamespaceEntry.Reference.ProfileSlug,
             owned.Management.ProfileId,
             operation,
@@ -269,9 +273,19 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
             throw new AgentProfileNotFoundException();
     }
 
-    private static AgentProfileOwnerIdentity NormalizeCallerOwner(
-        AgentProfileCallerContext caller) =>
-        NormalizeOwner(new AgentProfileOwnerIdentity { User = caller.Owner });
+    private static (AgentProfileOwnerIdentity Owner, string ScopeId) NormalizeCaller(
+        AgentProfileCallerContext? caller)
+    {
+        if (!AgentProfileOwnerSnapshotResolver.TryNormalizeCaller(
+                caller,
+                out var owner,
+                out var scopeId))
+        {
+            throw new AgentProfileRequestException("INVALID_AGENT_PROFILE_CALLER");
+        }
+
+        return (owner, scopeId);
+    }
 
     private static AgentProfileReference NormalizeUserReference(
         string ownerHandle,
@@ -330,20 +344,6 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         }
     }
 
-    private static AgentProfileOwnerIdentity NormalizeOwner(AgentProfileOwnerIdentity owner)
-    {
-        try
-        {
-            return AgentProfileDeterminism.NormalizeOwnerIdentity(owner);
-        }
-        catch (AgentProfileContractValidationException exception)
-        {
-            throw new AgentProfileRequestException(
-                exception.Diagnostics.FirstOrDefault()?.Code ?? "INVALID_AGENT_PROFILE_OWNER",
-                exception.Diagnostics);
-        }
-    }
-
     private static AgentProfileIdentity NormalizeIdentity(AgentProfileIdentity identity)
     {
         try
@@ -373,11 +373,12 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         long expectedAuthorityStateVersion,
         string operationId)
     {
-        if (expectedAuthorityStateVersion >= management.AuthorityStateVersion ||
-            string.Equals(
-                management.LastMutation?.Operation?.OperationId,
-                operationId,
-                StringComparison.Ordinal))
+        if (expectedAuthorityStateVersion == management.AuthorityStateVersion ||
+            (expectedAuthorityStateVersion < management.AuthorityStateVersion &&
+             string.Equals(
+                 management.LastMutation?.Operation?.OperationId,
+                 operationId,
+                 StringComparison.Ordinal)))
         {
             return;
         }
@@ -416,7 +417,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
         (char.IsWhiteSpace(value[0]) || char.IsWhiteSpace(value[^1]));
 
     private static AgentProfileAcceptedReceipt AcceptedReceipt(
-        AgentProfileCallerContext caller,
+        string owningScopeId,
         string profileSlug,
         string profileId,
         AgentProfileOperationFact operation,
@@ -433,6 +434,6 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
             CorrelationId: admission.CorrelationId,
             ActorId: admission.ActorId,
             ProfileId: profileId,
-            ResourceUrl: $"/api/scopes/{caller.ScopeId}/agent-profiles/{profileSlug}");
+            ResourceUrl: $"/api/scopes/{owningScopeId}/agent-profiles/{profileSlug}");
     }
 }
