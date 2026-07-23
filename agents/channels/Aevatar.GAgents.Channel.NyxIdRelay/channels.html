@@ -400,6 +400,7 @@ function buildLlmSelectionOptions(llm){
   }];
   const seenUserServiceIds = new Set();
   routeOptions.forEach(option=>{
+    if(option.source!=="user_service") return;
     const userServiceId=String(option.userServiceId||"").trim();
     if(!userServiceId || seenUserServiceIds.has(userServiceId) || !option.ready || !option.allowed) return;
     seenUserServiceIds.add(userServiceId);
@@ -415,10 +416,23 @@ function buildLlmSelectionOptions(llm){
 }
 function savedLlmSelectionValue(llm){
   if(!llm) return null;
-  if(llm.savedRouteKind==="gateway") return USER_LLM_GATEWAY_SELECTION;
+  if(llm.savedRouteKind==="gateway"){
+    return String(llm.savedRoute||"").trim()===USER_LLM_GATEWAY_ROUTE
+      ? USER_LLM_GATEWAY_SELECTION
+      : null;
+  }
   if(llm.savedRouteKind!=="nyx_id_user_service") return null;
   const userServiceId=String(llm.savedUserServiceId||"").trim();
   return userServiceId ? llmServiceSelectionValue(userServiceId) : null;
+}
+function llmSelectionObserved(option,llm){
+  if(!option || !llm) return false;
+  if(option.kind==="gateway"){
+    return llm.savedRouteKind==="gateway" &&
+      String(llm.savedRoute||"").trim()===USER_LLM_GATEWAY_ROUTE;
+  }
+  return llm.savedRouteKind==="nyx_id_user_service" &&
+    String(llm.savedUserServiceId||"").trim()===option.userServiceId;
 }
 
 /* Lark Tier-1 minimum scopes (skill §7 — the #1 silent-bot fix). */
@@ -574,7 +588,9 @@ const state = {
   statuses:{},                        // registrationId -> { status, last_event_at }
   llm:null,                           // GET /api/user-config/llm
   llmSel:{ value:null, model:null },  // step4 exact service selection + model
-  llmSaving:false, llmSaved:false,
+  llmSaveState:"idle",               // idle | saving | accepted | observed | failed
+  llmSaveError:null,
+  llmSaved:false,
   manageReg:null,                     // registration row being managed
   workflowRepairing:{},               // registrationId -> request in flight
   workflowRepairNotice:null,          // safe user-facing result message
@@ -859,16 +875,33 @@ async function doDelete(regId, after){
 async function saveLlm(){
   const option=buildLlmSelectionOptions(state.llm).find(item=>item.value===state.llmSel.value);
   if(!option) return;
-  state.llmSaving=true; state.llmSaved=false; render();
+  state.llmSaveState="saving"; state.llmSaveError=null; state.llmSaved=false; render();
   try {
     const body=option.kind==="gateway"
       ? { routeValue:USER_LLM_GATEWAY_ROUTE, model:state.llmSel.model||null }
       : { userServiceId:option.userServiceId, model:state.llmSel.model||null };
-    await apiSend("/api/user-config/llm", "PUT", body);
-    state.llmSaved=true;
-    await loadLlm(true);
-  } catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm save failed", e); }
-  state.llmSaving=false; render();
+    const result=await apiSend("/api/user-config/llm", "PUT", body);
+    if(!result.ok){
+      state.llmSaveState="failed";
+      state.llmSaveError=(result.data && (result.data.error||result.data.note)) || ("HTTP " + result.status);
+      return;
+    }
+
+    state.llmSaveState="accepted";
+    const previousLlm=state.llm;
+    const observedLlm=await loadLlm(true);
+    if(!observedLlm && previousLlm) state.llm=previousLlm;
+    if(llmSelectionObserved(option,observedLlm)){
+      state.llmSaveState="observed";
+      state.llmSaved=true;
+    }
+  } catch(e){
+    if(e.message!=="unauthorized"){
+      console.warn("channels: llm save failed", e);
+      state.llmSaveState="failed";
+      state.llmSaveError=String(e.message||e);
+    }
+  } finally { render(); }
 }
 
 /* ---- live status polling (verify step) ---- */
@@ -1312,11 +1345,25 @@ function renderStep3(){
 function renderStep4(){
   const wrap=el("section",{});
   const llm = state.llm;
-  const unset = !llm || !llm.savedRouteKind ||
-    (llm.savedRouteKind==="nyx_id_user_service" && !llm.savedUserServiceId) ||
-    llm.routeFallbackActive;
-  wrap.innerHTML=stepHead("STEP 4 / 5 · reply model", "配回复模型（owner LLM）", badge(state.llmSaved?"registered":"pending", state.llmSaved?"已保存":(unset?"未设置":"已设置")));
+  const unset = !savedLlmSelectionValue(llm) || !!(llm && llm.routeFallbackActive);
+  const saveState=state.llmSaveState||"idle";
+  const saveBadgeLabel=state.llmSaved
+    ? "已保存"
+    : saveState==="accepted"
+      ? "待确认"
+      : saveState==="failed"
+        ? "保存失败"
+        : unset
+          ? "未设置"
+          : "已设置";
+  wrap.innerHTML=stepHead("STEP 4 / 5 · reply model", "配回复模型（owner LLM）", badge(state.llmSaved?"registered":"pending", saveBadgeLabel));
   wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">bot 收到消息后，要用<b style="color:var(--fg)">一个 LLM</b> 生成回复 —— 用的是<b style="color:var(--fg)">你账户（bot owner）的回复模型配置</b>。没有模型，bot 收得到消息但回不了话。</p>`);
+
+  if(saveState==="failed"){
+    wrap.appendChild(el("div",{class:"callout err"},`${ICON.warn}<div class="body"><span class="ct-title">保存失败</span>回复模型没有保存，请检查选择后重试。${state.llmSaveError?`<div class="errnote mono">${esc(state.llmSaveError)}</div>`:""}</div>`));
+  } else if(saveState==="accepted"){
+    wrap.appendChild(el("div",{class:"callout warn"},`${ICON.warn}<div class="body"><span class="ct-title">保存请求已接受</span>服务端尚未返回所选的精确 LLM 身份。当前选择会保留，可再次保存以重新对账。</div>`));
+  }
 
   if(!llm){
     wrap.appendChild(el("div",{class:"live-chip"},`<span class="dot s-running"></span><span>正在读取你的回复模型配置…</span>`));
@@ -1348,16 +1395,25 @@ function renderStep4(){
   const grid=el("div",{class:"select-grid"});
   const selectionChoices = (state.llmSel.value==null ? [{value:"",label:"请选择 LLM 服务",disabled:true}] : []).concat(selectionOpts);
   const serviceSel=selField("LLM 服务", selectionChoices, state.llmSel.value||"");
-  serviceSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.value=e.target.value; state.llmSel.model=null; state.llmSaved=false; render(); });
+  serviceSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.value=e.target.value; state.llmSel.model=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; render(); });
   grid.appendChild(serviceSel);
   // Always offer the genuine "(平台默认)" sentinel; append real models when the catalog has them.
   const modelChoices = [{value:"",label:"（平台默认）"}].concat(liveModels.map(m=>({value:m,label:m})));
   const modelSel=selField("模型 model", modelChoices, state.llmSel.model);
-  modelSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.model=e.target.value; state.llmSaved=false; });
+  modelSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.model=e.target.value; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; render(); });
   grid.appendChild(modelSel);
   wrap.appendChild(grid);
 
-  const saveBtn = btn(state.llmSaving?"保存中…":(state.llmSaved?"已保存 ✓":"保存回复模型"),"ghost",ICON.gear, ()=>saveLlm(), {disabled:state.llmSaving||!selectedOption});
+  const saveLabel=saveState==="saving"
+    ? "保存中…"
+    : state.llmSaved
+      ? "已保存 ✓"
+      : saveState==="accepted"
+        ? "重新确认保存"
+        : saveState==="failed"
+          ? "重试保存"
+          : "保存回复模型";
+  const saveBtn = btn(saveLabel,"ghost",ICON.gear, ()=>saveLlm(), {disabled:saveState==="saving"||!selectedOption});
   const nextBtn = btn("下一步：验证","primary",ICON.arrow,()=>{ goStep(5); });
   wrap.appendChild(footer([ saveBtn, nextBtn, "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(3); }) ]));
   return wrap;
@@ -1492,7 +1548,7 @@ function renderManage(){
 /* ===========================================================================
    Compose / render
    =========================================================================== */
-function enterWizard(platformId){ state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.llmSel={ value:null, model:null }; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
+function enterWizard(platformId){ state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.llmSel={ value:null, model:null }; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());

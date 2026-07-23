@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { persistAuthSession } from "@/shared/auth/session";
 import {
@@ -38,6 +38,7 @@ const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
 );
 const originalNyxIDClientId = process.env.NYXID_CLIENT_ID;
 const gatewayRoute = "/api/v1/llm/gateway/v1";
+const sharedExactServiceRoute = "/api/v1/proxy/s/shared-openai";
 
 function installLocationAssignSpy() {
   const assign = jest.fn();
@@ -152,12 +153,80 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createExactServiceSettings(savedUserServiceId: string) {
+  const labels: Record<string, string> = {
+    "us-alpha": "Shared OpenAI alpha",
+    "us-beta": "Shared OpenAI beta",
+    "us-gamma": "Shared OpenAI gamma",
+  };
+  return createLlmSettings({
+    savedRoute: sharedExactServiceRoute,
+    savedRouteLabel: labels[savedUserServiceId],
+    savedRouteKind: "nyx_id_user_service",
+    savedUserServiceId,
+    savedServiceSlug: "shared-openai",
+    effectiveRoute: sharedExactServiceRoute,
+    effectiveRouteLabel: labels[savedUserServiceId],
+    defaultModel: "gpt-shared",
+    routeOptions: [
+      {
+        routeValue: gatewayRoute,
+        label: "Gateway route option",
+        source: "gateway_provider",
+        status: "ready",
+        allowed: true,
+        ready: true,
+        userServiceId: null,
+        serviceSlug: null,
+        description: null,
+      },
+      ...Object.entries(labels).map(([userServiceId, label]) => ({
+        routeValue: sharedExactServiceRoute,
+        label,
+        source: "user_service",
+        status: "ready",
+        allowed: true,
+        ready: true,
+        userServiceId,
+        serviceSlug: "shared-openai",
+        description: null,
+      })),
+    ],
+    modelGroupsByRoute: [
+      {
+        routeValue: sharedExactServiceRoute,
+        groupId: "shared-openai",
+        label: "Shared OpenAI",
+        models: ["gpt-shared"],
+      },
+    ],
+  });
+}
+
+function selectedLlmServiceElement(): Element | null {
+  return screen
+    .getByRole("combobox", { name: "Preferred LLM service" })
+    .closest(".ant-select");
+}
+
+async function selectLlmService(label: string): Promise<void> {
+  fireEvent.mouseDown(
+    screen.getByRole("combobox", { name: "Preferred LLM service" }),
+  );
+  fireEvent.click(await screen.findByRole("option", { name: label }));
+}
+
 describe("SettingsPage", () => {
   beforeEach(() => {
     process.env.NYXID_CLIENT_ID = "console-client-1";
     window.localStorage.clear();
     window.history.replaceState({}, "", "/settings");
     jest.clearAllMocks();
+
+    mockStudioApi.getAuthSession.mockReset();
+    mockStudioApi.getUserConfigRuntime.mockReset();
+    mockStudioApi.getUserLlmSettings.mockReset();
+    mockStudioApi.saveUserLlmSettings.mockReset();
 
     mockStudioApi.getAuthSession.mockResolvedValue({
       enabled: true,
@@ -528,6 +597,11 @@ describe("SettingsPage", () => {
     fireEvent.mouseDown(
       await screen.findByRole("combobox", { name: "Preferred LLM service" }),
     );
+    expect(
+      await screen.findByLabelText(
+        "Provider diagnostic · Ready · Provider diagnostic",
+      ),
+    ).toHaveAttribute("tabindex", "0");
     expect(await screen.findByRole("option", { name: "Shared OpenAI alpha" })).toBeTruthy();
     fireEvent.click(screen.getByRole("option", { name: "Shared OpenAI beta" }));
     expect(screen.queryByRole("option", { name: "Provider diagnostic" })).toBeNull();
@@ -540,6 +614,90 @@ describe("SettingsPage", () => {
         model: "gpt-shared",
       });
     });
+  });
+
+  it("hydrates a pristine draft when exact server identity refreshes from A to B", async () => {
+    mockStudioApi.getUserLlmSettings
+      .mockResolvedValueOnce(createExactServiceSettings("us-alpha"))
+      .mockResolvedValue(createExactServiceSettings("us-beta"));
+    const view = renderWithQueryClient(React.createElement(SettingsPage));
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI alpha",
+      ),
+    );
+
+    await act(async () => {
+      await view.queryClient.invalidateQueries({
+        queryKey: ["settings", "user-llm-settings"],
+      });
+    });
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI beta",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
+  });
+
+  it("preserves an explicitly edited exact service across a server refresh", async () => {
+    mockStudioApi.getUserLlmSettings
+      .mockResolvedValueOnce(createExactServiceSettings("us-alpha"))
+      .mockResolvedValue(createExactServiceSettings("us-gamma"));
+    const view = renderWithQueryClient(React.createElement(SettingsPage));
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI alpha",
+      ),
+    );
+    await selectLlmService("Shared OpenAI beta");
+
+    await act(async () => {
+      await view.queryClient.invalidateQueries({
+        queryKey: ["settings", "user-llm-settings"],
+      });
+    });
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI beta",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
+  });
+
+  it("reconciles touched state after save before hydrating a later refresh", async () => {
+    mockStudioApi.getUserLlmSettings
+      .mockResolvedValueOnce(createExactServiceSettings("us-alpha"))
+      .mockResolvedValueOnce(createExactServiceSettings("us-beta"))
+      .mockResolvedValue(createExactServiceSettings("us-gamma"));
+    const view = renderWithQueryClient(React.createElement(SettingsPage));
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI alpha",
+      ),
+    );
+    await selectLlmService("Shared OpenAI beta");
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled(),
+    );
+    await act(async () => {
+      await view.queryClient.invalidateQueries({
+        queryKey: ["settings", "user-llm-settings"],
+      });
+    });
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI gamma",
+      ),
+    );
   });
 
   it("treats a saved service without an exact ID as unavailable", async () => {

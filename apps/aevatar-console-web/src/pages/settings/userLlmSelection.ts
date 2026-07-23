@@ -1,4 +1,5 @@
 import { USER_LLM_ROUTE_GATEWAY } from "@/pages/chat/chatConversationConfig";
+import { t } from "@/shared/i18n/messages";
 import type {
   StudioUserLlmRouteOption,
   StudioUserLlmSettings,
@@ -55,12 +56,18 @@ export function buildUserLlmSelectionOptions(
         routeValue: USER_LLM_ROUTE_GATEWAY,
       };
       options.push({
-        label: option.label.trim() || "Gateway",
+        label:
+          option.label.trim() ||
+          t("pages.settings.userllmselection.gateway", "Gateway"),
         value: encodeUserLlmSelectionValue(selection),
         selection,
         ready: option.ready,
         allowed: option.allowed,
       });
+      continue;
+    }
+
+    if (option.source !== "user_service") {
       continue;
     }
 
