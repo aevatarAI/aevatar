@@ -119,8 +119,56 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
 
         var resolved = await ResolveAuthorizationRequestAsync(request, ct);
         var result = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
-        return new StudioMemberWorkflowAuthorizationResult(
-            result.Success, result.Plan, result.FailureCode, result.Detail);
+        return ToAuthorizationResult(result);
+    }
+
+    public async Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var resolved = await ResolveAuthorizationRequestAsync(request, ct);
+        var first = await _authorizationPlanner.PlanAsync(resolved.AuthorizationRequest, ct);
+        if (first.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(first.Detail))
+            return ToAuthorizationResult(first);
+
+        var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
+            resolved.AuthorizationRequest,
+            cancellationToken => ResolveProvisioningBearerTokenAsync(request, cancellationToken),
+            first.FailureCode,
+            first.Detail,
+            first.ObservedCatalogStateVersion,
+            ct);
+        if (!refresh.Success)
+        {
+            if (refresh.FailureCode ==
+                ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending)
+            {
+                throw new StudioMemberAutomationProjectionPendingException(
+                    refresh.RequiredStateVersion);
+            }
+
+            return new StudioMemberWorkflowAuthorizationResult(false, null, refresh.FailureCode, refresh.Detail);
+        }
+
+        var retryEvaluatedAtUtc = _timeProvider.GetUtcNow();
+        var retryRequest = resolved.AuthorizationRequest with
+        {
+            EvaluatedAtUtc = retryEvaluatedAtUtc,
+            ExpiresAtUtc = _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
+        };
+        var second = await _authorizationPlanner.PlanAsync(retryRequest, ct);
+        if (ShouldTreatRefreshedCatalogAsProjectionPending(
+                second.Success,
+                second.Detail,
+                second.ObservedCatalogStateVersion,
+                refresh.Refresh!.StateVersion))
+        {
+            throw new StudioMemberAutomationProjectionPendingException(refresh.Refresh.StateVersion);
+        }
+
+        return ToAuthorizationResult(second);
     }
 
     private async Task<ScheduledInvocationAuthorizationValidationResult> RevalidateWithCatalogRefreshRetryAsync(
@@ -134,69 +182,22 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         if (first.Success || !IsRecoverableNyxIdCatalogSnapshotFailure(first.Detail))
             return first;
 
-        string bearerToken;
-        try
-        {
-            bearerToken = await provisioningBearerTokenResolver(ct);
-        }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)
-        {
-            return ScheduledInvocationAuthorizationValidationResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_requires_bearer_token:{first.Detail}");
-        }
-
-        if (_catalogRefreshPort is null)
-        {
-            return ScheduledInvocationAuthorizationValidationResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_unavailable:{first.Detail}");
-        }
-
-        NyxIdAuthorizationCatalogRefreshResult refresh;
-        try
-        {
-            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            _logger.LogWarning(
-                "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
-                authorizationRequest.Owner.OwnerKind);
-            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
-        }
-
-        if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
-        {
-            if (refresh.StateVersion > 0 &&
-                first.ObservedCatalogStateVersion < refresh.StateVersion)
-            {
-                return ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
-                    refresh.StateVersion,
-                    first.ObservedCatalogStateVersion);
-            }
-
-            throw new StudioMemberAutomationCatalogRefreshSupersededException();
-        }
-
-        if (refresh.Status is NyxIdAuthorizationCatalogRefreshStatus.Failed or
-            NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)
-        {
-            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
-        }
-
+        var refresh = await RefreshRecoverableNyxIdCatalogSnapshotAsync(
+            authorizationRequest,
+            provisioningBearerTokenResolver,
+            first.FailureCode,
+            first.Detail,
+            first.ObservedCatalogStateVersion,
+            ct);
         if (!refresh.Success)
         {
-            var failureCode = string.IsNullOrWhiteSpace(refresh.FailureCode)
-                ? refresh.Status.ToString()
-                : refresh.FailureCode.Trim();
-            return ScheduledInvocationAuthorizationValidationResult.Failed(
-                first.FailureCode,
-                $"nyxid_catalog_refresh_failed:{failureCode}");
+            return refresh.FailureCode == ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending
+                ? ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
+                    refresh.RequiredStateVersion,
+                    refresh.ObservedCatalogStateVersion)
+                : ScheduledInvocationAuthorizationValidationResult.Failed(
+                    refresh.FailureCode,
+                    refresh.Detail);
         }
 
         var retryEvaluatedAtUtc = _timeProvider.GetUtcNow();
@@ -207,9 +208,13 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                            _schedulePolicy.ResolveCredentialExpiresAtUtc(retryEvaluatedAtUtc),
         };
         var second = await _authorizationRevalidator.RevalidateAsync(retryRequest, confirmation, ct);
-        return second.ObservedCatalogStateVersion < refresh.StateVersion
+        return ShouldTreatRefreshedCatalogAsProjectionPending(
+                second.Success,
+                second.Detail,
+                second.ObservedCatalogStateVersion,
+                refresh.Refresh!.StateVersion)
             ? ScheduledInvocationAuthorizationValidationResult.ProjectionPending(
-                refresh.StateVersion,
+                refresh.Refresh.StateVersion,
                 second.ObservedCatalogStateVersion)
             : second;
     }
@@ -783,6 +788,81 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         };
     }
 
+    private async Task<CatalogRefreshRecoveryResult> RefreshRecoverableNyxIdCatalogSnapshotAsync(
+        ScheduledInvocationAuthorizationRequest authorizationRequest,
+        Func<CancellationToken, Task<string>> provisioningBearerTokenResolver,
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        string detail,
+        long observedCatalogStateVersion,
+        CancellationToken ct)
+    {
+        string bearerToken;
+        try
+        {
+            bearerToken = await provisioningBearerTokenResolver(ct);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)
+        {
+            return CatalogRefreshRecoveryResult.Failed(
+                failureCode,
+                $"nyxid_catalog_refresh_requires_bearer_token:{detail}");
+        }
+
+        if (_catalogRefreshPort is null)
+        {
+            return CatalogRefreshRecoveryResult.Failed(
+                failureCode,
+                $"nyxid_catalog_refresh_unavailable:{detail}");
+        }
+
+        NyxIdAuthorizationCatalogRefreshResult refresh;
+        try
+        {
+            refresh = await _catalogRefreshPort.RefreshAsync(authorizationRequest.Owner, bearerToken, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            _logger.LogWarning(
+                "Failed to refresh NyxID authorization catalog for Studio member workflow schedule owner {OwnerKind}.",
+                authorizationRequest.Owner.OwnerKind);
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
+        }
+
+        if (refresh.Status == NyxIdAuthorizationCatalogRefreshStatus.Superseded)
+        {
+            if (refresh.StateVersion > 0 && observedCatalogStateVersion < refresh.StateVersion)
+            {
+                return CatalogRefreshRecoveryResult.ProjectionPending(
+                    refresh.StateVersion,
+                    observedCatalogStateVersion);
+            }
+
+            throw new StudioMemberAutomationCatalogRefreshSupersededException();
+        }
+
+        if (refresh.Status is NyxIdAuthorizationCatalogRefreshStatus.Failed or
+            NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)
+        {
+            throw new StudioMemberAutomationCatalogRefreshUnavailableException();
+        }
+
+        if (!refresh.Success)
+        {
+            var refreshFailureCode = string.IsNullOrWhiteSpace(refresh.FailureCode)
+                ? refresh.Status.ToString()
+                : refresh.FailureCode.Trim();
+            return CatalogRefreshRecoveryResult.Failed(
+                failureCode,
+                $"nyxid_catalog_refresh_failed:{refreshFailureCode}");
+        }
+
+        return CatalogRefreshRecoveryResult.Succeeded(refresh);
+    }
+
     private async Task<ResolvedStudioAuthorizationRequest> ResolveAuthorizationRequestAsync(
         StudioMemberWorkflowScheduleRequest request,
         CancellationToken ct,
@@ -851,8 +931,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             throw new UnauthorizedAccessException("authenticated_authorization_owner_required");
         var subjectPlatform = NormalizeOptional(owner.SubjectPlatform);
         var subjectExternalUserId = NormalizeOptional(owner.SubjectExternalUserId);
+        var bindingId = NormalizeOptional(owner.VerifiedBindingId);
         if (subjectPlatform is null || subjectExternalUserId is null)
             throw new UnauthorizedAccessException("authenticated_authorization_owner_incomplete");
+        if (bindingId is null)
+            throw new UnauthorizedAccessException("authenticated_authorization_owner_binding_missing");
         if (_callerAccessTokenProvider is null)
             throw new InvalidOperationException("workflow_caller_access_token_provider_unavailable");
 
@@ -863,6 +946,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 Tenant = NormalizeOptional(owner.SubjectTenant) ?? string.Empty,
                 ExternalUserId = subjectExternalUserId,
                 Scope = ProvisioningBearerCapabilityScope,
+                BindingId = bindingId,
             },
             ct);
         var issuedToken = WorkflowCallerCredentialTokens.ParseOptional(issued);
@@ -1434,12 +1518,56 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         value.Length <= 128 && value.All(static c =>
             char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.');
 
+    private static StudioMemberWorkflowAuthorizationResult ToAuthorizationResult(
+        ScheduledInvocationAuthorizationPlanResult result) =>
+        new(result.Success, result.Plan, result.FailureCode, result.Detail);
+
+    private static bool ShouldTreatRefreshedCatalogAsProjectionPending(
+        bool success,
+        string? detail,
+        long observedCatalogStateVersion,
+        long refreshedCatalogStateVersion)
+    {
+        if (observedCatalogStateVersion >= refreshedCatalogStateVersion)
+            return false;
+
+        return observedCatalogStateVersion > 0 || IsRecoverableNyxIdCatalogSnapshotFailure(detail);
+    }
+
     private static bool IsRecoverableNyxIdCatalogSnapshotFailure(string? detail)
     {
         var normalizedDetail = NormalizeOptional(detail);
         return normalizedDetail is "nyxid_catalog_snapshot_not_found" or
             "nyxid_catalog_snapshot_invalidated" or
             "nyxid_catalog_snapshot_stale";
+    }
+
+    private sealed record CatalogRefreshRecoveryResult(
+        bool Success,
+        ScheduledInvocationAuthorizationFailureCode FailureCode,
+        string Detail,
+        long RequiredStateVersion,
+        long ObservedCatalogStateVersion,
+        NyxIdAuthorizationCatalogRefreshResult? Refresh)
+    {
+        public static CatalogRefreshRecoveryResult Succeeded(NyxIdAuthorizationCatalogRefreshResult refresh) =>
+            new(true, ScheduledInvocationAuthorizationFailureCode.Unspecified, string.Empty, 0, 0, refresh);
+
+        public static CatalogRefreshRecoveryResult Failed(
+            ScheduledInvocationAuthorizationFailureCode failureCode,
+            string detail) =>
+            new(false, failureCode, detail, 0, 0, null);
+
+        public static CatalogRefreshRecoveryResult ProjectionPending(
+            long requiredStateVersion,
+            long observedCatalogStateVersion) =>
+            new(
+                false,
+                ScheduledInvocationAuthorizationFailureCode.CatalogProjectionPending,
+                "nyxid_catalog_projection_pending",
+                requiredStateVersion,
+                observedCatalogStateVersion,
+                null);
     }
 
     private static string NormalizeRequired(string? value, string fieldName)

@@ -958,9 +958,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         schedulePort.LastRequest.ConfirmedPolicyVersion.Should()
             .Be(RecordingMemberWorkflowSchedulePort.PolicyVersion);
         schedulePort.PreflightRequests.Should().ContainSingle();
-        schedulePort.PreflightRequests[0].ConfirmedPolicyVersion.Should().BeNull();
-        schedulePort.PreflightRequests[0].OperationId.Should().Be(schedulePort.LastRequest.OperationId);
-        schedulePort.PreflightRequests[0].IdempotencyKey.Should().Be(schedulePort.LastRequest.IdempotencyKey);
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.WritePreflightRequests[0].ConfirmedPolicyVersion.Should().BeNull();
+        schedulePort.WritePreflightRequests[0].OperationId.Should().Be(schedulePort.LastRequest.OperationId);
+        schedulePort.WritePreflightRequests[0].IdempotencyKey.Should().Be(schedulePort.LastRequest.IdempotencyKey);
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
@@ -1024,7 +1025,42 @@ public sealed class ProvisionWorkflowScheduleToolTests
         owner.SubjectPlatform.Should().Be("nyxid");
         owner.SubjectTenant.Should().Be("tenant-typed");
         owner.SubjectExternalUserId.Should().Be("typed-user");
-        owner.VerifiedBindingId.Should().Be("nyxid:typed-user");
+        owner.VerifiedBindingId.Should().Be("binding-alpha");
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenChannelSenderContextPresent_ShouldUseBindingBackedChannelSubject()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope",
+            senderBindingId: "binding-lark",
+            senderNyxUserId: "nyx-lark-user",
+            senderTenant: "tenant-lark",
+            channelPlatform: "lark",
+            channelSenderId: "ou_sender");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        schedulePort.LastRequest!.ScopeId.Should().Be("owner-scope");
+        var owner = schedulePort.LastRequest.AuthenticatedOwner;
+        owner.Owner.OwnerSubject.Should().Be("nyx-lark-user");
+        owner.SubjectPlatform.Should().Be("lark");
+        owner.SubjectTenant.Should().Be("tenant-lark");
+        owner.SubjectExternalUserId.Should().Be("ou_sender");
+        owner.VerifiedBindingId.Should().Be("binding-lark");
     }
 
     [Fact]
@@ -1234,6 +1270,58 @@ public sealed class ProvisionWorkflowScheduleToolTests
         schedulePort.CreateCallCount.Should().Be(0);
     }
 
+    [Theory]
+    [MemberData(nameof(ScheduleMemberWorkflowWritePreflightExceptionCases))]
+    public async Task ScheduleMemberWorkflow_WhenWritePreflightThrowsKnownAuthorizationRefreshException_ShouldReturnStableError(
+        Exception exception,
+        string expectedCode,
+        string expectedMessage)
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            WritePreflightException = exception,
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be(expectedCode);
+        ErrorMessage(output).Should().Be(expectedMessage);
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenCreateThrowsKnownAuthorizationRefreshException_ShouldReturnStableError()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            CreateException = new StudioMemberAutomationCatalogRefreshUnavailableException(),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("authorization_catalog_refresh_unavailable");
+        ErrorMessage(output).Should().Be("The authorization catalog could not be refreshed. Retry this request.");
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateCallCount.Should().Be(1);
+    }
+
     [Fact]
     public async Task ScheduleMemberWorkflow_WhenScopeMissing_ShouldReturnStructuredErrorAndNotCallPort()
     {
@@ -1258,6 +1346,24 @@ public sealed class ProvisionWorkflowScheduleToolTests
 
         ErrorCode(output).Should().Be("caller_subject_unavailable");
         schedulePort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenSenderBindingMissing_ShouldReturnAuthorizationContextUnavailable()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "scope-current",
+            ownerSubject: "owner-1",
+            accessToken: "access-token-1",
+            senderBindingId: null);
+        var output = await tool.ExecuteAsync("""{"member_id":"member-alpha","schedule_cron":"0 9 * * *","schedule_timezone":"Asia/Shanghai"}""");
+
+        ErrorCode(output).Should().Be("authenticated_owner_context_unavailable");
+        schedulePort.PreflightRequests.Should().BeEmpty();
+        schedulePort.CreateRequests.Should().BeEmpty();
     }
 
     [Fact]
@@ -1301,17 +1407,16 @@ public sealed class ProvisionWorkflowScheduleToolTests
         var tool = await DiscoverScheduleMemberWorkflowToolAsync(new RecordingMemberWorkflowSchedulePort());
 
         tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
-        var descriptor = tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>().Subject;
-        descriptor.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
+        tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
     }
 
     [Fact]
-    public async Task ScheduleTool_ShouldDeclareDirectChannelChatExclusion()
+    public async Task ProvisionWorkflowSchedule_ShouldUseSharedCreateScopedResourceApprovalPolicy()
     {
         var tool = await DiscoverToolAsync(new RecordingProvisioningPort());
 
-        var descriptor = tool.Should().BeAssignableTo<IAgentToolCapabilityDescriptor>().Subject;
-        descriptor.Capabilities.Should().Contain(AgentToolCapabilities.ExcludeFromDirectChannelChat);
+        tool.ApprovalMode.Should().Be(ToolApprovalPolicies.CreateScopedResource);
+        tool.Should().NotBeAssignableTo<IAgentToolCapabilityDescriptor>();
     }
 
     [Fact]
@@ -1655,14 +1760,20 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? callId = "call-1",
         string? idempotencyKey = null,
         string? ownerScopeId = null,
-        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null)
+        AgentToolNyxIdAuthorityContext? nyxIdAuthority = null,
+        string? senderBindingId = "binding-alpha",
+        string? senderNyxUserId = null,
+        string? senderTenant = null,
+        string? channelPlatform = null,
+        string? channelSenderId = null,
+        string? channelRegistrationScopeId = null)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
-            AgentToolChannelContext.Empty,
-            AgentToolSenderBindingContext.Empty,
+            new AgentToolChannelContext(channelPlatform, channelSenderId, channelRegistrationScopeId, null, null),
+            new AgentToolSenderBindingContext(senderBindingId, senderNyxUserId, senderTenant),
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
             AgentSkillRecoveryContext.Empty,
@@ -1671,6 +1782,32 @@ public sealed class ProvisionWorkflowScheduleToolTests
             NyxIdAuthority = nyxIdAuthority ?? AgentToolNyxIdAuthorityContext.Empty,
         });
     }
+
+    public static TheoryData<Exception, string, string> ScheduleMemberWorkflowWritePreflightExceptionCases() => new()
+    {
+        {
+            new StudioMemberAutomationProjectionPendingException(23),
+            "authorization_catalog_projection_pending",
+            "The refreshed authorization catalog is still being projected. Retry this request."
+        },
+        {
+            new StudioMemberAutomationCatalogRefreshUnavailableException(),
+            "authorization_catalog_refresh_unavailable",
+            "The authorization catalog could not be refreshed. Retry this request."
+        },
+        {
+            new StudioMemberAutomationCatalogRefreshSupersededException(),
+            "authorization_catalog_refresh_superseded",
+            "A newer authorization catalog refresh superseded this request. Retry this request."
+        },
+        {
+            new StudioMemberAutomationPlanConflictException(
+                "authorization_plan_changed",
+                "private authorization planner detail"),
+            "authorization_plan_changed",
+            "The authorization plan changed. Run schedule preflight again before retrying."
+        },
+    };
 
     private static string? ErrorCode(string output)
     {
@@ -2033,10 +2170,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         public const string PolicyVersion = "credential-policy-alpha";
 
         public List<StudioMemberWorkflowScheduleRequest> PreflightRequests { get; } = [];
+        public List<StudioMemberWorkflowScheduleRequest> WritePreflightRequests { get; } = [];
         public List<StudioMemberWorkflowScheduleRequest> CreateRequests { get; } = [];
         public StudioMemberWorkflowScheduleRequest? LastRequest =>
-            CreateRequests.LastOrDefault() ?? PreflightRequests.LastOrDefault();
+            CreateRequests.LastOrDefault() ?? WritePreflightRequests.LastOrDefault() ?? PreflightRequests.LastOrDefault();
         public int CreateCallCount { get; private set; }
+        public Exception? WritePreflightException { get; init; }
+        public Exception? CreateException { get; init; }
         public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
             new(
                 true,
@@ -2056,6 +2196,18 @@ public sealed class ProvisionWorkflowScheduleToolTests
             CancellationToken ct = default)
         {
             PreflightRequests.Add(request);
+            return Task.FromResult(PreflightResult);
+        }
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default)
+        {
+            WritePreflightRequests.Add(request);
+            PreflightRequests.Add(request);
+            if (WritePreflightException is not null)
+                return Task.FromException<StudioMemberWorkflowAuthorizationResult>(WritePreflightException);
+
             return Task.FromResult(PreflightResult);
         }
 
@@ -2119,6 +2271,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
             string confirmedPermissionDigest)
         {
             CreateCallCount++;
+            if (CreateException is not null)
+                return Task.FromException<StudioMemberWorkflowScheduleResult>(CreateException);
+
             if (!string.Equals(confirmedPermissionDigest, PermissionDigest, StringComparison.Ordinal))
                 throw new InvalidOperationException("authorization_plan_changed");
             if (string.IsNullOrWhiteSpace(request.OperationId))

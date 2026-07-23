@@ -26,6 +26,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Managed Codex Execution](canon/managed-codex-execution.md)
 - [Module Placement Map](canon/module-placement-map.md)
 - [NyxIdChat API Identity And Streaming Contract](canon/nyxid-chat-api.md)
+- [NyxID Chat Agent Profile Binding](canon/nyxid-chat-agent-profile-binding.md)
 - [NyxID Connected-Service LLM Tools](canon/nyxid-connected-service-tools.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
 - [NyxID Responses 直连](canon/nyxid-responses-direct.md)
@@ -130,4 +131,3 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ## Templates
 
 - [architecture.md](templates/architecture.md)
-

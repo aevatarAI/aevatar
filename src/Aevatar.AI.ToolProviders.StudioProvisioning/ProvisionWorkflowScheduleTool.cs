@@ -9,26 +9,20 @@ using Aevatar.Workflow.Abstractions.Workflows;
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
 /// <summary>
-/// <c>aevatar_provision_workflow_schedule</c> — the channel-free, Team-owned,
-/// Observatory-delivered analogue of the Lark <c>scheduled_agent_creator</c>. It
-/// provisions a runnable workflow (member create inside a confirmed Team → bind
-/// inline YAML → <c>ScheduleKind=Workflow</c> scheduled-dispatch) so its recurring
-/// runs surface in <c>/workflow/observatory</c>, never in a chat/bot.
+/// <c>aevatar_provision_workflow_schedule</c> — the Team-owned workflow scheduling
+/// tool. It provisions a runnable workflow (member create inside a confirmed Team →
+/// bind inline YAML → <c>ScheduleKind=Workflow</c> scheduled-dispatch) so its recurring
+/// runs surface in <c>/workflow/observatory</c>.
 ///
 /// The tool takes ONLY workflow/scheduling inputs from the LLM. The owning scope and
 /// caller identity come from the tool execution context (W1 threads
 /// <c>Caller.ScopeId</c>/<c>OwnerSubject</c> on the workflow llm_call path; the
 /// forwarded NyxID access token remains a boundary input and is not persisted in
 /// schedule auth). There are NO
-/// channel / Lark / owner / scope / credential inputs, and the result carries no
-/// channel/Lark fields — only the Team/member/schedule ids plus Studio and
-/// Observatory links.
-///
-/// Because its outcome lands in the Observatory and never in a chat, it declares the
-/// <see cref="AgentToolCapabilities.ExcludeFromDirectChannelChat"/> capability so any
-/// direct channel/chat agent filters it out generically (by capability, not by name).
+/// channel / Lark / owner / scope / credential inputs, and the result carries only
+/// the Team/member/schedule ids plus Studio and Observatory links.
 /// </summary>
-internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapabilityDescriptor
+internal sealed class ProvisionWorkflowScheduleTool : IAgentTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = new()
     {
@@ -104,12 +98,6 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
     public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
-
-    // Observatory-delivered, never chat-delivered: declare the generic surface signal so a
-    // direct channel/chat agent (e.g. the Lark/NyxID reply path) filters this out by capability
-    // rather than by hardcoding the tool name. The workflow allowlist path still selects it.
-    public IReadOnlyCollection<string> Capabilities { get; } =
-        [AgentToolCapabilities.ExcludeFromDirectChannelChat];
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {

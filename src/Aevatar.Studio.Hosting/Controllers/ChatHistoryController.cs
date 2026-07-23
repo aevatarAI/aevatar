@@ -49,7 +49,9 @@ public static class ChatHistoryEndpoints
         var messages = await queryPort.GetMessagesAsync(scopeId, conversationId, ct);
         return messages.Status == ChatHistoryConversationResultStatus.NotFound
             ? Results.NotFound()
-            : Results.Ok(messages.Messages);
+            : Results.Ok(new ChatHistoryConversationResponse(
+                messages.Messages,
+                messages.StateVersion));
     }
 
     private static async Task<IResult> HandleGetCreateRecovery(
@@ -124,4 +126,8 @@ public static class ChatHistoryEndpoints
         string? RequestFingerprint,
         long StateVersion,
         DateTimeOffset UpdatedAt);
+
+    private sealed record ChatHistoryConversationResponse(
+        IReadOnlyList<StoredChatMessage> Messages,
+        long StateVersion);
 }

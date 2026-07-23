@@ -1,3 +1,5 @@
+using Aevatar.Workflow.Application.Abstractions.Runs;
+
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
 // Invoke request body read manually via ReadFromJsonAsync.
@@ -50,13 +52,13 @@ internal sealed record SkillScheduleOutcome(
 }
 
 // Invokes a visible ornn skill once as an observable workflow run, or provisions a recurring schedule for it.
-// The access token + scope + owner subject are INPUTS (resolved from the caller at the endpoint), not read
-// from HttpContext here.
+// The one-shot caller credential and the scheduled access token + scope + owner subject are INPUTS resolved
+// from the caller at the endpoint, not read from HttpContext here.
 internal interface IUserSkillRunService
 {
     Task<SkillRunOutcome> InvokeOnceAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
         string prompt,
         CancellationToken ct = default);

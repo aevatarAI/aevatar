@@ -119,7 +119,8 @@ internal static class ChatRunRequestNormalizer
             platform,
             NormalizeOptional(authority.Tenant) ?? string.Empty,
             externalUserId,
-            scope);
+            scope,
+            NormalizeOptional(authority.BindingId));
     }
 
     private static WorkflowLlmControl? NormalizeLlmControl(ChatLlmControlInput? source)
@@ -267,9 +268,13 @@ internal static class ChatRunRequestNormalizer
         var conversationId = NormalizeOptional(source.ConversationId);
         if (conversationId == null)
             return new ConversationNormalizationResult(null, WorkflowChatRunStartError.InvalidConversationId);
+        if (source.MinimumStateVersion is not > 0)
+            return new ConversationNormalizationResult(null, WorkflowChatRunStartError.ChatHistoryReservationUnavailable);
 
         return new ConversationNormalizationResult(
-            WorkflowChatConversationIntent.Continue(conversationId),
+            WorkflowChatConversationIntent.Continue(
+                conversationId,
+                source.MinimumStateVersion),
             WorkflowChatRunStartError.None);
     }
 

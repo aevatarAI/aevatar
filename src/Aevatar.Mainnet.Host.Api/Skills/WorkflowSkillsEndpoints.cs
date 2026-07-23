@@ -1,10 +1,13 @@
 using System.Security.Claims;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Capabilities;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -115,11 +118,22 @@ internal static class WorkflowSkillsEndpoints
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(runService);
 
-        if (!TryGetBearerToken(http, out var token))
-            return Results.Unauthorized();
         // The run is attributed to the caller's scope so it surfaces in their observatory.
         if (!AevatarScopeAccessGuard.TryGetCallerScopeId(http, out var scopeId))
             return Results.Unauthorized();
+
+        var loggerFactory = http.RequestServices.GetService<ILoggerFactory>();
+        var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+            http,
+            http.RequestServices.GetService<IExternalIdentityBindingQueryPort>(),
+            loggerFactory?.CreateLogger("Aevatar.Mainnet.Host.Api.WorkflowSkills"),
+            ct);
+        if (!callerCredential.Succeeded ||
+            callerCredential.Credential == null ||
+            string.IsNullOrWhiteSpace(callerCredential.Credential.BearerToken))
+        {
+            return Results.Unauthorized();
+        }
 
         SkillInvokeRequest body;
         try
@@ -131,7 +145,12 @@ internal static class WorkflowSkillsEndpoints
             return Results.BadRequest(new { error = "invalid_json" });
         }
 
-        var outcome = await runService.InvokeOnceAsync(guid, token, scopeId, body.Prompt ?? string.Empty, ct);
+        var outcome = await runService.InvokeOnceAsync(
+            guid,
+            callerCredential.Credential,
+            scopeId,
+            body.Prompt ?? string.Empty,
+            ct);
         if (outcome.Succeeded)
             return Results.Json(outcome.Receipt);
 

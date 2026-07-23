@@ -2,6 +2,7 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using WorkflowCallerCredentialTokens = Aevatar.Workflow.Abstractions.WorkflowCallerCredentialTokens;
 
 namespace Aevatar.Mainnet.Host.Api.Skills;
 
@@ -29,11 +30,17 @@ internal sealed class UserSkillRunService : IUserSkillRunService
 
     public async Task<SkillRunOutcome> InvokeOnceAsync(
         string skillGuid,
-        string accessToken,
+        WorkflowCallerCredential callerCredential,
         string scopeId,
         string prompt,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(callerCredential);
+        var parsedToken = WorkflowCallerCredentialTokens.ParseOptional(callerCredential.BearerToken);
+        if (!parsedToken.IsValid)
+            return SkillRunOutcome.Failed("invalid_caller_credential", "Caller credential is invalid.");
+
+        var accessToken = parsedToken.NormalizedBearerToken!;
         var skill = await _remoteSkillFetcher.FetchSkillAsync(accessToken, skillGuid, ct);
         if (skill == null)
             return SkillRunOutcome.Failed("skill_not_found", $"Skill '{skillGuid}' was not found or is not accessible.");
@@ -44,7 +51,7 @@ internal sealed class UserSkillRunService : IUserSkillRunService
             Prompt: prompt ?? string.Empty,
             Source: WorkflowChatSource.InlineYamlBundle(yamls),
             ScopeId: scopeId,
-            CallerCredential: new WorkflowCallerCredential(accessToken));
+            CallerCredential: callerCredential);
 
         var dispatch = await _chatRunDispatch.DispatchAsync(request, ct);
         if (!dispatch.Succeeded || dispatch.Receipt == null)

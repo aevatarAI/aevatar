@@ -15,6 +15,7 @@ internal sealed class SkillRecoveryOrchestrator
     private readonly Func<AgentToolExecutionContext?, StreamingToolExecutor> _executorFactory;
     private int _searchAttempts;
     private int _directiveSequence;
+    private bool _primarySkillAttempted;
 
     public SkillRecoveryOrchestrator(
         AgentSkillRecoveryContext recovery,
@@ -50,6 +51,7 @@ internal sealed class SkillRecoveryOrchestrator
             finalContent,
             _searchAttempts,
             callIdPrefix,
+            _primarySkillAttempted,
             out _);
 
     public IAsyncEnumerable<SkillRecoveryToolProgress> RecoverFinalAnswerAsync(
@@ -84,13 +86,18 @@ internal sealed class SkillRecoveryOrchestrator
                     finalContent,
                     _searchAttempts,
                     callIdPrefix,
+                    _primarySkillAttempted,
                     out var directive))
             {
                 break;
             }
 
+            var sequencedDirective = WithUniqueToolCallId(directive);
+            if (sequencedDirective.AttemptsPrimarySkill)
+                _primarySkillAttempted = true;
+
             await foreach (var progress in ApplyDirectiveAsync(
-                               WithUniqueToolCallId(directive),
+                               sequencedDirective,
                                executor,
                                messages,
                                pendingHistoryMessages,

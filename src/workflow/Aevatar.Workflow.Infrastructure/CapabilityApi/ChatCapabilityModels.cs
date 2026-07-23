@@ -129,6 +129,7 @@ public sealed record HttpChatInput
 public sealed record ChatConversationInput
 {
     public string? ConversationId { get; init; }
+    public long? MinimumStateVersion { get; init; }
 }
 
 public sealed record ChatLlmControlInput

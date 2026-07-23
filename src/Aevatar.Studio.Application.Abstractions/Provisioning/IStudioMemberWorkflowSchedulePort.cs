@@ -25,6 +25,10 @@ public interface IStudioMemberWorkflowSchedulePort : IStudioMemberAutomationQuer
         StudioMemberWorkflowScheduleRequest request,
         CancellationToken ct = default);
 
+    Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        CancellationToken ct = default);
+
     Task<StudioMemberWorkflowScheduleResult> CreateAsync(
         StudioMemberWorkflowScheduleRequest request,
         string confirmedPermissionDigest,

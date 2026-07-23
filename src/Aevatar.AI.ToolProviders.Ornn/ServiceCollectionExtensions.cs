@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.Publishing;
 using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
@@ -63,14 +64,15 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<OrnnOptions>().PerCallTimeout,
                 sp.GetService<ILogger<OrnnSkillClient>>());
         });
+        services.TryAddSingleton<OrnnExactRemoteSkillFetcher>();
+        services.TryAddSingleton<IExactRemoteSkillFetcher>(sp =>
+            sp.GetRequiredService<OrnnExactRemoteSkillFetcher>());
         return services;
     }
 
     /// <summary>
-    /// Registers the host-level, context-aware system skill overlay provider sourced from a public,
-    /// org-owned Ornn skillset (issue #2498). It wins over the built-in default provider and degrades
-    /// to it (<see cref="Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayFallback"/>) when the
-    /// set is unreachable or empty.
+    /// Registers the optional global system skill layer sourced from a public, org-owned Ornn
+    /// skillset. The mandatory built-in prompt floor is registered independently by NyxID chat.
     /// </summary>
     public static IServiceCollection AddSystemSkillOverlay(
         this IServiceCollection services,
@@ -84,13 +86,10 @@ public static class ServiceCollectionExtensions
         services.AddOrnnSkillClient();
         services.TryAddSingleton(options);
 
-        // AddSingleton (not TryAdd) so the Ornn provider wins over the built-in default provider that
-        // NyxidChat registers via TryAddSingleton, regardless of module registration order.
-        services.AddSingleton<Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayProvider>(sp =>
+        services.TryAddSingleton<Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayProvider>(sp =>
             new OrnnSystemSkillOverlayProvider(
                 sp.GetRequiredService<Aevatar.AI.Abstractions.ToolProviders.SystemSkillOverlayOptions>(),
                 sp.GetRequiredService<OrnnSkillClient>(),
-                sp.GetService<Aevatar.AI.Abstractions.ToolProviders.ISystemSkillOverlayFallback>(),
                 sp.GetService<ILogger<OrnnSystemSkillOverlayProvider>>()));
         return services;
     }

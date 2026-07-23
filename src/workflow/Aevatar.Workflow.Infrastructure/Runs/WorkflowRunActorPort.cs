@@ -75,7 +75,7 @@ internal sealed class WorkflowRunActorPort :
         var createdActorIds = new List<string>(2);
         try
         {
-            definitionResolution = await EnsureDefinitionActorAsync(definition, NormalizeActorId(definition.DefinitionActorId), ct);
+            definitionResolution = await ResolveDefinitionActorForRunAsync(definition, ct);
             if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
                 createdActorIds.Add(definitionResolution.ActorId);
 
@@ -168,10 +168,7 @@ internal sealed class WorkflowRunActorPort :
         var createdActorIds = new List<string>(1);
         try
         {
-            definitionResolution = await EnsureDefinitionActorAsync(
-                definition,
-                NormalizeActorId(definition.DefinitionActorId),
-                ct);
+            definitionResolution = await ResolveDefinitionActorForRunAsync(definition, ct);
             if (definitionResolution.CreatedNow && !string.IsNullOrWhiteSpace(definitionResolution.ActorId))
                 createdActorIds.Add(definitionResolution.ActorId);
 
@@ -266,6 +263,51 @@ internal sealed class WorkflowRunActorPort :
         CancellationToken ct = default) =>
         _definitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
 
+    private async Task<DefinitionActorResolutionResult> ResolveDefinitionActorForRunAsync(
+        WorkflowDefinitionBinding definition,
+        CancellationToken ct)
+    {
+        var requestedDefinitionActorId = NormalizeActorId(definition.DefinitionActorId);
+        if (requestedDefinitionActorId == null)
+            return await CreateBoundDefinitionActorAsync(definition, preferredActorId: null, ct);
+
+        var existingActor = await _runtime.GetAsync(requestedDefinitionActorId);
+        if (existingActor == null)
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{requestedDefinitionActorId}' does not exist. Provision the Definition before creating a Run.");
+        }
+
+        var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
+        if (binding == null)
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{existingActor.Id}' does not have an available Definition binding read model.");
+        }
+
+        if (binding.ActorKind != WorkflowActorKind.Definition)
+        {
+            throw new InvalidOperationException(
+                $"Actor '{existingActor.Id}' is not a workflow definition actor and cannot be reused as a definition source.");
+        }
+
+        EnsureScopeCompatibility(existingActor.Id, binding, definition);
+        EnsureWorkflowNameCompatibility(existingActor.Id, binding, definition);
+        if (!binding.HasDefinitionPayload)
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{existingActor.Id}' does not have a materialized definition payload.");
+        }
+
+        if (!IsSameDefinitionPayload(binding, definition))
+        {
+            throw new InvalidOperationException(
+                $"Workflow definition actor '{existingActor.Id}' payload does not match the requested Run definition.");
+        }
+
+        return new DefinitionActorResolutionResult(existingActor.Id, CreatedNow: false);
+    }
+
     private async Task<DefinitionActorResolutionResult> EnsureDefinitionActorAsync(
         WorkflowDefinitionBinding definition,
         string? requestedDefinitionActorId,
@@ -280,13 +322,9 @@ internal sealed class WorkflowRunActorPort :
             var binding = await _bindingReader.GetAsync(existingActor.Id, ct);
             if (binding == null || binding.ActorKind != WorkflowActorKind.Definition)
             {
-                // A missing binding doc, or one frozen to the Run kind, is the signature of a definition
-                // _id whose binding read-model was clobbered by a relayed run-bind (the studio failure).
-                // When the caller supplies the definition payload (built-in/catalog-resolved definitions
-                // always do), re-bind from that payload instead of failing the run; the binding heal
-                // write dispatcher (Definition supersedes a Run-kind slot) lets the re-bind win, so the
-                // actor self-heals back to a Definition document. A genuinely unsupported actor (not a
-                // workflow definition) still fails fast — re-binding onto it would be wrong.
+                // Explicit Definition provisioning may repair a missing or Run-kind binding document
+                // from its authoritative payload. Run provisioning uses ResolveDefinitionActorForRunAsync
+                // and never enters this write-capable repair path.
                 var isClobberedDefinitionSlot =
                     binding == null || binding.ActorKind == WorkflowActorKind.Run;
                 if (isClobberedDefinitionSlot && HasDefinitionPayload(definition))
@@ -434,6 +472,19 @@ internal sealed class WorkflowRunActorPort :
         WorkflowActorBinding binding,
         WorkflowDefinitionBinding definition)
     {
+        if (!IsSameDefinitionPayload(binding, definition))
+            return false;
+
+        return string.Equals(
+            binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+            definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
+            StringComparison.Ordinal);
+    }
+
+    private static bool IsSameDefinitionPayload(
+        WorkflowActorBinding binding,
+        WorkflowDefinitionBinding definition)
+    {
         if (!string.Equals(
                 binding.WorkflowName?.Trim(),
                 definition.WorkflowName?.Trim(),
@@ -460,14 +511,6 @@ internal sealed class WorkflowRunActorPort :
             {
                 return false;
             }
-        }
-
-        if (!string.Equals(
-                binding.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
-                definition.CapabilityAdmissionPlan?.AdmissionDigest ?? string.Empty,
-                StringComparison.Ordinal))
-        {
-            return false;
         }
 
         return true;
@@ -636,10 +679,11 @@ internal sealed class WorkflowRunActorPort :
         {
             WorkflowYaml = workflowYaml ?? string.Empty,
             WorkflowName = workflowName ?? string.Empty,
-            ScopeId = scopeId?.Trim() ?? string.Empty,
             SourceKind = sourceKind?.Trim() ?? string.Empty,
             CapabilityAdmissionPlan = capabilityAdmissionPlan?.Clone(),
         };
+        if (scopeId is not null)
+            bind.ScopeId = scopeId.Trim();
 
         if (inlineWorkflowYamls != null)
         {

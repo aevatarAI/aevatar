@@ -14,19 +14,22 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     private readonly IScheduledInvocationWorkflowEvidenceQueryPort _workflowQueryPort;
     private readonly IScheduledInvocationConnectorEvidenceQueryPort _connectorQueryPort;
     private readonly IScheduledInvocationOwnerLLMEvidenceQueryPort _ownerLLMQueryPort;
+    private readonly IScheduledInvocationOwnerLLMServiceIdentityResolver _ownerLLMServiceIdentityResolver;
 
     public ScheduledInvocationAuthorizationPlanner(
         INyxIdAuthorizationCatalogQueryPort catalogQueryPort,
         IScheduledInvocationMemberEvidenceQueryPort? memberQueryPort = null,
         IScheduledInvocationWorkflowEvidenceQueryPort? workflowQueryPort = null,
         IScheduledInvocationConnectorEvidenceQueryPort? connectorQueryPort = null,
-        IScheduledInvocationOwnerLLMEvidenceQueryPort? ownerLLMQueryPort = null)
+        IScheduledInvocationOwnerLLMEvidenceQueryPort? ownerLLMQueryPort = null,
+        IScheduledInvocationOwnerLLMServiceIdentityResolver? ownerLLMServiceIdentityResolver = null)
     {
         _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
         _memberQueryPort = memberQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _workflowQueryPort = workflowQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _connectorQueryPort = connectorQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _ownerLLMQueryPort = ownerLLMQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
+        _ownerLLMServiceIdentityResolver = ownerLLMServiceIdentityResolver ?? UnavailableTargetEvidenceQueryPorts.Instance;
     }
 
     public async Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
@@ -171,6 +174,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             {
                 var ownerLLM = await ResolveOwnerLLMEvidenceAsync(
                     ownerLLMScopeId,
+                    request.OwnerContext,
                     directRequiredServices,
                     directGrantRequirement,
                     directSourceStamps,
@@ -278,6 +282,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         {
             var ownerLLM = await ResolveOwnerLLMEvidenceAsync(
                 target.ScopeId,
+                request.OwnerContext,
                 requiredServices,
                 serviceGrantRequirement,
                 sourceStamps,
@@ -300,12 +305,13 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
     private async Task<OwnerLLMEvidenceResolution> ResolveOwnerLLMEvidenceAsync(
         string scopeId,
+        AuthenticatedAuthorizationOwnerContext ownerContext,
         List<NyxIdUserServiceCapabilityRef> requiredServices,
         AuthorizationGrantRequirement serviceGrantRequirement,
         List<AuthorizationSourceStamp> sourceStamps,
         CancellationToken ct)
     {
-        var ownerLLM = await _ownerLLMQueryPort.GetAsync(scopeId, ct);
+        var ownerLLM = await _ownerLLMQueryPort.GetAsync(scopeId, ownerContext, ct);
         if (ownerLLM == null)
         {
             return OwnerLLMEvidenceResolution.Failed(Failed(
@@ -324,6 +330,10 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         var ownerServiceSlug = ownerLLM.NyxIdServiceSlug?.Trim() ?? string.Empty;
         if (ownerLLM.ServiceGrantRequirement == AuthorizationGrantRequirement.Required)
         {
+            if (ownerServiceId.Length == 0)
+            {
+                ownerServiceId = (await _ownerLLMServiceIdentityResolver.ResolveAsync(ownerLLM, ownerContext, ct)).Trim();
+            }
             if (ownerServiceId.Length == 0)
             {
                 return OwnerLLMEvidenceResolution.Failed(Failed(
@@ -779,7 +789,8 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         IScheduledInvocationMemberEvidenceQueryPort,
         IScheduledInvocationWorkflowEvidenceQueryPort,
         IScheduledInvocationConnectorEvidenceQueryPort,
-        IScheduledInvocationOwnerLLMEvidenceQueryPort
+        IScheduledInvocationOwnerLLMEvidenceQueryPort,
+        IScheduledInvocationOwnerLLMServiceIdentityResolver
     {
         public static readonly UnavailableTargetEvidenceQueryPorts Instance = new();
 
@@ -800,6 +811,12 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
         Task<ScheduledInvocationOwnerLLMEvidence?> IScheduledInvocationOwnerLLMEvidenceQueryPort.GetAsync(
             string scopeId,
-            CancellationToken ct) => Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
+            AuthenticatedAuthorizationOwnerContext? ownerContext = null,
+            CancellationToken ct = default) => Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
+
+        Task<string> IScheduledInvocationOwnerLLMServiceIdentityResolver.ResolveAsync(
+            ScheduledInvocationOwnerLLMEvidence evidence,
+            AuthenticatedAuthorizationOwnerContext ownerContext,
+            CancellationToken ct = default) => Task.FromResult(string.Empty);
     }
 }

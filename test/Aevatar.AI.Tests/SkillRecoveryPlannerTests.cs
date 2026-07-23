@@ -191,6 +191,35 @@ public sealed class SkillRecoveryPlannerTests
     }
 
     [Fact]
+    public async Task Orchestrator_ApplyInitialDirectivesAsync_WhenPrimarySkillFails_ShouldAttemptItOnlyOnce()
+    {
+        var tools = new ToolManager();
+        tools.Register(new FailedReceiptTool("use_skill"));
+        tools.Register(new FailedReceiptTool("ornn_search_skills"));
+        var orchestrator = new SkillRecoveryOrchestrator(
+            Recovery(primarySkillName: "project-summary", maxAttempts: 1),
+            _ => new StreamingToolExecutor(tools));
+        var messages = new List<ChatMessage> { ChatMessage.User("/goal ship") };
+        var pending = new List<ChatMessage> { messages[0] };
+
+        await foreach (var _ in orchestrator.ApplyInitialDirectivesAsync(
+                           toolContext: null,
+                           messages,
+                           pending,
+                           callIdPrefix: "req-primary-failure",
+                           CancellationToken.None))
+        {
+        }
+
+        var useSkillCalls = messages
+            .SelectMany(message => message.ToolCalls ?? [])
+            .Where(call => string.Equals(call.Name, "use_skill", StringComparison.Ordinal))
+            .ToArray();
+        useSkillCalls.Should().ContainSingle();
+        useSkillCalls[0].ArgumentsJson.Should().Be("{}");
+    }
+
+    [Fact]
     public void TryPlanNextDirective_WhenDisabled_ShouldReturnFalse()
     {
         var forced = SkillRecoveryPlanner.TryPlanNextDirective(
