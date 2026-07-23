@@ -2536,7 +2536,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 fact.Authority?.CatalogContentDigest ?? string.Empty,
                 fact.Authority?.CatalogContractVersion ?? string.Empty,
                 fact.Authority?.CatalogPolicyVersion ?? string.Empty,
-                fact.Authority?.CatalogEvaluatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue));
+                fact.Authority?.CatalogEvaluatedAt?.ToDateTimeOffset() ?? DateTimeOffset.MinValue),
+            fact.OwnerLlmSelection?.Clone());
     }
 
     private static EventEnvelope NormalizeTriggerEnvelope(EventEnvelope triggerEnvelope)

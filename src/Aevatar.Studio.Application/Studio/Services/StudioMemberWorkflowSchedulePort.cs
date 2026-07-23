@@ -328,7 +328,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 resolved.PublishedServiceId,
                 NormalizeOptional(command.Prompt) ?? string.Empty,
                 auth: null,
-                authorizationFact: null,
+                authorizationFact: ToScheduleAuthorizationFact(validated.ValidatedPlan!.Plan),
                 NormalizeRequired(command.ScheduleCron, nameof(command.ScheduleCron)),
                 NormalizeRequired(command.ScheduleTimezone, nameof(command.ScheduleTimezone)),
                 command.Enabled,
@@ -1143,11 +1143,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                         ServiceId = publishedServiceId,
                     },
                     EndpointId: WorkflowInvokeEndpointId,
-                    Payload: Any.Pack(new ChatRequestEvent
-                    {
-                        Prompt = prompt,
-                        ScopeId = scopeId,
-                    }),
+                    Payload: Any.Pack(BuildChatRequest(prompt, scopeId, authorizationFact)),
                     Auth: auth,
                     AuthorizationFact: authorizationFact)),
             CronExpression: cronExpression,
@@ -1202,7 +1198,33 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 catalog.ContentDigest,
                 catalog.ContractVersion,
                 catalog.PolicyVersion,
-                catalog.EvaluatedAt.ToDateTimeOffset()));
+                catalog.EvaluatedAt.ToDateTimeOffset()),
+            plan.OwnerLlmSelection?.Clone());
+    }
+
+    private static ChatRequestEvent BuildChatRequest(
+        string prompt,
+        string scopeId,
+        ScheduledInvocationAuthorizationFact? fact)
+    {
+        var request = new ChatRequestEvent
+        {
+            Prompt = prompt,
+            ScopeId = scopeId,
+        };
+        if (fact?.OwnerLLMSelection is { } selection &&
+            selection.RouteKind != ScheduledInvocationOwnerLLMRouteKind.Unspecified)
+        {
+            if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection))
+                throw new InvalidOperationException("scheduled_owner_llm_selection_invalid");
+            request.LlmControl = new LLMControlContextPayload
+            {
+                ModelOverride = selection.Model,
+                NyxIdRoutePreference = selection.RouteValue,
+            };
+        }
+
+        return request;
     }
 
     private static string ToScopeName(NyxIdCredentialScope scope) => scope switch

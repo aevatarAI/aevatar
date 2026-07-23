@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules;
@@ -1177,6 +1178,14 @@ public sealed class ScheduledDispatchApplicationServiceTests
     public async Task ScheduledDispatchActorPort_ShouldPersistPerServiceAuthorizationGrants()
     {
         var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var ownerLLMSelection = new ScheduledInvocationOwnerLLMSelection
+        {
+            RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+            RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+            NyxIdUserServiceId = "nyx-llm-service-alpha",
+            ServiceSlugSnapshot = "chrono-llm-public",
+            Model = "gpt-5.5",
+        };
         var authorizationFact = new ScheduledInvocationAuthorizationFact(
             "digest-alpha",
             "policy-v1",
@@ -1197,7 +1206,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
                 "catalog-digest-alpha",
                 "scope-plan-contract/v1",
                 "scope-plan-policy/v1",
-                now.AddMinutes(-2)));
+                now.AddMinutes(-2)),
+            ownerLLMSelection);
         var configuration = CreateServiceInvocationConfiguration(
             "schedule-authorization-fact",
             ScheduledDispatchScheduleKind.Workflow,
@@ -1234,6 +1244,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
         stateFact.Authority.CatalogContractVersion.Should().Be("scope-plan-contract/v1");
         stateFact.Authority.CatalogPolicyVersion.Should().Be("scope-plan-policy/v1");
         stateFact.Authority.CatalogEvaluatedAt.ToDateTimeOffset().Should().Be(now.AddMinutes(-2));
+        stateFact.OwnerLlmSelection.Should().BeEquivalentTo(ownerLLMSelection);
+        stateFact.OwnerLlmSelection.Should().NotBeSameAs(ownerLLMSelection);
     }
 
     [Fact]

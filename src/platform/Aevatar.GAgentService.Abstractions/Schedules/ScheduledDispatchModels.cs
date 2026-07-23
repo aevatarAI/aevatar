@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules;
 
@@ -88,7 +89,8 @@ public sealed record ScheduledInvocationAuthorizationFact(
     DateTimeOffset ExpiresAt,
     bool ServiceGrantsNotRequired,
     ScheduledInvocationAuthorizationDisclosure Disclosure,
-    ScheduledInvocationAuthorizationAuthority Authority);
+    ScheduledInvocationAuthorizationAuthority Authority,
+    ScheduledInvocationOwnerLLMSelection? OwnerLLMSelection = null);
 
 public sealed record ScheduledInvocationAuthorizationOwner(
     string Authority,

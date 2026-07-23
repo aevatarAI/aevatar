@@ -594,6 +594,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 CatalogPolicyVersion = fact.Authority.CatalogPolicyVersion,
                 CatalogEvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogEvaluatedAt),
             },
+            OwnerLlmSelection = fact.OwnerLLMSelection?.Clone(),
         };
         state.ServiceGrants.Add(fact.ServiceGrants.Select(static grant =>
         {

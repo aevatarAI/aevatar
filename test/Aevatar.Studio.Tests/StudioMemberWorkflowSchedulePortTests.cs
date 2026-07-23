@@ -64,9 +64,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("run digest");
         chat.ScopeId.Should().Be("scope-1");
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         invocation.AuthorizationFact.Should().NotBeNull();
         var fact = invocation.AuthorizationFact!;
         fact.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
+        fact.OwnerLLMSelection.Should().BeEquivalentTo(planner.Result.Plan!.OwnerLlmSelection);
         fact.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         fact.ServiceGrants.Should().ContainSingle().Which.Should().BeEquivalentTo(
             new ScheduledInvocationAuthorizationServiceGrant("nyx-service-alpha", ["nyx-node-alpha"], false));
@@ -620,6 +623,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         fact.ServiceGrants[1].ServiceId.Should().Be("nyx-service-direct");
         fact.ServiceGrants[1].NodeIds.Should().BeEmpty();
         fact.ServiceGrants[1].NodeGrantsNotRequired.Should().BeTrue();
+        fact.OwnerLLMSelection.Should().BeEquivalentTo(plan.OwnerLlmSelection);
+        fact.OwnerLLMSelection.Should().NotBeSameAs(plan.OwnerLlmSelection);
         fact.GetType().GetProperties().Should()
             .NotContain(property => property.Name == "NodeGrants");
     }
@@ -1064,6 +1069,35 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         scheduleService.EnsureCallCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task ReauthorizeAsync_WhenAuthorized_ShouldCarryFreshOwnerLLMSelection()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion),
+        };
+        var port = NewPort(scheduleService, planner: planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-reauthorize",
+            IdempotencyKey = "idempotency-reauthorize",
+        };
+
+        var result = await port.ReauthorizeAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        result.Success.Should().BeTrue();
+        var configuration = scheduleService.Configuration!;
+        configuration.Target.ServiceInvocation!.AuthorizationFact!.OwnerLLMSelection
+            .Should().BeEquivalentTo(planner.Result.Plan!.OwnerLlmSelection);
+        var chat = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+    }
+
     [Theory]
     [InlineData("stale-digest", RecordingAuthorizationPlanner.PolicyVersion)]
     [InlineData(RecordingAuthorizationPlanner.Digest, "stale-policy")]
@@ -1192,6 +1226,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         revalidator.Requests.Should().HaveCount(2);
         revalidator.Requests[1].ExpiresAtUtc.Should().Be(existingCredentialExpiry);
         scheduleService.UpdateCallCount.Should().Be(1);
+        var configuration = scheduleService.Configuration!;
+        configuration.Target.ServiceInvocation!.AuthorizationFact!.OwnerLLMSelection
+            .Should().BeEquivalentTo(RecordingAuthorizationPlanner.SuccessResult().Plan!.OwnerLlmSelection);
+        var chat = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         calls.Should().Equal("revalidate", "refresh", "revalidate");
     }
 
@@ -1676,6 +1716,14 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     PolicyVersion = "scope-plan-policy/v1",
                     EvaluatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
                 },
+                OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+                {
+                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                    NyxIdUserServiceId = "nyx-llm-service-alpha",
+                    ServiceSlugSnapshot = "chrono-llm-public",
+                    Model = "gpt-5.5",
+                },
             };
             plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
             {
@@ -2128,6 +2176,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             UpdateCallCount++;
+            Configuration = configuration;
+            Configurations.Add(configuration);
             return Task.FromResult(Accepted(scheduleId, "cmd-update"));
         }
 

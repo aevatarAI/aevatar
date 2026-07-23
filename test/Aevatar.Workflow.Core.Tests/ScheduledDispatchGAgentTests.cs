@@ -9,6 +9,7 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.Workflow.Core;
@@ -496,6 +497,34 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.TargetActorId.Should().Be("target-actor-updated");
         agent.State.NextFireAt.Should().BeNull();
         agent.State.NextFireLease.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleConfigureAsync_WhenUpdateSuppliesFreshAuthorizationFact_ShouldPreserveExistingAuth()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential("key-active");
+        await ActivateTeamAutomationAsync(agent, credential, enabled: false);
+        var updatedTarget = agent.State.Target!.Clone();
+        updatedTarget.ServiceInvocation.Auth = null;
+        updatedTarget.ServiceInvocation.AuthorizationFact.PermissionDigest = "digest-updated";
+        updatedTarget.ServiceInvocation.AuthorizationFact.OwnerLlmSelection = CreateOwnerLLMSelection();
+        var update = CreateUpdateCommand(
+            displayName: "Updated schedule",
+            target: updatedTarget,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow);
+        update.TeamAutomationOwner = owner.Clone();
+
+        await agent.HandleConfigureAsync(update);
+
+        agent.State.Target!.ServiceInvocation!.Auth!.ScheduledInvocationAgentKey!.ApiKeyId
+            .Should().Be("key-active");
+        agent.State.Target.ServiceInvocation.AuthorizationFact.PermissionDigest.Should().Be("digest-updated");
+        agent.State.Target.ServiceInvocation.AuthorizationFact.OwnerLlmSelection
+            .Should().BeEquivalentTo(CreateOwnerLLMSelection());
     }
 
     [Fact]
@@ -1686,6 +1715,14 @@ public sealed class ScheduledDispatchGAgentTests
                 CatalogPolicyVersion = "scope-plan-policy/v1",
                 CatalogEvaluatedAt = Timestamp.FromDateTimeOffset(evaluatedAt),
             },
+            OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                NyxIdUserServiceId = "nyx-llm-service-alpha",
+                ServiceSlugSnapshot = "chrono-llm-public",
+                Model = "gpt-5.5",
+            },
         };
         authorizationFact.ServiceGrants.Add(new ScheduledInvocationAuthorizationServiceGrantState
         {
@@ -1740,6 +1777,8 @@ public sealed class ScheduledDispatchGAgentTests
             "scope-plan-contract/v1",
             "scope-plan-policy/v1",
             evaluatedAt));
+        dispatchedFact.OwnerLLMSelection.Should().BeEquivalentTo(authorizationFact.OwnerLlmSelection);
+        dispatchedFact.OwnerLLMSelection.Should().NotBeSameAs(authorizationFact.OwnerLlmSelection);
     }
 
     [Fact]
@@ -3442,6 +3481,8 @@ public sealed class ScheduledDispatchGAgentTests
             });
         serviceDispatch.AuthorizationFacts.Should().ContainSingle().Which!
             .PermissionDigest.Should().Be("digest-alpha");
+        serviceDispatch.AuthorizationFacts.Should().ContainSingle().Which!
+            .OwnerLLMSelection.Should().BeEquivalentTo(CreateOwnerLLMSelection());
         agent.State.TeamAutomationLifecycleStatus.Should()
             .Be(TeamAutomationLifecycleStatusState.ReplacementPending);
     }
@@ -3484,6 +3525,9 @@ public sealed class ScheduledDispatchGAgentTests
         var replacementConfiguration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, replacement));
         replacementConfiguration.Target.ServiceInvocation.AuthorizationFact.PermissionDigest = "digest-beta";
         replacementConfiguration.Target.ServiceInvocation.AuthorizationFact.PolicyVersion = "policy-v2";
+        var replacementSelection = CreateOwnerLLMSelection();
+        replacementSelection.Model = "gpt-5.5-replacement";
+        replacementConfiguration.Target.ServiceInvocation.AuthorizationFact.OwnerLlmSelection = replacementSelection;
         var replacementEffectAttemptId = await RecordTeamCredentialCandidateAsync(
             agent, owner, "operation-beta", "idempotency-beta", replacement);
 
@@ -3508,6 +3552,9 @@ public sealed class ScheduledDispatchGAgentTests
         completion.NyxidRevocationPending.Should().BeTrue();
         completion.VaultRevocationPending.Should().BeTrue();
         agent.State.ActiveTeamCredential!.ApiKeyId.Should().Be("key-replacement");
+        agent.State.ActiveTeamAuthorizationFact!.OwnerLlmSelection
+            .Should().BeEquivalentTo(replacementSelection);
+        agent.State.ActiveTeamAuthorizationFact.OwnerLlmSelection.Should().NotBeSameAs(replacementSelection);
         agent.State.PendingRevocationTeamCredential!.ApiKeyId.Should().Be("key-active");
         agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Active);
         agent.State.TeamCredentialGeneration.Should().Be(2);
@@ -3752,6 +3799,7 @@ public sealed class ScheduledDispatchGAgentTests
                         PermissionDigest = "digest-alpha",
                         PolicyVersion = "policy-v1",
                         Owner = CreateCredentialOwner(),
+                        OwnerLlmSelection = CreateOwnerLLMSelection(),
                     },
                 },
             });
@@ -3764,6 +3812,15 @@ public sealed class ScheduledDispatchGAgentTests
         Authority = "nyxid",
         OwnerKind = "personal",
         OwnerSubject = "owner-alpha",
+    };
+
+    private static ScheduledInvocationOwnerLLMSelection CreateOwnerLLMSelection() => new()
+    {
+        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+        RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+        NyxIdUserServiceId = "nyx-llm-service-alpha",
+        ServiceSlugSnapshot = "chrono-llm-public",
+        Model = "gpt-5.5",
     };
 
     private static ScheduledDispatchConfiguredEvent ToConfiguredEvent(ScheduledDispatchCreateCommand command)

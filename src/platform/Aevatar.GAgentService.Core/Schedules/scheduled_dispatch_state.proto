@@ -7,6 +7,7 @@ import "google/protobuf/any.proto";
 import "agent_messages.proto";
 import "Credentials/credential_secret_references.proto";
 import "service_endpoint.proto";
+import "scheduled_invocation_authorization_plan.proto";
 
 message ScheduledDispatchState
 {
@@ -202,6 +203,7 @@ message ScheduledInvocationAuthorizationFactState
   ScheduledInvocationAuthorizationAuthorityState authority = 9;
   reserved 10;
   reserved "node_grants";
+  aevatar.gagentservice.schedules.authorization.ScheduledInvocationOwnerLLMSelection owner_llm_selection = 11;
 }
 
 message ScheduledInvocationAuthorizationOwnerState
