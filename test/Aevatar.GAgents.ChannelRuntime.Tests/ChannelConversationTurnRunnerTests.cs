@@ -468,6 +468,18 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkChatId].Should().Be("oc_chat_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintSubjectField}"].Should().Be("sender");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintKindField}"].Should().Be("global");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintValueField}"].Should().Be("on_union_1");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintSubjectField}"].Should().Be("conversation");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintKindField}"].Should().Be("platform");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintValueField}"].Should().Be("oc_chat_1");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintSubjectField}"].Should().Be("subject");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintKindField}"].Should().Be("account");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintValueField}"].Should().Be("lark-user-1");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintSubjectField}"].Should().Be("subject");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintKindField}"].Should().Be("directory");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintValueField}"].Should().Be("emp-1");
 
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
         toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
@@ -540,6 +552,15 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().NotBe("nyx-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorOpenId].Should().Be("ou_open_operator_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUnionId].Should().Be("on_operator_1");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintSubjectField}"].Should().Be("operator");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintKindField}"].Should().Be("account");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintValueField}"].Should().Be("lark-user-1");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintSubjectField}"].Should().Be("operator");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintKindField}"].Should().Be("platform");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintValueField}"].Should().Be("ou_open_operator_1");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintSubjectField}"].Should().Be("operator");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintKindField}"].Should().Be("global");
+        result.LlmReplyRequest.Metadata[$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintValueField}"].Should().Be("on_operator_1");
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
     }

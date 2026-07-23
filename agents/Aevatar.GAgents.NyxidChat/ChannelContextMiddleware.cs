@@ -84,6 +84,58 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         static string Resolve(IReadOnlyDictionary<string, string> values, string key) =>
             values.TryGetValue(key, out var value) ? JsonSerializer.Serialize(value ?? string.Empty) : "\"\"";
 
+        static List<string> BuildIdentityHintLines(IReadOnlyDictionary<string, string> values)
+        {
+            var hints = new Dictionary<int, Dictionary<string, string>>();
+            foreach (var (key, value) in values)
+            {
+                if (!key.StartsWith(ChannelMetadataKeys.IdentityHintKeyPrefix, StringComparison.Ordinal) ||
+                    string.IsNullOrWhiteSpace(value))
+                {
+                    continue;
+                }
+
+                var remainder = key[ChannelMetadataKeys.IdentityHintKeyPrefix.Length..];
+                var separatorIndex = remainder.IndexOf('.', StringComparison.Ordinal);
+                if (separatorIndex <= 0 || !int.TryParse(remainder[..separatorIndex], out var index))
+                {
+                    continue;
+                }
+
+                var field = remainder[(separatorIndex + 1)..];
+                if (field is not ChannelMetadataKeys.IdentityHintSubjectField and
+                    not ChannelMetadataKeys.IdentityHintKindField and
+                    not ChannelMetadataKeys.IdentityHintValueField)
+                {
+                    continue;
+                }
+
+                if (!hints.TryGetValue(index, out var hint))
+                {
+                    hint = new Dictionary<string, string>();
+                    hints[index] = hint;
+                }
+
+                hint[field] = value;
+            }
+
+            var lines = new List<string>();
+            foreach (var hint in hints.OrderBy(pair => pair.Key).Select(pair => pair.Value))
+            {
+                if (!hint.TryGetValue(ChannelMetadataKeys.IdentityHintSubjectField, out var subject) ||
+                    !hint.TryGetValue(ChannelMetadataKeys.IdentityHintKindField, out var kind) ||
+                    !hint.TryGetValue(ChannelMetadataKeys.IdentityHintValueField, out var value))
+                {
+                    continue;
+                }
+
+                lines.Add(
+                    $"- subject: {JsonSerializer.Serialize(subject)}, kind: {JsonSerializer.Serialize(kind)}, value: {JsonSerializer.Serialize(value)}");
+            }
+
+            return lines;
+        }
+
         var lines = new List<string>
         {
             "<channel-context>",
@@ -95,7 +147,7 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 
         // Only emit the mentions line when the message actually mentioned someone, so turns with no
         // @-mentions don't carry a noisy empty field. The value is already a readable
-        // `name <open_id>; …` list, so emit it raw rather than through Resolve — JSON-escaping would
+        // `name <platform_id>; ...` list, so emit it raw rather than through Resolve; JSON-escaping would
         // mangle the `<>` delimiters and any non-ASCII (e.g. CJK) display names into `\uXXXX`.
         if (metadata.TryGetValue(ChannelMetadataKeys.Mentions, out var mentions) &&
             !string.IsNullOrWhiteSpace(mentions))
@@ -105,13 +157,14 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 
         lines.Add($"conversation_id: {Resolve(metadata, ChannelMetadataKeys.ConversationId)}");
         lines.Add($"platform_message_id: {Resolve(metadata, ChannelMetadataKeys.PlatformMessageId)}");
-        lines.Add($"lark_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkUnionId)}");
-        lines.Add($"lark_chat_id: {Resolve(metadata, ChannelMetadataKeys.LarkChatId)}");
-        lines.Add($"operator_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUserId)}");
-        lines.Add($"operator_open_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorOpenId)}");
-        lines.Add($"operator_union_id: {Resolve(metadata, ChannelMetadataKeys.LarkOperatorUnionId)}");
-        lines.Add($"subject_user_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectUserId)}");
-        lines.Add($"subject_employee_id: {Resolve(metadata, ChannelMetadataKeys.LarkSubjectEmployeeId)}");
+
+        var identityHints = BuildIdentityHintLines(metadata);
+        if (identityHints.Count > 0)
+        {
+            lines.Add("identity_hints:");
+            lines.AddRange(identityHints);
+        }
+
         lines.Add("</channel-context>");
         return string.Join("\n", lines);
     }

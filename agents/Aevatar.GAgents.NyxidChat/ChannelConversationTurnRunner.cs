@@ -1976,17 +1976,24 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         if (!string.IsNullOrWhiteSpace(platformMessageId))
             metadata[ChannelMetadataKeys.PlatformMessageId] = platformMessageId;
 
+        var identityHintIndex = 0;
         // Lark cross-app outbound delivery: agent-builder consumers prefer the tenant-stable
         // union_id / chat_id captured at ingress over the relay-app-scoped open_id, so a
         // mismatch between the relay-side Lark app and the customer's outbound Lark app does
         // not surface as `code:99992361 open_id cross app` rejections at send time.
         var larkUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkUnionId);
         if (!string.IsNullOrWhiteSpace(larkUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkUnionId] = larkUnionId;
+            AddIdentityHint(metadata, identityHintIndex++, "sender", "global", larkUnionId);
+        }
 
         var larkChatId = NormalizeOptional(activity?.TransportExtras?.NyxLarkChatId);
         if (!string.IsNullOrWhiteSpace(larkChatId))
+        {
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
+            AddIdentityHint(metadata, identityHintIndex++, "conversation", "platform", larkChatId);
+        }
 
         var deliveryAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressId);
         if (!string.IsNullOrWhiteSpace(deliveryAddressId))
@@ -2006,23 +2013,39 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUserId] = larkOperatorUserId;
+            AddIdentityHint(metadata, identityHintIndex++, "operator", "account", larkOperatorUserId);
+        }
 
         var larkOperatorOpenId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorOpenId);
         if (!string.IsNullOrWhiteSpace(larkOperatorOpenId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorOpenId] = larkOperatorOpenId;
+            AddIdentityHint(metadata, identityHintIndex++, "operator", "platform", larkOperatorOpenId);
+        }
 
         var larkOperatorUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUnionId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
+            AddIdentityHint(metadata, identityHintIndex++, "operator", "global", larkOperatorUnionId);
+        }
 
         if (await TryResolveLarkSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
                 .ConfigureAwait(false) is { } subjectContactIds)
         {
             if (!string.IsNullOrWhiteSpace(subjectContactIds.UserId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectUserId] = subjectContactIds.UserId;
+                AddIdentityHint(metadata, identityHintIndex++, "subject", "account", subjectContactIds.UserId);
+            }
+
             if (!string.IsNullOrWhiteSpace(subjectContactIds.EmployeeId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
+                AddIdentityHint(metadata, identityHintIndex++, "subject", "directory", subjectContactIds.EmployeeId);
+            }
         }
 
         // Surface resolved @-mentions (canonical id + name) so the agent can target a third party by a
@@ -2042,6 +2065,19 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         }
 
         return metadata;
+    }
+
+    private static void AddIdentityHint(
+        IDictionary<string, string> metadata,
+        int index,
+        string subject,
+        string kind,
+        string value)
+    {
+        var prefix = $"{ChannelMetadataKeys.IdentityHintKeyPrefix}{index}.";
+        metadata[$"{prefix}{ChannelMetadataKeys.IdentityHintSubjectField}"] = subject;
+        metadata[$"{prefix}{ChannelMetadataKeys.IdentityHintKindField}"] = kind;
+        metadata[$"{prefix}{ChannelMetadataKeys.IdentityHintValueField}"] = value;
     }
 
     private async Task<LarkSubjectContactIds?> TryResolveLarkSubjectContactIdsAsync(

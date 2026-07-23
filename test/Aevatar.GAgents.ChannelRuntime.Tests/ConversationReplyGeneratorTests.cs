@@ -998,7 +998,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkApprovalOperatorUserIdInSystemPrompt()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_RendersOperatorIdsWithProviderNeutralLabels()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
@@ -1020,8 +1020,18 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkOperatorUserId] = "lark-user-1",
-                [ChannelMetadataKeys.LarkOperatorOpenId] = "ou_operator_1",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "sender",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintKindField}"] = "global",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintValueField}"] = "on_sender_1",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "conversation",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintKindField}"] = "platform",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintValueField}"] = "oc_provider_1",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "operator",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintKindField}"] = "account",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintValueField}"] = "provider-user-1",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "operator",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintKindField}"] = "platform",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintValueField}"] = "provider-operator-1",
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1029,8 +1039,16 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("operator_user_id: \"lark-user-1\"");
-        systemPrompt.Should().Contain("operator_open_id: \"ou_operator_1\"");
+        systemPrompt.Should().Contain("identity_hints:");
+        systemPrompt.Should().Contain("- subject: \"sender\", kind: \"global\", value: \"on_sender_1\"");
+        systemPrompt.Should().Contain("- subject: \"conversation\", kind: \"platform\", value: \"oc_provider_1\"");
+        systemPrompt.Should().Contain("- subject: \"operator\", kind: \"account\", value: \"provider-user-1\"");
+        systemPrompt.Should().Contain("- subject: \"operator\", kind: \"platform\", value: \"provider-operator-1\"");
+        systemPrompt.Should().NotContain("operator_user_id:");
+        systemPrompt.Should().NotContain("operator_open_id:");
+        systemPrompt.Should().NotContain("operator_union_id:");
+        systemPrompt.Should().NotContain("lark_union_id:");
+        systemPrompt.Should().NotContain("lark_chat_id:");
     }
 
     [Fact]
@@ -1191,7 +1209,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkSubjectIdsSeparatelyFromOperatorIds()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_RendersSubjectIdsSeparatelyFromOperatorIds()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
@@ -1213,8 +1231,12 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkSubjectUserId] = "lark-subject-user-1",
-                [ChannelMetadataKeys.LarkSubjectEmployeeId] = "employee-1",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "subject",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintKindField}"] = "account",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintValueField}"] = "provider-subject-user-1",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "subject",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintKindField}"] = "directory",
+                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintValueField}"] = "directory-1",
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1222,10 +1244,13 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("subject_user_id: \"lark-subject-user-1\"");
-        systemPrompt.Should().Contain("subject_employee_id: \"employee-1\"");
-        systemPrompt.Should().Contain("operator_user_id: \"\"");
-        systemPrompt.Should().Contain("operator_open_id: \"\"");
+        systemPrompt.Should().Contain("identity_hints:");
+        systemPrompt.Should().Contain("- subject: \"subject\", kind: \"account\", value: \"provider-subject-user-1\"");
+        systemPrompt.Should().Contain("- subject: \"subject\", kind: \"directory\", value: \"directory-1\"");
+        systemPrompt.Should().NotContain("operator_account_id:");
+        systemPrompt.Should().NotContain("operator_platform_id:");
+        systemPrompt.Should().NotContain("subject_user_id:");
+        systemPrompt.Should().NotContain("subject_employee_id:");
         systemPrompt.Should().NotContain("operator_user_id: \"lark-subject-user-1\"");
     }
 
