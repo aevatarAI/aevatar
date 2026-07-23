@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Xml.Linq;
 using FluentAssertions;
 using Xunit;
@@ -80,6 +81,48 @@ public sealed class AgentProfileManagementSkillContractTests
     }
 
     [Fact]
+    public void Skill_body_defines_the_exact_agent_profiles_argument_contract()
+    {
+        var source = File.ReadAllText(RepositoryFile(SkillRelativePath));
+        var examples = JsonExamples(source).ToDictionary(
+            static example => example.GetProperty("action").GetString()!,
+            StringComparer.Ordinal);
+
+        examples.Keys.Should().BeEquivalentTo("get", "upsert_skill", "validate", "publish");
+        foreach (var example in examples.Values)
+            PropertyNames(example).Should().Contain("action", "profile_slug");
+
+        PropertyNames(examples["get"]).Should().BeEquivalentTo("action", "profile_slug");
+        PropertyNames(examples["upsert_skill"]).Should().BeEquivalentTo(
+            "action",
+            "profile_slug",
+            "etag",
+            "binding_id",
+            "activation_mode",
+            "skill");
+        PropertyNames(examples["upsert_skill"].GetProperty("skill")).Should().BeEquivalentTo(
+            "skill_guid",
+            "literal_version",
+            "expected_name",
+            "expected_publisher_id");
+        PropertyNames(examples["validate"]).Should().BeEquivalentTo("action", "profile_slug");
+        PropertyNames(examples["publish"]).Should().BeEquivalentTo(
+            "action",
+            "profile_slug",
+            "etag");
+        examples["upsert_skill"].GetProperty("etag").GetString().Should().MatchRegex(
+            @"^""agent-profile-v[1-9][0-9]*""$");
+        examples["publish"].GetProperty("etag").GetString().Should().MatchRegex(
+            @"^""agent-profile-v[1-9][0-9]*""$");
+
+        Contains(source, "caller owner is implicit").Should().BeTrue();
+        Contains(source, "including its surrounding quotes").Should().BeTrue();
+        source.Should().Contain("Do not use `operation`, `profile`, or `owner_profile`.");
+        source.Should().Contain("Do not use `exact_ornn_skill_reference`");
+        source.Should().Contain("Do not invent `if_match`, `validation_id`, or other fields.");
+    }
+
+    [Fact]
     public void Mainnet_project_links_the_repository_skill_source_to_output_and_publish()
     {
         var project = XDocument.Load(RepositoryFile("src/Aevatar.Mainnet.Host.Api/Aevatar.Mainnet.Host.Api.csproj"));
@@ -122,6 +165,30 @@ public sealed class AgentProfileManagementSkillContractTests
 
     private static bool Contains(string source, string marker) =>
         source.Contains(marker, StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<JsonElement> JsonExamples(string source)
+    {
+        const string openingFence = "```json";
+        const string closingFence = "```";
+        var examples = new List<JsonElement>();
+        var searchIndex = 0;
+
+        while ((searchIndex = source.IndexOf(openingFence, searchIndex, StringComparison.Ordinal)) >= 0)
+        {
+            var jsonStart = searchIndex + openingFence.Length;
+            var jsonEnd = source.IndexOf(closingFence, jsonStart, StringComparison.Ordinal);
+            jsonEnd.Should().BeGreaterThan(jsonStart);
+
+            using var document = JsonDocument.Parse(source[jsonStart..jsonEnd]);
+            examples.Add(document.RootElement.Clone());
+            searchIndex = jsonEnd + closingFence.Length;
+        }
+
+        return examples;
+    }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        element.EnumerateObject().Select(static property => property.Name).ToArray();
 
     private static string RepositoryFile(string relativePath) =>
         Path.Combine(FindRepositoryRoot(), relativePath.Replace('/', Path.DirectorySeparatorChar));
