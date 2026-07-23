@@ -567,6 +567,55 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpdateAsync_WhenTeamAutomationReplacementIsPending_ShouldRejectBeforeActorDispatch()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "member-alpha");
+        var existing = CreateSummaryDetail(
+            "schedule-replacement-pending",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var queryPort = new RecordingScheduledDispatchQueryPort
+        {
+            Detail = existing with
+            {
+                Schedule = existing.Schedule with
+                {
+                    TeamOwned = true,
+                    TeamOwnerScopeId = owner.ScopeId,
+                    TeamOwnerMemberId = owner.MemberId,
+                    TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.ReplacementPending,
+                },
+            },
+        };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            queryPort,
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateServiceInvocationConfiguration(
+            "schedule-replacement-pending",
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService) with
+        {
+            TeamAutomationOwner = owner,
+        };
+
+        var act = () => service.UpdateAsync(
+            configuration.ScheduleId,
+            configuration,
+            new ScheduledDispatchMutationContext(TeamAutomationOwner: owner));
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_replacement_pending");
+        queryPort.GetScheduleIds.Should().ContainSingle().Which.Should().Be(configuration.ScheduleId);
+        actorPort.ResolvedScheduleIds.Should().BeEmpty();
+        actorPort.Updated.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task EnsureAsync_ShouldNormalizePrepareEnsureActorAndDispatch()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();

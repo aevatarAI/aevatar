@@ -99,6 +99,17 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             requireScheduleId: true,
             ct);
         var existing = await GetMutableScheduleAsync(normalized.ScheduleId, normalized.TeamAutomationOwner, ct);
+        if (existing?.Schedule is
+            {
+                TeamOwned: true,
+                TeamAutomationLifecycleStatus: TeamAutomationLifecycleStatus.ReplacementPending,
+            })
+        {
+            throw new ScheduledDispatchConflictException(
+                normalized.ScheduleId,
+                "team_automation_replacement_pending");
+        }
+
         normalized = AdmitCredentialRequirement(
             normalized,
             ScheduledDispatchCredentialRequirementOperation.Update,

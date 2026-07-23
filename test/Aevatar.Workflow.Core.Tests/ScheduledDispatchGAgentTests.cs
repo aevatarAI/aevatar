@@ -3414,7 +3414,7 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task TeamAutomationReauthorize_ShouldKeepUsingActiveCredentialUntilReplacementActivates()
+    public async Task TeamAutomationReauthorize_WhenReplacementPending_ShouldRejectConfigureAndDispatchActiveTargetAtomically()
     {
         var eventStore = new TestEventStore();
         var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort();
@@ -3429,6 +3429,17 @@ public sealed class ScheduledDispatchGAgentTests
         var effectAttemptId = await RecordTeamCredentialCandidateAsync(
             agent, owner, "operation-alpha", "idempotency-alpha", activeCredential);
         var configured = ToConfiguredEvent(CreateTeamConfigureCommand(owner, activeCredential));
+        var activeSelection = configured.Target.ServiceInvocation.AuthorizationFact.OwnerLlmSelection;
+        configured.Target.ServiceInvocation.Payload = Any.Pack(new ChatRequestEvent
+        {
+            Prompt = "active prompt",
+            ScopeId = "scope-alpha",
+            LlmControl = new LLMControlContextPayload
+            {
+                ModelOverride = activeSelection.Model,
+                NyxIdRoutePreference = activeSelection.RouteValue,
+            },
+        });
         configured.Target.ServiceInvocation.Auth.CallerAuthority = new ScheduledCallerNyxIdAuthority
         {
             Platform = "lark",
@@ -3460,6 +3471,37 @@ public sealed class ScheduledDispatchGAgentTests
                 CredentialEffectLocator = CreateTeamCredentialEffectLocator("operation-beta"),
                 MutationDigest = "mutation-beta",
             });
+        var activeTarget = agent.State.Target!.Clone();
+        var replacementSelection = CreateOwnerLLMSelection();
+        replacementSelection.RouteValue = "/api/v1/proxy/s/chrono-llm-beta";
+        replacementSelection.NyxIdUserServiceId = "nyx-llm-service-beta";
+        replacementSelection.ServiceSlugSnapshot = "chrono-llm-beta";
+        replacementSelection.Model = "gpt-5.6";
+        var replacementTarget = activeTarget.Clone();
+        replacementTarget.ServiceInvocation.Auth = null;
+        replacementTarget.ServiceInvocation.AuthorizationFact.PermissionDigest = "digest-beta";
+        replacementTarget.ServiceInvocation.AuthorizationFact.OwnerLlmSelection = replacementSelection;
+        replacementTarget.ServiceInvocation.Payload = Any.Pack(new ChatRequestEvent
+        {
+            Prompt = "replacement prompt",
+            ScopeId = "scope-alpha",
+            LlmControl = new LLMControlContextPayload
+            {
+                ModelOverride = replacementSelection.Model,
+                NyxIdRoutePreference = replacementSelection.RouteValue,
+            },
+        });
+        var update = CreateUpdateCommand(
+            displayName: "Rejected replacement update",
+            target: replacementTarget,
+            scheduleKind: ScheduledDispatchScheduleKindState.Workflow);
+        update.TeamAutomationOwner = owner.Clone();
+
+        var updateAction = () => agent.HandleConfigureAsync(update);
+
+        await updateAction.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_replacement_pending");
+        agent.State.Target!.ToByteArray().Should().Equal(activeTarget.ToByteArray());
         await agent.HandleFireAsync(new ScheduledDispatchFireCommand
         {
             ScheduledFireAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddMinutes(1)),
@@ -3468,10 +3510,15 @@ public sealed class ScheduledDispatchGAgentTests
             TeamAutomationOwner = owner.Clone(),
         });
 
-        serviceDispatch.Auths.Should().ContainSingle().Which!
-            .ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-active");
-        serviceDispatch.Auths.Should().ContainSingle().Which!
-            .CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
+        var dispatchedChat = serviceDispatch.Requests.Should().ContainSingle().Which.Payload
+            .Unpack<ChatRequestEvent>();
+        dispatchedChat.Prompt.Should().Be("active prompt");
+        dispatchedChat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        dispatchedChat.LlmControl.NyxIdRoutePreference.Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        var dispatchedAuth = serviceDispatch.Auths.Should().ContainSingle().Which;
+        dispatchedAuth!.ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-active");
+        dispatchedAuth.CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
             {
                 Platform = "lark",
                 Tenant = "tenant-alpha",
@@ -3479,10 +3526,9 @@ public sealed class ScheduledDispatchGAgentTests
                 Scope = "proxy",
                 BindingId = "bnd-owner-alpha",
             });
-        serviceDispatch.AuthorizationFacts.Should().ContainSingle().Which!
-            .PermissionDigest.Should().Be("digest-alpha");
-        serviceDispatch.AuthorizationFacts.Should().ContainSingle().Which!
-            .OwnerLLMSelection.Should().BeEquivalentTo(CreateOwnerLLMSelection());
+        var dispatchedFact = serviceDispatch.AuthorizationFacts.Should().ContainSingle().Which;
+        dispatchedFact!.PermissionDigest.Should().Be("digest-alpha");
+        dispatchedFact.OwnerLLMSelection.Should().BeEquivalentTo(CreateOwnerLLMSelection());
         agent.State.TeamAutomationLifecycleStatus.Should()
             .Be(TeamAutomationLifecycleStatusState.ReplacementPending);
     }

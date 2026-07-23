@@ -229,6 +229,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
         EnsureTeamAutomationOwnerAccess(teamAutomationOwner, "configure");
+        if (!isCreate &&
+            State.TeamAutomationOwner != null &&
+            State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.ReplacementPending)
+        {
+            throw new InvalidOperationException("team_automation_replacement_pending");
+        }
+
         EnsureValidDefinition(targetActorId, target, triggerEnvelope, cronExpression, timezone, scheduleKind, scheduleMode, oneShotFireAt);
 
         var now = DateTimeOffset.UtcNow;
