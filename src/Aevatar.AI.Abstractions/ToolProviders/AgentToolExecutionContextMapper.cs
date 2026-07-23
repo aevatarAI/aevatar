@@ -153,7 +153,8 @@ public static class AgentToolExecutionContextMapper
                 AgentToolExecutionContext.Normalize(payload.Channel?.PlatformMessageId),
                 AgentToolExecutionContext.Normalize(payload.Channel?.DeliveryTargetId),
                 FromWorkflowResultDeliveryCredentialPayload(payload.Channel?.WorkflowResultDeliveryCredential),
-                AgentToolExecutionContext.Normalize(payload.Channel?.BotRegistrationId)),
+                AgentToolExecutionContext.Normalize(payload.Channel?.BotRegistrationId),
+                FromIdentityHintPayloads(payload.Channel?.IdentityHints)),
             new AgentToolSenderBindingContext(
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.BindingId),
                 AgentToolExecutionContext.Normalize(payload.SenderBinding?.NyxUserId),
@@ -246,6 +247,25 @@ public static class AgentToolExecutionContextMapper
             };
         }
 
+        if (context.Channel.IdentityHints is { Count: > 0 })
+        {
+            foreach (var hint in context.Channel.IdentityHints)
+            {
+                var subject = AgentToolExecutionContext.Normalize(hint.Subject);
+                var kind = AgentToolExecutionContext.Normalize(hint.Kind);
+                var value = AgentToolExecutionContext.Normalize(hint.Value);
+                if (subject is null || kind is null || value is null)
+                    continue;
+
+                payload.Channel.IdentityHints.Add(new AgentToolChannelIdentityHintPayload
+                {
+                    Subject = subject,
+                    Kind = kind,
+                    Value = value,
+                });
+            }
+        }
+
         if (context.Routing.MaxToolRoundsOverride.HasValue)
             payload.Routing.MaxToolRoundsOverride = context.Routing.MaxToolRoundsOverride.Value;
 
@@ -278,6 +298,27 @@ public static class AgentToolExecutionContextMapper
     private static ChannelWorkflowResultDeliveryCredential? FromWorkflowResultDeliveryCredentialPayload(
         ChannelWorkflowResultDeliveryCredential? payload) =>
         string.IsNullOrWhiteSpace(payload?.SecretReference?.Ref) ? null : payload.Clone();
+
+    private static IReadOnlyList<AgentToolChannelIdentityHint> FromIdentityHintPayloads(
+        IEnumerable<AgentToolChannelIdentityHintPayload>? payloads)
+    {
+        if (payloads is null)
+            return [];
+
+        var hints = new List<AgentToolChannelIdentityHint>();
+        foreach (var payload in payloads)
+        {
+            var subject = AgentToolExecutionContext.Normalize(payload.Subject);
+            var kind = AgentToolExecutionContext.Normalize(payload.Kind);
+            var value = AgentToolExecutionContext.Normalize(payload.Value);
+            if (subject is null || kind is null || value is null)
+                continue;
+
+            hints.Add(new AgentToolChannelIdentityHint(subject, kind, value));
+        }
+
+        return hints;
+    }
 
     private static AgentSkillRecoveryContext FromSkillRecoveryPayload(AgentSkillRecoveryContextPayload? payload)
     {

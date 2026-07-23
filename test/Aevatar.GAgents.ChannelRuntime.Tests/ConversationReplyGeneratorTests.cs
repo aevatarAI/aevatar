@@ -1020,18 +1020,20 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "sender",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintKindField}"] = "global",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintValueField}"] = "on_sender_1",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "conversation",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintKindField}"] = "platform",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintValueField}"] = "oc_provider_1",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "operator",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintKindField}"] = "account",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}2.{ChannelMetadataKeys.IdentityHintValueField}"] = "provider-user-1",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "operator",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintKindField}"] = "platform",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}3.{ChannelMetadataKeys.IdentityHintValueField}"] = "provider-operator-1",
+            },
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Channel = AgentToolChannelContext.Empty with
+                {
+                    IdentityHints =
+                    [
+                        new AgentToolChannelIdentityHint("sender", "global", "on_sender_1"),
+                        new AgentToolChannelIdentityHint("conversation", "platform", "oc_provider_1"),
+                        new AgentToolChannelIdentityHint("operator", "account", "provider-user-1"),
+                        new AgentToolChannelIdentityHint("operator", "platform", "provider-operator-1"),
+                    ],
+                },
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1231,12 +1233,18 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "subject",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintKindField}"] = "account",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}0.{ChannelMetadataKeys.IdentityHintValueField}"] = "provider-subject-user-1",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintSubjectField}"] = "subject",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintKindField}"] = "directory",
-                [$"{ChannelMetadataKeys.IdentityHintKeyPrefix}1.{ChannelMetadataKeys.IdentityHintValueField}"] = "directory-1",
+            },
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Channel = AgentToolChannelContext.Empty with
+                {
+                    IdentityHints =
+                    [
+                        new AgentToolChannelIdentityHint("subject", "account", "provider-subject-user-1"),
+                        new AgentToolChannelIdentityHint("subject", "directory", "directory-1"),
+                    ],
+                },
             },
             streamingSink: null,
             CancellationToken.None);

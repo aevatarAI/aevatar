@@ -210,6 +210,13 @@ message AgentToolChannelContextPayload {
   string delivery_target_id = 6;
   ChannelWorkflowResultDeliveryCredential workflow_result_delivery_credential = 8;
   string bot_registration_id = 9;
+  repeated AgentToolChannelIdentityHintPayload identity_hints = 10;
+}
+
+message AgentToolChannelIdentityHintPayload {
+  string subject = 1;
+  string kind = 2;
+  string value = 3;
 }
 
 // Typed handle for a channel bot's workflow terminal-result delivery credential.

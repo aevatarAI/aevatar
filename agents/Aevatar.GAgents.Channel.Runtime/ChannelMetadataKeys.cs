@@ -22,15 +22,6 @@ public static class ChannelMetadataKeys
     public const string PlatformMessageId = "channel.platform_message_id";
     public const string ChatType = "channel.chat_type";
     /// <summary>
-    /// Prefix for provider-neutral identity hint entries surfaced to generic LLM channel context.
-    /// Entries use indexed keys: <c>channel.identity_hints.{n}.subject</c>, <c>.kind</c>, and <c>.value</c>.
-    /// Provider adapters decide which concrete provider identifiers become hints.
-    /// </summary>
-    public const string IdentityHintKeyPrefix = "channel.identity_hints.";
-    public const string IdentityHintSubjectField = "subject";
-    public const string IdentityHintKindField = "kind";
-    public const string IdentityHintValueField = "value";
-    /// <summary>
     /// Provider slug used for outbound delivery back to the current channel. This is the generic
     /// channel-delivery route selected by the inbound adapter.
     /// </summary>

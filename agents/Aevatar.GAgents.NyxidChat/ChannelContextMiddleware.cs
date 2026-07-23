@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Runtime;
 using Microsoft.Extensions.Logging;
 
@@ -48,7 +49,9 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
 
         try
         {
-            var channelContext = BuildChannelContextSection(metadata);
+            var channelContext = BuildChannelContextSection(
+                metadata,
+                context.Request.ToolContext?.Channel.IdentityHints);
             if (string.IsNullOrWhiteSpace(channelContext))
                 return;
 
@@ -72,7 +75,9 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         }
     }
 
-    internal static string BuildChannelContextSection(IReadOnlyDictionary<string, string> metadata)
+    internal static string BuildChannelContextSection(
+        IReadOnlyDictionary<string, string> metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint>? identityHints = null)
     {
         if (metadata.Count == 0 ||
             !metadata.TryGetValue(ChannelMetadataKeys.Platform, out var platform) ||
@@ -84,56 +89,23 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         static string Resolve(IReadOnlyDictionary<string, string> values, string key) =>
             values.TryGetValue(key, out var value) ? JsonSerializer.Serialize(value ?? string.Empty) : "\"\"";
 
-        static List<string> BuildIdentityHintLines(IReadOnlyDictionary<string, string> values)
+        static IEnumerable<string> BuildIdentityHintLines(IReadOnlyList<AgentToolChannelIdentityHint>? hints)
         {
-            var hints = new Dictionary<int, Dictionary<string, string>>();
-            foreach (var (key, value) in values)
+            if (hints is null)
+                yield break;
+
+            foreach (var hint in hints)
             {
-                if (!key.StartsWith(ChannelMetadataKeys.IdentityHintKeyPrefix, StringComparison.Ordinal) ||
-                    string.IsNullOrWhiteSpace(value))
+                if (string.IsNullOrWhiteSpace(hint.Subject) ||
+                    string.IsNullOrWhiteSpace(hint.Kind) ||
+                    string.IsNullOrWhiteSpace(hint.Value))
                 {
                     continue;
                 }
 
-                var remainder = key[ChannelMetadataKeys.IdentityHintKeyPrefix.Length..];
-                var separatorIndex = remainder.IndexOf('.', StringComparison.Ordinal);
-                if (separatorIndex <= 0 || !int.TryParse(remainder[..separatorIndex], out var index))
-                {
-                    continue;
-                }
-
-                var field = remainder[(separatorIndex + 1)..];
-                if (field is not ChannelMetadataKeys.IdentityHintSubjectField and
-                    not ChannelMetadataKeys.IdentityHintKindField and
-                    not ChannelMetadataKeys.IdentityHintValueField)
-                {
-                    continue;
-                }
-
-                if (!hints.TryGetValue(index, out var hint))
-                {
-                    hint = new Dictionary<string, string>();
-                    hints[index] = hint;
-                }
-
-                hint[field] = value;
+                yield return
+                    $"- subject: {JsonSerializer.Serialize(hint.Subject)}, kind: {JsonSerializer.Serialize(hint.Kind)}, value: {JsonSerializer.Serialize(hint.Value)}";
             }
-
-            var lines = new List<string>();
-            foreach (var hint in hints.OrderBy(pair => pair.Key).Select(pair => pair.Value))
-            {
-                if (!hint.TryGetValue(ChannelMetadataKeys.IdentityHintSubjectField, out var subject) ||
-                    !hint.TryGetValue(ChannelMetadataKeys.IdentityHintKindField, out var kind) ||
-                    !hint.TryGetValue(ChannelMetadataKeys.IdentityHintValueField, out var value))
-                {
-                    continue;
-                }
-
-                lines.Add(
-                    $"- subject: {JsonSerializer.Serialize(subject)}, kind: {JsonSerializer.Serialize(kind)}, value: {JsonSerializer.Serialize(value)}");
-            }
-
-            return lines;
         }
 
         var lines = new List<string>
@@ -158,11 +130,11 @@ internal sealed class ChannelContextMiddleware : ILLMCallMiddleware
         lines.Add($"conversation_id: {Resolve(metadata, ChannelMetadataKeys.ConversationId)}");
         lines.Add($"platform_message_id: {Resolve(metadata, ChannelMetadataKeys.PlatformMessageId)}");
 
-        var identityHints = BuildIdentityHintLines(metadata);
-        if (identityHints.Count > 0)
+        var identityHintLines = BuildIdentityHintLines(identityHints).ToList();
+        if (identityHintLines.Count > 0)
         {
             lines.Add("identity_hints:");
-            lines.AddRange(identityHints);
+            lines.AddRange(identityHintLines);
         }
 
         lines.Add("</channel-context>");
