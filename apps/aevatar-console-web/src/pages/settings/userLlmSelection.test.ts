@@ -49,7 +49,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     status: "ready",
     allowed: true,
     ready: true,
-    userServiceId: null,
+    userServiceId: "diag-health",
     serviceSlug: "diagnostic-only",
     description: "Visible in health details only",
   },

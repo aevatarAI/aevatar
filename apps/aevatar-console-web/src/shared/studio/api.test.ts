@@ -298,6 +298,41 @@ describe('studioApi host-session requests', () => {
     });
   });
 
+  it('maps an unknown saved LLM selection kind to the fail-closed variant', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        savedRoute: '/api/v1/proxy/s/openai',
+        savedRouteLabel: 'OpenAI alpha',
+        savedRouteKind: 'future_selection_kind',
+        savedUserServiceId: 'us-alpha',
+        savedServiceSlug: 'openai',
+        effectiveRoute: '/api/v1/llm/gateway/v1',
+        effectiveRouteLabel: 'Gateway',
+        routeFallbackActive: true,
+        fallbackReason: 'saved_route_unavailable',
+        routeOptions: [],
+        modelGroupsByRoute: [],
+        catalogStatus: 'ready',
+        capabilities: {
+          canEditRoute: true,
+          canEditModel: true,
+          canSave: true,
+          canRetryCatalog: false,
+        },
+        defaultModel: '',
+        setupHint: null,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getUserLlmSettings()).resolves.toMatchObject({
+      savedRouteKind: 'unknown',
+      savedUserServiceId: 'us-alpha',
+    });
+  });
+
   it('saves an exact inventory-backed LLM service selection', async () => {
     persistAuthSession({
       tokens: {

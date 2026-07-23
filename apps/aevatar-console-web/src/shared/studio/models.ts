@@ -1063,10 +1063,15 @@ export interface StudioUserLlmSettingsCapabilities {
   readonly canRetryCatalog: boolean;
 }
 
+export type StudioUserLlmSavedRouteKind =
+  | 'gateway'
+  | 'nyx_id_user_service'
+  | 'unknown';
+
 export interface StudioUserLlmSettings {
   readonly savedRoute: string;
   readonly savedRouteLabel: string;
-  readonly savedRouteKind: 'gateway' | 'nyx_id_user_service' | string;
+  readonly savedRouteKind: StudioUserLlmSavedRouteKind;
   readonly savedUserServiceId?: string | null;
   readonly savedServiceSlug?: string | null;
   readonly effectiveRoute: string;

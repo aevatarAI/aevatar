@@ -61,6 +61,7 @@ import type {
   StudioUserConfig,
   StudioUserConfigSaveReceipt,
   StudioUserConfigRuntime,
+  StudioUserLlmSavedRouteKind,
   StudioUserLlmSettings,
   StudioWorkflowDraft,
   StudioWorkflowDraftCreateAcceptedReceipt,
@@ -377,6 +378,16 @@ function decodeOrnnSkillSearchResult(
   };
 }
 
+function decodeStudioUserLlmSavedRouteKind(
+  value: unknown,
+  label: string
+): StudioUserLlmSavedRouteKind {
+  const kind = expectString(value, label);
+  return kind === "gateway" || kind === "nyx_id_user_service"
+    ? kind
+    : "unknown";
+}
+
 function decodeStudioUserLlmSettings(
   value: unknown,
   label = "StudioUserLlmSettings"
@@ -385,7 +396,10 @@ function decodeStudioUserLlmSettings(
   return {
     savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
     savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
-    savedRouteKind: readString(record, "savedRouteKind", `${label}.savedRouteKind`),
+    savedRouteKind: decodeStudioUserLlmSavedRouteKind(
+      record.savedRouteKind,
+      `${label}.savedRouteKind`
+    ),
     savedUserServiceId: readNullableString(
       record,
       "savedUserServiceId",

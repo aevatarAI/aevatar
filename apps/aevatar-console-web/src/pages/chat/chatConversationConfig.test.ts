@@ -1,10 +1,11 @@
+import type { StudioUserLlmSettings } from "@/shared/studio/models";
 import {
   buildConversationRouteOptions,
   buildConversationModelGroups,
   USER_LLM_ROUTE_GATEWAY,
 } from "./chatConversationConfig";
 
-const llmSettings = {
+const llmSettings: StudioUserLlmSettings = {
   savedRoute: USER_LLM_ROUTE_GATEWAY,
   savedRouteLabel: "Company LLM Gateway",
   savedRouteKind: "gateway",

@@ -330,8 +330,22 @@ const ConnectedProviderChip: React.FC<{
 }> = ({ option, selected }) => {
   const { token } = theme.useToken();
   const ready = option.ready && option.allowed;
-  const sourceLabel = option.source === "user_service" ? "User service" : "Gateway provider";
+  const sourceLabel =
+    option.source === "user_service"
+      ? t("pages.settings.index.provider.source.user.service", "User service")
+      : option.source === "gateway_provider"
+        ? t("pages.settings.index.provider.source.gateway", "Gateway provider")
+        : option.source === "provider_diagnostic"
+          ? t(
+              "pages.settings.index.provider.source.diagnostic",
+              "Provider diagnostic",
+            )
+          : t("pages.settings.index.provider.source.status", "Provider status");
+  const readinessLabel = ready
+    ? t("pages.settings.index.provider.ready", "Ready")
+    : t("pages.settings.index.provider.unavailable", "Unavailable");
   const label = option.label;
+  const accessibleLabel = `${label} · ${readinessLabel} · ${sourceLabel}`;
   const background = selected
     ? ready
       ? token.colorSuccessBg
@@ -353,9 +367,10 @@ const ConnectedProviderChip: React.FC<{
     <Tooltip
       mouseEnterDelay={0.15}
       placement="top"
-      title={`${label} · ${ready ? "Ready" : "Unavailable"} · ${sourceLabel}`}
+      title={accessibleLabel}
     >
       <div
+        aria-label={accessibleLabel}
         style={{
           alignItems: "center",
           background,
@@ -370,6 +385,7 @@ const ConnectedProviderChip: React.FC<{
           lineHeight: 1,
           padding: "8px 12px",
         }}
+        tabIndex={0}
       >
         <span
           style={{
@@ -422,35 +438,32 @@ const SettingsPage: React.FC = () => {
     [userLlmSettingsQuery.data],
   );
   const [draft, setDraft] = React.useState<SettingsDraft>(loadedDraft);
+  const [draftTouched, setDraftTouched] = React.useState(false);
   const [saveError, setSaveError] = React.useState<string | null>(null);
-  const hydratedDraftRef = React.useRef(false);
   const draftDirty = React.useMemo(
-    () => !draftsEqual(draft, loadedDraft),
-    [draft, loadedDraft],
+    () => draftTouched && !draftsEqual(draft, loadedDraft),
+    [draft, draftTouched, loadedDraft],
   );
 
   React.useEffect(() => {
-    if (!userLlmSettingsQuery.isSuccess) {
+    if (!userLlmSettingsQuery.isSuccess || draftTouched) {
       return;
     }
 
-    if (!hydratedDraftRef.current) {
-      hydratedDraftRef.current = true;
-      setDraft(loadedDraft);
-      return;
-    }
-
-    if (!draftDirty) {
-      setDraft(loadedDraft);
-    }
-  }, [draftDirty, loadedDraft, userLlmSettingsQuery.isSuccess]);
+    setDraft(loadedDraft);
+  }, [draftTouched, loadedDraft, userLlmSettingsQuery.isSuccess]);
 
   const saveMutation = useMutation({
     mutationFn: async (nextDraft: SettingsDraft) => {
       const model = trimConversationValue(nextDraft.defaultModel) ?? "";
       const selection = nextDraft.preferredLlmSelection;
       if (!selection) {
-        throw new Error("Choose an exact LLM service before saving.");
+        throw new Error(
+          t(
+            "pages.settings.index.choose.exact.llm.service.before.saving",
+            "Choose an exact LLM service before saving.",
+          ),
+        );
       }
 
       return selection.kind === "gateway"
@@ -470,6 +483,7 @@ const SettingsPage: React.FC = () => {
         queryClient.invalidateQueries({ queryKey: ["studio-user-llm-settings"] }),
         queryClient.invalidateQueries({ queryKey: ["chat", "user-llm-settings"] }),
       ]);
+      setDraftTouched(false);
     },
     onError: (error) => {
       setSaveError(describeError(error, "Failed to save settings."));
@@ -746,6 +760,7 @@ const SettingsPage: React.FC = () => {
 
   const handleReset = React.useCallback(() => {
     setDraft(loadedDraft);
+    setDraftTouched(false);
     setSaveError(null);
   }, [loadedDraft]);
 
@@ -758,6 +773,8 @@ const SettingsPage: React.FC = () => {
       if (!nextSelection) {
         return;
       }
+
+      setDraftTouched(true);
 
       const nextRouteGroups = buildConversationModelGroups({
         effectiveRoute: nextSelection.routeValue,
@@ -781,6 +798,14 @@ const SettingsPage: React.FC = () => {
       userLlmSettingsQuery.data,
     ],
   );
+
+  const handleDefaultModelChange = React.useCallback((nextValue: unknown) => {
+    setDraftTouched(true);
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      defaultModel: String(nextValue || ""),
+    }));
+  }, []);
 
   const handleSectionChange = React.useCallback((nextKey: string) => {
     const nextSection: SettingsSection =
@@ -922,11 +947,25 @@ const SettingsPage: React.FC = () => {
 
             {routeFallbackActive ? (
               <Alert
-                message={`Effective route is currently ${routeSummaryLabel}.`}
+                message={t(
+                  "pages.settings.index.effective.route.currently",
+                  "Effective route is currently {route}.",
+                  { route: routeSummaryLabel },
+                )}
                 description={
                   preferredSelectionAvailable
-                    ? "The selected service is available and will be used for new requests."
-                    : `${preferredRouteLabel} is unavailable right now, so new requests fall back to ${routeSummaryLabel}.`
+                    ? t(
+                        "pages.settings.index.selected.service.available",
+                        "The selected service is available and will be used for new requests.",
+                      )
+                    : t(
+                        "pages.settings.index.selected.service.unavailable.fallback",
+                        "{service} is unavailable right now, so new requests fall back to {route}.",
+                        {
+                          route: routeSummaryLabel,
+                          service: preferredRouteLabel,
+                        },
+                      )
                 }
                 showIcon
                 type={preferredSelectionAvailable ? "info" : "warning"}
@@ -993,12 +1032,20 @@ const SettingsPage: React.FC = () => {
                           <Typography.Text strong>{t("pages.settings.index.connected.providers", "Connected providers")}</Typography.Text>
                           <Space size={6} wrap>
                             <FieldMetaPill
-                              label={`${readyProviderCount} ready`}
+                              label={t(
+                                "pages.settings.index.providers.ready.count",
+                                "{count} ready",
+                                { count: readyProviderCount },
+                              )}
                               tone={readyProviderCount > 0 ? "success" : "default"}
                             />
                             {unavailableProviderCount > 0 ? (
                               <FieldMetaPill
-                                label={`${unavailableProviderCount} unavailable`}
+                                label={t(
+                                  "pages.settings.index.providers.unavailable.count",
+                                  "{count} unavailable",
+                                  { count: unavailableProviderCount },
+                                )}
                                 tone="warning"
                               />
                             ) : null}
@@ -1044,12 +1091,7 @@ const SettingsPage: React.FC = () => {
                             aria-label={t("pages.settings.index.default.model.3", "Default model")}
                             allowClear
                             disabled={!canEditModel}
-                            onChange={(nextValue) =>
-                              setDraft((currentDraft) => ({
-                                ...currentDraft,
-                                defaultModel: String(nextValue || ""),
-                              }))
-                            }
+                            onChange={handleDefaultModelChange}
                             optionFilterProp="label"
                             options={modelOptions}
                             placeholder={defaultModelPlaceholder}
@@ -1061,10 +1103,7 @@ const SettingsPage: React.FC = () => {
                             aria-label={t("pages.settings.index.default.model.4", "Default model")}
                             disabled={!canEditModel}
                             onChange={(event) =>
-                              setDraft((currentDraft) => ({
-                                ...currentDraft,
-                                defaultModel: event.target.value,
-                              }))
+                              handleDefaultModelChange(event.target.value)
                             }
                             placeholder={defaultModelPlaceholder}
                             value={draft.defaultModel}
@@ -1206,6 +1245,7 @@ const SettingsPage: React.FC = () => {
       providerDisplayList,
       readyProviderCount,
       routeFallbackActive,
+      handleDefaultModelChange,
       handlePreferredServiceChange,
       isCatalogOptionSelected,
       savedServiceIdentityMissing,
