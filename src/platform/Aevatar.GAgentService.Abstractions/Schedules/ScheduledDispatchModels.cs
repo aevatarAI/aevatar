@@ -364,7 +364,18 @@ public sealed record ScheduledDispatchSummary(
     string TeamAutomationIdempotencyKey = "",
     string CredentialOwnerAuthority = "",
     string CredentialOwnerKind = "",
-    string CredentialOwnerSubject = "");
+    string CredentialOwnerSubject = "")
+{
+    public string OwnerLLMRouteKind { get; init; } = "unspecified";
+
+    public string OwnerLLMRoute { get; init; } = string.Empty;
+
+    public string OwnerLLMUserServiceId { get; init; } = string.Empty;
+
+    public string OwnerLLMServiceSlug { get; init; } = string.Empty;
+
+    public string OwnerLLMModel { get; init; } = string.Empty;
+}
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,

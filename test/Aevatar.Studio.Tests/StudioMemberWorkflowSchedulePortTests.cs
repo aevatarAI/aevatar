@@ -129,6 +129,38 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldExposeOwnerLLMRuntimeEvidenceFromScheduleReadModel()
+    {
+        var detail = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMRouteKind", "nyx_id_user_service");
+        SetRequiredStringProperty(
+            detail.Schedule,
+            "OwnerLLMRoute",
+            "/api/v1/proxy/s/chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMUserServiceId", "us-chrono");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMServiceSlug", "chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMModel", "gpt-5.5");
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = detail,
+        };
+        var port = NewPort(scheduleService);
+
+        var result = await port.GetAsync("scope-1", "team-1", "member-1", "schedule-1");
+
+        result.Should().NotBeNull();
+        ReadRequiredStringProperty(result!, "OwnerLLMRouteKind").Should().Be("nyx_id_user_service");
+        ReadRequiredStringProperty(result, "OwnerLLMRoute").Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        ReadRequiredStringProperty(result, "OwnerLLMUserServiceId").Should().Be("us-chrono");
+        ReadRequiredStringProperty(result, "OwnerLLMServiceSlug").Should().Be("chrono-llm-public");
+        ReadRequiredStringProperty(result, "OwnerLLMModel").Should().Be("gpt-5.5");
+        result.StateVersion.Should().Be(detail.Schedule.StateVersion);
+    }
+
+    [Fact]
     public async Task EnsureAsync_WhenVerifiedOwnerBindingMissing_ShouldFailClosed()
     {
         var scheduleService = new RecordingScheduleService();
@@ -1483,6 +1515,20 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CredentialProvisioningKind = "dedicated_scheduled_invocation_agent_key",
             ConfirmedPolicyVersion = RecordingAuthorizationPlanner.PolicyVersion,
         };
+
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        property!.SetValue(target, value);
+    }
+
+    private static string ReadRequiredStringProperty(object value, string propertyName)
+    {
+        var property = value.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        return property!.GetValue(value).Should().BeOfType<string>().Which;
+    }
 
     private static StudioMemberWorkflowSchedulePort NewPort(
         RecordingScheduleService schedule,

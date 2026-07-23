@@ -450,6 +450,11 @@ message ScheduledDispatchDocument {
   ScheduledInvocationAuthorizationOwnerDocument active_credential_owner = 55;
   reserved 56 to 57;
   string team_id = 58;
+  string owner_llm_route_kind = 59;
+  string owner_llm_route = 60;
+  string owner_llm_user_service_id = 61;
+  string owner_llm_service_slug = 62;
+  string owner_llm_model = 63;
 }
 
 enum TeamAutomationLifecycleStatusDocument {

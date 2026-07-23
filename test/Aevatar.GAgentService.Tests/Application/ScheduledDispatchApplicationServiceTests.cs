@@ -1890,6 +1890,58 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldMapOwnerLLMRuntimeEvidence()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-owner-llm",
+            StateVersion = 31,
+        };
+        SetRequiredStringProperty(document, "OwnerLlmRouteKind", "nyx_id_user_service");
+        SetRequiredStringProperty(document, "OwnerLlmRoute", "/api/v1/proxy/s/chrono-llm-public");
+        SetRequiredStringProperty(document, "OwnerLlmUserServiceId", "us-chrono");
+        SetRequiredStringProperty(document, "OwnerLlmServiceSlug", "chrono-llm-public");
+        SetRequiredStringProperty(document, "OwnerLlmModel", "gpt-5.5");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        ReadRequiredStringProperty(item, "OwnerLLMRouteKind").Should().Be("nyx_id_user_service");
+        ReadRequiredStringProperty(item, "OwnerLLMRoute").Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        ReadRequiredStringProperty(item, "OwnerLLMUserServiceId").Should().Be("us-chrono");
+        ReadRequiredStringProperty(item, "OwnerLLMServiceSlug").Should().Be("chrono-llm-public");
+        ReadRequiredStringProperty(item, "OwnerLLMModel").Should().Be("gpt-5.5");
+        item.StateVersion.Should().Be(31);
+    }
+
+    [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldUseUnspecifiedOwnerLLMRouteKindForHistoricalDocument()
+    {
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [new ScheduledDispatchDocument { ScheduleId = "historical-schedule" }],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        ReadRequiredStringProperty(item, "OwnerLLMRouteKind").Should().Be("unspecified");
+    }
+
+    [Fact]
     public async Task ScheduledDispatchQueryPort_ShouldFailClosedForUnknownLifecycleStatus()
     {
         var reader = new RecordingScheduledDispatchDocumentReader
@@ -2537,6 +2589,20 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         private static DispatchAdmission CreateAdmission(string actorId) =>
             new(true, "cmd-1", DateTimeOffset.UtcNow, actorId, "corr-1");
+    }
+
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        property!.SetValue(target, value);
+    }
+
+    private static string ReadRequiredStringProperty(object value, string propertyName)
+    {
+        var property = value.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        return property!.GetValue(value).Should().BeOfType<string>().Which;
     }
 
     private sealed class RecordingScheduledDispatchDocumentReader : IProjectionDocumentReader<ScheduledDispatchDocument, string>

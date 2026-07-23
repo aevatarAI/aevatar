@@ -128,6 +128,16 @@ public sealed record StudioMemberAutomationView(
     public string CredentialSourceKind { get; init; } = "scheduled_invocation_agent_key";
 
     public DateTimeOffset UpdatedAt { get; init; }
+
+    public string OwnerLLMRouteKind { get; init; } = "unspecified";
+
+    public string OwnerLLMRoute { get; init; } = string.Empty;
+
+    public string OwnerLLMUserServiceId { get; init; } = string.Empty;
+
+    public string OwnerLLMServiceSlug { get; init; } = string.Empty;
+
+    public string OwnerLLMModel { get; init; } = string.Empty;
 }
 
 public sealed record StudioMemberAutomationListResponse(

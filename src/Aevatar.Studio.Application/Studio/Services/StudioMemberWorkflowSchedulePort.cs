@@ -1023,6 +1023,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             CredentialSourceKind = "scheduled_invocation_agent_key",
             UpdatedAt = schedule.UpdatedAt,
+            OwnerLLMRouteKind = schedule.OwnerLLMRouteKind,
+            OwnerLLMRoute = schedule.OwnerLLMRoute,
+            OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
+            OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
+            OwnerLLMModel = schedule.OwnerLLMModel,
         };
 
     private static string ToStatusName(TeamAutomationLifecycleStatus status) => status switch

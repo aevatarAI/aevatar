@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Projectors;
@@ -457,6 +458,117 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.StateVersion.Should().Be(18);
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldExposePersistedOwnerLLMRuntimeEvidenceFromActiveAuthorizationFact()
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-24T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "team-owner-llm",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.Target.ServiceInvocation.AuthorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+                RouteValue = "/api/v1/llm/gateway/v1",
+                Model = "fallback-model",
+            },
+        };
+        state.ActiveTeamAuthorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            Owner = new ScheduledInvocationAuthorizationOwnerState
+            {
+                Authority = "caller-authority-sensitive",
+                OwnerKind = "Personal",
+                OwnerSubject = "caller-subject-sensitive",
+            },
+            OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                NyxIdUserServiceId = "us-chrono",
+                ServiceSlugSnapshot = "chrono-llm-public",
+                Model = "gpt-5.5",
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:team-owner-llm"),
+            WrapCommitted(
+                state,
+                version: 23,
+                eventId: "evt-owner-llm",
+                observedAt: DateTimeOffset.Parse("2026-07-24T01:00:00+00:00")));
+
+        var document = await store.GetAsync("team-owner-llm");
+        document.Should().NotBeNull();
+        ReadRequiredStringProperty(document!, "OwnerLlmRouteKind").Should().Be("nyx_id_user_service");
+        ReadRequiredStringProperty(document, "OwnerLlmRoute").Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        ReadRequiredStringProperty(document, "OwnerLlmUserServiceId").Should().Be("us-chrono");
+        ReadRequiredStringProperty(document, "OwnerLlmServiceSlug").Should().Be("chrono-llm-public");
+        ReadRequiredStringProperty(document, "OwnerLlmModel").Should().Be("gpt-5.5");
+        document.StateVersion.Should().Be(23);
+        AssertDocumentDoesNotContain(document, "caller-authority-sensitive");
+        AssertDocumentDoesNotContain(document, "caller-subject-sensitive");
+        AssertDocumentDoesNotContain(document, "fallback-model");
+    }
+
+    [Theory]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Unspecified, "unspecified", "")]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, "gateway", "/api/v1/llm/gateway/v1")]
+    public async Task ProjectAsync_ShouldExposeExplicitRouteKindFromTargetAuthorizationFact(
+        ScheduledInvocationOwnerLLMRouteKind routeKind,
+        string expectedRouteKind,
+        string route)
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-24T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "target-owner-llm",
+            new ServiceIdentity
+            {
+                TenantId = "scope-alpha",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "service-alpha",
+            });
+        state.Target.ServiceInvocation.AuthorizationFact = new ScheduledInvocationAuthorizationFactState
+        {
+            OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+            {
+                RouteKind = routeKind,
+                RouteValue = route,
+                Model = routeKind == ScheduledInvocationOwnerLLMRouteKind.Gateway ? "gpt-5.5" : string.Empty,
+            },
+        };
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:target-owner-llm"),
+            WrapCommitted(
+                state,
+                version: 24,
+                eventId: $"evt-owner-llm-{expectedRouteKind}",
+                observedAt: DateTimeOffset.Parse("2026-07-24T02:00:00+00:00")));
+
+        var document = await store.GetAsync("target-owner-llm");
+        document.Should().NotBeNull();
+        ReadRequiredStringProperty(document!, "OwnerLlmRouteKind").Should().Be(expectedRouteKind);
+        ReadRequiredStringProperty(document, "OwnerLlmRoute").Should().Be(route);
+        document.StateVersion.Should().Be(24);
+    }
+
     private static ScheduledDispatchProjectionContext CreateContext(string rootActorId) =>
         new()
         {
@@ -512,5 +624,12 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
     {
         document.ToByteArray().AsSpan().IndexOf(ByteString.CopyFromUtf8(value).ToByteArray()).Should().Be(-1);
         document.ToString().Should().NotContain(value);
+    }
+
+    private static string ReadRequiredStringProperty(object value, string propertyName)
+    {
+        var property = value.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        return property!.GetValue(value).Should().BeOfType<string>().Which;
     }
 }
