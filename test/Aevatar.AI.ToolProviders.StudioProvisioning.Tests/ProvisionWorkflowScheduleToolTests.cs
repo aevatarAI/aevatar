@@ -24,6 +24,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
     private const string CreateMemberToolName = "aevatar_create_member";
     private const string ListMembersToolName = "aevatar_list_members";
     private const string GetMemberToolName = "aevatar_get_member";
+    private const string ListWorkflowsToolName = "aevatar_list_workflows";
     private const string ListSchedulesToolName = "aevatar_list_schedules";
     private const string GetScheduleToolName = "aevatar_get_schedule";
     private const string BindMemberWorkflowToolName = "aevatar_bind_member_workflow";
@@ -93,6 +94,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         toolNames.Should().Contain(CreateMemberToolName);
         toolNames.Should().Contain(ListMembersToolName);
         toolNames.Should().Contain(GetMemberToolName);
+        toolNames.Should().Contain(ListWorkflowsToolName);
         toolNames.Should().Contain(ListSchedulesToolName);
         toolNames.Should().Contain(GetScheduleToolName);
         toolNames.Should().Contain(BindMemberWorkflowToolName);

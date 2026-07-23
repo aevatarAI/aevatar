@@ -378,6 +378,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<CreateStudioMemberToolSource>,
                     CreateToolSource<StudioMemberQueryToolSource>,
                     CreateToolSource<StudioScheduleQueryToolSource>,
+                    CreateToolSource<StudioWorkflowQueryToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
                     CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
