@@ -8,11 +8,13 @@ using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Bindings;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.ScopeGAgents;
 using Aevatar.GAgentService.Application.Responses;
@@ -21,12 +23,14 @@ using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
+using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Core.Models;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Infrastructure.Activation;
+using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
@@ -35,6 +39,7 @@ using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 using Aevatar.GAgentService.Infrastructure.Credentials;
 using Aevatar.Workflow.Abstractions.Credentials;
 using Aevatar.GAgentService.Hosting.Demo;
+using Aevatar.GAgentService.Hosting.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Responses;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
@@ -150,6 +155,24 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<LlmRunExecutionWorker>();
         services.TryAddSingleton<IResponsesToolClassificationService, ResponsesToolClassificationService>();
         services.AddToolSetRegistry();
+        services.TryAddSingleton<IExactOrnnSkillResolver, UnavailableExactOrnnSkillResolver>();
+        services.TryAddSingleton<AgentProfileDraftValidator>();
+        services.TryAddSingleton<AgentProfileSkillSealer>();
+        services.TryAddSingleton<AgentProfileOperationFactory>();
+        services.TryAddSingleton<IAgentProfileActorPort, AgentProfileActorPort>();
+        services.TryAddSingleton<IAgentProfileCommandService, AgentProfileCommandApplicationService>();
+        services.TryAddSingleton<IAgentProfileQueryService, AgentProfileQueryApplicationService>();
+        services.TryAddSingleton<
+            ISystemAgentProfileOrnnAccessTokenProvider,
+            UnavailableSystemAgentProfileOrnnAccessTokenProvider>();
+        services.TryAddSingleton<ISystemAgentProfileProvisioningService, SystemAgentProfileProvisioningService>();
+        services.TryAddSingleton<ISystemAgentProfileReadinessService, SystemAgentProfileReadinessService>();
+        services.TryAddSingleton<ISystemAgentProfileBootstrapSignal, SystemAgentProfileBootstrapSignal>();
+        services.TryAddTransient<AgentProfileNamespaceGAgent>();
+        services.TryAddTransient<AgentProfileGAgent>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IHostedService,
+            SystemAgentProfileBootstrapHostedService>());
         services.TryAddSingleton<IResponsesDirectToolPlanService, ResponsesDirectToolPlanService>();
         services.TryAddSingleton<IServiceInvocationDispatcher>(sp => new DefaultServiceInvocationDispatcher(
             sp.GetRequiredService<IActorDispatchPort>(),

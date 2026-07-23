@@ -290,6 +290,19 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScheduledDispatchQueryPort>();
         services.TryAddSingleton<IScheduledDispatchQueryPort>(sp => sp.GetRequiredService<ScheduledDispatchQueryPort>());
         services.TryAddSingleton<INyxIdAuthorizationCatalogQueryPort, ProjectionNyxIdAuthorizationCatalogQueryPort>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileProvisioningStartedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileProvisioningCompletedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileProvisioningFailedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfilePublishedSummaryObservedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileInitializedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileInitializationRejectedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileDraftUpdatedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileSkillBindingUpsertedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileSkillBindingRemovedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfilePublishedAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfilePublishNoChangeAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileMutationNoChangeAuditTranslator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, AgentProfileMutationRejectedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationSucceededAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationFailedAuditTranslator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IAuditCommittedEventTranslator, ServiceRegistrationRetiredAuditTranslator>());
@@ -364,9 +377,11 @@ public static class ServiceCollectionExtensions
         services.AddCurrentStateProjectionMaterializer<
             AgentProfileNamespaceCurrentStateProjectionContext,
             AgentProfileNamespaceCurrentStateProjector>();
+        services.AddAuditCommittedFactMaterializer<AgentProfileNamespaceCurrentStateProjectionContext>();
         services.AddCurrentStateProjectionMaterializer<
             AgentProfileOwnerCurrentStateProjectionContext,
             AgentProfileOwnerCurrentStateProjector>();
+        services.AddAuditCommittedFactMaterializer<AgentProfileOwnerCurrentStateProjectionContext>();
         services.AddCurrentStateProjectionMaterializer<
             AgentProfileExecutionCurrentStateProjectionContext,
             AgentProfileExecutionCurrentStateProjector>();

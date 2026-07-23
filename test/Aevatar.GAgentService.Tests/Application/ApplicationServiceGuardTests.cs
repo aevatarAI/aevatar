@@ -1,14 +1,20 @@
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Governance.Application.Services;
+using Aevatar.GAgentService.Projection.AgentProfiles;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Options;
@@ -17,6 +23,45 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class ApplicationServiceGuardTests
 {
+    [Fact]
+    public void AgentProfileLayers_ShouldNotReferenceHostOrConcreteInfrastructureAssemblies()
+    {
+        var assemblies = new[]
+        {
+            typeof(AgentProfileGAgent).Assembly,
+            typeof(AgentProfileCommandApplicationService).Assembly,
+            typeof(ProjectionAgentProfileManagementQueryPort).Assembly,
+        };
+        var forbiddenPrefixes = new[]
+        {
+            "Microsoft.AspNetCore",
+            "Aevatar.AI.ToolProviders.Ornn",
+            "Aevatar.CQRS.Projection.Providers.",
+            "Aevatar.Foundation.Runtime.Implementations.",
+            "Aevatar.Foundation.Runtime.Persistence.Implementations.",
+        };
+
+        foreach (var assembly in assemblies)
+        {
+            assembly.GetReferencedAssemblies()
+                .Select(static reference => reference.Name ?? string.Empty)
+                .Should()
+                .NotContain(reference => forbiddenPrefixes.Any(prefix =>
+                    reference.StartsWith(prefix, StringComparison.Ordinal)), assembly.GetName().Name);
+        }
+    }
+
+    [Fact]
+    public void AgentProfileTelemetry_ShouldBeApplicationOwnedAndExposeOneActivityAndMeterSurface()
+    {
+        var telemetryType = typeof(AgentProfileTelemetry);
+        var staticMembers = telemetryType.GetMembers(BindingFlags.Public | BindingFlags.Static);
+
+        telemetryType.Assembly.Should().BeSameAs(typeof(AgentProfileCommandApplicationService).Assembly);
+        staticMembers.Count(member => MemberType(member) == typeof(ActivitySource)).Should().Be(1);
+        staticMembers.Count(member => MemberType(member) == typeof(Meter)).Should().Be(1);
+    }
+
     [Fact]
     public void ServiceCommandApplicationService_ShouldValidateConstructorArguments()
     {
@@ -342,4 +387,11 @@ public sealed class ApplicationServiceGuardTests
         public Task<InvokeAdmissionDecision> EvaluateAsync(InvokeAdmissionRequest request, CancellationToken ct = default) =>
             Task.FromResult(new InvokeAdmissionDecision { Allowed = true });
     }
+
+    private static System.Type? MemberType(MemberInfo member) => member switch
+    {
+        FieldInfo field => field.FieldType,
+        PropertyInfo property => property.PropertyType,
+        _ => null,
+    };
 }

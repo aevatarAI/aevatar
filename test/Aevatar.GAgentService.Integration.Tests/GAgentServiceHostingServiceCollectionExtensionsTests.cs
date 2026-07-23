@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgentService.Abstractions.Schedules;
@@ -9,13 +11,19 @@ using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.DependencyInjection;
 using Aevatar.GAgentService.Governance.Projection.ReadModels;
 using Aevatar.GAgentService.Projection.ReadModels;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Application.Schedules;
+using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Core.Ports;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Hosting.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgentService.Projection.DependencyInjection;
+using Aevatar.GAgentService.Infrastructure.AgentProfiles;
+using Aevatar.GAgentService.Projection.AgentProfiles;
+using Aevatar.GAgentService.Projection.Audit;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.GAgentService.Infrastructure.Schedules;
@@ -43,6 +51,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Aevatar.GAgentService.Hosting.Responses;
 
@@ -58,6 +67,10 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             .AddInMemoryCollection(new Dictionary<string, string?>())
             .Build();
 
+        services.AddLogging();
+        services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
         services.AddGAgentServiceCapability(configuration);
 
         services.Should().Contain(x => x.ServiceType == typeof(IServiceCommandPort));
@@ -116,6 +129,93 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         provider.GetRequiredService<IScopeBindingReadinessQueryPort>().Should().NotBeNull();
         provider.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
         provider.GetRequiredService<IGAgentRunTerminalQueryPort>().Should().NotBeNull();
+
+        provider.GetServices<AgentProfileNamespaceGAgent>().Should().ContainSingle();
+        provider.GetServices<AgentProfileGAgent>().Should().ContainSingle();
+        provider.GetServices<IAgentProfileActorPort>().Should().ContainSingle()
+            .Which.Should().BeOfType<AgentProfileActorPort>();
+        provider.GetServices<IAgentProfileCommandService>().Should().ContainSingle()
+            .Which.Should().BeOfType<AgentProfileCommandApplicationService>();
+        provider.GetServices<IAgentProfileQueryService>().Should().ContainSingle()
+            .Which.Should().BeOfType<AgentProfileQueryApplicationService>();
+        provider.GetServices<IAgentProfileNamespaceQueryPort>().Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionAgentProfileNamespaceQueryPort>();
+        provider.GetServices<IAgentProfileManagementQueryPort>().Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionAgentProfileManagementQueryPort>();
+        provider.GetServices<IAgentProfileExecutionSnapshotQueryPort>().Should().ContainSingle()
+            .Which.Should().BeOfType<ProjectionAgentProfileExecutionSnapshotQueryPort>();
+        provider.GetServices<IExactOrnnSkillResolver>().Should().ContainSingle()
+            .Which.Should().BeOfType<UnavailableExactOrnnSkillResolver>();
+        provider.GetServices<ISystemAgentProfileProvisioningService>().Should().ContainSingle()
+            .Which.Should().BeOfType<SystemAgentProfileProvisioningService>();
+        provider.GetServices<ISystemAgentProfileReadinessService>().Should().ContainSingle()
+            .Which.Should().BeOfType<SystemAgentProfileReadinessService>();
+        provider.GetServices<ISystemAgentProfileOrnnAccessTokenProvider>().Should().ContainSingle()
+            .Which.Should().BeOfType<UnavailableSystemAgentProfileOrnnAccessTokenProvider>();
+        provider.GetServices<ISystemAgentProfileBootstrapSignal>().Should().ContainSingle()
+            .Which.Should().BeOfType<SystemAgentProfileBootstrapSignal>();
+        provider.GetServices<IHostedService>().Count(service =>
+            service is SystemAgentProfileBootstrapHostedService).Should().Be(1);
+        provider.GetServices<AgentProfileDraftValidator>().Should().ContainSingle();
+        provider.GetServices<AgentProfileSkillSealer>().Should().ContainSingle();
+        provider.GetServices<AgentProfileOperationFactory>().Should().ContainSingle();
+        provider.GetServices<AgentProfileNamespaceCurrentStateProjector>().Should().ContainSingle();
+        provider.GetServices<AgentProfileOwnerCurrentStateProjector>().Should().ContainSingle();
+        provider.GetServices<AgentProfileExecutionCurrentStateProjector>().Should().ContainSingle();
+
+        var expectedProfileAuditTranslators = new[]
+        {
+            typeof(AgentProfileProvisioningStartedAuditTranslator),
+            typeof(AgentProfileProvisioningCompletedAuditTranslator),
+            typeof(AgentProfileProvisioningFailedAuditTranslator),
+            typeof(AgentProfilePublishedSummaryObservedAuditTranslator),
+            typeof(AgentProfileInitializedAuditTranslator),
+            typeof(AgentProfileInitializationRejectedAuditTranslator),
+            typeof(AgentProfileDraftUpdatedAuditTranslator),
+            typeof(AgentProfileSkillBindingUpsertedAuditTranslator),
+            typeof(AgentProfileSkillBindingRemovedAuditTranslator),
+            typeof(AgentProfilePublishedAuditTranslator),
+            typeof(AgentProfilePublishNoChangeAuditTranslator),
+            typeof(AgentProfileMutationNoChangeAuditTranslator),
+            typeof(AgentProfileMutationRejectedAuditTranslator),
+        };
+        var auditTranslatorTypes = provider.GetServices<IAuditCommittedEventTranslator>()
+            .Select(static translator => translator.GetType())
+            .ToArray();
+        foreach (var expected in expectedProfileAuditTranslators)
+            auditTranslatorTypes.Count(type => type == expected).Should().Be(1, expected.Name);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AddGAgentServiceCapability_ShouldLetHostReplaceDefaultSystemProfileTokenProvider(
+        bool hostRegistersFirst)
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+        if (hostRegistersFirst)
+        {
+            services.Replace(ServiceDescriptor.Singleton<
+                ISystemAgentProfileOrnnAccessTokenProvider,
+                HostSystemAgentProfileOrnnAccessTokenProvider>());
+        }
+
+        services.AddGAgentServiceCapability(configuration);
+
+        if (!hostRegistersFirst)
+        {
+            services.Replace(ServiceDescriptor.Singleton<
+                ISystemAgentProfileOrnnAccessTokenProvider,
+                HostSystemAgentProfileOrnnAccessTokenProvider>());
+        }
+
+        using var provider = services.BuildServiceProvider();
+        services.Count(descriptor =>
+                descriptor.ServiceType == typeof(ISystemAgentProfileOrnnAccessTokenProvider))
+            .Should().Be(1);
+        provider.GetServices<ISystemAgentProfileOrnnAccessTokenProvider>().Should().ContainSingle()
+            .Which.Should().BeOfType<HostSystemAgentProfileOrnnAccessTokenProvider>();
     }
 
     [Fact]
@@ -371,6 +471,11 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 
         var registrations = app.Services.GetServices<AevatarCapabilityRegistration>().ToList();
         registrations.Should().ContainSingle(x => x.Name == "gagent-service");
+        var healthContributor = app.Services.GetServices<AevatarHealthContributorRegistration>()
+            .Single(registration => registration.Name == "gagent-service");
+        healthContributor.RequiredRoutes.Should().Contain(
+            "/api/scopes/{scopeId}/agent-profiles",
+            "/api/agent-profiles/{ownerHandle}/{profileSlug}");
 
         var endpoints = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -409,6 +514,61 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs/{runId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs/{runId}/audit");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/agent-profiles");
+        endpoints.Should().Contain("/api/agent-profiles/{ownerHandle}/{profileSlug}");
+    }
+
+    [Theory]
+    [InlineData(
+        SystemAgentProfileReadinessStatus.Pending,
+        SystemAgentProfileReadinessReason.ExecutionSnapshotMissing)]
+    [InlineData(
+        SystemAgentProfileReadinessStatus.Pending,
+        SystemAgentProfileReadinessReason.ExecutionSnapshotLagging)]
+    public async Task GAgentServiceHealthProbe_WhenRequiredSystemProfileIsNotExecutionVisible_ShouldBeUnhealthy(
+        SystemAgentProfileReadinessStatus status,
+        SystemAgentProfileReadinessReason reason)
+    {
+        var readiness = new SystemAgentProfileReadinessSnapshot(
+        [
+            ReadinessEntry(status, reason),
+        ]);
+        var (app, contributor) = BuildHealthProbe(readiness);
+        await using (app)
+        {
+            var result = await contributor.ProbeAsync!(app.Services, CancellationToken.None);
+
+            result.Status.Should().Be(AevatarHealthStatuses.Unhealthy);
+            result.Message.Should().Be("Required system Agent Profiles are not execution-visible.");
+            result.Details.Should().Contain("required_profile_count", "1");
+            result.Details.Should().Contain("non_ready_required_profile_count", "1");
+            result.Details.Should().Contain("profile_0_reference", "system/test-assistant");
+            result.Details.Should().Contain("profile_0_status", StatusLabel(status));
+            result.Details.Should().Contain("profile_0_reason", ReasonLabel(reason));
+            result.Details.Values.Should().NotContain(value =>
+                value.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("bearer", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("raw remote error", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [Fact]
+    public async Task GAgentServiceHealthProbe_WhenAllRequiredSystemProfilesAreExecutionVisible_ShouldBeHealthy()
+    {
+        var readiness = new SystemAgentProfileReadinessSnapshot(
+        [
+            ReadinessEntry(
+                SystemAgentProfileReadinessStatus.Ready,
+                SystemAgentProfileReadinessReason.None),
+        ]);
+        var (app, contributor) = BuildHealthProbe(readiness);
+        await using (app)
+        {
+            var result = await contributor.ProbeAsync!(app.Services, CancellationToken.None);
+
+            result.Status.Should().Be(AevatarHealthStatuses.Healthy);
+            result.Message.Should().Be("GAgent service capability is ready.");
+        }
     }
 
     [Fact]
@@ -770,6 +930,68 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         nullConfigurationAct.Should().Throw<ArgumentNullException>();
     }
 
+    private static (WebApplication App, AevatarHealthContributorRegistration Contributor)
+        BuildHealthProbe(SystemAgentProfileReadinessSnapshot readiness)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.Host.UseDefaultServiceProvider(options =>
+        {
+            options.ValidateOnBuild = false;
+            options.ValidateScopes = false;
+        });
+        builder.Services.AddAevatarRuntime();
+        builder.Services.AddWorkflowProjectionReadModelProviders(builder.Configuration);
+        builder.AddGAgentServiceCapabilityBundle();
+        builder.Services.Replace(ServiceDescriptor.Singleton<ISystemAgentProfileReadinessService>(
+            new FixedSystemAgentProfileReadinessService(readiness)));
+        var app = builder.Build();
+        var contributor = app.Services.GetServices<AevatarHealthContributorRegistration>()
+            .Single(registration => registration.Name == "gagent-service");
+        return (app, contributor);
+    }
+
+    private static SystemAgentProfileReadinessEntry ReadinessEntry(
+        SystemAgentProfileReadinessStatus status,
+        SystemAgentProfileReadinessReason reason) =>
+        new(
+            "system/test-assistant",
+            Required: true,
+            new AgentProfileReference
+            {
+                OwnerHandle = AgentProfilePolicies.SystemOwnerHandle,
+                ProfileSlug = "test-assistant",
+            },
+            status,
+            reason,
+            "prof-system-test-assistant",
+            DraftRevision: 3,
+            Google.Protobuf.ByteString.CopyFrom(Enumerable.Repeat((byte)0x11, 32).ToArray()),
+            Google.Protobuf.ByteString.CopyFrom(Enumerable.Repeat((byte)0x11, 32).ToArray()),
+            PublishedRevision: 2,
+            Google.Protobuf.ByteString.CopyFrom(Enumerable.Repeat((byte)0x11, 32).ToArray()),
+            Google.Protobuf.ByteString.CopyFrom(Enumerable.Repeat((byte)0x22, 32).ToArray()),
+            ExecutionPublishedRevision: status == SystemAgentProfileReadinessStatus.Ready ? 2 : 1,
+            Google.Protobuf.ByteString.CopyFrom(Enumerable.Repeat((byte)0x22, 32).ToArray()));
+
+    private static string StatusLabel(SystemAgentProfileReadinessStatus status) => status switch
+    {
+        SystemAgentProfileReadinessStatus.Ready => "ready",
+        SystemAgentProfileReadinessStatus.Pending => "pending",
+        SystemAgentProfileReadinessStatus.Unavailable => "unavailable",
+        SystemAgentProfileReadinessStatus.Unhealthy => "unhealthy",
+        _ => "unspecified",
+    };
+
+    private static string ReasonLabel(SystemAgentProfileReadinessReason reason) => reason switch
+    {
+        SystemAgentProfileReadinessReason.ExecutionSnapshotMissing => "execution_snapshot_missing",
+        SystemAgentProfileReadinessReason.ExecutionSnapshotLagging => "execution_snapshot_lagging",
+        _ => "none",
+    };
+
     private static bool ServiceTypeContains(Type serviceType, string typeName)
     {
         if (serviceType.Name.Contains(typeName, StringComparison.Ordinal))
@@ -815,5 +1037,39 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
     {
         public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default) =>
             throw new NotSupportedException("The DI test only resolves the scheduled credential-admission adapter.");
+    }
+
+    private sealed class FixedSystemAgentProfileReadinessService(
+        SystemAgentProfileReadinessSnapshot readiness) : ISystemAgentProfileReadinessService
+    {
+        public Task<SystemAgentProfileReadinessSnapshot> GetAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(readiness);
+        }
+    }
+
+    private sealed class HostSystemAgentProfileOrnnAccessTokenProvider
+        : ISystemAgentProfileOrnnAccessTokenProvider
+    {
+        public Task<string?> GetAccessTokenAsync(
+            string definitionKey,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<string?>("host-token");
+        }
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+
+        public string ApplicationName { get; set; } = "Aevatar.GAgentService.Integration.Tests";
+
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 }

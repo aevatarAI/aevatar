@@ -9,6 +9,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Actor Evolution Canon Matrix](canon/actor-evolution.md)
 - [Aevatar Admin Authorization](canon/admin-authorization.md)
 - [[RFC] Aevatar Chat — Multi-Channel Adapter Architecture](canon/aevatar-channel-architecture.md)
+- [Agent Profiles](canon/agent-profiles.md)
 - [Approval Quota Ledger](canon/approval-quota-ledger.md)
 - [Architecture Vocabulary](canon/architecture-vocabulary.md)
 - [Aevatar Foundation](canon/architecture.md)
@@ -40,6 +41,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [System Skill Overlay Authoring Contract](canon/system-skill-overlay-authoring-contract.md)
 - [Voice Presence Integration — aevatar as the /ws/voice Brain](canon/voice-presence-integration.md)
 - [Work Orders](canon/work-orders.md)
+- [Workflow 可见性模型：公共模板目录 vs scope 私有资源](canon/workflow-catalog-visibility.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
