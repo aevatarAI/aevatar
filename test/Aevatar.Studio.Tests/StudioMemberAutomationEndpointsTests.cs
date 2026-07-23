@@ -353,6 +353,8 @@ public sealed class StudioMemberAutomationEndpointsTests
             DateTimeOffset.Parse("2026-07-17T09:00:00Z"),
             DateTimeOffset.Parse("2026-07-16T09:00:00Z"),
             17);
+        SetRequiredStringProperty(view, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(view, "VaultRevocationStatus", "vault-track-terminal");
         var schedules = new StubSchedules { View = view };
 
         var getResult = await StudioMemberAutomationEndpoints.HandleGetAsync(
@@ -379,6 +381,15 @@ public sealed class StudioMemberAutomationEndpointsTests
         getResponse.TeamId.Should().Be(TeamId);
         getResponse.MemberId.Should().Be(MemberId);
         getResponse.ScheduleId.Should().Be(ScheduleId);
+        using (var json = JsonDocument.Parse(JsonSerializer.Serialize(
+                   getResponse,
+                   new JsonSerializerOptions(JsonSerializerDefaults.Web))))
+        {
+            json.RootElement.GetProperty("nyxIdRevocationStatus").GetString()
+                .Should().Be("nyx-track-terminal");
+            json.RootElement.GetProperty("vaultRevocationStatus").GetString()
+                .Should().Be("vault-track-terminal");
+        }
         AssertNoCredentialMaterial(getResponse);
 
         StatusCode(listResult).Should().Be(StatusCodes.Status200OK);
@@ -841,6 +852,13 @@ public sealed class StudioMemberAutomationEndpointsTests
     private static string? StringProperty(object value, string propertyName) =>
         value.GetType().GetProperty(propertyName)?.GetValue(value) as string;
 
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the public revocation evidence contract");
+        property!.SetValue(target, value);
+    }
+
     private static void AssertNoCredentialMaterial(object response)
     {
         var serialized = JsonSerializer.Serialize(
@@ -852,6 +870,12 @@ public sealed class StudioMemberAutomationEndpointsTests
         normalized.Should().NotContain("secretreference");
         normalized.Should().NotContain("apikeyid");
         normalized.Should().NotContain("credentialid");
+        normalized.Should().NotContain("callerauthority");
+        normalized.Should().NotContain("verifiedbindingid");
+        normalized.Should().NotContain("vaultref");
+        normalized.Should().NotContain("ciphertext");
+        normalized.Should().NotContain("refreshtoken");
+        normalized.Should().NotContain("fullkey");
         normalized.Should().NotContain("binding-alpha");
         normalized.Should().NotContain("nyx-owner-alpha");
     }

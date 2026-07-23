@@ -854,6 +854,8 @@ public sealed class ScheduledDispatchEndpointsTests
         SetRequiredStringProperty(detail.Schedule, "OwnerLLMUserServiceId", "us-chrono");
         SetRequiredStringProperty(detail.Schedule, "OwnerLLMServiceSlug", "chrono-llm-public");
         SetRequiredStringProperty(detail.Schedule, "OwnerLLMModel", "gpt-5.5");
+        SetRequiredStringProperty(detail.Schedule, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(detail.Schedule, "VaultRevocationStatus", "vault-track-terminal");
         var service = new RecordingScheduledDispatchApplicationService
         {
             Detail = detail,
@@ -872,6 +874,8 @@ public sealed class ScheduledDispatchEndpointsTests
         payload.GetProperty("ownerLLMUserServiceId").GetString().Should().Be("us-chrono");
         payload.GetProperty("ownerLLMServiceSlug").GetString().Should().Be("chrono-llm-public");
         payload.GetProperty("ownerLLMModel").GetString().Should().Be("gpt-5.5");
+        payload.GetProperty("nyxIdRevocationStatus").GetString().Should().Be("nyx-track-terminal");
+        payload.GetProperty("vaultRevocationStatus").GetString().Should().Be("vault-track-terminal");
         var json = document.RootElement.GetRawText();
         json.Should().NotContain("callerAuthority")
             .And.NotContain("bindingId")

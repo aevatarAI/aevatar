@@ -157,7 +157,31 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         ReadRequiredStringProperty(result, "OwnerLLMUserServiceId").Should().Be("us-chrono");
         ReadRequiredStringProperty(result, "OwnerLLMServiceSlug").Should().Be("chrono-llm-public");
         ReadRequiredStringProperty(result, "OwnerLLMModel").Should().Be("gpt-5.5");
+        ReadRequiredStringProperty(result, "NyxIdRevocationStatus").Should().BeEmpty();
+        ReadRequiredStringProperty(result, "VaultRevocationStatus").Should().BeEmpty();
         result.StateVersion.Should().Be(detail.Schedule.StateVersion);
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldPreserveDistinctRevocationTrackStatusesFromScheduleReadModel()
+    {
+        var detail = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        SetRequiredStringProperty(detail.Schedule, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(detail.Schedule, "VaultRevocationStatus", "vault-track-terminal");
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = detail,
+        };
+        var port = NewPort(scheduleService);
+
+        var result = await port.GetAsync("scope-1", "team-1", "member-1", "schedule-1");
+
+        result.Should().NotBeNull();
+        ReadRequiredStringProperty(result!, "NyxIdRevocationStatus").Should().Be("nyx-track-terminal");
+        ReadRequiredStringProperty(result, "VaultRevocationStatus").Should().Be("vault-track-terminal");
+        result.RevocationPending.Should().Be(detail.Schedule.RevocationPending);
     }
 
     [Fact]

@@ -1924,6 +1924,35 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task ScheduledDispatchQueryPort_ShouldPreserveDistinctRevocationTrackStatuses()
+    {
+        var document = new ScheduledDispatchDocument
+        {
+            ScheduleId = "workflow-revocation-evidence",
+            RevocationPending = true,
+            StateVersion = 37,
+        };
+        SetRequiredStringProperty(document, "NyxidRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(document, "VaultRevocationStatus", "vault-track-terminal");
+        var reader = new RecordingScheduledDispatchDocumentReader
+        {
+            Result = new ProjectionDocumentQueryResult<ScheduledDispatchDocument>
+            {
+                Items = [document],
+            },
+        };
+        var port = new ScheduledDispatchQueryPort(reader);
+
+        var result = await port.ListAsync(new ScheduledDispatchListQuery(25));
+
+        var item = result.Items.Should().ContainSingle().Which;
+        ReadRequiredStringProperty(item, "NyxIdRevocationStatus").Should().Be("nyx-track-terminal");
+        ReadRequiredStringProperty(item, "VaultRevocationStatus").Should().Be("vault-track-terminal");
+        item.RevocationPending.Should().BeTrue();
+        item.StateVersion.Should().Be(37);
+    }
+
+    [Fact]
     public async Task ScheduledDispatchQueryPort_ShouldUseUnspecifiedOwnerLLMRouteKindForHistoricalDocument()
     {
         var reader = new RecordingScheduledDispatchDocumentReader
@@ -1939,6 +1968,8 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         var item = result.Items.Should().ContainSingle().Which;
         ReadRequiredStringProperty(item, "OwnerLLMRouteKind").Should().Be("unspecified");
+        ReadRequiredStringProperty(item, "NyxIdRevocationStatus").Should().BeEmpty();
+        ReadRequiredStringProperty(item, "VaultRevocationStatus").Should().BeEmpty();
     }
 
     [Fact]

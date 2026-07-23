@@ -1028,6 +1028,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             OwnerLLMUserServiceId = schedule.OwnerLLMUserServiceId,
             OwnerLLMServiceSlug = schedule.OwnerLLMServiceSlug,
             OwnerLLMModel = schedule.OwnerLLMModel,
+            NyxIdRevocationStatus = schedule.NyxIdRevocationStatus,
+            VaultRevocationStatus = schedule.VaultRevocationStatus,
         };
 
     private static string ToStatusName(TeamAutomationLifecycleStatus status) => status switch

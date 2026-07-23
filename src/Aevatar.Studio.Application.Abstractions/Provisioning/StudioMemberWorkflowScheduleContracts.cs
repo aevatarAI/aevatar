@@ -138,6 +138,10 @@ public sealed record StudioMemberAutomationView(
     public string OwnerLLMServiceSlug { get; init; } = string.Empty;
 
     public string OwnerLLMModel { get; init; } = string.Empty;
+
+    public string NyxIdRevocationStatus { get; init; } = string.Empty;
+
+    public string VaultRevocationStatus { get; init; } = string.Empty;
 }
 
 public sealed record StudioMemberAutomationListResponse(
