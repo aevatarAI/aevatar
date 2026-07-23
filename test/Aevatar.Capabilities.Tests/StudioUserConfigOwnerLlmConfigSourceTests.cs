@@ -38,7 +38,7 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
         var config = new UserConfig(
             DefaultModel: "gpt-5.5",
             PreferredLlmRoute: "/api/v1/proxy/s/legacy-provider",
-            MaxToolRounds: 0,
+            MaxToolRounds: 9,
             LlmSelection: useUnspecifiedSelection
                 ? new UserLlmSelectionValue(
                     UserLlmSelectionKind.Unspecified,
@@ -51,7 +51,9 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
 
         var result = await source.GetForScopeAsync("scope-1");
 
+        result.DefaultModel.Should().Be("gpt-5.5");
         result.PreferredLlmRoute.Should().BeNull();
+        result.MaxToolRounds.Should().Be(9);
     }
 
     [Fact]
