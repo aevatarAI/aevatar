@@ -53,6 +53,72 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
+    public async Task Reassign_WhenAssignmentAlreadyMatches_ShouldStillRejectStaleVersion()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate());
+        await agent.HandleReassignAsync(BuildReassign(expectedVersion: 2));
+
+        var stale = () => agent.HandleReassignAsync(BuildReassign(expectedVersion: 2));
+
+        await stale.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*lifecycle version is 3, not 2*");
+    }
+
+    [Fact]
+    public async Task Reassign_WhenAssignmentAlreadyMatches_ShouldStillRejectAfterDispatch()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        var sameAssignment = new ReassignWorkOrder
+        {
+            WorkOrderId = WorkOrderId,
+            ExpectedLifecycleVersion = agent.State.LifecycleVersion,
+            RequestedBy = Principal("requester-1"),
+            MemberId = agent.State.MemberId,
+            PublishedServiceId = agent.State.PublishedServiceId,
+            WorkflowId = agent.State.WorkflowId,
+            ServiceRevisionId = agent.State.ServiceRevisionId,
+            ImplementationKind = agent.State.ImplementationKind,
+        };
+
+        var reassign = () => agent.HandleReassignAsync(sameAssignment);
+
+        await reassign.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot be reassigned from*DispatchPending*");
+    }
+
+    [Fact]
+    public async Task Cancel_WhenAlreadyCancelled_ShouldStillRejectStaleVersion()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate());
+        var cancel = new CancelWorkOrder
+        {
+            WorkOrderId = WorkOrderId,
+            ExpectedLifecycleVersion = 2,
+            RequestedBy = Principal("requester-1"),
+            Reason = "withdrawn",
+        };
+        await agent.HandleCancelAsync(cancel);
+
+        var stale = () => agent.HandleCancelAsync(cancel.Clone());
+
+        await stale.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*lifecycle version is 3, not 2*");
+    }
+
+    [Fact]
+    public async Task Dispatch_WhenSameDispatchAlreadyPending_ShouldStillRejectStaleVersion()
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+
+        var stale = () => agent.HandleDispatchAsync(BuildDispatch(expectedVersion: 2));
+
+        await stale.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*lifecycle version is 3, not 2*");
+    }
+
+    [Fact]
     public async Task DuplicateCreate_ShouldRemainIdempotentAfterReassignment()
     {
         var agent = await CreateAgentAsync();
@@ -208,6 +274,134 @@ public sealed class WorkOrderGAgentTests
 
         agent.State.Run.RunId.Should().Be(RequestedRunId);
         agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExecutionContinuation_ShouldRejectEnvelopeFromDifferentPublisher(bool accepted)
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        var lifecycleVersion = agent.State.LifecycleVersion;
+        IMessage continuation = accepted
+            ? BuildAcceptedContinuation(agent.State)
+            : BuildFailedContinuation(agent.State);
+
+        var act = () => agent.HandleEventAsync(
+            BuildInboundEnvelope(continuation, "forged-execution-worker"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.Run.Should().BeNull();
+        agent.State.Failure.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("revision")]
+    [InlineData("deployment")]
+    [InlineData("acceptedAt")]
+    public async Task AcceptedContinuation_WhenRunLinkIsIncompleteOrUnauthorized_ShouldReject(string invalidField)
+    {
+        var agent = await CreateDispatchPendingAgentAsync(new RecordingExecutionScheduler());
+        var lifecycleVersion = agent.State.LifecycleVersion;
+        var continuation = BuildAcceptedContinuation(agent.State);
+        switch (invalidField)
+        {
+            case "revision":
+                continuation.Accepted.RevisionId = "revision-unrelated";
+                break;
+            case "deployment":
+                continuation.Accepted.DeploymentId = string.Empty;
+                break;
+            case "acceptedAt":
+                continuation.Accepted.AcceptedAtUtc = null;
+                break;
+        }
+
+        var act = () => agent.HandleExecutionAcceptedAsync(continuation);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*execution receipt*");
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.Run.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ExecuteInternalSignal_ShouldRejectEnvelopeFromDifferentPublisher()
+    {
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+
+        var act = () => agent.HandleEventAsync(BuildInboundEnvelope(
+            new ExecuteWorkOrder
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                DispatchCommandId = agent.State.DispatchCommandId,
+            },
+            "forged-signal-publisher"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        scheduler.Requests.Should().BeEmpty();
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
+        agent.State.ExecutionRetryAttempt.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ExecutionRetryInternalSignal_ShouldRejectEnvelopeFromDifferentPublisher()
+    {
+        var scheduler = new RecordingExecutionScheduler();
+        var agent = await CreateDispatchPendingAgentAsync(scheduler);
+        await agent.HandleExecuteAsync(new ExecuteWorkOrder
+        {
+            WorkOrderId = agent.State.WorkOrderId,
+            DispatchCommandId = agent.State.DispatchCommandId,
+        });
+        var retryAttempt = agent.State.ExecutionRetryAttempt;
+
+        var act = () => agent.HandleEventAsync(BuildInboundEnvelope(
+            new WorkOrderExecutionRetryFired
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                DispatchCommandId = agent.State.DispatchCommandId,
+                RequestedRunId = agent.State.RequestedRunId,
+                Attempt = retryAttempt,
+            },
+            "forged-signal-publisher"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        scheduler.Requests.Should().ContainSingle();
+        agent.State.ExecutionRetryAttempt.Should().Be(retryAttempt);
+    }
+
+    [Fact]
+    public async Task TimeoutInternalSignal_ShouldRejectEnvelopeFromDifferentPublisher()
+    {
+        var requestedAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        var create = BuildCreate();
+        create.RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt);
+        create.TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddMinutes(1));
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(create);
+        var lifecycleVersion = agent.State.LifecycleVersion;
+
+        var act = () => agent.HandleEventAsync(BuildInboundEnvelope(
+            new WorkOrderTimeoutFired
+            {
+                WorkOrderId = agent.State.WorkOrderId,
+                TimeoutAtUtc = agent.State.TimeoutAtUtc.Clone(),
+            },
+            "forged-signal-publisher"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*publisher*does not match*");
+        agent.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Ready);
+        agent.State.LifecycleVersion.Should().Be(lifecycleVersion);
     }
 
     [Fact]
@@ -768,11 +962,10 @@ public sealed class WorkOrderGAgentTests
     }
 
     [Fact]
-    public async Task DuplicateDispatchAndExecute_ShouldNotCreateAnotherRun()
+    public async Task RedispatchAtCurrentVersion_ShouldNotCreateAnotherRun()
     {
         var scheduler = new RecordingExecutionScheduler();
         var agent = await CreateDispatchPendingAgentAsync(scheduler);
-        var dispatch = BuildDispatch(expectedVersion: 2);
         var execute = new ExecuteWorkOrder
         {
             WorkOrderId = WorkOrderId,
@@ -781,7 +974,7 @@ public sealed class WorkOrderGAgentTests
         await agent.HandleExecuteAsync(execute);
         await agent.HandleExecutionAcceptedAsync(BuildAcceptedContinuation(agent.State));
 
-        await agent.HandleDispatchAsync(dispatch.Clone());
+        await agent.HandleDispatchAsync(BuildDispatch(agent.State.LifecycleVersion));
         await agent.HandleExecuteAsync(execute.Clone());
 
         scheduler.Requests.Should().ContainSingle();

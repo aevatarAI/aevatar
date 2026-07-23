@@ -65,11 +65,14 @@ public sealed class ValidatedWorkOrderExecutionPort : IWorkOrderExecutionPort
         }
 
         if (!string.Equals(receipt.RunId, request.RequestedRunId, StringComparison.Ordinal) ||
-            !string.Equals(receipt.CommandId, request.DispatchCommandId, StringComparison.Ordinal))
+            !string.Equals(receipt.CommandId, request.DispatchCommandId, StringComparison.Ordinal) ||
+            !string.Equals(receipt.CorrelationId, request.DispatchCommandId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(receipt.TargetActorId) ||
+            string.IsNullOrWhiteSpace(receipt.DeploymentId))
         {
             return Failed(
                 "WORK_ORDER_RUN_IDENTITY_MISMATCH",
-                "Service invocation receipt did not preserve the authorized command and Run identities.",
+                "Service invocation receipt did not preserve the authorized WorkOrder Run link.",
                 "gagent-service",
                 receipt.RunId);
         }

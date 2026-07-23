@@ -130,7 +130,15 @@ After committing `dispatch_pending`, the Actor sends an internal execute command
 to itself. Activation redrives pending execution. The execution adapter
 revalidates the authoritative assignment, invokes the exact
 `publishedServiceId`, and requires the accepted receipt to preserve the
-requested Run and dispatch command identities.
+requested Run and dispatch command identities. Accepted and failed execution
+continuations are trusted only when their envelope publisher is the canonical
+WorkOrder execution worker and their WorkOrder, dispatch-command, and requested
+Run identities match the pending dispatch.
+
+Execute, retry, and timeout signals are internal WorkOrder continuations. The
+Actor accepts a matching signal only when its envelope publisher is that same
+WorkOrder Actor; correlation keys alone do not authorize external callers to
+advance or retry the lifecycle.
 
 The accepted receipt is stored only as `WorkOrderRunLink`:
 

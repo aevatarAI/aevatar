@@ -79,9 +79,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         EnsureInitialized(command.WorkOrderId);
         EnsureRequester(command.RequestedBy);
 
-        if (IsSameAssignment(State, command))
-            return;
-
         EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus is not (
                 WorkOrderLifecycleStatus.Accepted or
@@ -90,6 +87,9 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             throw new InvalidOperationException(
                 $"work order '{State.WorkOrderId}' cannot be reassigned from '{State.LifecycleStatus}'.");
         }
+
+        if (IsSameAssignment(State, command))
+            return;
 
         EnsureRequired(command.MemberId, nameof(command.MemberId));
         EnsureRequired(command.PublishedServiceId, nameof(command.PublishedServiceId));
@@ -132,6 +132,8 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             string.Equals(State.DispatchCommandId, command.DispatchCommandId, StringComparison.Ordinal) &&
             string.Equals(State.RequestedRunId, command.RequestedRunId, StringComparison.Ordinal) &&
             string.Equals(State.TerminalDeliveryId, command.TerminalDeliveryId, StringComparison.Ordinal);
+
+        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (sameDispatch && State.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending)
         {
             await SendExecutionRequestAsync();
@@ -140,7 +142,6 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (sameDispatch && (State.LifecycleStatus == WorkOrderLifecycleStatus.Running || IsTerminal(State.LifecycleStatus)))
             return;
 
-        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus != WorkOrderLifecycleStatus.Ready)
         {
             throw new InvalidOperationException(
@@ -174,6 +175,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (State.Run != null && !string.IsNullOrWhiteSpace(State.Run.RunId))
             return;
 
+        EnsureInboundPublisherMatches(Id, "WorkOrder execute signal");
         await ScheduleExecutionAndWatchdogAsync();
     }
 
@@ -186,6 +188,9 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 continuation.RequestedRunId))
             return;
 
+        EnsureInboundPublisherMatches(
+            WorkOrderConventions.ExecutionWorkerPublisherActorId,
+            "WorkOrder execution continuation");
         ValidateAcceptedExecution(continuation.Accepted);
         await PersistDomainEventAsync(new WorkOrderRunAcceptedEvent
         {
@@ -202,6 +207,9 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
                 continuation.RequestedRunId))
             return;
 
+        EnsureInboundPublisherMatches(
+            WorkOrderConventions.ExecutionWorkerPublisherActorId,
+            "WorkOrder execution continuation");
         await PersistDomainEventAsync(new WorkOrderDispatchFailedEvent
         {
             Failure = continuation.Failed?.Failure?.Clone() ?? new WorkOrderFailureReference
@@ -231,6 +239,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             return;
         }
 
+        EnsureInboundPublisherMatches(Id, "WorkOrder execution retry signal");
         await ScheduleExecutionAndWatchdogAsync();
     }
 
@@ -241,10 +250,10 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         EnsureInitialized(command.WorkOrderId);
         EnsureRequester(command.RequestedBy);
 
+        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus == WorkOrderLifecycleStatus.Cancelled)
             return;
 
-        EnsureExpectedVersion(command.ExpectedLifecycleVersion);
         if (State.LifecycleStatus is not (
                 WorkOrderLifecycleStatus.Accepted or
                 WorkOrderLifecycleStatus.Ready))
@@ -274,6 +283,7 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
             return;
         }
 
+        EnsureInboundPublisherMatches(Id, "WorkOrder timeout signal");
         var now = DateTimeOffset.UtcNow;
         var timeoutAt = State.TimeoutAtUtc.ToDateTimeOffset();
         if (now < timeoutAt)
@@ -575,10 +585,13 @@ public sealed partial class WorkOrderGAgent : GAgentBase<WorkOrderState>, IProje
         if (!string.Equals(accepted.RunId, State.RequestedRunId, StringComparison.Ordinal) ||
             !string.Equals(accepted.CommandId, State.DispatchCommandId, StringComparison.Ordinal) ||
             !string.Equals(accepted.CorrelationId, State.DispatchCommandId, StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(accepted.RunActorId))
+            !string.Equals(accepted.RevisionId, State.ServiceRevisionId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(accepted.RunActorId) ||
+            string.IsNullOrWhiteSpace(accepted.DeploymentId) ||
+            accepted.AcceptedAtUtc == null)
         {
             throw new InvalidOperationException(
-                "WorkOrder execution receipt does not match the authorized Run or command identity.");
+                "WorkOrder execution receipt does not match the authorized Run link.");
         }
     }
 

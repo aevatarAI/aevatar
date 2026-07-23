@@ -287,6 +287,29 @@ public sealed class ValidatedWorkOrderExecutionPortTests
         result.Failed.Failure.Code.Should().Be("WORK_ORDER_RUN_IDENTITY_MISMATCH");
     }
 
+    [Theory]
+    [InlineData("correlation")]
+    [InlineData("targetActor")]
+    [InlineData("deployment")]
+    public async Task ExecuteAsync_ShouldFailClosed_WhenInvocationReceiptCannotBuildAuthorizedRunLink(
+        string invalidField)
+    {
+        var invocationPort = new RecordingInvocationPort
+        {
+            ReceiptCorrelationId = invalidField == "correlation" ? "correlation-unrelated" : "command-1",
+            ReceiptTargetActorId = invalidField == "targetActor" ? string.Empty : "workflow-run-actor-1",
+            ReceiptDeploymentId = invalidField == "deployment" ? string.Empty : "deployment-1",
+        };
+        var port = new ValidatedWorkOrderExecutionPort(
+            WorkOrderAssignmentValidatorTests.CreateValidator(),
+            invocationPort);
+
+        var result = await port.ExecuteAsync(BuildExecutionRequest());
+
+        result.ResultCase.Should().Be(WorkOrderExecutionResult.ResultOneofCase.Failed);
+        result.Failed.Failure.Code.Should().Be("WORK_ORDER_RUN_IDENTITY_MISMATCH");
+    }
+
     [Fact]
     public async Task ValidatedExecution_ShouldUseWorkOrderDeadlineForBothCompletionTargets()
     {
@@ -384,6 +407,9 @@ public sealed class ValidatedWorkOrderExecutionPortTests
         public List<ServiceInvocationRequest> Requests { get; } = [];
 
         public string ReceiptRunId { get; init; } = "run-1";
+        public string ReceiptCorrelationId { get; init; } = "command-1";
+        public string ReceiptTargetActorId { get; init; } = "workflow-run-actor-1";
+        public string ReceiptDeploymentId { get; init; } = "deployment-1";
 
         public Task<ServiceInvocationAcceptedReceipt> InvokeAsync(
             ServiceInvocationRequest request,
@@ -393,10 +419,10 @@ public sealed class ValidatedWorkOrderExecutionPortTests
             return Task.FromResult(new ServiceInvocationAcceptedReceipt
             {
                 RunId = ReceiptRunId,
-                TargetActorId = "workflow-run-actor-1",
+                TargetActorId = ReceiptTargetActorId,
                 CommandId = request.CommandId,
-                CorrelationId = request.CorrelationId,
-                DeploymentId = "deployment-1",
+                CorrelationId = ReceiptCorrelationId,
+                DeploymentId = ReceiptDeploymentId,
             });
         }
     }
