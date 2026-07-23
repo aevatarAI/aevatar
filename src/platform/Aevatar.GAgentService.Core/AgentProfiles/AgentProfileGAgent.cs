@@ -22,67 +22,106 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             "namespace_actor_id");
 
         AgentProfileIdentity identity;
-        AgentProfileContent content;
         try
         {
             identity = AgentProfileDeterminism.NormalizeIdentity(command.Identity);
+        }
+        catch (Exception exception) when (
+            exception is AgentProfileContractValidationException or ArgumentNullException)
+        {
+            throw AgentProfileActorInvariants.Error(
+                "INVALID_PROFILE_INITIALIZATION_IDENTITY",
+                "Initialization requires a canonical safe Profile identity.");
+        }
+
+        AgentProfileContent content;
+        try
+        {
             content = AgentProfileDeterminism.NormalizeContent(command.InitialContent);
         }
         catch (AgentProfileContractValidationException exception)
         {
-            await SendInitializationRejectedAsync(
-                namespaceActorId,
-                operation,
-                command.Identity,
-                AgentProfileActorInvariants.FirstDiagnostic(exception));
-            return;
-        }
+            var rejectedContentSha256 = AgentProfileDeterminism.Sha256(command.InitialContent);
+            var existingRejection = FindOperation(operation.OperationId);
+            if (existingRejection is not null)
+            {
+                EnsureInitializationRejectionReplay(
+                    existingRejection,
+                    operation,
+                    identity,
+                    namespaceActorId,
+                    rejectedContentSha256);
+                await SendInitializationRejectedAsync(existingRejection, operation);
+                return;
+            }
 
-        if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(content))
-        {
-            await SendInitializationRejectedAsync(
+            await PersistInitializationRejectionAsync(
                 namespaceActorId,
                 operation,
                 identity,
-                AgentProfileActorInvariants.MultipleDefaultSkills());
+                AgentProfileActorInvariants.FirstDiagnostic(exception),
+                rejectedContentSha256);
             return;
         }
 
         var expectedInput = AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content);
-        if (State.Identity is not null)
+        var rejectedContentFingerprint = AgentProfileDeterminism.Sha256(content);
+        var existingOperation = FindOperation(operation.OperationId);
+        if (existingOperation is not null)
         {
-            var existingOperation = FindOperation(operation.OperationId);
-            if (existingOperation is not null &&
-                AgentProfileActorInvariants.SameInput(existingOperation.Operation, operation) &&
-                AgentProfileActorInvariants.DigestEquals(operation.InputSha256, expectedInput) &&
-                AgentProfileActorInvariants.SameIdentity(State.Identity, identity) &&
-                string.Equals(State.NamespaceActorId, namespaceActorId, StringComparison.Ordinal))
+            EnsureInitializationReplay(
+                existingOperation,
+                operation,
+                identity,
+                namespaceActorId,
+                expectedInput,
+                rejectedContentFingerprint);
+            if (existingOperation.InitializationRejection is not null)
+            {
+                await SendInitializationRejectedAsync(existingOperation, operation);
+                return;
+            }
+            if (existingOperation.InitializationContinuation is not null)
             {
                 await SendInitializedAsync(namespaceActorId, operation);
                 return;
             }
 
-            var diagnostic = existingOperation is not null
-                ? AgentProfileActorInvariants.Diagnostic(
-                    "IDEMPOTENCY_PAYLOAD_CONFLICT",
-                    "An initialization operation cannot change its normalized input.",
-                    "operation.input_sha256")
-                : AgentProfileActorInvariants.IdentityConflict();
-            await SendInitializationRejectedAsync(
+            throw AgentProfileActorInvariants.Error(
+                "IDEMPOTENCY_PAYLOAD_CONFLICT",
+                "The initialization operation has no replayable typed outcome.");
+        }
+
+        if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(content))
+        {
+            await PersistInitializationRejectionAsync(
+                namespaceActorId,
+                operation,
+                identity,
+                AgentProfileActorInvariants.MultipleDefaultSkills(),
+                rejectedContentFingerprint);
+            return;
+        }
+
+        if (State.Identity is not null)
+        {
+            await PersistInitializationRejectionAsync(
                 State.NamespaceActorId,
                 operation,
                 identity,
-                diagnostic);
+                AgentProfileActorInvariants.IdentityConflict(),
+                rejectedContentFingerprint);
             return;
         }
 
         if (!AgentProfileActorInvariants.DigestEquals(operation.InputSha256, expectedInput))
         {
-            await SendInitializationRejectedAsync(
+            await PersistInitializationRejectionAsync(
                 namespaceActorId,
                 operation,
                 identity,
-                AgentProfileActorInvariants.InputDigestMismatch());
+                AgentProfileActorInvariants.InputDigestMismatch(),
+                rejectedContentFingerprint);
             return;
         }
 
@@ -95,6 +134,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             DraftRevision = 1,
             DraftSha256 = draftSha256,
             NamespaceActorId = namespaceActorId,
+            ProfileActorId = Id,
         });
         await SendInitializedAsync(namespaceActorId, operation);
     }
@@ -104,7 +144,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        if (!await EnsureMutationIdentityAsync(operation, command.Identity))
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        if (identity is null)
             return;
 
         AgentProfileContent content;
@@ -114,12 +155,17 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         }
         catch (AgentProfileContractValidationException exception)
         {
-            await PersistNewRejectionAsync(
+            await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.FirstDiagnostic(exception));
             return;
         }
 
+        var expectedInput = AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
+            identity,
+            content);
+        if (!await PrepareMutationAsync(operation, identity, expectedInput))
+            return;
         if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(content))
         {
             await PersistNewRejectionAsync(
@@ -127,12 +173,6 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 AgentProfileActorInvariants.MultipleDefaultSkills());
             return;
         }
-
-        var expectedInput = AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
-            State.Identity,
-            content);
-        if (await HandleMutationReplayOrInputFailureAsync(operation, expectedInput))
-            return;
         if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
             return;
 
@@ -166,7 +206,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        if (!await EnsureMutationIdentityAsync(operation, command.Identity))
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        if (identity is null)
             return;
 
         AgentProfileSkillBinding binding;
@@ -176,16 +217,16 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         }
         catch (AgentProfileContractValidationException exception)
         {
-            await PersistNewRejectionAsync(
+            await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.FirstDiagnostic(exception));
             return;
         }
 
         var expectedInput = AgentProfileDeterminism.ComputeUpsertAgentProfileSkillBindingInputSha256(
-            State.Identity,
+            identity,
             binding);
-        if (await HandleMutationReplayOrInputFailureAsync(operation, expectedInput))
+        if (!await PrepareMutationAsync(operation, identity, expectedInput))
             return;
         if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
             return;
@@ -234,25 +275,26 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        if (!await EnsureMutationIdentityAsync(operation, command.Identity))
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        if (identity is null)
             return;
 
         ByteString expectedInput;
         try
         {
             expectedInput = AgentProfileDeterminism.ComputeRemoveAgentProfileSkillBindingInputSha256(
-                State.Identity,
+                identity,
                 command.BindingId);
         }
         catch (AgentProfileContractValidationException exception)
         {
-            await PersistNewRejectionAsync(
+            await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.FirstDiagnostic(exception));
             return;
         }
 
-        if (await HandleMutationReplayOrInputFailureAsync(operation, expectedInput))
+        if (!await PrepareMutationAsync(operation, identity, expectedInput))
             return;
         if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
             return;
@@ -294,7 +336,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        if (!await EnsureMutationIdentityAsync(operation, command.Identity))
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        if (identity is null)
             return;
 
         AgentProfilePublishedSnapshot snapshot;
@@ -304,29 +347,34 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         }
         catch (AgentProfileContractValidationException exception)
         {
-            await PersistNewRejectionAsync(
+            await PersistUncanonicalizedRejectionAsync(
                 operation,
                 AgentProfileActorInvariants.FirstDiagnostic(exception));
             return;
         }
 
         var expectedInput = AgentProfileDeterminism.ComputePublishAgentProfileInputSha256(
-            State.Identity,
+            identity,
             snapshot);
-        var existingOperation = FindOperation(operation.OperationId);
-        if (existingOperation is not null)
+        if (!await PrepareMutationAsync(
+                operation,
+                identity,
+                expectedInput,
+                existing => existing.PublishedSummary is null
+                    ? Task.CompletedTask
+                    : SendPublishedSummaryAsync(operation, existing.PublishedSummary)))
+            return;
+        if (!AgentProfileActorInvariants.SameIdentity(snapshot.Identity, State.Identity))
         {
-            EnsureReplay(existingOperation, operation, expectedInput);
-            if (existingOperation.PublishedSummary is not null)
-            {
-                await SendPublishedSummaryAsync(operation, existingOperation.PublishedSummary);
-            }
+            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.IdentityConflict());
             return;
         }
-
-        if (!AgentProfileActorInvariants.DigestEquals(operation.InputSha256, expectedInput))
+        var hardLimitDiagnostic = AgentProfilePolicies
+            .ValidatePublishedSnapshotHardLimits(snapshot)
+            .FirstOrDefault();
+        if (hardLimitDiagnostic is not null)
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.InputDigestMismatch());
+            await PersistNewRejectionAsync(operation, hardLimitDiagnostic);
             return;
         }
         if (!await EnsureExpectedVersionAsync(operation, command.ExpectedAuthorityStateVersion))
@@ -414,6 +462,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         StateTransitionMatcher
             .Match(current, evt)
             .On<AgentProfileInitializedEvent>(ApplyInitialized)
+            .On<AgentProfileInitializationRejectedEvent>(ApplyInitializationRejected)
             .On<AgentProfileDraftUpdatedEvent>(ApplyDraftUpdated)
             .On<AgentProfileSkillBindingUpsertedEvent>(ApplyBindingUpserted)
             .On<AgentProfileSkillBindingRemovedEvent>(ApplyBindingRemoved)
@@ -423,7 +472,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             .On<AgentProfileMutationRejectedEvent>(ApplyMutationRejected)
             .OrCurrent();
 
-    private async Task<bool> EnsureMutationIdentityAsync(
+    private async Task<AgentProfileIdentity?> NormalizeMutationIdentityAsync(
         AgentProfileOperationFact operation,
         AgentProfileIdentity? candidate)
     {
@@ -442,32 +491,42 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         catch (Exception exception) when (
             exception is AgentProfileContractValidationException or ArgumentNullException)
         {
-            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.IdentityConflict());
-            return false;
+            await PersistUncanonicalizedRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.IdentityConflict());
+            return null;
         }
 
-        if (AgentProfileActorInvariants.SameIdentity(State.Identity, identity))
-            return true;
-
-        await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.IdentityConflict());
-        return false;
+        return identity;
     }
 
-    private async Task<bool> HandleMutationReplayOrInputFailureAsync(
+    private async Task<bool> PrepareMutationAsync(
         AgentProfileOperationFact operation,
-        ByteString expectedInput)
+        AgentProfileIdentity identity,
+        ByteString expectedInput,
+        Func<AgentProfileOperationState, Task>? replay = null)
     {
         var existing = FindOperation(operation.OperationId);
         if (existing is not null)
         {
             EnsureReplay(existing, operation, expectedInput);
-            return true;
+            if (replay is not null)
+                await replay(existing);
+            return false;
         }
 
-        if (AgentProfileActorInvariants.DigestEquals(operation.InputSha256, expectedInput))
+        if (!AgentProfileActorInvariants.DigestEquals(operation.InputSha256, expectedInput))
+        {
+            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.InputDigestMismatch());
             return false;
+        }
 
-        await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.InputDigestMismatch());
+        if (!AgentProfileActorInvariants.SameIdentity(State.Identity, identity))
+        {
+            await PersistNewRejectionAsync(operation, AgentProfileActorInvariants.IdentityConflict());
+            return false;
+        }
+
         return true;
     }
 
@@ -518,36 +577,75 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         });
     }
 
+    private Task PersistUncanonicalizedRejectionAsync(
+        AgentProfileOperationFact operation,
+        AgentProfileSafeDiagnostic diagnostic)
+    {
+        if (FindOperation(operation.OperationId) is not null)
+        {
+            throw AgentProfileActorInvariants.Error(
+                "IDEMPOTENCY_PAYLOAD_CONFLICT",
+                "An operation id cannot be reused with input that cannot be canonicalized.");
+        }
+
+        return PersistNewRejectionAsync(operation, diagnostic);
+    }
+
     private Task SendInitializedAsync(
         string namespaceActorId,
-        AgentProfileOperationFact operation) =>
-        SendToAsync(
+        AgentProfileOperationFact operation)
+    {
+        var stored = FindOperation(operation.OperationId)?.InitializationContinuation
+            ?? throw AgentProfileActorInvariants.Error(
+                "MISSING_INITIALIZATION_CONTINUATION",
+                "The committed initialization continuation is unavailable.");
+        var continuation = stored.Clone();
+        continuation.Operation = operation.Clone();
+        return SendToAsync(
             namespaceActorId,
-            new AgentProfileInitializedContinuation
-            {
-                Operation = operation.Clone(),
-                Identity = State.Identity.Clone(),
-                ProfileActorId = Id,
-                DraftRevision = State.DraftRevision,
-                DraftSha256 = State.DraftSha256,
-            },
+            continuation,
             CancellationToken.None);
+    }
 
-    private Task SendInitializationRejectedAsync(
+    private async Task PersistInitializationRejectionAsync(
         string namespaceActorId,
         AgentProfileOperationFact operation,
-        AgentProfileIdentity? identity,
-        AgentProfileSafeDiagnostic diagnostic) =>
-        SendToAsync(
-            namespaceActorId,
-            new AgentProfileInitializationRejectedContinuation
-            {
-                Operation = operation.Clone(),
-                Identity = identity?.Clone() ?? new AgentProfileIdentity(),
-                ProfileActorId = Id,
-                Diagnostic = diagnostic.Clone(),
-            },
+        AgentProfileIdentity identity,
+        AgentProfileSafeDiagnostic diagnostic,
+        ByteString rejectedContentSha256)
+    {
+        await PersistDomainEventAsync(new AgentProfileInitializationRejectedEvent
+        {
+            Operation = operation.Clone(),
+            Identity = identity.Clone(),
+            NamespaceActorId = namespaceActorId,
+            ProfileActorId = Id,
+            Diagnostic = diagnostic.Clone(),
+            RejectedContentSha256 = rejectedContentSha256,
+        });
+        await SendInitializationRejectedAsync(
+            FindOperation(operation.OperationId)
+                ?? throw AgentProfileActorInvariants.Error(
+                    "MISSING_INITIALIZATION_REJECTION",
+                    "The committed initialization rejection is unavailable."),
+            operation);
+    }
+
+    private Task SendInitializationRejectedAsync(
+        AgentProfileOperationState operationState,
+        AgentProfileOperationFact operation)
+    {
+        var rejection = operationState.InitializationRejection
+            ?? throw AgentProfileActorInvariants.Error(
+                "MISSING_INITIALIZATION_REJECTION",
+                "The committed initialization rejection is unavailable.");
+        var continuation = rejection.Continuation.Clone();
+        continuation.Operation = operation.Clone();
+        return SendToAsync(
+            rejection.NamespaceActorId,
+            continuation,
             CancellationToken.None);
+    }
 
     private Task SendPublishedSummaryAsync(
         AgentProfileOperationFact operation,
@@ -585,6 +683,59 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         }
     }
 
+    private void EnsureInitializationReplay(
+        AgentProfileOperationState existing,
+        AgentProfileOperationFact candidate,
+        AgentProfileIdentity identity,
+        string namespaceActorId,
+        ByteString expectedInput,
+        ByteString rejectedContentSha256)
+    {
+        var storedIdentity = existing.InitializationContinuation?.Identity ??
+            existing.InitializationRejection?.Continuation?.Identity;
+        var storedProfileActorId = existing.InitializationContinuation?.ProfileActorId ??
+            existing.InitializationRejection?.Continuation?.ProfileActorId;
+        var storedNamespaceActorId = existing.InitializationRejection?.NamespaceActorId ??
+            State.NamespaceActorId;
+        if (!AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
+            !AgentProfileActorInvariants.DigestEquals(candidate.InputSha256, expectedInput) ||
+            !AgentProfileActorInvariants.SameIdentity(storedIdentity, identity) ||
+            !string.Equals(storedProfileActorId, Id, StringComparison.Ordinal) ||
+            !string.Equals(storedNamespaceActorId, namespaceActorId, StringComparison.Ordinal) ||
+            existing.InitializationRejection is not null &&
+            !AgentProfileActorInvariants.DigestEquals(
+                existing.InitializationRejection.RejectedContentSha256,
+                rejectedContentSha256))
+        {
+            throw AgentProfileActorInvariants.Error(
+                "IDEMPOTENCY_PAYLOAD_CONFLICT",
+                "An initialization operation cannot change its normalized input or Actor relation.");
+        }
+    }
+
+    private void EnsureInitializationRejectionReplay(
+        AgentProfileOperationState existing,
+        AgentProfileOperationFact candidate,
+        AgentProfileIdentity identity,
+        string namespaceActorId,
+        ByteString rejectedContentSha256)
+    {
+        var rejection = existing.InitializationRejection;
+        if (rejection is null ||
+            !AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
+            !AgentProfileActorInvariants.SameIdentity(rejection.Continuation?.Identity, identity) ||
+            !string.Equals(rejection.Continuation?.ProfileActorId, Id, StringComparison.Ordinal) ||
+            !string.Equals(rejection.NamespaceActorId, namespaceActorId, StringComparison.Ordinal) ||
+            !AgentProfileActorInvariants.DigestEquals(
+                rejection.RejectedContentSha256,
+                rejectedContentSha256))
+        {
+            throw AgentProfileActorInvariants.Error(
+                "IDEMPOTENCY_PAYLOAD_CONFLICT",
+                "An initialization rejection cannot change its typed input or Actor relation.");
+        }
+    }
+
     private static int FindBindingIndex(AgentProfileContent content, string bindingId)
     {
         for (var index = 0; index < content.SkillBindings.Count; index++)
@@ -599,7 +750,6 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         AgentProfileState state,
         AgentProfileInitializedEvent evt)
     {
-        _ = state;
         var next = new AgentProfileState
         {
             Identity = evt.Identity.Clone(),
@@ -608,9 +758,42 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             DraftRevision = evt.DraftRevision,
             DraftSha256 = evt.DraftSha256,
         };
+        next.Operations.Add(state.Operations.Select(static operation => operation.Clone()));
         next.Operations.Add(new AgentProfileOperationState
         {
             Operation = evt.Operation.Clone(),
+            InitializationContinuation = new AgentProfileInitializedContinuation
+            {
+                Operation = evt.Operation.Clone(),
+                Identity = evt.Identity.Clone(),
+                ProfileActorId = evt.ProfileActorId,
+                DraftRevision = evt.DraftRevision,
+                DraftSha256 = evt.DraftSha256,
+            },
+        });
+        return next;
+    }
+
+    private static AgentProfileState ApplyInitializationRejected(
+        AgentProfileState state,
+        AgentProfileInitializationRejectedEvent evt)
+    {
+        var next = state.Clone();
+        next.Operations.Add(new AgentProfileOperationState
+        {
+            Operation = evt.Operation.Clone(),
+            InitializationRejection = new AgentProfileInitializationRejectionState
+            {
+                NamespaceActorId = evt.NamespaceActorId,
+                Continuation = new AgentProfileInitializationRejectedContinuation
+                {
+                    Operation = evt.Operation.Clone(),
+                    Identity = evt.Identity.Clone(),
+                    ProfileActorId = evt.ProfileActorId,
+                    Diagnostic = evt.Diagnostic.Clone(),
+                },
+                RejectedContentSha256 = evt.RejectedContentSha256,
+            },
         });
         return next;
     }

@@ -58,7 +58,132 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
-    public async Task Initialize_ShouldRejectPayloadDriftOrImmutableIdentityChangeWithoutMutatingState()
+    public async Task InitializeReplay_ShouldUseCommittedContinuationAfterFirstSendFailsAndDraftChanges()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        publisher.SendFailuresRemaining = 1;
+        var command = InitializeCommand();
+        var initialDraftSha256 = AgentProfileDeterminism.ComputeDraftSha256(command.InitialContent);
+
+        var initialize = () => agent.HandleInitializeAsync(command);
+        await initialize.Should().ThrowAsync<InvalidOperationException>();
+
+        var changed = agent.State.Draft.Clone();
+        changed.DisplayName = "Changed after initialization";
+        await agent.HandleUpdateDraftAsync(UpdateCommand(
+            agent.State.Identity,
+            changed,
+            "op-update-after-initialize-send-failure",
+            expectedVersion: 1));
+        agent.State.DraftRevision.Should().Be(2);
+
+        var replay = command.Clone();
+        replay.Operation.CommandId = "cmd-initialize-recovery";
+        replay.Operation.CorrelationId = "corr-initialize-recovery";
+        await agent.HandleInitializeAsync(replay);
+
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+        publisher.Sends.Should().ContainSingle();
+        var continuation = publisher.Sends[0].Payload.Unpack<AgentProfileInitializedContinuation>();
+        continuation.Operation.CommandId.Should().Be("cmd-initialize-recovery");
+        continuation.DraftRevision.Should().Be(1);
+        continuation.DraftSha256.Should().Equal(initialDraftSha256);
+    }
+
+    [Fact]
+    public async Task InitializeRejection_ShouldCommitBeforeSendAndReplayStoredContinuation()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        publisher.SendFailuresRemaining = 1;
+        var command = InitializeCommand(content: ContentWithMultipleDefaultBindings());
+
+        var initialize = () => agent.HandleInitializeAsync(command);
+        await initialize.Should().ThrowAsync<InvalidOperationException>();
+
+        (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
+        agent.State.Operations.Should().ContainSingle();
+        var replay = command.Clone();
+        replay.Operation.CommandId = "cmd-initialize-rejection-recovery";
+        replay.Operation.CorrelationId = "corr-initialize-rejection-recovery";
+        await agent.HandleInitializeAsync(replay);
+
+        (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
+        publisher.Sends.Should().ContainSingle();
+        var continuation = publisher.Sends[0].Payload.Unpack<AgentProfileInitializationRejectedContinuation>();
+        continuation.Operation.CommandId.Should().Be("cmd-initialize-rejection-recovery");
+        continuation.Identity.Should().BeEquivalentTo(command.Identity);
+        continuation.ProfileActorId.Should().Be(agent.Id);
+        continuation.Diagnostic.Code.Should().Be("MULTIPLE_DEFAULT_SKILLS");
+    }
+
+    [Fact]
+    public async Task InitializeMalformedContentRejectionReplay_ShouldResendWithoutAnotherEvent()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand();
+        command.InitialContent.DisplayName = string.Empty;
+        await agent.HandleInitializeAsync(command);
+        var replay = command.Clone();
+        replay.Operation.CommandId = "cmd-initialize-invalid-content-retry";
+        replay.Operation.CorrelationId = "corr-initialize-invalid-content-retry";
+
+        await agent.HandleInitializeAsync(replay);
+
+        (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
+        agent.State.Operations.Should().ContainSingle();
+        publisher.Sends.Should().HaveCount(2);
+        var continuation = publisher.Sends[1].Payload.Unpack<AgentProfileInitializationRejectedContinuation>();
+        continuation.Operation.CommandId.Should().Be("cmd-initialize-invalid-content-retry");
+        continuation.Diagnostic.Code.Should().Be("INVALID_DISPLAY_NAME");
+    }
+
+    [Theory]
+    [InlineData("operation")]
+    [InlineData("namespace")]
+    [InlineData("identity")]
+    public async Task InitializeMalformedAuthorityInput_ShouldFailClosedWithoutEventOrSend(string boundary)
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand();
+        switch (boundary)
+        {
+            case "operation":
+                command.Operation.OperationId = string.Empty;
+                break;
+            case "namespace":
+                command.NamespaceActorId = string.Empty;
+                break;
+            case "identity":
+                command.Identity = new AgentProfileIdentity();
+                break;
+        }
+
+        var act = () => agent.HandleInitializeAsync(command);
+
+        await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        (await store.GetEventsAsync(agent.Id)).Should().BeEmpty();
+        agent.State.Operations.Should().BeEmpty();
+        publisher.Sends.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InitializeSuccess_ShouldPreserveEarlierRejectedOperationFacts()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        await agent.HandleInitializeAsync(InitializeCommand(
+            content: ContentWithMultipleDefaultBindings(),
+            operationId: "op-initialize-rejected"));
+
+        await agent.HandleInitializeAsync(InitializeCommand(operationId: "op-initialize-valid"));
+
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+        agent.State.Identity.Should().NotBeNull();
+        agent.State.Operations.Select(x => x.Operation.OperationId).Should().BeEquivalentTo(
+            ["op-initialize-rejected", "op-initialize-valid"]);
+    }
+
+    [Fact]
+    public async Task Initialize_ShouldRejectPayloadDriftAndCommitImmutableIdentityChangeWithoutMutatingAuthority()
     {
         var (agent, store, publisher) = await CreateActorAsync();
         var command = InitializeCommand();
@@ -68,14 +193,14 @@ public sealed class AgentProfileGAgentTests
         var otherIdentity = GAgentServiceTestKit.CreateAgentProfileIdentity(profileId: "prof-other");
         var changedIdentity = InitializeCommand(otherIdentity, operationId: "op-initialize-other");
 
-        await agent.HandleInitializeAsync(drifted);
+        var driftedAct = () => agent.HandleInitializeAsync(drifted);
+        var exception = await driftedAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
         await agent.HandleInitializeAsync(changedIdentity);
 
-        (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
-        publisher.Sends.Should().HaveCount(3);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+        publisher.Sends.Should().HaveCount(2);
         publisher.Sends[1].Payload.Unpack<AgentProfileInitializationRejectedContinuation>()
-            .Diagnostic.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
-        publisher.Sends[2].Payload.Unpack<AgentProfileInitializationRejectedContinuation>()
             .Diagnostic.Code.Should().Be("PROFILE_IDENTITY_CONFLICT");
         agent.State.Identity.ProfileId.Should().Be("prof-alpha");
     }
@@ -187,6 +312,109 @@ public sealed class AgentProfileGAgentTests
             "op-update-idempotent",
             expectedVersion: agent.EventSourcing!.CurrentVersion);
         var act = () => agent.HandleUpdateDraftAsync(drifted);
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCount);
+    }
+
+    [Theory]
+    [InlineData("update")]
+    [InlineData("upsert")]
+    [InlineData("remove")]
+    [InlineData("publish")]
+    public async Task MutationReplay_ShouldRejectCallerIdentityDriftBeforeNoOp(string mutation)
+    {
+        var content = GAgentServiceTestKit.CreateAgentProfileContent();
+        content.SkillBindings.Add(Binding(
+            "bind-alpha",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidAlpha, "skill-alpha")));
+        var (agent, store, _) = await CreateInitializedActorAsync(content: content);
+        Func<Task> replay;
+
+        switch (mutation)
+        {
+            case "update":
+            {
+                var changed = agent.State.Draft.Clone();
+                changed.DisplayName = "Changed";
+                var command = UpdateCommand(
+                    agent.State.Identity,
+                    changed,
+                    "op-identity-drift-update",
+                    agent.EventSourcing!.CurrentVersion);
+                await agent.HandleUpdateDraftAsync(command);
+                var candidate = command.Clone();
+                candidate.Identity.OwningScopeId = "scope-other";
+                replay = () => agent.HandleUpdateDraftAsync(candidate);
+                break;
+            }
+            case "upsert":
+            {
+                var command = UpsertCommand(
+                    agent,
+                    Binding(
+                        "bind-beta",
+                        AgentProfileSkillActivationMode.Routed,
+                        ExactReference(SkillGuidBeta, "skill-beta")),
+                    "op-identity-drift-upsert");
+                await agent.HandleUpsertSkillBindingAsync(command);
+                var candidate = command.Clone();
+                candidate.Identity.OwningScopeId = "scope-other";
+                replay = () => agent.HandleUpsertSkillBindingAsync(candidate);
+                break;
+            }
+            case "remove":
+            {
+                var command = RemoveCommand(agent, "bind-alpha", "op-identity-drift-remove");
+                await agent.HandleRemoveSkillBindingAsync(command);
+                var candidate = command.Clone();
+                candidate.Identity.OwningScopeId = "scope-other";
+                replay = () => agent.HandleRemoveSkillBindingAsync(candidate);
+                break;
+            }
+            case "publish":
+            {
+                var command = PublishCommand(
+                    agent,
+                    Snapshot(agent.State.Identity, agent.State.Draft),
+                    "op-identity-drift-publish");
+                await agent.HandlePublishAsync(command);
+                var candidate = command.Clone();
+                candidate.Identity.OwningScopeId = "scope-other";
+                replay = () => agent.HandlePublishAsync(candidate);
+                break;
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+        }
+
+        var eventCount = (await store.GetEventsAsync(agent.Id)).Count;
+        var act = replay;
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCount);
+    }
+
+    [Fact]
+    public async Task UpdateReplay_ShouldClassifyPayloadDriftBeforeSemanticPolicyRejection()
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var changed = agent.State.Draft.Clone();
+        changed.DisplayName = "Changed";
+        var command = UpdateCommand(
+            agent.State.Identity,
+            changed,
+            "op-update-policy-drift",
+            expectedVersion: 1);
+        await agent.HandleUpdateDraftAsync(command);
+        var eventCount = (await store.GetEventsAsync(agent.Id)).Count;
+        var replay = command.Clone();
+        replay.Content = ContentWithMultipleDefaultBindings();
+
+        var act = () => agent.HandleUpdateDraftAsync(replay);
+
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCount);
@@ -329,6 +557,74 @@ public sealed class AgentProfileGAgentTests
         agent.State.LastMutation.Diagnostic.Code.Should().Be("SEALED_SKILL_CONTENT_SHA256_MISMATCH");
     }
 
+    [Theory]
+    [InlineData("prompt", "AGGREGATE_PROMPT_BYTES_EXCEEDED")]
+    [InlineData("asset", "TEXT_ASSET_TOO_LARGE")]
+    [InlineData("skill", "SEALED_SKILL_TOO_LARGE")]
+    [InlineData("snapshot", "PUBLISHED_SNAPSHOT_TOO_LARGE")]
+    public async Task Publish_ShouldEnforceSharedHardLimitsDirectly(
+        string boundary,
+        string expectedCode)
+    {
+        var content = GAgentServiceTestKit.CreateAgentProfileContent();
+        var bindingCount = boundary == "snapshot" ? 17 : 1;
+        content.SkillBindings.Add(Enumerable.Range(1, bindingCount).Select(index => Binding(
+            $"bind-{index:D2}",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidAlpha, "skill-alpha"))));
+        var (agent, store, _) = await CreateInitializedActorAsync(content: content);
+        var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+
+        switch (boundary)
+        {
+            case "prompt":
+                snapshot.SkillBindings[0].Skill.Package.Instructions = new string('a', 65_537);
+                break;
+            case "asset":
+                snapshot.SkillBindings[0].Skill.Package.Assets.Add(new AgentProfileNamedTextAsset
+                {
+                    Path = "large.txt",
+                    Content = new string('a', 262_145),
+                });
+                break;
+            case "skill":
+                for (var index = 0; index < 4; index++)
+                {
+                    snapshot.SkillBindings[0].Skill.Package.Assets.Add(new AgentProfileNamedTextAsset
+                    {
+                        Path = $"asset-{index}.txt",
+                        Content = new string((char)('a' + index), 262_144),
+                    });
+                }
+                break;
+            case "snapshot":
+                foreach (var sealedBinding in snapshot.SkillBindings)
+                {
+                    sealedBinding.Skill.Package.Assets.Add(new AgentProfileNamedTextAsset
+                    {
+                        Path = "asset.txt",
+                        Content = new string('a', 250_000),
+                    });
+                }
+                break;
+        }
+
+        foreach (var sealedBinding in snapshot.SkillBindings)
+        {
+            sealedBinding.Skill.ContentSha256 =
+                AgentProfileDeterminism.ComputeSealedSkillSha256(sealedBinding.Skill);
+        }
+        snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+        var command = PublishCommand(agent, snapshot, $"op-publish-hard-limit-{boundary}");
+
+        await agent.HandlePublishAsync(command);
+
+        agent.State.Published.Should().BeNull();
+        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        agent.State.LastMutation.Diagnostic.Code.Should().Be(expectedCode);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+    }
+
     [Fact]
     public async Task Publish_ShouldRequireExactDraftBindingMatch()
     {
@@ -352,6 +648,41 @@ public sealed class AgentProfileGAgentTests
 
         agent.State.Published.Should().BeNull();
         agent.State.LastMutation.Diagnostic.Code.Should().Be("PROFILE_BINDING_CONFLICT");
+    }
+
+    [Theory]
+    [InlineData("profile")]
+    [InlineData("owner")]
+    [InlineData("scope")]
+    [InlineData("reference")]
+    public async Task Publish_ShouldRejectSnapshotIdentityOutsideAuthoritativeBoundary(string boundary)
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+        switch (boundary)
+        {
+            case "profile":
+                snapshot.Identity.ProfileId = "prof-other";
+                break;
+            case "owner":
+                snapshot.Identity.Owner.User.SubjectId = "owner-other";
+                break;
+            case "scope":
+                snapshot.Identity.OwningScopeId = "scope-other";
+                break;
+            case "reference":
+                snapshot.Identity.Reference.ProfileSlug = "other-assistant";
+                break;
+        }
+        snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+        var command = PublishCommand(agent, snapshot, $"op-publish-identity-{boundary}");
+
+        await agent.HandlePublishAsync(command);
+
+        agent.State.Published.Should().BeNull();
+        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        agent.State.LastMutation.Diagnostic.Code.Should().Be("PROFILE_IDENTITY_CONFLICT");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
     }
 
     [Fact]
@@ -572,6 +903,20 @@ public sealed class AgentProfileGAgentTests
             SealedBinding(binding, packageVariant)));
         snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
         return snapshot;
+    }
+
+    private static AgentProfileContent ContentWithMultipleDefaultBindings()
+    {
+        var content = GAgentServiceTestKit.CreateAgentProfileContent();
+        content.SkillBindings.Add(Binding(
+            "bind-alpha",
+            AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
+            ExactReference(SkillGuidAlpha, "skill-alpha")));
+        content.SkillBindings.Add(Binding(
+            "bind-beta",
+            AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
+            ExactReference(SkillGuidBeta, "skill-beta")));
+        return content;
     }
 
     private static SealedAgentProfileSkillBinding SealedBinding(

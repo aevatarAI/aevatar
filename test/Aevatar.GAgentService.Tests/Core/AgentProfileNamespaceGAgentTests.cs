@@ -116,6 +116,81 @@ public sealed class AgentProfileNamespaceGAgentTests
     }
 
     [Fact]
+    public async Task Create_ShouldRejectDuplicateProfileIdWithDifferentReference()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        await agent.HandleCreateAsync(CreateCommand());
+        var duplicateProfileId = CreateCommand(
+            GAgentServiceTestKit.CreateAgentProfileIdentity(profileSlug: "researcher"),
+            operationId: "op-profile-id-conflict",
+            profileActorId: "profile-beta");
+
+        await agent.HandleCreateAsync(duplicateProfileId);
+
+        agent.State.Profiles.Should().ContainSingle();
+        agent.State.Operations.Single(x => x.Operation.OperationId == "op-profile-id-conflict")
+            .Diagnostic.Code.Should().Be("PROFILE_ID_TAKEN");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CreateConflict_ShouldNotFailExistingProvisioningEntry()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var original = CreateCommand();
+        await agent.HandleCreateAsync(original);
+        var conflict = CreateCommand(operationId: "op-profile-existing-conflict");
+
+        await agent.HandleCreateAsync(conflict);
+
+        agent.State.Profiles.Should().ContainSingle()
+            .Which.Status.Should().Be(AgentProfileProvisioningStatus.Provisioning);
+        agent.State.Operations.Single(x => x.Operation.OperationId == original.Operation.OperationId)
+            .Diagnostic.Should().BeNull();
+        agent.State.Operations.Single(x => x.Operation.OperationId == conflict.Operation.OperationId)
+            .Diagnostic.Code.Should().Be("PROFILE_ID_TAKEN");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Continuation_ShouldRejectPreCreateFailureWithMatchingProfileCoordinates()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        await agent.HandleCreateAsync(CreateCommand());
+        var conflict = CreateCommand(operationId: "op-profile-existing-continuation-conflict");
+        await agent.HandleCreateAsync(conflict);
+
+        var act = () => agent.HandleInitializedAsync(Initialized(conflict));
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PROVISIONING_CONTINUATION_MISMATCH");
+        agent.State.Profiles.Should().ContainSingle()
+            .Which.Status.Should().Be(AgentProfileProvisioningStatus.Provisioning);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+        publisher.Sends.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectDuplicateProfileActorIdForDifferentProfile()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        await agent.HandleCreateAsync(CreateCommand());
+        var duplicateActorId = CreateCommand(
+            GAgentServiceTestKit.CreateAgentProfileIdentity(
+                profileId: "prof-beta",
+                profileSlug: "researcher"),
+            operationId: "op-profile-actor-conflict",
+            profileActorId: "profile-alpha");
+
+        await agent.HandleCreateAsync(duplicateActorId);
+
+        agent.State.Profiles.Should().ContainSingle();
+        agent.State.Operations.Single(x => x.Operation.OperationId == "op-profile-actor-conflict")
+            .Diagnostic.Code.Should().Be("PROFILE_ACTOR_ID_TAKEN");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task Create_ShouldRejectReservedSystemHandleForUserOwner()
     {
         var (agent, _, publisher) = await CreateActorAsync();
@@ -159,6 +234,23 @@ public sealed class AgentProfileNamespaceGAgentTests
             content: GAgentServiceTestKit.CreateAgentProfileContent(displayName: "Changed"));
 
         var act = () => agent.HandleCreateAsync(drifted);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
+        publisher.Sends.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CreateReplay_ShouldRejectIdentityDriftWithOriginalOperationDigest()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = CreateCommand();
+        await agent.HandleCreateAsync(command);
+        var replay = command.Clone();
+        replay.Identity.Reference.ProfileSlug = "researcher";
+
+        var act = () => agent.HandleCreateAsync(replay);
 
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
@@ -271,6 +363,30 @@ public sealed class AgentProfileNamespaceGAgentTests
         var mismatchException = await mismatchAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
         mismatchException.Which.Code.Should().Be("PROFILE_PROVISIONING_CONTINUATION_MISMATCH");
         (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Continuation_ShouldRejectOperationMisassociatedWithAnotherEntryActor()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var first = CreateCommand();
+        await agent.HandleCreateAsync(first);
+        var conflicting = CreateCommand(
+            GAgentServiceTestKit.CreateAgentProfileIdentity(profileSlug: "researcher"),
+            operationId: "op-misassociated",
+            profileActorId: "profile-beta");
+        await agent.HandleCreateAsync(conflicting);
+        var misassociated = Initialized(conflicting);
+        misassociated.Identity = first.Identity.Clone();
+        misassociated.ProfileActorId = first.ProfileActorId;
+
+        var act = () => agent.HandleInitializedAsync(misassociated);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PROVISIONING_CONTINUATION_MISMATCH");
+        agent.State.Profiles.Should().ContainSingle()
+            .Which.Status.Should().Be(AgentProfileProvisioningStatus.Provisioning);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
     }
 
     [Fact]

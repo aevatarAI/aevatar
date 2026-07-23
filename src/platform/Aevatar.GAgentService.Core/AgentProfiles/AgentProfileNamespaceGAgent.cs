@@ -21,34 +21,6 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             command.ProfileActorId,
             "profile_actor_id");
 
-        var existingOperation = FindOperation(operation.OperationId);
-        if (existingOperation is not null)
-        {
-            EnsureReplayInput(existingOperation.Operation, operation);
-            if (!string.Equals(existingOperation.ProfileActorId, profileActorId, StringComparison.Ordinal))
-            {
-                throw AgentProfileActorInvariants.Error(
-                    "PROFILE_PROVISIONING_CONTINUATION_MISMATCH",
-                    "An operation cannot change its Profile Actor target.");
-            }
-
-            var replayEntry = FindProfile(existingOperation.ProfileId);
-            if (replayEntry is null)
-            {
-                if (existingOperation.Diagnostic is not null)
-                    return;
-                throw AgentProfileActorInvariants.Error(
-                    "UNKNOWN_PROFILE_PROVISIONING",
-                    "The operation has no durable Profile provisioning entry.");
-            }
-            if (replayEntry.Status is AgentProfileProvisioningStatus.Provisioning or
-                AgentProfileProvisioningStatus.Failed)
-            {
-                await SendInitializationAsync(replayEntry, operation);
-            }
-            return;
-        }
-
         var identityDiagnostics = AgentProfilePolicies.ValidateIdentity(command.Identity);
         if (identityDiagnostics.Count > 0)
         {
@@ -74,6 +46,42 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         var identity = AgentProfileDeterminism.NormalizeIdentity(command.Identity);
         var content = AgentProfileDeterminism.NormalizeContent(command.InitialContent);
         var expectedInput = AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content);
+        var existingOperation = FindOperation(operation.OperationId);
+        if (existingOperation is not null)
+        {
+            EnsureReplayInput(existingOperation.Operation, operation, expectedInput);
+            if (!string.Equals(existingOperation.ProfileActorId, profileActorId, StringComparison.Ordinal))
+            {
+                throw AgentProfileActorInvariants.Error(
+                    "PROFILE_PROVISIONING_CONTINUATION_MISMATCH",
+                    "An operation cannot change its Profile Actor target.");
+            }
+            if (!existingOperation.ProvisioningStarted)
+            {
+                if (existingOperation.Diagnostic is not null)
+                    return;
+                throw AgentProfileActorInvariants.Error(
+                    "UNKNOWN_PROFILE_PROVISIONING",
+                    "The operation did not commit Profile provisioning.");
+            }
+
+            var replayEntry = FindProfile(existingOperation.ProfileId);
+            if (replayEntry is null)
+            {
+                if (existingOperation.Diagnostic is not null)
+                    return;
+                throw AgentProfileActorInvariants.Error(
+                    "UNKNOWN_PROFILE_PROVISIONING",
+                    "The operation has no durable Profile provisioning entry.");
+            }
+            if (replayEntry.Status is AgentProfileProvisioningStatus.Provisioning or
+                AgentProfileProvisioningStatus.Failed)
+            {
+                await SendInitializationAsync(replayEntry, operation);
+            }
+            return;
+        }
+
         if (!AgentProfileActorInvariants.DigestEquals(operation.InputSha256, expectedInput))
         {
             await PersistCreateFailureAsync(
@@ -113,6 +121,34 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                     "OWNER_HANDLE_CONFLICT",
                     "The requested owner handle is already claimed.",
                     "identity.reference.owner_handle"));
+            return;
+        }
+
+        if (State.Profiles.Any(entry =>
+                string.Equals(entry.Identity?.ProfileId, identity.ProfileId, StringComparison.Ordinal)))
+        {
+            await PersistCreateFailureAsync(
+                operation,
+                identity,
+                profileActorId,
+                AgentProfileActorInvariants.Diagnostic(
+                    "PROFILE_ID_TAKEN",
+                    "The Profile identity is already claimed.",
+                    "identity.profile_id"));
+            return;
+        }
+
+        if (State.Profiles.Any(entry =>
+                string.Equals(entry.ProfileActorId, profileActorId, StringComparison.Ordinal)))
+        {
+            await PersistCreateFailureAsync(
+                operation,
+                identity,
+                profileActorId,
+                AgentProfileActorInvariants.Diagnostic(
+                    "PROFILE_ACTOR_ID_TAKEN",
+                    "The Profile Actor identity is already claimed.",
+                    "profile_actor_id"));
             return;
         }
 
@@ -341,10 +377,12 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 "No durable provisioning entry matches the continuation.");
         var storedOperation = FindOperation(operation.OperationId);
         if (storedOperation is null ||
+            !storedOperation.ProvisioningStarted ||
             !AgentProfileActorInvariants.SameInput(storedOperation.Operation, operation) ||
             !AgentProfileActorInvariants.SameIdentity(entry.Identity, identity) ||
             !string.Equals(entry.ProfileActorId, profileActorId, StringComparison.Ordinal) ||
-            !string.Equals(storedOperation.ProfileId, entry.Identity.ProfileId, StringComparison.Ordinal))
+            !string.Equals(storedOperation.ProfileId, entry.Identity.ProfileId, StringComparison.Ordinal) ||
+            !string.Equals(storedOperation.ProfileActorId, entry.ProfileActorId, StringComparison.Ordinal))
         {
             throw AgentProfileActorInvariants.Error(
                 "PROFILE_PROVISIONING_CONTINUATION_MISMATCH",
@@ -363,9 +401,12 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
 
     private static void EnsureReplayInput(
         AgentProfileOperationFact existing,
-        AgentProfileOperationFact candidate)
+        AgentProfileOperationFact candidate,
+        ByteString? expectedInput = null)
     {
-        if (!AgentProfileActorInvariants.SameInput(existing, candidate))
+        if (!AgentProfileActorInvariants.SameInput(existing, candidate) ||
+            expectedInput is not null &&
+            !AgentProfileActorInvariants.DigestEquals(candidate.InputSha256, expectedInput))
         {
             throw AgentProfileActorInvariants.Error(
                 "IDEMPOTENCY_PAYLOAD_CONFLICT",
@@ -400,6 +441,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             Operation = evt.Operation.Clone(),
             ProfileId = evt.Identity.ProfileId,
             ProfileActorId = evt.ProfileActorId,
+            ProvisioningStarted = true,
         });
         return next;
     }
@@ -421,17 +463,22 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         AgentProfileProvisioningFailedEvent evt)
     {
         var next = state.Clone();
-        var entry = next.Profiles.FirstOrDefault(profile =>
-            string.Equals(profile.Identity.ProfileId, evt.Identity.ProfileId, StringComparison.Ordinal) &&
-            string.Equals(profile.ProfileActorId, evt.ProfileActorId, StringComparison.Ordinal));
-        if (entry is not null)
-        {
-            entry.Status = AgentProfileProvisioningStatus.Failed;
-            entry.Failure = evt.Diagnostic.Clone();
-        }
-
         var operation = next.Operations.FirstOrDefault(candidate =>
             string.Equals(candidate.Operation.OperationId, evt.Operation.OperationId, StringComparison.Ordinal));
+        if (operation is not null &&
+            string.Equals(operation.ProfileId, evt.Identity.ProfileId, StringComparison.Ordinal) &&
+            string.Equals(operation.ProfileActorId, evt.ProfileActorId, StringComparison.Ordinal))
+        {
+            var entry = next.Profiles.FirstOrDefault(profile =>
+                string.Equals(profile.Identity.ProfileId, evt.Identity.ProfileId, StringComparison.Ordinal) &&
+                string.Equals(profile.ProfileActorId, evt.ProfileActorId, StringComparison.Ordinal));
+            if (entry is not null)
+            {
+                entry.Status = AgentProfileProvisioningStatus.Failed;
+                entry.Failure = evt.Diagnostic.Clone();
+            }
+        }
+
         if (operation is null)
         {
             next.Operations.Add(new AgentProfileNamespaceOperationState

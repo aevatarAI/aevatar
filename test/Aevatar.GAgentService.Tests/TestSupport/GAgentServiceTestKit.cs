@@ -449,6 +449,7 @@ internal sealed class RecordingActorDispatchPort : IActorDispatchPort
 internal sealed class RecordingProfileEventPublisher : IEventPublisher
 {
     public List<(string TargetActorId, Google.Protobuf.WellKnownTypes.Any Payload)> Sends { get; } = [];
+    public int SendFailuresRemaining { get; set; }
 
     public Task PublishAsync<TEvent>(
         TEvent evt,
@@ -471,6 +472,11 @@ internal sealed class RecordingProfileEventPublisher : IEventPublisher
         where TEvent : IMessage
     {
         ct.ThrowIfCancellationRequested();
+        if (SendFailuresRemaining > 0)
+        {
+            SendFailuresRemaining--;
+            throw new InvalidOperationException("Injected Profile send failure.");
+        }
         Sends.Add((targetActorId, Google.Protobuf.WellKnownTypes.Any.Pack(evt)));
         return Task.CompletedTask;
     }

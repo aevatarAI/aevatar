@@ -1,4 +1,4 @@
-namespace Aevatar.GAgentService.Application.AgentProfiles;
+namespace Aevatar.GAgentService.Abstractions.AgentProfiles;
 
 public static class AgentProfileValidationLimits
 {

@@ -94,7 +94,6 @@ public sealed class AgentProfileSkillSealer
 
         var sealedBindings = new List<SealedAgentProfileSkillBinding>(
             normalizedContent.SkillBindings.Count);
-        long aggregatePromptBytes = Encoding.UTF8.GetByteCount(normalizedContent.Instructions);
         foreach (var binding in normalizedContent.SkillBindings)
         {
             ct.ThrowIfCancellationRequested();
@@ -131,9 +130,7 @@ public sealed class AgentProfileSkillSealer
                 continue;
             }
 
-            aggregatePromptBytes += PromptByteCount(package);
             var bindingDiagnosticCount = diagnostics.Count;
-            ValidateTextAssets(binding.BindingId, package, diagnostics);
             ValidateDeclaredToolNames(binding.BindingId, package, diagnostics);
             ValidateDeclaredDependencies(
                 binding.BindingId,
@@ -158,15 +155,6 @@ public sealed class AgentProfileSkillSealer
                     $"skill_bindings.{binding.BindingId}.skill");
             }
 
-            if (sealedSkill.CalculateSize() > AgentProfileValidationLimits.SealedSkillMaxSerializedBytes)
-            {
-                AddDiagnostic(
-                    diagnostics,
-                    "SEALED_SKILL_TOO_LARGE",
-                    "Sealed skill serialized size exceeds the limit.",
-                    $"skill_bindings.{binding.BindingId}.skill");
-            }
-
             if (diagnostics.Count != bindingDiagnosticCount)
                 continue;
 
@@ -177,25 +165,6 @@ public sealed class AgentProfileSkillSealer
                 Skill = sealedSkill,
             });
         }
-
-        if (aggregatePromptBytes > AgentProfileValidationLimits.AggregatePromptMaxUtf8Bytes)
-        {
-            AddDiagnostic(
-                diagnostics,
-                "AGGREGATE_PROMPT_BYTES_EXCEEDED",
-                "Aggregate Profile prompt bytes exceed the limit.",
-                "skill_bindings");
-        }
-        if (aggregatePromptBytes > AgentProfileValidationLimits.AggregatePromptMaxTokens)
-        {
-            AddDiagnostic(
-                diagnostics,
-                "AGGREGATE_PROMPT_TOKENS_EXCEEDED",
-                "Aggregate Profile prompt token upper bound exceeds the limit.",
-                "skill_bindings");
-        }
-        if (diagnostics.Count > 0)
-            return AgentProfileSealingResult.Failed(diagnostics);
 
         var snapshot = new AgentProfilePublishedSnapshot
         {
@@ -209,15 +178,11 @@ public sealed class AgentProfileSkillSealer
         };
         snapshot.SkillBindings.Add(sealedBindings);
         snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
-        if (snapshot.CalculateSize() > AgentProfileValidationLimits.PublishedSnapshotMaxSerializedBytes)
-        {
-            AddDiagnostic(
-                diagnostics,
-                "PUBLISHED_SNAPSHOT_TOO_LARGE",
-                "Published Profile snapshot serialized size exceeds the limit.",
-                "snapshot");
+        AddDiagnostics(
+            diagnostics,
+            AgentProfilePolicies.ValidatePublishedSnapshotHardLimits(snapshot));
+        if (diagnostics.Count > 0)
             return AgentProfileSealingResult.Failed(diagnostics);
-        }
 
         return AgentProfileSealingResult.Success(
             AgentProfileDeterminism.NormalizePublishedSnapshot(snapshot));
@@ -331,53 +296,6 @@ public sealed class AgentProfileSkillSealer
                 $"skill_bindings.{bindingId}.declared_tool_names[{index}]");
         }
     }
-
-    private static void ValidateTextAssets(
-        string bindingId,
-        ResolvedOrnnSkillPackage package,
-        List<AgentProfileSafeDiagnostic> diagnostics)
-    {
-        foreach (var (path, content) in EnumerateTextAssets(package))
-        {
-            if (Encoding.UTF8.GetByteCount(content) <= AgentProfileValidationLimits.TextAssetMaxUtf8Bytes)
-                continue;
-
-            AddDiagnostic(
-                diagnostics,
-                "TEXT_ASSET_TOO_LARGE",
-                "Sealed skill text asset exceeds the UTF-8 byte limit.",
-                $"skill_bindings.{bindingId}.{path}");
-        }
-    }
-
-    private static IEnumerable<(string Path, string Content)> EnumerateTextAssets(
-        ResolvedOrnnSkillPackage package)
-    {
-        foreach (var workflow in package.Workflows)
-        {
-            for (var index = 0; index < workflow.WorkflowYamls.Count; index++)
-                yield return ($"workflows.{workflow.WorkflowId}[{index}]", workflow.WorkflowYamls[index]);
-        }
-
-        foreach (var script in package.Scripts)
-        {
-            foreach (var source in script.SourceFiles)
-                yield return ($"scripts.{script.ScriptId}.{source.Path}", source.Content);
-            foreach (var proto in script.ProtoFiles)
-                yield return ($"scripts.{script.ScriptId}.{proto.Path}", proto.Content);
-        }
-
-        foreach (var reference in package.References)
-            yield return ($"references.{reference.Path}", reference.Content);
-        foreach (var asset in package.Assets)
-            yield return ($"assets.{asset.Path}", asset.Content);
-    }
-
-    private static long PromptByteCount(ResolvedOrnnSkillPackage package) =>
-        Encoding.UTF8.GetByteCount(package.Description) +
-        Encoding.UTF8.GetByteCount(package.Instructions) +
-        Encoding.UTF8.GetByteCount(package.Arguments) +
-        Encoding.UTF8.GetByteCount(package.WhenToUse);
 
     private static string BindingPath(string bindingId, string path) =>
         string.IsNullOrEmpty(path)

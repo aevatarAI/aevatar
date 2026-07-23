@@ -26,6 +26,7 @@ message AgentProfileNamespaceOperationState {
   string profile_actor_id = 3;
   aevatar.gagentservice.agentprofiles.AgentProfileSafeDiagnostic diagnostic = 4;
   aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 5;
+  bool provisioning_started = 6;
 }
 
 message AgentProfileNamespaceState {
@@ -34,10 +35,18 @@ message AgentProfileNamespaceState {
   repeated AgentProfileNamespaceOperationState operations = 3;
 }
 
+message AgentProfileInitializationRejectionState {
+  string namespace_actor_id = 1;
+  aevatar.gagentservice.agentprofiles.AgentProfileInitializationRejectedContinuation continuation = 2;
+  bytes rejected_content_sha256 = 3;
+}
+
 message AgentProfileOperationState {
   aevatar.gagentservice.agentprofiles.AgentProfileOperationFact operation = 1;
   aevatar.gagentservice.agentprofiles.AgentProfileMutationOutcome outcome = 2;
   aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 3;
+  aevatar.gagentservice.agentprofiles.AgentProfileInitializedContinuation initialization_continuation = 4;
+  AgentProfileInitializationRejectionState initialization_rejection = 5;
 }
 
 message AgentProfileState {

@@ -11,15 +11,15 @@ public static class AgentProfilePolicies
     public const string AevatarPlatformId = "aevatar";
 
     private const int HumanReferenceSegmentMaxLength = 63;
-    private const int ExpectedSkillNameMaxBytes = 64;
-    private const int PublisherIdMaxBytes = 256;
-    private const int IdentifierMaxBytes = 128;
-    private const int DisplayNameMaxBytes = 256;
-    private const int PurposeMaxBytes = 4_096;
-    private const int InstructionsMaxBytes = 32_768;
-    private const int SkillBindingMaxCount = 32;
-    private const int ToolNameMaxCount = 128;
-    private const int ToolSetRefMaxCount = 32;
+    private const int ExpectedSkillNameMaxBytes = AgentProfileValidationLimits.ExpectedOrnnNameMaxUtf8Bytes;
+    private const int PublisherIdMaxBytes = AgentProfileValidationLimits.PublisherIdMaxUtf8Bytes;
+    private const int IdentifierMaxBytes = AgentProfileValidationLimits.IdentifierMaxUtf8Bytes;
+    private const int DisplayNameMaxBytes = AgentProfileValidationLimits.DisplayNameMaxUtf8Bytes;
+    private const int PurposeMaxBytes = AgentProfileValidationLimits.PurposeMaxUtf8Bytes;
+    private const int InstructionsMaxBytes = AgentProfileValidationLimits.ProfileInstructionsMaxUtf8Bytes;
+    private const int SkillBindingMaxCount = AgentProfileValidationLimits.SkillBindingMaxCount;
+    private const int ToolNameMaxCount = AgentProfileValidationLimits.ExplicitToolNameMaxCount;
+    private const int ToolSetRefMaxCount = AgentProfileValidationLimits.ToolSetRefMaxCount;
 
     private static readonly Regex HumanReferenceSegmentPattern = new(
         "\\A[a-z0-9]+(?:-[a-z0-9]+)*\\z",
@@ -464,6 +464,76 @@ public static class AgentProfilePolicies
         return diagnostics;
     }
 
+    public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidatePublishedSnapshotHardLimits(
+        AgentProfilePublishedSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return [Diagnostic("MISSING_PUBLISHED_SNAPSHOT", "Published snapshot is required.", "snapshot")];
+
+        var diagnostics = new List<AgentProfileSafeDiagnostic>();
+        long aggregatePromptBytes = Encoding.UTF8.GetByteCount(snapshot.Instructions ?? string.Empty);
+        foreach (var binding in snapshot.SkillBindings)
+        {
+            var skill = binding.Skill;
+            var package = skill?.Package;
+            if (package is not null)
+            {
+                aggregatePromptBytes += PromptByteCount(package);
+                foreach (var (path, content) in EnumerateTextAssets(package))
+                {
+                    if (Encoding.UTF8.GetByteCount(content) <=
+                        AgentProfileValidationLimits.TextAssetMaxUtf8Bytes)
+                    {
+                        continue;
+                    }
+
+                    AddHardLimitDiagnostic(
+                        diagnostics,
+                        "TEXT_ASSET_TOO_LARGE",
+                        "Sealed skill text asset exceeds the UTF-8 byte limit.",
+                        $"skill_bindings.{binding.BindingId}.skill.package.{path}");
+                }
+            }
+
+            if (skill is not null &&
+                skill.CalculateSize() > AgentProfileValidationLimits.SealedSkillMaxSerializedBytes)
+            {
+                AddHardLimitDiagnostic(
+                    diagnostics,
+                    "SEALED_SKILL_TOO_LARGE",
+                    "Sealed skill serialized size exceeds the limit.",
+                    $"skill_bindings.{binding.BindingId}.skill");
+            }
+        }
+
+        if (aggregatePromptBytes > AgentProfileValidationLimits.AggregatePromptMaxUtf8Bytes)
+        {
+            AddHardLimitDiagnostic(
+                diagnostics,
+                "AGGREGATE_PROMPT_BYTES_EXCEEDED",
+                "Aggregate Profile prompt bytes exceed the limit.",
+                "skill_bindings");
+        }
+        if (aggregatePromptBytes > AgentProfileValidationLimits.AggregatePromptMaxTokens)
+        {
+            AddHardLimitDiagnostic(
+                diagnostics,
+                "AGGREGATE_PROMPT_TOKENS_EXCEEDED",
+                "Aggregate Profile prompt token upper bound exceeds the limit.",
+                "skill_bindings");
+        }
+        if (snapshot.CalculateSize() > AgentProfileValidationLimits.PublishedSnapshotMaxSerializedBytes)
+        {
+            AddHardLimitDiagnostic(
+                diagnostics,
+                "PUBLISHED_SNAPSHOT_TOO_LARGE",
+                "Published Profile snapshot serialized size exceeds the limit.",
+                "snapshot");
+        }
+
+        return diagnostics;
+    }
+
     private static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateUserOwner(
         AgentProfileUserOwnerIdentity? owner)
     {
@@ -583,6 +653,45 @@ public static class AgentProfilePolicies
 
     private static string NormalizeBindingIdentity(string bindingId) =>
         bindingId.Normalize(NormalizationForm.FormC);
+
+    private static IEnumerable<(string Path, string Content)> EnumerateTextAssets(
+        ResolvedOrnnSkillPackage package)
+    {
+        foreach (var workflow in package.Workflows)
+        {
+            for (var index = 0; index < workflow.WorkflowYamls.Count; index++)
+                yield return ($"workflows.{workflow.WorkflowId}[{index}]", workflow.WorkflowYamls[index]);
+        }
+
+        foreach (var script in package.Scripts)
+        {
+            foreach (var source in script.SourceFiles)
+                yield return ($"scripts.{script.ScriptId}.{source.Path}", source.Content);
+            foreach (var proto in script.ProtoFiles)
+                yield return ($"scripts.{script.ScriptId}.{proto.Path}", proto.Content);
+        }
+
+        foreach (var reference in package.References)
+            yield return ($"references.{reference.Path}", reference.Content);
+        foreach (var asset in package.Assets)
+            yield return ($"assets.{asset.Path}", asset.Content);
+    }
+
+    private static long PromptByteCount(ResolvedOrnnSkillPackage package) =>
+        Encoding.UTF8.GetByteCount(package.Description ?? string.Empty) +
+        Encoding.UTF8.GetByteCount(package.Instructions ?? string.Empty) +
+        Encoding.UTF8.GetByteCount(package.Arguments ?? string.Empty) +
+        Encoding.UTF8.GetByteCount(package.WhenToUse ?? string.Empty);
+
+    private static void AddHardLimitDiagnostic(
+        ICollection<AgentProfileSafeDiagnostic> diagnostics,
+        string code,
+        string message,
+        string path)
+    {
+        if (diagnostics.Count < AgentProfileValidationLimits.DiagnosticMaxCount)
+            diagnostics.Add(Diagnostic(code, message, path));
+    }
 
     private static void ValidateAuthoredText(
         ICollection<AgentProfileSafeDiagnostic> diagnostics,

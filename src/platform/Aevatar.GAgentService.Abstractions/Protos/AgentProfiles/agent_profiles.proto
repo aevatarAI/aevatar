@@ -275,6 +275,16 @@ message AgentProfileInitializedEvent {
   int64 draft_revision = 4;
   bytes draft_sha256 = 5;
   string namespace_actor_id = 6;
+  string profile_actor_id = 7;
+}
+
+message AgentProfileInitializationRejectedEvent {
+  AgentProfileOperationFact operation = 1;
+  AgentProfileIdentity identity = 2;
+  string namespace_actor_id = 3;
+  string profile_actor_id = 4;
+  AgentProfileSafeDiagnostic diagnostic = 5;
+  bytes rejected_content_sha256 = 6;
 }
 
 message AgentProfileDraftUpdatedEvent {
