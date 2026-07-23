@@ -192,40 +192,40 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> List(
         [FromServices] IScheduledDispatchApplicationService schedules,
-        string? scopeId,
-        string? teamId = null,
+        string? scopeId = null,
         string? memberId = null,
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(scopeId))
-            return Results.BadRequest(new { error = "scopeId is required." });
+        var query = string.IsNullOrWhiteSpace(scopeId)
+            ? new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount)
+            : new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount,
+                TeamAutomationScopeId: scopeId,
+                TeamAutomationMemberId: memberId);
 
-        return Results.Ok(await schedules.ListAsync(new ScheduledDispatchListQuery(
-            Take: take,
-            Cursor: cursor,
-            IncludeTotalCount: includeTotalCount,
-            TeamAutomationScopeId: scopeId,
-            TeamAutomationTeamId: teamId,
-            TeamAutomationMemberId: memberId), ct));
+        return Results.Ok(await schedules.ListAsync(query, ct));
     }
 
     internal static async Task<IResult> Get(
         string scheduleId,
         [FromServices] IScheduledDispatchApplicationService schedules,
-        string? scopeId,
-        string? teamId = null,
+        string? scopeId = null,
         string? memberId = null,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(scopeId))
-            return Results.BadRequest(new { error = "scopeId is required." });
-
         try
         {
-            var schedule = await schedules.GetTeamScheduleAsync(scheduleId, scopeId, teamId, memberId, ct);
+            var schedule = string.IsNullOrWhiteSpace(scopeId)
+                ? await schedules.GetAsync(scheduleId, ct)
+                : await schedules.GetTeamScheduleAsync(scheduleId, scopeId, memberId, ct);
             return schedule == null ? Results.NotFound() : Results.Ok(schedule);
         }
         catch (ArgumentException ex)

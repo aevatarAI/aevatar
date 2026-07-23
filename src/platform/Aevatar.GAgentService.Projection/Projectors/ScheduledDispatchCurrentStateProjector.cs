@@ -96,7 +96,6 @@ public sealed class ScheduledDispatchCurrentStateProjector
                     ScopeId = state.TeamAutomationOwner.ScopeId ?? string.Empty,
                     MemberId = state.TeamAutomationOwner.MemberId ?? string.Empty,
                 },
-            TeamId = state.TeamAutomationOwner?.CurrentTeamId ?? string.Empty,
             TeamAutomationLifecycleStatus = ToProjectionLifecycleStatus(
                 state.TeamAutomationLifecycleStatus),
             TeamAutomationOperationId = state.TeamAutomationOperationId ?? string.Empty,

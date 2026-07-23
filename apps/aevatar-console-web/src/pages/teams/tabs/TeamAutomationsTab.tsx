@@ -750,6 +750,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     queryFn: () =>
       scheduledDispatchApi.listAll({
         includeTotalCount: true,
+        scopeId,
         take: scheduleListTake,
       }),
     queryKey: scheduleQueryKey,

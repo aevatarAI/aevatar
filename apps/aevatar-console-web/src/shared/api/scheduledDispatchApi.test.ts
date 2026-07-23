@@ -165,6 +165,31 @@ describe("scheduledDispatchApi", () => {
     );
   });
 
+  it("passes scoped schedule list query parameters", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [],
+        nextCursor: null,
+        totalCount: 0,
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.list({
+      includeTotalCount: true,
+      memberId: "member-alpha",
+      scopeId: "scope-alpha",
+      take: 25,
+    });
+
+    const [input] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+    expect(input).toBe(
+      "/api/schedules?includeTotalCount=true&memberId=member-alpha&scopeId=scope-alpha&take=25",
+    );
+  });
+
   it("lists every schedule page when requested", async () => {
     const fetchMock = jest
       .fn()
@@ -191,6 +216,8 @@ describe("scheduledDispatchApi", () => {
     await expect(
       scheduledDispatchApi.listAll({
         includeTotalCount: true,
+        memberId: "member-alpha",
+        scopeId: "scope-alpha",
         take: 200,
       }),
     ).resolves.toEqual({
@@ -203,8 +230,8 @@ describe("scheduledDispatchApi", () => {
     });
 
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
-      "/api/schedules?includeTotalCount=true&take=200",
-      "/api/schedules?cursor=cursor-2&includeTotalCount=true&take=200",
+      "/api/schedules?includeTotalCount=true&memberId=member-alpha&scopeId=scope-alpha&take=200",
+      "/api/schedules?cursor=cursor-2&includeTotalCount=true&memberId=member-alpha&scopeId=scope-alpha&take=200",
     ]);
   });
 
