@@ -958,9 +958,10 @@ public sealed class ProvisionWorkflowScheduleToolTests
         schedulePort.LastRequest.ConfirmedPolicyVersion.Should()
             .Be(RecordingMemberWorkflowSchedulePort.PolicyVersion);
         schedulePort.PreflightRequests.Should().ContainSingle();
-        schedulePort.PreflightRequests[0].ConfirmedPolicyVersion.Should().BeNull();
-        schedulePort.PreflightRequests[0].OperationId.Should().Be(schedulePort.LastRequest.OperationId);
-        schedulePort.PreflightRequests[0].IdempotencyKey.Should().Be(schedulePort.LastRequest.IdempotencyKey);
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.WritePreflightRequests[0].ConfirmedPolicyVersion.Should().BeNull();
+        schedulePort.WritePreflightRequests[0].OperationId.Should().Be(schedulePort.LastRequest.OperationId);
+        schedulePort.WritePreflightRequests[0].IdempotencyKey.Should().Be(schedulePort.LastRequest.IdempotencyKey);
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
@@ -1267,6 +1268,58 @@ public sealed class ProvisionWorkflowScheduleToolTests
         ErrorCode(output).Should().Be(nameof(ScheduledInvocationAuthorizationFailureCode.SnapshotStale));
         ErrorMessage(output).Should().Be("nyxid_catalog_snapshot_stale");
         schedulePort.CreateCallCount.Should().Be(0);
+    }
+
+    [Theory]
+    [MemberData(nameof(ScheduleMemberWorkflowWritePreflightExceptionCases))]
+    public async Task ScheduleMemberWorkflow_WhenWritePreflightThrowsKnownAuthorizationRefreshException_ShouldReturnStableError(
+        Exception exception,
+        string expectedCode,
+        string expectedMessage)
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            WritePreflightException = exception,
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be(expectedCode);
+        ErrorMessage(output).Should().Be(expectedMessage);
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ScheduleMemberWorkflow_WhenCreateThrowsKnownAuthorizationRefreshException_ShouldReturnStableError()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort
+        {
+            CreateException = new StudioMemberAutomationCatalogRefreshUnavailableException(),
+        };
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(scopeId: "scope-current", ownerSubject: "owner-1", accessToken: "access-token-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().Be("authorization_catalog_refresh_unavailable");
+        ErrorMessage(output).Should().Be("The authorization catalog could not be refreshed. Retry this request.");
+        schedulePort.WritePreflightRequests.Should().ContainSingle();
+        schedulePort.CreateCallCount.Should().Be(1);
     }
 
     [Fact]
@@ -1731,6 +1784,32 @@ public sealed class ProvisionWorkflowScheduleToolTests
         });
     }
 
+    public static TheoryData<Exception, string, string> ScheduleMemberWorkflowWritePreflightExceptionCases() => new()
+    {
+        {
+            new StudioMemberAutomationProjectionPendingException(23),
+            "authorization_catalog_projection_pending",
+            "The refreshed authorization catalog is still being projected. Retry this request."
+        },
+        {
+            new StudioMemberAutomationCatalogRefreshUnavailableException(),
+            "authorization_catalog_refresh_unavailable",
+            "The authorization catalog could not be refreshed. Retry this request."
+        },
+        {
+            new StudioMemberAutomationCatalogRefreshSupersededException(),
+            "authorization_catalog_refresh_superseded",
+            "A newer authorization catalog refresh superseded this request. Retry this request."
+        },
+        {
+            new StudioMemberAutomationPlanConflictException(
+                "authorization_plan_changed",
+                "private authorization planner detail"),
+            "authorization_plan_changed",
+            "The authorization plan changed. Run schedule preflight again before retrying."
+        },
+    };
+
     private static string? ErrorCode(string output)
     {
         using var document = JsonDocument.Parse(output);
@@ -2092,10 +2171,13 @@ public sealed class ProvisionWorkflowScheduleToolTests
         public const string PolicyVersion = "credential-policy-alpha";
 
         public List<StudioMemberWorkflowScheduleRequest> PreflightRequests { get; } = [];
+        public List<StudioMemberWorkflowScheduleRequest> WritePreflightRequests { get; } = [];
         public List<StudioMemberWorkflowScheduleRequest> CreateRequests { get; } = [];
         public StudioMemberWorkflowScheduleRequest? LastRequest =>
-            CreateRequests.LastOrDefault() ?? PreflightRequests.LastOrDefault();
+            CreateRequests.LastOrDefault() ?? WritePreflightRequests.LastOrDefault() ?? PreflightRequests.LastOrDefault();
         public int CreateCallCount { get; private set; }
+        public Exception? WritePreflightException { get; init; }
+        public Exception? CreateException { get; init; }
         public StudioMemberWorkflowAuthorizationResult PreflightResult { get; init; } =
             new(
                 true,
@@ -2115,6 +2197,18 @@ public sealed class ProvisionWorkflowScheduleToolTests
             CancellationToken ct = default)
         {
             PreflightRequests.Add(request);
+            return Task.FromResult(PreflightResult);
+        }
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default)
+        {
+            WritePreflightRequests.Add(request);
+            PreflightRequests.Add(request);
+            if (WritePreflightException is not null)
+                return Task.FromException<StudioMemberWorkflowAuthorizationResult>(WritePreflightException);
+
             return Task.FromResult(PreflightResult);
         }
 
@@ -2178,6 +2272,9 @@ public sealed class ProvisionWorkflowScheduleToolTests
             string confirmedPermissionDigest)
         {
             CreateCallCount++;
+            if (CreateException is not null)
+                return Task.FromException<StudioMemberWorkflowScheduleResult>(CreateException);
+
             if (!string.Equals(confirmedPermissionDigest, PermissionDigest, StringComparison.Ordinal))
                 throw new InvalidOperationException("authorization_plan_changed");
             if (string.IsNullOrWhiteSpace(request.OperationId))

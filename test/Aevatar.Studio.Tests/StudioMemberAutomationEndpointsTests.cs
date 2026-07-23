@@ -693,6 +693,11 @@ public sealed class StudioMemberAutomationEndpointsTests
                 "not_configured"));
         }
 
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default) =>
+            PreflightAsync(request, ct);
+
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,
             string confirmedPermissionDigest,
