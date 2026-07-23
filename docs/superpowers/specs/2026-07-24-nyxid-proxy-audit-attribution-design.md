@@ -55,10 +55,10 @@ headers, arguments, response bodies, and credential material remain excluded.
 
 ## Receipt Flow
 
-For `NyxIdProxyTool`, the provider parses `service_id` from the structured tool
-arguments. For `ConnectedServiceProxyTool`, it uses the exact service id bound
-when the typed tool was discovered. Both call the shared
-`NyxIdProxyReceiptFactory`.
+The current `origin/feature/integrate` implementation has one live proxy
+surface, `NyxIdProxyTool`. It parses `service_id` from the structured tool
+arguments and calls `NyxIdProxyReceiptFactory`. The connected-service proxy
+layer was deleted upstream and this fix does not restore it.
 
 The factory performs the following mapping:
 
@@ -115,7 +115,6 @@ Regression tests will prove:
 - a successful `nyxid_proxy` result creates a success receipt targeting the
   exact UserService;
 - a 502 result creates an error receipt targeting the same exact UserService;
-- a connected-service proxy success uses its bound exact UserService identity;
 - authorization-required receipts also retain the exact UserService target;
 - the audit factory preserves `NYXID_PROXY_HTTP_502`,
   `NYXID_PROXY_UNAUTHORIZED`, and `NYXID_PROXY_FORBIDDEN`;
