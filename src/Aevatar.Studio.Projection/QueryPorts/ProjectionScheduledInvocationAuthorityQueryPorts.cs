@@ -112,12 +112,12 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
         long stateVersion,
         UserLlmSelection selection)
     {
-        var route = selection.RouteValue?.Trim() ?? string.Empty;
-        var serviceId = selection.NyxIdUserServiceId?.Trim() ?? string.Empty;
-        var serviceSlug = selection.ServiceSlugSnapshot?.Trim() ?? string.Empty;
+        var route = selection.RouteValue ?? string.Empty;
+        var serviceId = selection.NyxIdUserServiceId ?? string.Empty;
+        var serviceSlug = selection.ServiceSlugSnapshot ?? string.Empty;
 
         if (selection.RouteKind == UserLlmRouteKind.Gateway &&
-            string.Equals(route.TrimEnd('/'), NyxIdGatewayRoute, StringComparison.Ordinal) &&
+            string.Equals(route, NyxIdGatewayRoute, StringComparison.Ordinal) &&
             serviceId.Length == 0 &&
             serviceSlug.Length == 0)
         {
@@ -125,7 +125,9 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
         }
 
         if (selection.RouteKind == UserLlmRouteKind.NyxIdUserService &&
-            serviceId.Length > 0 &&
+            IsCanonicalNonEmpty(route) &&
+            IsCanonicalNonEmpty(serviceId) &&
+            IsCanonicalNonEmpty(serviceSlug) &&
             IsExactProxyRoute(route, serviceSlug))
         {
             return new ScheduledInvocationOwnerLLMEvidence(
@@ -156,6 +158,9 @@ public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
         long stateVersion,
         AuthorizationGrantRequirement requirement) =>
         new(stateVersion, string.Empty, string.Empty, requirement);
+
+    private static bool IsCanonicalNonEmpty(string value) =>
+        value.Length > 0 && string.Equals(value, value.Trim(), StringComparison.Ordinal);
 
     private static bool IsExactProxyRoute(string route, string serviceSlug) =>
         serviceSlug.Length > 0 &&
