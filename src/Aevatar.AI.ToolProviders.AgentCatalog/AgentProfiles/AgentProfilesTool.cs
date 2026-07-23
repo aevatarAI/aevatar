@@ -282,7 +282,11 @@ public sealed class AgentProfilesTool : IAgentTool
         {
             var senderSubjectId = Normalize(context?.SenderBinding.NyxUserId);
             var senderScopeId = Normalize(context?.Caller.OwnerScopeId);
-            if (bindingId is null || senderSubjectId is null || senderScopeId is null)
+            var senderAccessToken = Normalize(context?.Credentials.SenderNyxIdAccessToken);
+            if (bindingId is null ||
+                senderSubjectId is null ||
+                senderScopeId is null ||
+                senderAccessToken is null)
                 throw new AgentProfilesToolInputException("agent_profile_sender_authority_required");
 
             return new AgentProfileCallerContext(
@@ -293,7 +297,7 @@ public sealed class AgentProfilesTool : IAgentTool
                 },
                 senderScopeId,
                 Username: null,
-                NyxIdAccessToken: Normalize(context?.Credentials.SenderNyxIdAccessToken));
+                NyxIdAccessToken: senderAccessToken);
         }
 
         var scopeId = Normalize(context?.Caller.ScopeId);

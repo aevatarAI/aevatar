@@ -270,6 +270,38 @@ public sealed class AgentProfilesToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_channel_sender_without_sender_token_fails_closed_before_get()
+    {
+        var tool = CreateTool(out var commands, out var queries);
+        using var context = UseContext(CreateChannelContext(senderAccessToken: null));
+
+        var result = await tool.ExecuteAsync(
+            """{ "action": "get", "profile_slug": "profile-zulu" }""");
+
+        Error(result).Should().Be("agent_profile_sender_authority_required");
+        result.Should().NotContain("bot-token-secret-43");
+        result.Should().NotContain("secret");
+        AssertNoApplicationCalls(commands, queries);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_binding_only_without_sender_token_fails_closed_before_get()
+    {
+        var tool = CreateTool(out var commands, out var queries);
+        using var context = UseContext(CreateChannelContext(
+            channelSenderId: null,
+            senderAccessToken: null));
+
+        var result = await tool.ExecuteAsync(
+            """{ "action": "get", "profile_slug": "profile-zulu" }""");
+
+        Error(result).Should().Be("agent_profile_sender_authority_required");
+        result.Should().NotContain("bot-token-secret-43");
+        result.Should().NotContain("secret");
+        AssertNoApplicationCalls(commands, queries);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_unbound_channel_get_fails_closed_without_reading_owner_profile()
     {
         var tool = CreateTool(out var commands, out var queries);
@@ -773,7 +805,8 @@ public sealed class AgentProfilesToolTests
         string? bindingId = "binding-sender-73",
         string? senderNyxUserId = "sender-nyx-user-67",
         string? senderOwnerScopeId = "scope-sender-owner-61",
-        string? channelSenderId = "platform-sender-83") =>
+        string? channelSenderId = "platform-sender-83",
+        string? senderAccessToken = "sender-token-secret-71") =>
         CreateContext(
             scopeId: "scope-bot-registration-53",
             subjectId: "bot-owner-subject-59",
@@ -782,7 +815,7 @@ public sealed class AgentProfilesToolTests
             Credentials = new AgentToolCredentials(
                 "bot-token-secret-43",
                 "bot-token-secret-43",
-                "sender-token-secret-71"),
+                senderAccessToken),
             Caller = new AgentToolCallerContext(
                 "scope-bot-registration-53",
                 "bot-owner-subject-59",
