@@ -10,9 +10,8 @@ public sealed partial class WorkOrderGAgent
         StateTransitionMatcher
             .Match(current, evt)
             .On<WorkOrderCreatedEvent>(ApplyCreated)
-            .On<WorkOrderPlannedEvent>(ApplyPlanned)
+            .On<WorkOrderReadyEvent>(ApplyReady)
             .On<WorkOrderReassignedEvent>(ApplyReassigned)
-            .On<WorkOrderApprovalDecidedEvent>(ApplyApprovalDecided)
             .On<WorkOrderDispatchRequestedEvent>(ApplyDispatchRequested)
             .On<WorkOrderExecutionRetryScheduledEvent>(ApplyExecutionRetryScheduled)
             .On<WorkOrderRunAcceptedEvent>(ApplyRunAccepted)
@@ -20,8 +19,8 @@ public sealed partial class WorkOrderGAgent
             .On<WorkOrderDispatchFailedEvent>(ApplyDispatchFailed)
             .On<WorkOrderCancelledEvent>(ApplyCancelled)
             .On<WorkOrderTimedOutEvent>(ApplyTimedOut)
-            .On<WorkOrderTerminalEvidenceRecordedEvent>(ApplyTerminalEvidence)
-            .On<WorkOrderLateTerminalEvidenceRecordedEvent>(ApplyLateTerminalEvidence)
+            .On<WorkOrderRunOutcomeObservedEvent>(ApplyRunOutcome)
+            .On<WorkOrderLateRunOutcomeObservedEvent>(ApplyLateRunOutcome)
             .OrCurrent();
 
     private static WorkOrderState ApplyCreated(WorkOrderState _, WorkOrderCreatedEvent evt)
@@ -43,7 +42,6 @@ public sealed partial class WorkOrderGAgent
             EndpointId = request.EndpointId,
             Intent = request.Intent,
             Input = request.Input?.Clone(),
-            PermissionPlan = request.PermissionPlan?.Clone(),
             LifecycleStatus = WorkOrderLifecycleStatus.Accepted,
             LifecycleVersion = 1,
             CreatedAtUtc = createdAt.Clone(),
@@ -53,12 +51,11 @@ public sealed partial class WorkOrderGAgent
         };
     }
 
-    private static WorkOrderState ApplyPlanned(WorkOrderState current, WorkOrderPlannedEvent evt)
+    private static WorkOrderState ApplyReady(WorkOrderState current, WorkOrderReadyEvent evt)
     {
         var next = current.Clone();
-        next.LifecycleStatus = evt.LifecycleStatus;
-        next.Approval = evt.Approval?.Clone();
-        Advance(next, current, evt.PlannedAtUtc);
+        next.LifecycleStatus = WorkOrderLifecycleStatus.Ready;
+        Advance(next, current, evt.ReadyAtUtc);
         return next;
     }
 
@@ -74,34 +71,12 @@ public sealed partial class WorkOrderGAgent
         return next;
     }
 
-    private static WorkOrderState ApplyApprovalDecided(WorkOrderState current, WorkOrderApprovalDecidedEvent evt)
-    {
-        var next = current.Clone();
-        next.Approval ??= new WorkOrderApprovalState();
-        next.Approval.Status = evt.ApprovalStatus;
-        next.Approval.DecisionId = evt.DecisionId;
-        next.Approval.DecidedBy = evt.DecidedBy?.Clone();
-        next.Approval.Reason = evt.Reason;
-        next.Approval.DecidedAtUtc = evt.DecidedAtUtc?.Clone();
-        next.LifecycleStatus = evt.ApprovalStatus == WorkOrderApprovalStatus.Approved
-            ? WorkOrderLifecycleStatus.Ready
-            : WorkOrderLifecycleStatus.Denied;
-        if (next.LifecycleStatus == WorkOrderLifecycleStatus.Denied)
-        {
-            next.TerminalReason = evt.Reason;
-            ClearExecutionRetry(next);
-        }
-        Advance(next, current, evt.DecidedAtUtc);
-        return next;
-    }
-
     private static WorkOrderState ApplyDispatchRequested(WorkOrderState current, WorkOrderDispatchRequestedEvent evt)
     {
         var next = current.Clone();
         next.DispatchCommandId = evt.DispatchCommandId;
         next.RequestedRunId = evt.RequestedRunId;
         next.TerminalDeliveryId = evt.TerminalDeliveryId;
-        next.Execution ??= new WorkOrderExecutionProvenance();
         next.LifecycleStatus = WorkOrderLifecycleStatus.DispatchPending;
         Advance(next, current, evt.RequestedAtUtc);
         return next;
@@ -131,7 +106,7 @@ public sealed partial class WorkOrderGAgent
     {
         var next = current.Clone();
         var accepted = evt.Accepted ?? new WorkOrderExecutionAccepted();
-        next.Execution = new WorkOrderExecutionProvenance
+        next.Run = new WorkOrderRunLink
         {
             RunId = accepted.RunId,
             RunActorId = accepted.RunActorId,
@@ -149,8 +124,6 @@ public sealed partial class WorkOrderGAgent
     private static WorkOrderState ApplyRunStarted(WorkOrderState current, WorkOrderRunStartedEvent evt)
     {
         var next = current.Clone();
-        next.Execution ??= new WorkOrderExecutionProvenance();
-        next.Execution.StartedAtUtc = evt.StartedAtUtc?.Clone();
         if (current.LifecycleStatus == WorkOrderLifecycleStatus.DispatchPending)
             next.LifecycleStatus = WorkOrderLifecycleStatus.Running;
         Advance(next, current, evt.StartedAtUtc);
@@ -188,36 +161,26 @@ public sealed partial class WorkOrderGAgent
         return next;
     }
 
-    private static WorkOrderState ApplyTerminalEvidence(
+    private static WorkOrderState ApplyRunOutcome(
         WorkOrderState current,
-        WorkOrderTerminalEvidenceRecordedEvent evt)
+        WorkOrderRunOutcomeObservedEvent evt)
     {
         var next = current.Clone();
         next.LifecycleStatus = evt.LifecycleStatus;
-        next.TerminalEvidence = evt.Evidence?.Clone();
+        next.RunOutcome = evt.Outcome?.Clone();
         ClearExecutionRetry(next);
-        if (evt.LifecycleStatus == WorkOrderLifecycleStatus.Failed)
-        {
-            next.Failure = new WorkOrderFailureReference
-            {
-                Code = "WORK_ORDER_RUN_FAILED",
-                Message = evt.Evidence?.Error ?? string.Empty,
-                Source = "run",
-                ReferenceId = evt.Evidence?.RunId ?? string.Empty,
-            };
-        }
-        Advance(next, current, evt.Evidence?.TerminalAtUtc);
+        Advance(next, current, evt.Outcome?.TerminalAtUtc);
         return next;
     }
 
-    private static WorkOrderState ApplyLateTerminalEvidence(
+    private static WorkOrderState ApplyLateRunOutcome(
         WorkOrderState current,
-        WorkOrderLateTerminalEvidenceRecordedEvent evt)
+        WorkOrderLateRunOutcomeObservedEvent evt)
     {
         var next = current.Clone();
-        next.LateTerminalEvidence = evt.Evidence?.Clone();
+        next.LateRunOutcome = evt.Outcome?.Clone();
         ClearExecutionRetry(next);
-        Advance(next, current, evt.Evidence?.TerminalAtUtc);
+        Advance(next, current, evt.Outcome?.TerminalAtUtc);
         return next;
     }
 

@@ -18,9 +18,6 @@ public static class WorkOrderConventions
     public static string BuildActorId(string scopeId, string workOrderId) =>
         $"{ActorIdPrefix}:{NormalizeScopeId(scopeId)}:{NormalizeWorkOrderId(workOrderId)}";
 
-    public static string BuildApprovalId(string workOrderId) =>
-        $"approval-{NormalizeWorkOrderId(workOrderId)}";
-
     public static string BuildDispatchCommandId(string workOrderId) =>
         $"work-order-dispatch-{NormalizeWorkOrderId(workOrderId)}";
 

@@ -93,11 +93,12 @@ public sealed class ValidatedWorkOrderExecutionPort : IWorkOrderExecutionPort
     {
         if (request.Input?.Chat == null)
             throw new InvalidOperationException("WorkOrder chat input is required for dispatch.");
-        if (request.DeadlineAtUtc == null ||
+        if (request.DeadlineAtUtc != null &&
             request.DeadlineAtUtc.ToDateTimeOffset().ToUnixTimeMilliseconds() <= 0)
             throw new InvalidOperationException("WorkOrder execution requires a positive deadline_at_utc.");
 
-        var expiresAtUnixMs = request.DeadlineAtUtc.ToDateTimeOffset().ToUnixTimeMilliseconds();
+        var expiresAtUnixMs = request.DeadlineAtUtc?.ToDateTimeOffset().ToUnixTimeMilliseconds()
+                              ?? long.MaxValue;
 
         var invocationRequest = new ServiceInvocationRequest
         {
