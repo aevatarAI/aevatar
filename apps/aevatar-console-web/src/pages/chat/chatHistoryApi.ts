@@ -1,6 +1,7 @@
 import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { authFetch } from "@/shared/auth/fetch";
 import type {
+  ChatConversationDetail,
   ChatCreateRecovery,
   ChatHistoryIndex,
   ConversationMeta,
@@ -191,27 +192,51 @@ export function decodeChatHistoryIndex(value: unknown): ChatHistoryIndex {
 
 export function decodeChatCreateRecovery(value: unknown): ChatCreateRecovery {
   const record = asRecord(value, "$recovery");
-  const sourceVersion = readNumber(record, "sourceVersion", "$recovery");
-  if (!Number.isInteger(sourceVersion) || sourceVersion < 0) {
-    return failContract("$recovery.sourceVersion", "a non-negative integer");
+  const stateVersion = readNumber(record, "stateVersion", "$recovery");
+  if (!Number.isInteger(stateVersion) || stateVersion < 0) {
+    return failContract("$recovery.stateVersion", "a non-negative integer");
   }
 
   return {
     conversationId: readString(record, "conversationId", "$recovery"),
-    sourceVersion,
+    stateVersion,
     status: readString(record, "status", "$recovery"),
     turnId: readString(record, "turnId", "$recovery"),
   };
 }
 
-export function decodeStoredChatMessages(value: unknown): StoredChatMessage[] {
+function decodeStoredChatMessagesAtPath(
+  value: unknown,
+  path: string
+): StoredChatMessage[] {
   if (!Array.isArray(value)) {
-    return failContract("$messages", "an array");
+    return failContract(path, "an array");
   }
 
   return value.map((message, index) =>
-    decodeStoredChatMessage(message, `$messages[${index}]`)
+    decodeStoredChatMessage(message, `${path}[${index}]`)
   );
+}
+
+export function decodeChatConversationDetail(
+  value: unknown
+): ChatConversationDetail {
+  const record = asRecord(value, "$conversation");
+  const stateVersion = readNumber(record, "stateVersion", "$conversation");
+  if (!Number.isSafeInteger(stateVersion) || stateVersion < 0) {
+    return failContract(
+      "$conversation.stateVersion",
+      "a non-negative safe integer"
+    );
+  }
+
+  return {
+    messages: decodeStoredChatMessagesAtPath(
+      record.messages,
+      "$conversation.messages"
+    ),
+    stateVersion,
+  };
 }
 
 function encodeSegment(value: string): string {
@@ -230,10 +255,10 @@ function buildConversationPath(scopeId: string, conversationId: string): string 
 
 function buildCreateRecoveryPath(
   scopeId: string,
-  createIdempotencyKey: string
+  commandId: string
 ): string {
-  return `${buildHistoryPath(scopeId)}/create-recoveries/${encodeSegment(
-    createIdempotencyKey
+  return `${buildHistoryPath(scopeId)}/create-recovery/${encodeSegment(
+    commandId
   )}`;
 }
 
@@ -249,11 +274,13 @@ async function createApiError(response: Response): Promise<ChatHistoryApiError> 
 
 async function requestJson<T>(
   path: string,
-  decoder: (value: unknown) => T
+  decoder: (value: unknown) => T,
+  signal?: AbortSignal
 ): Promise<T> {
   const response = await authFetch(path, {
     headers: JSON_HEADERS,
     method: "GET",
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok) {
     throw await createApiError(response);
@@ -270,14 +297,18 @@ async function requestJson<T>(
 }
 
 export const chatHistoryApi = {
-  async listConversationMetas(scopeId: string): Promise<ConversationMeta[]> {
+  async listConversationMetas(
+    scopeId: string,
+    signal?: AbortSignal
+  ): Promise<ConversationMeta[]> {
     const conversations: ConversationMeta[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
       const index = await requestJson(
         buildIndexPagePath(scopeId, cursor),
-        decodeChatHistoryIndex
+        decodeChatHistoryIndex,
+        signal
       );
       conversations.push(...index.conversations);
       const nextCursor = index.nextCursor?.trim() || undefined;
@@ -297,21 +328,25 @@ export const chatHistoryApi = {
 
   async recoverCreate(
     scopeId: string,
-    createIdempotencyKey: string
+    commandId: string,
+    signal?: AbortSignal
   ): Promise<ChatCreateRecovery> {
     return requestJson(
-      buildCreateRecoveryPath(scopeId, createIdempotencyKey),
-      decodeChatCreateRecovery
+      buildCreateRecoveryPath(scopeId, commandId),
+      decodeChatCreateRecovery,
+      signal
     );
   },
 
   async loadConversation(
     scopeId: string,
-    conversationId: string
-  ): Promise<StoredChatMessage[]> {
+    conversationId: string,
+    signal?: AbortSignal
+  ): Promise<ChatConversationDetail> {
     return requestJson(
       buildConversationPath(scopeId, conversationId),
-      decodeStoredChatMessages
+      decodeChatConversationDetail,
+      signal
     );
   },
 

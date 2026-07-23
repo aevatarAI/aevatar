@@ -680,6 +680,7 @@ const projectMessages = {
   "pages.chat.chatpresentation.manual": "手动的",
   "pages.chat.chatpresentation.message.count.many": "{count} 条消息",
   "pages.chat.chatpresentation.message.count.one": "{count} 条消息",
+  "pages.chat.chatpresentation.message.table": "消息表格",
   "pages.chat.chatpresentation.model": "模型",
   "pages.chat.chatpresentation.msg": "msg",
   "pages.chat.chatpresentation.new.chat": "新聊天",
