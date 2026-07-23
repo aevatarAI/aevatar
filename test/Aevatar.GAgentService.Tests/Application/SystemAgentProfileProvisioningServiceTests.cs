@@ -67,6 +67,32 @@ public sealed class SystemAgentProfileProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_WhenDistinctKeysShareCanonicalReference_ShouldRejectBeforeWork()
+    {
+        var namespaceQuery = new RecordingNamespaceQueryPort();
+        var actorPort = new RecordingActorPort();
+        var resolver = new RecordingResolver();
+        var service = new SystemAgentProfileProvisioningService(
+            [
+                new MutableDefinitionSource(Content(), "system/assistant-alpha"),
+                new MutableDefinitionSource(Content(), "system/assistant-beta"),
+            ],
+            namespaceQuery,
+            new RecordingManagementQueryPort(),
+            new RecordingExecutionQueryPort(),
+            actorPort,
+            new AgentProfileSkillSealer(resolver, new EmptyToolSetRegistry()),
+            new RecordingTokenProvider());
+
+        var act = () => service.ReconcileAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("System Profile reference 'system/test-assistant' is registered more than once.");
+        namespaceQuery.References.Should().BeEmpty();
+        actorPort.DispatchCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ReconcileAsync_WhenOrdinaryOwnerClaimsSystemReference_ShouldAdmitNoMutation()
     {
         var namespaceQuery = new RecordingNamespaceQueryPort
@@ -505,7 +531,10 @@ public sealed class SystemAgentProfileProvisioningServiceTests
             $"execution-event-{snapshot.PublishedRevision}",
             snapshot);
 
-    private sealed class MutableDefinitionSource(AgentProfileContent content)
+    private sealed class MutableDefinitionSource(
+        AgentProfileContent content,
+        string definitionKey = DefinitionKey,
+        string profileSlug = ProfileSlug)
         : ISystemAgentProfileDefinitionSource
     {
         public int GetDefinitionsCalls { get; private set; }
@@ -518,8 +547,8 @@ public sealed class SystemAgentProfileProvisioningServiceTests
             return
             [
                 new SystemAgentProfileDefinition(
-                    DefinitionKey,
-                    ProfileSlug,
+                    definitionKey,
+                    profileSlug,
                     Content.Clone()),
             ];
         }

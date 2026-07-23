@@ -247,6 +247,21 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
                 $"System Profile definition key '{duplicate.Key}' is registered more than once.");
         }
 
+        var duplicateReference = definitions
+            .GroupBy(
+                static definition =>
+                    $"{AgentProfilePolicies.SystemOwnerHandle}/{definition.ProfileSlug}",
+                StringComparer.Ordinal)
+            .Where(static group => group.Count() > 1)
+            .Select(static group => group.Key)
+            .Order(StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (duplicateReference is not null)
+        {
+            throw new InvalidOperationException(
+                $"System Profile reference '{duplicateReference}' is registered more than once.");
+        }
+
         return definitions;
     }
 

@@ -39,6 +39,27 @@ public sealed class SystemAgentProfileBootstrapTests
     }
 
     [Fact]
+    public async Task Readiness_WhenDistinctKeysShareCanonicalReference_ShouldRejectBeforeQueryingFacts()
+    {
+        var namespaceQuery = new MutableNamespaceQueryPort();
+        var service = new SystemAgentProfileReadinessService(
+            [
+                new MutableDefinitionSource(Content(), "system/assistant-alpha"),
+                new MutableDefinitionSource(Content(), "system/assistant-beta"),
+            ],
+            namespaceQuery,
+            new MutableManagementQueryPort(),
+            new MutableExecutionQueryPort(),
+            new MutableTokenProvider());
+
+        var act = () => service.GetAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("System Profile reference 'system/test-assistant' is registered more than once.");
+        namespaceQuery.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task Readiness_ShouldRereadMaterializedFactsAcrossPendingUnavailableAndReadyStates()
     {
         var desired = Content(withSkill: true);
@@ -146,6 +167,101 @@ public sealed class SystemAgentProfileBootstrapTests
     }
 
     [Fact]
+    public async Task Readiness_WhenExecutionPayloadIsTamperedBehindExpectedDigest_ShouldRemainPending()
+    {
+        var desired = Content();
+        var published = PublishedSnapshot(desired, revision: 4);
+        var tampered = published.Clone();
+        tampered.Instructions = "Tampered after the declared digest was computed.";
+        var service = new SystemAgentProfileReadinessService(
+            [new MutableDefinitionSource(desired)],
+            new MutableNamespaceQueryPort { Result = NamespaceEntry() },
+            new MutableManagementQueryPort
+            {
+                Result = Management(
+                    desired,
+                    publishedRevision: published.PublishedRevision,
+                    publishedSourceDraftSha256: published.SourceDraftSha256,
+                    publishedSnapshotSha256: published.SnapshotSha256),
+            },
+            new MutableExecutionQueryPort { Result = ExecutionSnapshot(tampered) },
+            new MutableTokenProvider());
+
+        var readiness = await service.GetAsync();
+
+        AssertSingle(
+            readiness,
+            SystemAgentProfileReadinessStatus.Pending,
+            SystemAgentProfileReadinessReason.ExecutionSnapshotLagging);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenOptionalProfileIsUnavailable_ShouldPreserveReadyAggregateAndEntryReason()
+    {
+        const string optionalDefinitionKey = "system/optional-assistant";
+        const string optionalProfileId = "prof-system-optional-assistant";
+        const string optionalProfileSlug = "optional-assistant";
+        var requiredContent = Content(displayName: "Required Assistant");
+        var optionalContent = Content(withSkill: true, displayName: "Optional Assistant");
+        var requiredPublished = PublishedSnapshot(requiredContent, revision: 4);
+        var requiredManagement = Management(
+            requiredContent,
+            publishedRevision: requiredPublished.PublishedRevision,
+            publishedSourceDraftSha256: requiredPublished.SourceDraftSha256,
+            publishedSnapshotSha256: requiredPublished.SnapshotSha256);
+        var optionalManagement = Management(
+            optionalContent,
+            profileId: optionalProfileId,
+            profileSlug: optionalProfileSlug);
+        var tokenProvider = new MutableTokenProvider();
+        var service = new SystemAgentProfileReadinessService(
+            [
+                new MutableDefinitionSource(requiredContent),
+                new MutableDefinitionSource(
+                    optionalContent,
+                    optionalDefinitionKey,
+                    optionalProfileSlug,
+                    required: false),
+            ],
+            new MutableNamespaceQueryPort
+            {
+                ResultFactory = reference => reference.ProfileSlug == ProfileSlug
+                    ? NamespaceEntry()
+                    : NamespaceEntry(
+                        profileId: optionalProfileId,
+                        profileSlug: optionalProfileSlug),
+            },
+            new MutableManagementQueryPort
+            {
+                ResultFactory = profileId => profileId == ProfileId
+                    ? requiredManagement
+                    : optionalManagement,
+            },
+            new MutableExecutionQueryPort
+            {
+                ResultFactory = profileId => profileId == ProfileId
+                    ? ExecutionSnapshot(requiredPublished)
+                    : null,
+            },
+            tokenProvider);
+
+        var readiness = await service.GetAsync();
+
+        readiness.IsReady.Should().BeTrue();
+        readiness.Profiles.Should().HaveCount(2);
+        var required = readiness.Profiles.Single(profile => profile.DefinitionKey == DefinitionKey);
+        required.Required.Should().BeTrue();
+        required.Status.Should().Be(SystemAgentProfileReadinessStatus.Ready);
+        required.Reason.Should().Be(SystemAgentProfileReadinessReason.None);
+        var optional = readiness.Profiles.Single(
+            profile => profile.DefinitionKey == optionalDefinitionKey);
+        optional.Required.Should().BeFalse();
+        optional.Status.Should().Be(SystemAgentProfileReadinessStatus.Unavailable);
+        optional.Reason.Should().Be(SystemAgentProfileReadinessReason.OrnnAccessTokenUnavailable);
+        tokenProvider.DefinitionKeys.Should().Equal(optionalDefinitionKey);
+    }
+
+    [Fact]
     public async Task HostedService_ShouldRunStartupPassAndOnePassPerManualSignal()
     {
         var provisioning = new RecordingProvisioningService();
@@ -237,11 +353,11 @@ public sealed class SystemAgentProfileBootstrapTests
         return content;
     }
 
-    private static AgentProfileReference SystemReference() =>
+    private static AgentProfileReference SystemReference(string profileSlug = ProfileSlug) =>
         new()
         {
             OwnerHandle = AgentProfilePolicies.SystemOwnerHandle,
-            ProfileSlug = ProfileSlug,
+            ProfileSlug = profileSlug,
         };
 
     private static AgentProfileOwnerIdentity SystemOwner() =>
@@ -253,23 +369,27 @@ public sealed class SystemAgentProfileBootstrapTests
             },
         };
 
-    private static AgentProfileIdentity SystemIdentity() =>
+    private static AgentProfileIdentity SystemIdentity(
+        string profileId = ProfileId,
+        string profileSlug = ProfileSlug) =>
         new()
         {
-            ProfileId = ProfileId,
+            ProfileId = profileId,
             Owner = SystemOwner(),
             OwningScopeId = string.Empty,
-            Reference = SystemReference(),
+            Reference = SystemReference(profileSlug),
         };
 
     private static AgentProfileNamespaceEntrySnapshot NamespaceEntry(
         AgentProfileOwnerIdentity? owner = null,
-        string owningScopeId = "") =>
+        string owningScopeId = "",
+        string profileId = ProfileId,
+        string profileSlug = ProfileSlug) =>
         new(
             8,
             "namespace-event-8",
-            ProfileId,
-            SystemReference(),
+            profileId,
+            SystemReference(profileSlug),
             owner ?? SystemOwner(),
             owningScopeId,
             AgentProfileProvisioningStatus.Active,
@@ -279,11 +399,13 @@ public sealed class SystemAgentProfileBootstrapTests
         AgentProfileContent content,
         long publishedRevision = 0,
         ByteString? publishedSourceDraftSha256 = null,
-        ByteString? publishedSnapshotSha256 = null) =>
+        ByteString? publishedSnapshotSha256 = null,
+        string profileId = ProfileId,
+        string profileSlug = ProfileSlug) =>
         new(
             11,
             "profile-event-11",
-            SystemIdentity(),
+            SystemIdentity(profileId, profileSlug),
             content,
             1,
             AgentProfileDeterminism.ComputeDraftSha256(content),
@@ -319,9 +441,20 @@ public sealed class SystemAgentProfileBootstrapTests
 
     private sealed class MutableDefinitionSource : ISystemAgentProfileDefinitionSource
     {
-        public MutableDefinitionSource(AgentProfileContent? content = null)
+        private readonly string _definitionKey;
+        private readonly string _profileSlug;
+        private readonly bool _required;
+
+        public MutableDefinitionSource(
+            AgentProfileContent? content = null,
+            string definitionKey = DefinitionKey,
+            string profileSlug = ProfileSlug,
+            bool required = true)
         {
             Content = content?.Clone();
+            _definitionKey = definitionKey;
+            _profileSlug = profileSlug;
+            _required = required;
         }
 
         public AgentProfileContent? Content { get; set; }
@@ -333,13 +466,19 @@ public sealed class SystemAgentProfileBootstrapTests
             GetDefinitionsCalls++;
             return Content is null
                 ? []
-                : [new SystemAgentProfileDefinition(DefinitionKey, ProfileSlug, Content.Clone())];
+                : [new SystemAgentProfileDefinition(
+                    _definitionKey,
+                    _profileSlug,
+                    Content.Clone(),
+                    _required)];
         }
     }
 
     private sealed class MutableNamespaceQueryPort : IAgentProfileNamespaceQueryPort
     {
         public AgentProfileNamespaceEntrySnapshot? Result { get; set; }
+
+        public Func<AgentProfileReference, AgentProfileNamespaceEntrySnapshot?>? ResultFactory { get; init; }
 
         public int Calls { get; private set; }
 
@@ -356,13 +495,16 @@ public sealed class SystemAgentProfileBootstrapTests
         {
             ct.ThrowIfCancellationRequested();
             Calls++;
-            return Task.FromResult(Result?.DeepClone());
+            var result = ResultFactory is null ? Result : ResultFactory(reference);
+            return Task.FromResult(result?.DeepClone());
         }
     }
 
     private sealed class MutableManagementQueryPort : IAgentProfileManagementQueryPort
     {
         public AgentProfileManagementSnapshot? Result { get; set; }
+
+        public Func<string, AgentProfileManagementSnapshot?>? ResultFactory { get; init; }
 
         public int Calls { get; private set; }
 
@@ -372,13 +514,16 @@ public sealed class SystemAgentProfileBootstrapTests
         {
             ct.ThrowIfCancellationRequested();
             Calls++;
-            return Task.FromResult(Result?.DeepClone());
+            var result = ResultFactory is null ? Result : ResultFactory(profileId);
+            return Task.FromResult(result?.DeepClone());
         }
     }
 
     private sealed class MutableExecutionQueryPort : IAgentProfileExecutionSnapshotQueryPort
     {
         public AgentProfileExecutionSnapshot? Result { get; set; }
+
+        public Func<string, AgentProfileExecutionSnapshot?>? ResultFactory { get; init; }
 
         public int Calls { get; private set; }
 
@@ -388,7 +533,8 @@ public sealed class SystemAgentProfileBootstrapTests
         {
             ct.ThrowIfCancellationRequested();
             Calls++;
-            return Task.FromResult(Result?.DeepClone());
+            var result = ResultFactory is null ? Result : ResultFactory(profileId);
+            return Task.FromResult(result?.DeepClone());
         }
     }
 

@@ -211,6 +211,21 @@ public sealed class SystemAgentProfileReadinessService : ISystemAgentProfileRead
                 $"System Profile definition key '{duplicate.Key}' is registered more than once.");
         }
 
+        var duplicateReference = definitions
+            .GroupBy(
+                static definition =>
+                    $"{AgentProfilePolicies.SystemOwnerHandle}/{definition.ProfileSlug}",
+                StringComparer.Ordinal)
+            .Where(static group => group.Count() > 1)
+            .Select(static group => group.Key)
+            .Order(StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (duplicateReference is not null)
+        {
+            throw new InvalidOperationException(
+                $"System Profile reference '{duplicateReference}' is registered more than once.");
+        }
+
         return definitions;
     }
 
@@ -260,22 +275,39 @@ public sealed class SystemAgentProfileReadinessService : ISystemAgentProfileRead
     private static bool ExecutionMatches(
         AgentProfileExecutionSnapshot execution,
         AgentProfileManagementSnapshot management,
-        ByteString desiredDigest) =>
-        HasExpectedIdentity(
-            execution.Snapshot.Identity,
-            new AgentProfileNamespaceEntrySnapshot(
-                0,
-                string.Empty,
-                management.ProfileId,
-                management.Identity.Reference,
-                management.Identity.Owner,
-                management.Identity.OwningScopeId,
-                AgentProfileProvisioningStatus.Active,
-                null),
-            management.Identity.Reference) &&
-        execution.Snapshot.PublishedRevision == management.PublishedRevision &&
-        execution.Snapshot.SourceDraftSha256.Equals(desiredDigest) &&
-        execution.Snapshot.SnapshotSha256.Equals(management.PublishedSnapshotSha256);
+        ByteString desiredDigest)
+    {
+        var snapshot = execution.Snapshot;
+        if (!HasExpectedIdentity(
+                snapshot.Identity,
+                new AgentProfileNamespaceEntrySnapshot(
+                    0,
+                    string.Empty,
+                    management.ProfileId,
+                    management.Identity.Reference,
+                    management.Identity.Owner,
+                    management.Identity.OwningScopeId,
+                    AgentProfileProvisioningStatus.Active,
+                    null),
+                management.Identity.Reference) ||
+            snapshot.PublishedRevision != management.PublishedRevision ||
+            !snapshot.SourceDraftSha256.Equals(desiredDigest) ||
+            !snapshot.SnapshotSha256.Equals(management.PublishedSnapshotSha256))
+        {
+            return false;
+        }
+
+        try
+        {
+            var normalized = AgentProfileDeterminism.NormalizePublishedSnapshot(snapshot);
+            return normalized.SnapshotSha256.Equals(
+                AgentProfileDeterminism.ComputeExecutionSnapshotSha256(normalized));
+        }
+        catch (AgentProfileContractValidationException)
+        {
+            return false;
+        }
+    }
 
     private static AgentProfileReference SystemReference(string profileSlug) =>
         AgentProfileDeterminism.NormalizeReference(new AgentProfileReference
