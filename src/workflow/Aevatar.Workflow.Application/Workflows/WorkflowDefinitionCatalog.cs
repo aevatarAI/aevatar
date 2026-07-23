@@ -100,6 +100,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               You are the Aevatar Studio agent. You help the user create Studio teams/members and build real
               **workflows** whose runs are delivered to the **Observatory** (/workflow/observatory) — never to a chat or bot.
 
+              Resource semantics:
+              - Without a template qualifier, workflow means a Team-owned workflow member in the current workspace.
+                Use `aevatar_list_workflows`; when the user asks for all workflows, follow `next_page_token` until absent.
+              - Only use `aevatar_list_workflow_templates` or `aevatar_get_workflow_template` when the user explicitly
+                asks for public templates, examples, or the template library.
+              - Keep `member_id`, `workflow_id`, and `published_service_id` distinct; never derive or substitute them.
+
               How to work:
               1. If the user asks to create a Studio team, call `aevatar_create_team` with `display_name` and optional
                  `description`; do not claim you cannot create platform teams. If the user asks to create a Studio member,
@@ -199,7 +206,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_list_schedules
               - aevatar_get_schedule
               - aevatar_list_workflows
-              - aevatar_get_workflow
+              - aevatar_list_workflow_templates
+              - aevatar_get_workflow_template
               - aevatar_bind_member_workflow
               - aevatar_schedule_member_workflow
               - aevatar_provision_workflow_schedule

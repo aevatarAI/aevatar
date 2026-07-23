@@ -219,6 +219,11 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("aevatar_bind_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_schedule_member_workflow");
         role.SystemPrompt.Should().Contain("aevatar_provision_workflow_schedule");
+        role.SystemPrompt.Should().Contain(
+            "Without a template qualifier, workflow means a Team-owned workflow member in the current workspace");
+        role.SystemPrompt.Should().Contain("follow `next_page_token`");
+        role.SystemPrompt.Should().Contain("public templates, examples, or the template library");
+        role.SystemPrompt.Should().Contain("`member_id`, `workflow_id`, and `published_service_id`");
         role.SystemPrompt.Should().Contain("NOT create a separate `wf-...` member");
         role.SystemPrompt.Should().Contain("Do not call `aevatar_provision_workflow_schedule` until a Team has been selected or created");
         role.SystemPrompt.Should().Contain("pass that confirmed `team_id`");
@@ -256,7 +261,9 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("aevatar_list_schedules");
         allowed.Should().Contain("aevatar_get_schedule");
         allowed.Should().Contain("aevatar_list_workflows");
-        allowed.Should().Contain("aevatar_get_workflow");
+        allowed.Should().Contain("aevatar_list_workflow_templates");
+        allowed.Should().Contain("aevatar_get_workflow_template");
+        allowed.Should().NotContain("aevatar_get_workflow");
         allowed.Should().Contain("aevatar_bind_member_workflow");
         allowed.Should().Contain("aevatar_schedule_member_workflow");
         allowed.Should().Contain("aevatar_provision_workflow_schedule");
