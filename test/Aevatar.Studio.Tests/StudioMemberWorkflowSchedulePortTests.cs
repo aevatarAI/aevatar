@@ -417,7 +417,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
-                BindingId = "binding-alpha",
+                BindingId = "bnd-owner-alpha",
             });
     }
 
