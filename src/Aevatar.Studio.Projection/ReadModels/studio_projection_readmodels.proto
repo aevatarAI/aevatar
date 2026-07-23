@@ -5,6 +5,102 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
+message WorkOrderArtifactReferenceDocument {
+  string artifact_id = 1;
+  string artifact_kind = 2;
+  string uri = 3;
+  string revision_id = 4;
+}
+
+message WorkOrderExternalActionReferenceDocument {
+  string action_id = 1;
+  string system = 2;
+  string action = 3;
+  string resource_id = 4;
+}
+
+message WorkOrderPermissionRequirementDocument {
+  string permission_id = 1;
+  string action_id = 2;
+  string capability = 3;
+  bool requires_approval = 4;
+}
+
+message WorkOrderTerminalEvidenceDocument {
+  string delivery_id = 1;
+  string run_id = 2;
+  string run_actor_id = 3;
+  string command_id = 4;
+  string outcome = 5;
+  string output = 6;
+  string error = 7;
+  int64 terminal_at_unix_ms = 8;
+  repeated WorkOrderArtifactReferenceDocument result_artifacts = 9;
+  string correlation_id = 10;
+}
+
+// Actor-scoped current-state replica for WorkOrderGAgent. Business lifecycle
+// decisions are copied from the authoritative actor state; projection does
+// not reconstruct or advance the WorkOrder state machine.
+message WorkOrderCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string work_order_id = 20;
+  string dedup_key = 21;
+  string scope_id = 22;
+  string team_id = 23;
+  string requester_principal_id = 24;
+  string requester_principal_kind = 25;
+  string member_id = 26;
+  string published_service_id = 27;
+  string workflow_id = 28;
+  string service_revision_id = 29;
+  string implementation_kind = 30;
+  string endpoint_id = 31;
+  string intent = 32;
+  string lifecycle_status = 33;
+  int64 lifecycle_version = 34;
+  int64 created_at_unix_ms = 35;
+  int64 timeout_at_unix_ms = 36;
+  google.protobuf.Timestamp work_order_updated_at_utc = 37;
+
+  string input_prompt = 40;
+  repeated WorkOrderArtifactReferenceDocument input_artifacts = 41;
+  repeated WorkOrderArtifactReferenceDocument declared_result_artifacts = 42;
+  repeated WorkOrderExternalActionReferenceDocument external_actions = 43;
+  repeated WorkOrderPermissionRequirementDocument permission_requirements = 44;
+  repeated string approver_principal_ids = 45;
+
+  string approval_id = 50;
+  string approval_status = 51;
+  string approval_decision_id = 52;
+  string approval_decided_by_id = 53;
+  string approval_decided_by_kind = 54;
+  string approval_reason = 55;
+  int64 approval_decided_at_unix_ms = 56;
+
+  string run_id = 60;
+  string run_actor_id = 61;
+  string run_command_id = 62;
+  string run_correlation_id = 63;
+  string run_revision_id = 64;
+  string run_deployment_id = 65;
+  int64 run_accepted_at_unix_ms = 66;
+  int64 run_started_at_unix_ms = 67;
+
+  WorkOrderTerminalEvidenceDocument terminal_evidence = 70;
+  WorkOrderTerminalEvidenceDocument late_terminal_evidence = 71;
+  string failure_code = 72;
+  string failure_message = 73;
+  string failure_source = 74;
+  string failure_reference_id = 75;
+  string terminal_reason = 76;
+}
+
 // ─── Workflow Board Execution Materialized View ───
 //
 // Studio owns the workflow board product surface. The authoritative facts

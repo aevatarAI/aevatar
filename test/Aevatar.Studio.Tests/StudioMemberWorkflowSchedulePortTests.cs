@@ -6,6 +6,8 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 
@@ -72,7 +74,10 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             3, 5, 7, 11, 13,
             DateTimeOffset.Parse("2026-07-01T00:00:00Z"),
             DateTimeOffset.Parse("2026-08-01T00:00:00Z"),
-            "catalog-revision-alpha", "catalog-digest-alpha"));
+            "catalog-digest-alpha",
+            "scope-plan-contract/v1",
+            "scope-plan-policy/v1",
+            DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
     }
 
     [Fact]
@@ -131,6 +136,175 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public void UpdateCommand_ShouldCarryOnlyTransientProvisioningBearerInput()
+    {
+        var bearerProperty = typeof(StudioMemberAutomationUpdateCommand)
+            .GetProperty("ProvisioningBearerToken");
+
+        bearerProperty.Should().NotBeNull();
+        bearerProperty!.CanRead.Should().BeTrue();
+        bearerProperty.SetMethod.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void CatalogRefreshUnavailable_ShouldUseTypedSanitizedApplicationFailure()
+    {
+        var exceptionType = typeof(StudioMemberAutomationPlanConflictException).Assembly.GetType(
+            "Aevatar.Studio.Application.Provisioning." +
+            "StudioMemberAutomationCatalogRefreshUnavailableException");
+
+        exceptionType.Should().NotBeNull();
+        exceptionType.Should().BeAssignableTo<Exception>();
+        var exception = Activator.CreateInstance(exceptionType!).Should().BeAssignableTo<Exception>().Subject;
+        exception.Message.Should().Be("The authorization catalog could not be refreshed. Retry this request.");
+    }
+
+    [Fact]
+    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndBearerAvailable_ShouldReturnPlannerResultWithoutSideEffects()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found"));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var request = Request("scope-1", "member-1");
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh);
+
+        var result = await port.PreflightAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndTypedAuthorityAvailable_ShouldNotIssueFreshTokenOrRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_not_found"));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var request = Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        };
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightAsync(request);
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
+        result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+        tokenProvider.Requests.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+        "nyxid_catalog_snapshot_stale")]
+    public async Task PreflightAsync_WhenCatalogSnapshotUnavailableWithoutBearer_ShouldReturnSinglePlannerResultWithoutSideEffects(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        string detail)
+    {
+        var planner = new RecordingAuthorizationPlanner
+        {
+            Result = ScheduledInvocationAuthorizationPlanResult.Failed(failureCode, detail),
+        };
+        var downstreamCalls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = downstreamCalls };
+        var refresh = new RecordingCatalogRefreshPort { Calls = downstreamCalls };
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightAsync(Request("scope-1", "member-1") with
+        {
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                "lark",
+                "tenant-alpha",
+                "sender-alpha",
+                string.Empty),
+            ProvisioningBearerToken = null,
+        });
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(failureCode);
+        result.Detail.Should().Be(detail);
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(0);
+        tokenProvider.Requests.Should().BeEmpty();
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        downstreamCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenBearerMissingButTypedAuthorityAvailable_ShouldIssueFreshTokenAndPersistAgentKeyOnly()
+    {
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await ScheduleAsync(port, Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        });
+
+        result.Success.Should().BeTrue();
+        tokenProvider.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "binding-alpha",
+            });
+        materializer.BearerToken.Should().Be("issued-bearer-alpha");
+        var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
+        auth.Should().NotBeNull();
+        auth!.ScheduledInvocationAgentKey.Should().NotBeNull();
+        auth.ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-alpha");
+        auth.SenderNyxId.Should().BeNull();
+        auth.Durable.Should().BeNull();
+        auth.ScopeOwnerNyxId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PreflightAsync_WhenMemberBelongsToAnotherTeam_ShouldReturnGenericNotFound()
     {
         var port = NewPort(new RecordingScheduleService());
@@ -158,7 +332,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     public void ToScheduleAuthorizationFact_ShouldMapMixedDirectAndNodeBackedServicesPerService()
     {
         var plan = new RecordingAuthorizationPlanner().Result.Plan!.Clone();
-        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant { UserServiceId = "nyx-service-direct" });
+        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
+        {
+            UserServiceId = "nyx-service-direct",
+            NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        });
 
         var fact = StudioMemberWorkflowSchedulePort.ToScheduleAuthorizationFact(plan);
 
@@ -169,9 +347,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         fact.ServiceGrants[1].ServiceId.Should().Be("nyx-service-direct");
         fact.ServiceGrants[1].NodeIds.Should().BeEmpty();
         fact.ServiceGrants[1].NodeGrantsNotRequired.Should().BeTrue();
-        fact.NodeGrants.Should().ContainSingle(node =>
-            node.UserServiceId == "nyx-service-alpha" &&
-            node.NodeId == "nyx-node-alpha");
+        fact.GetType().GetProperties().Should()
+            .NotContain(property => property.Name == "NodeGrants");
     }
 
     [Fact]
@@ -192,6 +369,283 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             .WithMessage("snapshot_missing");
         conflict.Which.Code.Should().Be("authorization_plan_changed");
         scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCatalogSnapshotInvalidatedAndBearerAvailable_ShouldRefreshAndRetryRevalidation()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort { Calls = calls };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls);
+        var retryNow = TestNow.AddSeconds(7);
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh,
+            timeProvider: new SequenceTimeProvider(TestNow, retryNow));
+        var request = Request("scope-1", "member-1");
+
+        var result = await port.CreateAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        result.Success.Should().BeTrue();
+        result.Status.Should().Be("pending");
+        refresh.RefreshCallCount.Should().Be(1);
+        refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
+        refresh.LastBearerToken.Should().Be("bearer-alpha");
+        revalidator.Requests.Should().HaveCount(2);
+        revalidator.Requests[1].EvaluatedAtUtc.Should().Be(retryNow);
+        revalidator.Requests[1].ExpiresAtUtc.Should().Be(
+            new StudioMemberWorkflowSchedulePolicy().ResolveCredentialExpiresAtUtc(retryNow));
+        scheduleService.BeginCallCount.Should().Be(1);
+        scheduleService.EnsureCallCount.Should().Be(1);
+        calls.Should().Equal("revalidate", "refresh", "revalidate", "begin", "complete");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCommittedRefreshVersionIsNotYetVisible_ShouldReturnRetryableProjectionPending()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.Observed,
+                string.Empty,
+                StateVersion: 23),
+        };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls)
+        {
+            VisibleCatalogStateVersionAfterRefresh = 22,
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh", "revalidate");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenSuccessfulSecondReadIsBelowCommittedRefreshVersion_ShouldReturnProjectionPending()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls)
+        {
+            SuccessfulCatalogStateVersionAfterRefresh = 22,
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh", "revalidate");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenSupersededRefreshVersionIsAheadOfObservedSnapshot_ShouldReturnProjectionPending()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.Superseded,
+                "nyxid_catalog_refresh_superseded",
+                StateVersion: 23),
+        };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls)
+        {
+            VisibleCatalogStateVersionBeforeRefresh = 22,
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenSupersededRefreshIsAlreadyVisible_ShouldReturnRetryableSupersededFailure()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.Superseded,
+                "nyxid_catalog_refresh_superseded",
+                StateVersion: 23),
+        };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls)
+        {
+            VisibleCatalogStateVersionBeforeRefresh = 23,
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        await act.Should().ThrowAsync<StudioMemberAutomationCatalogRefreshSupersededException>();
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh");
+    }
+
+    [Theory]
+    [InlineData(NyxIdAuthorizationCatalogRefreshStatus.Failed)]
+    [InlineData(NyxIdAuthorizationCatalogRefreshStatus.ObservationTimedOut)]
+    public async Task CreateAsync_WhenCatalogRefreshFailsTransiently_ShouldReturnRetryableUnavailable(
+        NyxIdAuthorizationCatalogRefreshStatus refreshStatus)
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                refreshStatus,
+                "private-provider-detail-bearer-secret"),
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: new RefreshAwareAuthorizationRevalidator(refresh, calls),
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        await act.Should().ThrowAsync<StudioMemberAutomationCatalogRefreshUnavailableException>()
+            .WithMessage("The authorization catalog could not be refreshed. Retry this request.");
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCatalogRefreshInfrastructureFails_ShouldReturnRetryableUnavailable()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Exception = new InvalidOperationException("private-provider-detail-bearer-secret"),
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: new RefreshAwareAuthorizationRevalidator(refresh, calls),
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        await act.Should().ThrowAsync<StudioMemberAutomationCatalogRefreshUnavailableException>()
+            .WithMessage("The authorization catalog could not be refreshed. Retry this request.");
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCatalogRefreshCancelsWithoutCallerCancellation_ShouldReturnRetryableUnavailable()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Exception = new OperationCanceledException("infrastructure-owned-cancellation"),
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: new RefreshAwareAuthorizationRevalidator(refresh, calls),
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        await act.Should().ThrowAsync<StudioMemberAutomationCatalogRefreshUnavailableException>()
+            .WithMessage("The authorization catalog could not be refreshed. Retry this request.");
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh");
+    }
+
+    [Theory]
+    [InlineData("nyxid_catalog_snapshot_invalidated")]
+    [InlineData("nyxid_catalog_snapshot_stale")]
+    public async Task CreateAsync_WhenCatalogFailureIsVisibleAtOrBeyondCommittedRefreshVersion_ShouldKeepFailure(
+        string failureDetail)
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService { Calls = calls };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls)
+        {
+            VisibleCatalogStateVersionAfterRefresh = 24,
+            FailureDetailAfterRefresh = failureDetail,
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh);
+
+        var act = () => port.CreateAsync(
+            Request("scope-1", "member-1"),
+            RecordingAuthorizationPlanner.Digest);
+
+        var conflict = await act.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>()
+            .WithMessage(failureDetail);
+        conflict.Which.Code.Should().Be("authorization_plan_changed");
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh", "revalidate");
     }
 
     [Fact]
@@ -366,6 +820,106 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var conflict = await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>();
         conflict.Which.Code.Should().Be("reauthorization_required");
         scheduleService.UpdateCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenRefreshedCatalogVersionIsNotVisible_ShouldReturnProjectionPendingWithoutDispatch()
+    {
+        var calls = new List<string>();
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion),
+        };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls)
+        {
+            VisibleCatalogStateVersionAfterRefresh = 22,
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh);
+        var request = Request("scope-1", "member-1");
+        var command = new StudioMemberAutomationUpdateCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "0 10 * * *",
+            "UTC",
+            true,
+            "operation-update",
+            "idempotency-update",
+            request.AuthenticatedOwner)
+        {
+            ProvisioningBearerToken = "fresh-update-bearer",
+        };
+
+        var act = () => port.UpdateAsync(command);
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        refresh.LastBearerToken.Should().Be("fresh-update-bearer");
+        scheduleService.UpdateCallCount.Should().Be(0);
+        calls.Should().Equal("revalidate", "refresh", "revalidate");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WhenRefreshedCatalogIsVisible_ShouldPreserveCredentialExpiryAndDispatch()
+    {
+        var calls = new List<string>();
+        var existingCredentialExpiry = TestNow.AddHours(20);
+        var scheduleService = new RecordingScheduleService
+        {
+            Calls = calls,
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion),
+        };
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Calls = calls,
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(13),
+        };
+        var revalidator = new RefreshAwareAuthorizationRevalidator(refresh, calls)
+        {
+            RequiredExpiresAtUtcAfterRefresh = existingCredentialExpiry,
+        };
+        var port = NewPort(
+            scheduleService,
+            revalidator: revalidator,
+            catalogRefresh: refresh,
+            timeProvider: new FixedTimeProvider(TestNow.AddMinutes(1)));
+        var request = Request("scope-1", "member-1");
+        var command = new StudioMemberAutomationUpdateCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "0 10 * * *",
+            "UTC",
+            true,
+            "operation-update",
+            "idempotency-update",
+            request.AuthenticatedOwner)
+        {
+            ProvisioningBearerToken = "fresh-update-bearer",
+        };
+
+        var receipt = await port.UpdateAsync(command);
+
+        receipt.Accepted.Should().BeTrue();
+        revalidator.Requests.Should().HaveCount(2);
+        revalidator.Requests[1].ExpiresAtUtc.Should().Be(existingCredentialExpiry);
+        scheduleService.UpdateCallCount.Should().Be(1);
+        calls.Should().Equal("revalidate", "refresh", "revalidate");
     }
 
     [Fact]
@@ -598,16 +1152,22 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         RecordingScheduleService schedule,
         RecordingMemberService? memberService = null,
         IScheduledInvocationAuthorizationPlanner? planner = null,
-        IStudioScheduledCredentialMaterializer? materializer = null)
+        IScheduledInvocationAuthorizationRevalidator? revalidator = null,
+        IStudioScheduledCredentialMaterializer? materializer = null,
+        INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null,
+        TimeProvider? timeProvider = null,
+        IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         var resolvedPlanner = planner ?? new RecordingAuthorizationPlanner();
         return new StudioMemberWorkflowSchedulePort(
             memberService ?? new RecordingMemberService { Detail = CreateWorkflowMemberDetail() },
             schedule,
             resolvedPlanner,
-            new RecordingAuthorizationRevalidator(resolvedPlanner),
+            revalidator ?? new RecordingAuthorizationRevalidator(resolvedPlanner),
             materializer ?? new RecordingCredentialMaterializer(),
-            new FixedTimeProvider(TestNow));
+            timeProvider ?? new FixedTimeProvider(TestNow),
+            catalogRefresh,
+            callerAccessTokenProvider: callerAccessTokenProvider);
     }
 
     private static async Task<StudioMemberWorkflowScheduleResult> ScheduleAsync(
@@ -784,7 +1344,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public const string Digest = "permission-digest-alpha";
         public const string PolicyVersion = "scheduled-invocation-auth/v1";
         public List<ScheduledInvocationAuthorizationRequest> Requests { get; } = [];
+        public Queue<ScheduledInvocationAuthorizationPlanResult> Results { get; } = [];
         public ScheduledInvocationAuthorizationPlanResult Result { get; init; } =
+            SuccessResult();
+
+        public static ScheduledInvocationAuthorizationPlanResult SuccessResult() =>
             ScheduledInvocationAuthorizationPlanResult.Succeeded(CreatePlan());
 
         private static ScheduledInvocationAuthorizationPlan CreatePlan()
@@ -811,16 +1375,17 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     ActorStateVersion = 13,
                     ObservedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
                     FreshUntil = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-01T00:00:00Z")),
-                    ExternalRevision = "catalog-revision-alpha",
                     ContentDigest = "catalog-digest-alpha",
+                    ContractVersion = "scope-plan-contract/v1",
+                    PolicyVersion = "scope-plan-policy/v1",
+                    EvaluatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
                 },
             };
-            plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant { UserServiceId = "nyx-service-alpha" });
-            plan.NyxIdNodeGrants.Add(new NyxIdNodeGrant
+            plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
             {
                 UserServiceId = "nyx-service-alpha",
-                NodeId = "nyx-node-alpha",
-                Role = NyxIdNodeRole.Primary,
+                NodeGrantRequirement = AuthorizationGrantRequirement.Required,
+                NodeIds = { "nyx-node-alpha" },
             });
             plan.Disclosures.Add(new[]
             {
@@ -852,8 +1417,52 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             Requests.Add(request);
-            return Task.FromResult(Result);
+            return Task.FromResult(Results.Count > 0 ? Results.Dequeue() : Result);
         }
+    }
+
+    private sealed class RecordingWorkflowCallerAccessTokenProvider : IWorkflowCallerAccessTokenProvider
+    {
+        public List<WorkflowCallerNyxIdAuthority> Requests { get; } = [];
+
+        public Task<string> IssueAsync(
+            WorkflowCallerNyxIdAuthority authority,
+            CancellationToken ct = default)
+        {
+            Requests.Add(authority.Clone());
+            return Task.FromResult("issued-bearer-alpha");
+        }
+    }
+
+    private sealed class RecordingCatalogRefreshPort : INyxIdAuthorizationCatalogRefreshPort
+    {
+        public int RefreshCallCount { get; private set; }
+        public AuthorizationOwnerIdentity? LastOwner { get; private set; }
+        public string? LastBearerToken { get; private set; }
+        public List<string>? Calls { get; init; }
+        public Exception? Exception { get; init; }
+        public NyxIdAuthorizationCatalogRefreshResult Result { get; init; } =
+            NyxIdAuthorizationCatalogRefreshResult.ObservedAt(1);
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string bearerToken,
+            CancellationToken ct = default)
+        {
+            RefreshCallCount++;
+            Calls?.Add("refresh");
+            LastOwner = owner.Clone();
+            LastBearerToken = bearerToken;
+            return Exception == null
+                ? Task.FromResult(Result)
+                : Task.FromException<NyxIdAuthorizationCatalogRefreshResult>(Exception);
+        }
+
+        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
+            string verifiedOwnerSubject,
+            string bearerToken,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingAuthorizationRevalidator(
@@ -878,6 +1487,67 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 : ScheduledInvocationAuthorizationValidationResult.Failed(
                     ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
                     "authorization_plan_changed");
+        }
+    }
+
+    private sealed class RefreshAwareAuthorizationRevalidator(
+        RecordingCatalogRefreshPort refresh,
+        List<string> calls) : IScheduledInvocationAuthorizationRevalidator
+    {
+        public List<ScheduledInvocationAuthorizationRequest> Requests { get; } = [];
+
+        public long VisibleCatalogStateVersionBeforeRefresh { get; init; }
+        public long VisibleCatalogStateVersionAfterRefresh { get; init; } = long.MaxValue;
+        public long? SuccessfulCatalogStateVersionAfterRefresh { get; init; }
+        public string? FailureDetailAfterRefresh { get; init; }
+        public DateTimeOffset? RequiredExpiresAtUtcAfterRefresh { get; init; }
+
+        public Task<ScheduledInvocationAuthorizationValidationResult> RevalidateAsync(
+            ScheduledInvocationAuthorizationRequest request,
+            ScheduledInvocationAuthorizationConfirmation confirmation,
+            CancellationToken ct = default)
+        {
+            Requests.Add(request);
+            calls.Add("revalidate");
+            if (refresh.RefreshCallCount == 0)
+            {
+                return Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Failed(
+                    ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+                    "nyxid_catalog_snapshot_invalidated",
+                    VisibleCatalogStateVersionBeforeRefresh));
+            }
+
+            if (FailureDetailAfterRefresh != null)
+            {
+                return Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Failed(
+                    ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
+                    FailureDetailAfterRefresh,
+                    VisibleCatalogStateVersionAfterRefresh));
+            }
+
+            if (RequiredExpiresAtUtcAfterRefresh.HasValue &&
+                request.ExpiresAtUtc != RequiredExpiresAtUtcAfterRefresh.Value)
+            {
+                return Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Failed(
+                    ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
+                    "authorization_plan_changed",
+                    VisibleCatalogStateVersionAfterRefresh));
+            }
+
+            if (SuccessfulCatalogStateVersionAfterRefresh.HasValue)
+            {
+                var plan = RecordingAuthorizationPlanner.SuccessResult().Plan!.Clone();
+                plan.CatalogAuthority.ActorStateVersion = SuccessfulCatalogStateVersionAfterRefresh.Value;
+                return Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Succeeded(plan));
+            }
+
+            return VisibleCatalogStateVersionAfterRefresh < refresh.Result.StateVersion
+                ? Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Failed(
+                    ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+                    "nyxid_catalog_snapshot_stale",
+                    VisibleCatalogStateVersionAfterRefresh))
+                : Task.FromResult(ScheduledInvocationAuthorizationValidationResult.Succeeded(
+                    RecordingAuthorizationPlanner.SuccessResult().Plan!));
         }
     }
 
@@ -946,6 +1616,18 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public override DateTimeOffset GetUtcNow() => utcNow;
     }
 
+    private sealed class SequenceTimeProvider(params DateTimeOffset[] values) : TimeProvider
+    {
+        private int _index;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var index = Math.Min(_index, values.Length - 1);
+            _index++;
+            return values[index];
+        }
+    }
+
     private sealed class RecordingScheduleService : IScheduledDispatchApplicationService
     {
         public int EnsureCallCount { get; private set; }
@@ -965,6 +1647,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int RetryRevocationCallCount { get; private set; }
         public int CompleteRevocationCallCount { get; private set; }
         public TeamAutomationCredentialOperation? BeginOperation { get; private set; }
+        public List<string>? Calls { get; init; }
         private ScheduledInvocationAgentKeyCredentialReference? _candidateCredential;
         private ScheduledInvocationAuthorizationOwner? _candidateOwner;
         private bool _candidateExceptionThrown;
@@ -974,6 +1657,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             BeginCallCount++;
+            Calls?.Add("begin");
             BeginOperation = operation;
             return Task.FromResult(Committed(
                 operation.ScheduleId,
@@ -1033,6 +1717,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             EnsureCallCount++;
+            Calls?.Add("complete");
             Configuration = configuration;
             Configurations.Add(configuration);
             if (EnsureCallCount <= TombstonedAttempts)

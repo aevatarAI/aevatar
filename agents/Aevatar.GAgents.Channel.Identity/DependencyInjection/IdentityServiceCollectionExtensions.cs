@@ -94,6 +94,30 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<IOwnerScopeResolver>(sp =>
             sp.GetRequiredService<ExternalIdentityBindingProjectionQueryPort>());
 
+        // ─── Per-NyxID-user managed Codex credential projection ───
+        services.AddProjectionMaterializationRuntimeCore<
+            ManagedCodexCredentialMaterializationContext,
+            ManagedCodexCredentialMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ManagedCodexCredentialMaterializationContext>>(
+            static scopeKey => new ManagedCodexCredentialMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ManagedCodexCredentialMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            ManagedCodexCredentialMaterializationContext,
+            ManagedCodexCredentialProjector>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ManagedCodexCredentialDocument>,
+            ManagedCodexCredentialDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IManagedCodexCredentialQueryPort,
+            ManagedCodexCredentialProjectionQueryPort>();
+        services.TryAddSingleton<
+            IManagedCodexCredentialCommandPort,
+            ManagedCodexCredentialCommandPort>();
+
         // ─── Committed-fact audit for external-identity bindings ───
         // Subject-bearing: the actor id embeds the raw external subject, so the
         // translators hash the origin actor id through the host-provided

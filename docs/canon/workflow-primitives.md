@@ -104,6 +104,47 @@ Runtime semantics:
 - Compensation dispatch uses self continuation. Stale or duplicate compensation completions are rejected by execution id and do not advance the cursor.
 - A child `workflow_call` reports its own compensated terminal failure with `SubWorkflowInvocationCompletedEvent.compensated = true`. The flag is child-outcome-only; parent workflow compensation remains driven by the parent run's own ledger.
 
+### External capability authoring 与统一 admission
+
+External operation 先按 authority owner 选 primitive，而不是按“是否需要认证”判断：部署配置并 allowlist 的 operation 使用 `connector_call`，即使它的 Connector 使用 `client_credentials` 或 `secret_ref_header`；用户/org credential、OAuth connection、NyxID UserService 或 local Node 拥有的 operation 使用 `tool_call -> nyxid_proxy`。任意未发现 URL 不允许 authoring。
+
+Chat authoring 先调用只读 `list_external_workflow_capabilities`，再把完整 candidate 原样交给 `inspect_external_workflow_capability_readiness` 并指定 `interactive` 或 `durable`。只有每个 external capability 的 typed readiness status 都是 `READY` 才尝试 Workflow write；其他 status 只展示 typed blocker 和 trusted remediation。Readiness 是 point-in-time decision，不是 Workflow lifecycle，也不会创建连接、approval 或 projection。
+
+NyxID 的 `durable` readiness 不会永久返回 unavailable。它在 live `/keys` 与 exact OpenAPI 校验之外，只读一次 verified caller 对应的 owner-scoped authorization catalog current-state read model；查询不得触发 refresh、activation、lease、polling、replay 或 projection priming。只有 catalog 已 activated、未 invalidated/cleaned、仍在 freshness window 内，且 exact `user_service_id` 的 slug snapshot、`PERMITTED` access、normalized resource owner、node-grant requirement 与 canonical Node ids 全部一致时才返回 `READY`。该结果必须携带 `DURABLE_AUTHORIZATION_CATALOG` source stamp；统一 admission 还会校验 execution mode、exact capability identity 与 stamp，已有 durable plan 缺少该证据同样 fail closed。Catalog snapshot 本身还必须具有正 authoritative version、完整 lifecycle facts，以及与 typed owner/services 一致的 canonical content digest；非 exact ordinal `nyxid` resource owner authority 一律拒绝。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A["Chat intent"] --> B["Typed capability listing"]
+    B --> C{"Authority owner"}
+    C -->|"Host-owned"| D["Connector catalog"]
+    C -->|"User or org-owned"| E["NyxID /keys + OpenAPI"]
+    D --> F["Typed readiness"]
+    E --> F
+    F --> G{"READY"}
+    G -->|"No"| H["Typed blocker and remediation; no write"]
+    G -->|"Yes"| I["Unified server-side admission"]
+    I --> J["Commit definition + admission digest"]
+    J --> K{"Runtime capability owner"}
+    K -->|"Host Connector"| L["Host connector credential edge"]
+    K -->|"NyxID"| M{"Execution mode"}
+    M -->|"Interactive"| N["Transient caller bearer"]
+    M -->|"Durable"| O["Exact scoped key"]
+    N --> P["Proxy route _nyxid_via=user_service_id"]
+    O --> P
+```
+
+所有普通 write entry（Scope upsert、Studio draft/provision/bind、skill mount、prepare、publish、startup file materialization）统一调用 `IWorkflowExternalCapabilityAdmissionService`，但契约明确区分两条路径。首次 live admission 在 mutation 前重新 parse YAML，以 authenticated caller 的 transient authority/credential 读取 live sources，并生成 `external-capability-admission.v2` plan。Actor 已持有 plan 的后续 prepare、publish、replay 或 Studio handoff 只调用 credential-free persisted revalidation；每个调用点必须按当前业务契约独立提供 expected execution mode，并与 plan 精确匹配，禁止从待验证 plan 自身回读 mode。该路径不伪造 caller、不使用 `appId`/`serviceId` 替代 owner，也不重复外部 readiness read。
+
+V2 plan 固化 definition digest、exact capability refs、operation contract digests 和 source stamps。Durable NyxID plan 还必须携带 typed `durable_authorization_owner = nyxid/personal/<subject>`，该 owner 参与 `admission_digest`，并且必须能确定唯一、完全相等的 owner-scoped catalog source id。即使篡改者重新计算未加密 digest，owner/source mismatch 仍 fail closed；不需要 durable NyxID catalog 的 plan 则禁止携带该 owner。Definition actor 再次独立 parse，并在一个 actor transition 中提交 definition 与 admission fact；caller-supplied evidence 不能覆盖 actor 解析结果。仓库 `workflows/` 是无租户 caller authority 的 startup definition source，因此不得内嵌租户专属 NyxID `user_service_id`；这类 workflow 必须由 scope/user authoring 路径基于 live candidate 创建。
+
+YAML 的 exact capability 规则：
+
+- `connector_call` 使用静态 `connector + operation + contract_digest`，对应 `HostConnectorCapabilityRef`。
+- `nyxid_proxy` 使用静态 `service_id + slug + operation_id + method + path + contract_digest`；其中 `service_id` 必须等于 selected candidate 的 `user_service_id`，slug 只是 `service_slug_snapshot`。
+- Dynamic identity、slug-only、`service` alias、incomplete operation tuple、changed method/path/digest 和 secret-bearing header 都 fail closed。
+- API key、bearer、OAuth secret、cookie 和 downstream credential 不得进入 Chat、YAML、actor state、read model、receipt 或 log。Credential setup 只在 NyxID 或 Host Connector trusted boundary 完成。
+
 ## 2. Data 原语
 
 ### `transform`
@@ -385,6 +426,9 @@ steps:
 - 常用参数：`tool`。
 - 工具输出若是 JSON object 且步骤成功，运行时会把顶层字段镜像为 `steps.<step_id>.json.<field>` 变量，供后续 `switch` / `conditional` / `while` 分支使用。
 - 当前 step 的 typed input file refs 会随 `WorkflowToolExecutionRequest` 传给 workflow tool。工具若同时支持 arguments `fileRef` 与当前输入文件上下文，显式 `fileRef` 优先；未显式选择时，只能在恰好 1 个当前输入文件时 fallback，多文件必须 fail closed 并要求调用方显式选择。
+- workflow tool 的成功或失败是 typed outcome。外部协议的 provider/adapter 负责把 HTTP 非 2xx、第三方错误 envelope 或 provider receipt 归一化为 typed failure；Workflow Core 与前端不得根据任意 output JSON 中的 `error`、`status` 等字段猜测执行结果。
+- typed failure 会发布 `WorkflowToolCallCompletedEvent.Success=false` 与 `StepCompletedEvent.Success=false`，保留 provider 提供的安全结果输出，并进入与异常失败相同的 retry、`on_error`、saga compensation 和 terminal run failure 链路。未被 provider 分类的普通返回值保持成功，即使业务 payload 恰好包含名为 `error` 的字段。
+- 升级后，过去以 success-wrapped error 返回的 tool 若已由 provider/adapter 分类，会从“步骤成功”变为正确的失败或进入 workflow 配置的恢复策略。workflow 作者应检查依赖旧假成功输出分支的定义，并改用 `on_error`、retry 或 compensation 表达恢复语义。
 - `tool_call` side effect 是 at-least-once。workflow actor 在 dispatch seam 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 tool invocation envelope。审批 replay / crash replay 会复用同一个 key；该 key 只用于 callee-side 幂等建议，不表示 engine-side dedup 或 exactly-once。
 - 需要人工审批的 direct `tool_call` 不把 `ApprovalPending` 当作失败完成。`ToolCallModule` 将原始 tool name、arguments、`execution_id`、`tool_call_id`、`approval_request_id` 持久化到 workflow actor state，并发布 `WorkflowSuspendedEvent.tool_approval`。该 suspension 只暴露审批对账键，不暴露工具参数。
 - tool approval resume 使用 `WorkflowResumedEvent.tool_approval` nested payload，仅携带 `execution_id`、`tool_call_id`、`approval_request_id`。客户端不得在 resume payload 中提交 tool name 或 arguments；approved replay 必须从 actor pending state 读取原始工具和参数，并向 tool middleware 传递 typed `ToolApprovalGrant`。
@@ -398,15 +442,27 @@ steps:
       tool: "web_search"
 ```
 
+NyxID external operation 必须从 typed listing/readiness 复制完整 exact tuple。下例中的 id、slug、operation 和 digest 只是彼此不同的文档 fixture；实际 authoring 必须用同一个 `READY` candidate 原子替换，不能从 slug 推导 id：
+
+```yaml
+steps:
+  - id: read_home_state
+    type: tool_call
+    parameters:
+      tool: nyxid_proxy
+      arguments: >-
+        {"service_id":"us-home-alpha","slug":"home-assistant","operation_id":"list-states","method":"GET","path":"/api/states","contract_digest":"fixture-replace-from-ready-capability"}
+```
+
 #### NyxID `codex_exec` 工具
 
-`codex_exec` 是 NyxID tool provider 暴露的受限执行路由，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。它只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 `danger-full-access`。
+`codex_exec` 是 NyxID tool provider 暴露的受限执行路由，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。它只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 sandbox/isolation 配置。
 
-- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 直连 OpenSandbox，固定使用 operator-owned digest 镜像、`empty_git` workspace、Landlock profile、NyxID Responses gateway 和最长 `180s` timeout。调用者必须有 authenticated NyxID authority、有效 broker binding、可签发 `llm:proxy` 的 capability grant，并位于部署 allowlist；`llm:proxy` 不进入 interactive OAuth authorize scope。
+- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 使用用户级 Vault agent key 调用固定 NyxID `chrono-sandbox` proxy 路由，只接受 `empty_git` workspace 和最长 `180s` timeout。NyxID 为该请求注入五分钟 `llm:proxy` delegation token；chrono-sandbox 负责 OpenSandbox、runner 镜像、gVisor 隔离、provider 配置与清理（ADR-0044）。用户必须先通过 authenticated self-service endpoint 完成 allowlisted credential provisioning。
 - `private_ssh`：`target.private_ssh.service` 是 NyxID SSH UserService 的 slug/UUID，不是 `node_id`；`principal` 是该 service 允许的 Unix principal。Codex 登录态、workspace 与 sandbox policy 由目标机固定 wrapper 负责，最长 `300s`。
 - prompt 最多 `6000` UTF-8 bytes，只通过 stdin/file boundary 进入固定命令，不参与 shell command 拼接。
 - managed target 返回包含 `status/target/output/exit_code/diagnostic_id/elapsed_ms` 的 JSON；private SSH target 保留 NyxID SSH executor 的结构化结果。
-- 配置检查、node online 或 OpenSandbox health 只证明局部依赖；必须运行真实 sample 并得到精确 `CODEX_EXEC_READY` 才能声明可用。
+- 配置检查、credential status 或 chrono-sandbox health 只证明局部依赖；必须运行真实 workflow sample 并得到精确 `CODEX_EXEC_READY` 才能声明可用。
 
 Managed sample 不接收调用者路由参数：
 
@@ -677,7 +733,8 @@ steps:
 ### `connector_call`（别名：`bridge_call`、`cli_call`、`mcp_call`、`http_get`、`http_post`、`http_put`、`http_delete`）
 
 - 作用：调用外部 connector（HTTP/CLI/MCP 等），支持重试和降级策略。
-- 常用参数：`connector`、`operation`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
+- 常用参数：`connector`、`operation`、`contract_digest`、`retry`、`timeout_ms`、`optional`、`on_missing`、`on_error`。
+- 新 authoring 必须从 typed capability listing 复制静态 `connector + operation + contract_digest`；动态 connector identity、缺失 operation 或 digest drift 会在 server-side admission fail closed。
 - `connector_call` / `secure_connector_call` side effect 是 at-least-once。workflow actor 按 logical run id + step id + logical attempt 解析并持久化 typed `idempotency_key`；若 step 声明 `compensation`，同一 seam 先写入 `PROVISIONAL` compensation ledger，再发布 connector request。connector physical retry / pending replay 复用同一个 key；HTTP connector 会在 key 非空时发送 `Idempotency-Key` header，其他 connector 可按自身边界使用或忽略。该 key 不提供 engine-side dedup 或 exactly-once。
 - `approval.policy: required` enables actor-owned durable approval coordination before connector dispatch. The step must provide `approval.service_ref`, `approval.node_id`, `approval.http_verb`, `approval.resource`, `approval.permission_scope`, `approval.expiration_seconds`, and a stable `idempotency_key`. `approval.status_check_interval_seconds` defaults to 2.
 - The exact payload, input, parameters, and execution options are stored as protected Protobuf material and bound to the safe approval plan by SHA-256. They are absent from approval records, committed projections, logs, and public APIs.
@@ -697,6 +754,7 @@ steps:
     parameters:
       connector: "incident_api"
       operation: "create_ticket"
+      contract_digest: "<exact digest from READY connector capability>"
       retry: "2"
       timeout_ms: "10000"
       on_error: "continue"
@@ -721,6 +779,7 @@ steps:
     parameters:
       connector: "service_proxy"
       operation: "create_resource"
+      contract_digest: "<exact digest from READY connector capability>"
       method: "POST"
       path: "/resources/alpha"
       approval.policy: "required"

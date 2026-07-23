@@ -1,8 +1,10 @@
 using System.Reflection;
 using System.Security.Claims;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -83,6 +85,32 @@ public sealed class StudioProvisioningEndpointsTests
         service.ProvisionCaller.ExternalUserId.Should().Be("ou-1");
         service.ProvisionCaller.Scope.Should().Be("proxy");
         service.ProvisionCaller.Tenant.Should().Be("t-1");
+    }
+
+    [Fact]
+    public async Task HandleProvisionWorkflowAsync_ShouldAttachTransientBearerAdmissionContext()
+    {
+        var service = new RecordingProvisioningService { Response = NewResponse() };
+        var http = CreateAuthenticatedContext(ScopeId);
+        ((ClaimsIdentity)http.User.Identity!).AddClaim(new Claim("sub", "caller-alpha"));
+        http.Request.Headers.Authorization = "Bearer runtime-caller-credential";
+
+        await InvokeHandle<IResult>(
+            http,
+            ScopeId,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor", Caller: Caller)
+            {
+                TeamId = TeamId,
+            },
+            service,
+            CancellationToken.None);
+
+        var context = service.ProvisionRequest!.CapabilityAdmission;
+        context.Should().NotBeNull();
+        context!.CallerId.Should().Be("caller-alpha");
+        context.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        context.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        context.ToString().Should().NotContain("runtime-caller-credential");
     }
 
     [Fact]

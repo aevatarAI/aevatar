@@ -100,6 +100,35 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
+    public async Task Preflight_ShouldPassFreshBearerToApplicationBoundary()
+    {
+        var schedules = new StubSchedules();
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status200OK);
+        schedules.LastPreflight.Should().NotBeNull();
+        schedules.LastPreflight!.ScopeId.Should().Be(ScopeId);
+        schedules.LastPreflight.TeamId.Should().Be(TeamId);
+        schedules.LastPreflight.MemberId.Should().Be(MemberId);
+        schedules.LastPreflight.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
+        schedules.LastPreflight.AuthenticatedOwner.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+    }
+
+    [Fact]
     public async Task Create_ShouldKeepCanonicalOwnerIdentityAndReturnPendingReceipt()
     {
         var schedules = new StubSchedules();
@@ -250,6 +279,139 @@ public sealed class StudioMemberAutomationEndpointsTests
         schedules.LastUpdate.MemberId.Should().Be(MemberId);
         schedules.LastUpdate.ScheduleId.Should().Be(ScheduleId);
         schedules.ScheduleMutationCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Update_ShouldReturnRetryableProjectionPendingWithRequiredStateVersion()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioMemberAutomationProjectionPendingException(23),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationUpdateRequest(
+                "0 9 * * *",
+                "UTC",
+                "prompt",
+                "name",
+                true,
+                "op-alpha",
+                "idem-alpha"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be("TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        value.GetType().GetProperty("requiredStateVersion")?.GetValue(value).Should().Be(23L);
+        AssertNoCredentialMaterial(value);
+        schedules.ScheduleMutationCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Update_ShouldReturnRetryableCatalogRefreshSuperseded()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioMemberAutomationCatalogRefreshSupersededException(),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationUpdateRequest(
+                "0 9 * * *",
+                "UTC",
+                "prompt",
+                "name",
+                true,
+                "op-alpha",
+                "idem-alpha"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be("TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        AssertNoCredentialMaterial(value);
+        schedules.ScheduleMutationCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Update_ShouldReturnSanitizedRetryableCatalogRefreshUnavailable()
+    {
+        var schedules = new StubSchedules
+        {
+            Exception = new StudioMemberAutomationCatalogRefreshUnavailableException(),
+        };
+
+        var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationUpdateRequest(
+                "0 9 * * *",
+                "UTC",
+                "prompt",
+                "name",
+                true,
+                "op-alpha",
+                "idem-alpha"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+        var value = Value(result);
+        StringProperty(value, "code").Should().Be("TEAM_AUTOMATION_AUTHORIZATION_REFRESH_UNAVAILABLE");
+        value.GetType().GetProperty("retryable")?.GetValue(value).Should().Be(true);
+        JsonSerializer.Serialize(value).Should().NotContain("private-provider-detail");
+        AssertNoCredentialMaterial(value);
+        schedules.ScheduleMutationCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Update_ShouldPassFreshBearerOnlyToApplicationCommand()
+    {
+        var schedules = new StubSchedules();
+
+        var result = await StudioMemberAutomationEndpoints.HandleUpdateAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            ScheduleId,
+            new StudioMemberAutomationUpdateRequest(
+                "0 9 * * *",
+                "UTC",
+                "prompt",
+                "name",
+                true,
+                "op-alpha",
+                "idem-alpha"),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status202Accepted);
+        schedules.LastUpdate.Should().NotBeNull();
+        schedules.LastUpdate!.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
+        AssertNoCredentialMaterial(Value(result));
     }
 
     [Theory]
@@ -508,6 +670,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public int ListCalls { get; private set; }
         public int ScheduleMutationCalls { get; private set; }
         public StudioMemberAutomationView? View { get; init; }
+        public StudioMemberWorkflowScheduleRequest? LastPreflight { get; private set; }
         public StudioMemberWorkflowScheduleRequest? LastCreate { get; private set; }
         public string? LastConfirmedPermissionDigest { get; private set; }
         public StudioMemberAutomationUpdateCommand? LastUpdate { get; private set; }
@@ -520,12 +683,15 @@ public sealed class StudioMemberAutomationEndpointsTests
 
         public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
             StudioMemberWorkflowScheduleRequest request,
-            CancellationToken ct = default) =>
-            Result(new StudioMemberWorkflowAuthorizationResult(
+            CancellationToken ct = default)
+        {
+            LastPreflight = request;
+            return Result(new StudioMemberWorkflowAuthorizationResult(
                 false,
                 null,
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "not_configured"));
+        }
 
         public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
             StudioMemberWorkflowScheduleRequest request,

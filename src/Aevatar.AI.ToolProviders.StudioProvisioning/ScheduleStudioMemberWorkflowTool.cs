@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Studio.Application.Provisioning;
@@ -75,7 +76,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return ErrorJson(
@@ -83,22 +84,33 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
                 "scope_id is required in AgentToolRequestContext. The local Studio member workflow schedule tool uses the caller scope from the tool execution context.");
         }
 
-        var ownerSubject = Normalize(AgentToolRequestContext.OwnerSubject);
-        if (ownerSubject is null)
+        var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
+        var authorityOwnerSubject = typedAuthority.IsComplete
+            ? Normalize(typedAuthority.ExternalUserId)
+            : Normalize(AgentToolRequestContext.OwnerSubject);
+        if (authorityOwnerSubject is null)
         {
             return ErrorJson(
                 "caller_subject_unavailable",
                 "owner subject is required in AgentToolRequestContext so the schedule can re-mint caller NyxID credentials when it fires.");
         }
         var bindingId = Normalize(AgentToolRequestContext.SenderBindingId);
-        var nyxUserId = Normalize(AgentToolRequestContext.SenderNyxUserId) ?? ownerSubject;
-        var subjectPlatform = Normalize(AgentToolRequestContext.ChannelPlatform) ?? "nyxid";
-        var subjectExternalUserId = Normalize(AgentToolRequestContext.ChannelSenderId) ?? ownerSubject;
-        if (bindingId is null && !string.Equals(subjectPlatform, "nyxid", StringComparison.Ordinal))
+        var nyxUserId = typedAuthority.IsComplete
+            ? authorityOwnerSubject
+            : Normalize(AgentToolRequestContext.SenderNyxUserId) ?? authorityOwnerSubject;
+        var subjectPlatform = typedAuthority.IsComplete
+            ? Normalize(typedAuthority.Platform) ?? "nyxid"
+            : Normalize(AgentToolRequestContext.ChannelPlatform) ?? "nyxid";
+        var subjectTenant = typedAuthority.IsComplete
+            ? Normalize(typedAuthority.Tenant) ?? string.Empty
+            : Normalize(AgentToolRequestContext.ChannelRegistrationScopeId) ?? string.Empty;
+        var subjectExternalUserId = typedAuthority.IsComplete
+            ? authorityOwnerSubject
+            : Normalize(AgentToolRequestContext.ChannelSenderId) ?? authorityOwnerSubject;
+        if (bindingId is null)
             return ErrorJson("authenticated_owner_context_unavailable", "A verified NyxID binding is required to authorize a Team schedule.");
-        bindingId ??= $"nyxid:{nyxUserId}";
         var provisioningBearerToken = Normalize(AgentToolRequestContext.NyxIdAccessToken);
-        if (provisioningBearerToken is null)
+        if (provisioningBearerToken is null && !typedAuthority.IsComplete)
             return ErrorJson("caller_credential_unavailable", "A current NyxID credential is required to create the schedule credential.");
 
         ScheduleStudioMemberWorkflowArguments? args;
@@ -156,7 +168,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
                     OwnerSubject = nyxUserId,
                 },
                 subjectPlatform,
-                Normalize(AgentToolRequestContext.ChannelRegistrationScopeId) ?? string.Empty,
+                subjectTenant,
                 subjectExternalUserId,
                 bindingId))
         {

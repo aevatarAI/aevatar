@@ -67,7 +67,7 @@ internal sealed class CreateStudioMemberTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return ErrorJson(

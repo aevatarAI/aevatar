@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Workflows;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
@@ -111,7 +113,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return ErrorJson(
@@ -144,6 +146,7 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
         if (displayName is null)
             return ErrorJson("invalid_arguments", "display_name is required.");
 
+        var typedAuthority = AgentToolRequestContext.NyxIdAuthority;
         var request = new WorkflowScheduleProvisioningRequest(
             ScopeId: scopeId,
             TeamId: teamId,
@@ -154,7 +157,15 @@ internal sealed class ProvisionWorkflowScheduleTool : IAgentTool, IAgentToolCapa
             ScheduleCron = Normalize(args.ScheduleCron),
             ScheduleTimezone = Normalize(args.ScheduleTimezone),
             RunImmediately = args.RunImmediately ?? true,
-            CallerSubjectExternalUserId = Normalize(AgentToolRequestContext.OwnerSubject),
+            CallerSubjectPlatform = typedAuthority.IsComplete
+                ? Normalize(typedAuthority.Platform) ?? "nyxid"
+                : "nyxid",
+            CallerSubjectTenant = typedAuthority.IsComplete ? Normalize(typedAuthority.Tenant) : null,
+            CallerSubjectExternalUserId = typedAuthority.IsComplete
+                ? Normalize(typedAuthority.ExternalUserId)
+                : Normalize(AgentToolRequestContext.OwnerSubject),
+            CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
+                ExternalCapabilityExecutionMode.Durable),
         };
 
         try

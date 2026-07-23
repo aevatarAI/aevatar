@@ -52,6 +52,7 @@ using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.TypeSystem;
 using Aevatar.Workflow.Application.Abstractions.Queries;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.DependencyInjection;
 using Aevatar.Workflow.Projection.Metadata;
@@ -99,9 +100,7 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(NyxIdRegistrationTokenOptions.SectionName));
         if (configuration.GetSection(ScopeServiceTokenOptions.SectionName).Get<ScopeServiceTokenOptions>()?.Enabled == true)
             services.AddScopeServiceTokens(configuration);
-        services.AddGAgentServiceProjection();
-        services.AddGAgentServiceProjectionReadModelProviders(configuration);
-        services.AddNyxIdAuthorizationCatalog(configuration);
+        services.AddNyxIdAuthorizationCatalogHosting(configuration);
         services.AddGAgentServiceGovernanceCapability(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<ServiceInvokeReadinessEvaluator>();
@@ -118,7 +117,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ServiceExternalExposureIntentService>();
         services.TryAddSingleton<IServiceExternalExposureIntentPort>(sp => sp.GetRequiredService<ServiceExternalExposureIntentService>());
         services.TryAddSingleton<NyxIdToolOptions>();
-        services.AddHttpClient<NyxIdApiClient>();
         services.TryAddSingleton<INyxIdServiceRegistrationPort, NyxIdServiceRegistrationAdapter>();
         services.TryAddSingleton<INyxIdRegistrationTokenAccessor, ConfiguredNyxIdRegistrationTokenAccessor>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
@@ -191,7 +189,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IScopeWorkflowQueryPort>(sp => sp.GetRequiredService<ScopeWorkflowQueryApplicationService>());
         services.TryAddSingleton<IScopeWorkflowCommandPort, ScopeWorkflowCommandApplicationService>();
         services.TryAddSingleton<IScopeWorkflowSaveAndBindPort, ScopeWorkflowSaveAndBindApplicationService>();
-        services.TryAddSingleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>();
+        services.Replace(ServiceDescriptor.Singleton<ISkillWorkflowMountPort, SkillWorkflowMountAdapter>());
         services.TryAddSingleton<IScopeBindingCommandPort>(sp => new ScopeBindingCommandApplicationService(
             sp.GetRequiredService<IServiceCommandPort>(),
             sp.GetRequiredService<IServiceLifecycleQueryPort>(),
@@ -201,6 +199,7 @@ public static class ServiceCollectionExtensions
             sp.GetService<IScriptDefinitionSnapshotPort>(),
             sp.GetRequiredService<IWorkflowDefinitionParser>(),
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ScopeWorkflowCapabilityOptions>>(),
+            sp.GetRequiredService<IWorkflowExternalCapabilityAdmissionService>(),
             sp.GetService<IAgentKindRegistry>(),
             sp.GetService<IServiceExternalExposureIntentPort>()));
         services.TryAddSingleton<IScopeBindingReadinessQueryPort, ScopeBindingReadinessQueryService>();
@@ -228,11 +227,8 @@ public static class ServiceCollectionExtensions
         services.AddAevatarAgentKindRegistry(builder =>
         {
             builder.Register<ScheduledDispatchGAgent>();
-            builder.Register<NyxIdAuthorizationCatalogGAgent>();
         });
-        services.AddGAgentServiceProjection();
-        services.AddGAgentServiceProjectionReadModelProviders(configuration);
-        services.AddNyxIdAuthorizationCatalog(configuration);
+        services.AddNyxIdAuthorizationCatalogHosting(configuration);
         services.TryAddSingleton<PreparedServiceRevisionArtifactAssembler>();
         services.TryAddSingleton<IServiceServingTargetResolver, DefaultServiceServingTargetResolver>();
         services.TryAddSingleton<IServiceRunRegistrationPort, ServiceRunRegistrationAdapter>();
@@ -266,19 +262,6 @@ public static class ServiceCollectionExtensions
                     broker,
                     sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<NyxIdScheduledServiceInvocationCredentialExchangePort>>())
                 : new NoopScheduledServiceInvocationCredentialExchangePort());
-
-    private static IServiceCollection AddNyxIdAuthorizationCatalog(
-        this IServiceCollection services,
-        IConfiguration configuration)
-    {
-        services.AddScheduledInvocationAuthorization();
-        services.AddHttpClient();
-        services.TryAddSingleton(TimeProvider.System);
-        services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
-        services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
-        services.TryAddTransient<NyxIdAuthorizationCatalogGAgent>();
-        return services;
-    }
 
     private static void AddScheduledCredentialAdmissionPort(this IServiceCollection services) =>
         services.TryAddSingleton<IScheduledDispatchCredentialAdmissionPort>(sp =>

@@ -13,6 +13,7 @@ type WorkflowStudioYamlPanelProps = {
   readonly hasBlockingFindings: boolean;
   readonly hasConflict: boolean;
   readonly hasUnappliedChanges: boolean;
+  readonly editorLoading: boolean;
   readonly loading: boolean;
   readonly onApply: () => Promise<void>;
   readonly onBufferChange: (yaml: string) => void;
@@ -188,6 +189,7 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
   hasBlockingFindings,
   hasConflict,
   hasUnappliedChanges,
+  editorLoading,
   loading,
   onApply,
   onBufferChange,
@@ -198,11 +200,13 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
   const [messageApi, contextHolder] = message.useMessage();
   const gutterRef = React.useRef<HTMLDivElement | null>(null);
   const lineCount = Math.max(1, buffer.split("\n").length);
+  const showEditorLoading = Boolean(editorLoading && !buffer.trim() && !error);
   const applyDisabled = Boolean(
     applying ||
       loading ||
       hasConflict ||
       hasBlockingFindings ||
+      !hasUnappliedChanges ||
       !buffer.trim(),
   );
 
@@ -317,35 +321,47 @@ const WorkflowStudioYamlPanel: React.FC<WorkflowStudioYamlPanelProps> = ({
           })}
         </div>
       ) : null}
-      <div style={editorShellStyle}>
-        <div aria-hidden="true" ref={gutterRef} style={lineNumberGutterStyle}>
-          {Array.from({ length: lineCount }, (_, index) => (
-            <div key={index + 1}>{index + 1}</div>
-          ))}
+      {showEditorLoading ? (
+        <div
+          style={{
+            ...editorShellStyle,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Spin />
         </div>
-        <textarea
-          aria-label={t(
-            "teamMemberWorkflowStudio.yamlPanel.editorAria",
-            "Workflow YAML editor",
-          )}
-          autoFocus
-          onChange={(event) => {
-            if (!applying) {
-              onBufferChange(event.target.value);
-            }
-          }}
-          onScroll={(event) => {
-            if (gutterRef.current) {
-              gutterRef.current.scrollTop = event.currentTarget.scrollTop;
-            }
-          }}
-          readOnly={applying}
-          spellCheck={false}
-          style={textareaStyle}
-          value={buffer}
-          wrap="off"
-        />
-      </div>
+      ) : (
+        <div style={editorShellStyle}>
+          <div aria-hidden="true" ref={gutterRef} style={lineNumberGutterStyle}>
+            {Array.from({ length: lineCount }, (_, index) => (
+              <div key={index + 1}>{index + 1}</div>
+            ))}
+          </div>
+          <textarea
+            aria-label={t(
+              "teamMemberWorkflowStudio.yamlPanel.editorAria",
+              "Workflow YAML editor",
+            )}
+            autoFocus
+            onChange={(event) => {
+              if (!applying) {
+                onBufferChange(event.target.value);
+              }
+            }}
+            onScroll={(event) => {
+              if (gutterRef.current) {
+                gutterRef.current.scrollTop = event.currentTarget.scrollTop;
+              }
+            }}
+            readOnly={applying}
+            spellCheck={false}
+            style={textareaStyle}
+            value={buffer}
+            wrap="off"
+          />
+        </div>
+      )}
       <footer style={{ flex: "0 0 auto" }}>
         <Space align="center" style={{ justifyContent: "flex-end", width: "100%" }}>
           <Button disabled={applying} onClick={onClose}>

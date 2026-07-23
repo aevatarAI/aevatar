@@ -124,6 +124,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddElasticsearchStore<ProjectionScopeStatusDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ExternalIdentityBindingDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<AevatarOAuthClientDocument>(services, configuration, static document => document.Id);
+        TryAddElasticsearchStore<ManagedCodexCredentialDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<ChatRoutePolicyCurrentStateDocument>(services, configuration, static document => document.ActorId);
         TryAddElasticsearchStore<DeviceRegistrationDocument>(services, configuration, static document => document.Id);
         TryAddElasticsearchStore<UserAgentCatalogDocument>(services, configuration, static document => document.Id);
@@ -143,6 +144,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddInMemoryStore<ProjectionScopeStatusDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ExternalIdentityBindingDocument>(services, static document => document.Id);
         TryAddInMemoryStore<AevatarOAuthClientDocument>(services, static document => document.Id);
+        TryAddInMemoryStore<ManagedCodexCredentialDocument>(services, static document => document.Id);
         TryAddInMemoryStore<ChatRoutePolicyCurrentStateDocument>(services, static document => document.ActorId);
         TryAddInMemoryStore<DeviceRegistrationDocument>(services, static document => document.Id);
         TryAddInMemoryStore<UserAgentCatalogDocument>(services, static document => document.Id);
@@ -175,6 +177,7 @@ public static class MainnetAgentProjectionDocumentStoresExtensions
         TryAddReadModelDescriptor<ProjectionScopeStatusDocument>(services, "projection-scope-status", "ProjectionMaterializationScopeGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<ExternalIdentityBindingDocument>(services, "external-identity-binding", "ExternalIdentityBindingGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<AevatarOAuthClientDocument>(services, "aevatar-oauth-client", "AevatarOAuthClientGAgent", engineLabel, shape);
+        TryAddReadModelDescriptor<ManagedCodexCredentialDocument>(services, "managed-codex-credential", "ManagedCodexCredentialGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<ChatRoutePolicyCurrentStateDocument>(services, "chat-route-policy-current-state", "ChatRoutePolicyGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<DeviceRegistrationDocument>(services, "device-registration", "DeviceGAgent", engineLabel, shape);
         TryAddReadModelDescriptor<UserAgentCatalogDocument>(services, "user-agent-catalog", "UserAgentCatalogGAgent", engineLabel, shape);

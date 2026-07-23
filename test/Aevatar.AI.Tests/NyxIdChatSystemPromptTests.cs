@@ -1,3 +1,7 @@
+using System.Reflection;
+using Aevatar.AI.Abstractions.Prompting;
+using Aevatar.AI.Core.AgentProfiles;
+using Aevatar.AI.Core.Prompting;
 using Aevatar.GAgents.NyxidChat;
 using FluentAssertions;
 
@@ -11,9 +15,15 @@ public class NyxIdChatSystemPromptTests
     // composition while invariant assertions stay on the kernel itself.
     private static string ComposedAgentPrompt()
     {
-        var overlay = new SystemSkillOverlayDefaultProvider().GetCurrent(default);
-        overlay.Should().NotBeNull();
-        return $"{NyxIdChatSystemPrompt.Value}\n\n{overlay!.OverlayMarkdown}";
+        var floor = new BuiltInPromptFloorProvider().GetFloor();
+        return SystemPromptLayerComposer.Compose(
+            NyxIdChatSystemPrompt.Value,
+            floor,
+            global: null,
+            profile: null,
+            selectedSkill: null,
+            runtimeFacts: null,
+            conversation: null).Prompt;
     }
 
     [Fact]
@@ -30,11 +40,38 @@ public class NyxIdChatSystemPromptTests
         prompt.Should().Contain("agent_delivery_targets");
         prompt.Should().Contain("loaded skill metadata and instructions");
         prompt.Should().Contain("fetch live data through `nyxid_proxy`");
-        prompt.Should().Contain("required_service_slugs");
+        prompt.Should().Contain("required_nyx_services");
         prompt.Should().Contain("derive the digest from current facts");
         prompt.Should().Contain("post the digest to the negotiated chat target");
         prompt.Should().Contain("api-github");
         prompt.Should().NotContain("deadline-monitor");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldKeepExternalCapabilitySecretsOutOfChat()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain(
+            "Never ask the user to paste an API key, bearer token, OAuth secret, or downstream credential into chat");
+        prompt.Should().Contain("NyxID or the Host-owned Connector configuration owns credentials");
+        prompt.Should().NotContain(
+            "Credentials the user provides to configure a service are expected input. Accept them");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldRequireTypedReadinessBeforeWorkflowWrites()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("`list_external_workflow_capabilities`");
+        prompt.Should().Contain("`inspect_external_workflow_capability_readiness`");
+        prompt.Should().Contain("typed readiness status is `READY`");
+        prompt.Should().Contain("`user_service_id` is the NyxID capability identity");
+        prompt.Should().Contain("`service_slug_snapshot` is only a display and routing snapshot");
+        prompt.Should().Contain("`required_nyx_services`");
+        prompt.Should().NotContain("`required_service_slugs`");
+        prompt.Should().NotContain("Omit slug → discover all proxyable services");
     }
 
     [Fact]
@@ -50,7 +87,7 @@ public class NyxIdChatSystemPromptTests
     [Fact]
     public void Value_ShouldContainHonestSuccessRule()
     {
-        var prompt = NyxIdChatSystemPrompt.Value;
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("## Honest Success Rule");
         prompt.Should().Contain("successful mutating tool result or typed success receipt");
@@ -61,11 +98,60 @@ public class NyxIdChatSystemPromptTests
     [Fact]
     public void Value_ShouldRequireTypedMissingServiceBlocker()
     {
-        var prompt = NyxIdChatSystemPrompt.Value;
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
 
         prompt.Should().Contain("`nyxid_require_service`");
         prompt.Should().Contain("not listed in `<connected-services>`");
-        prompt.Should().Contain("Do not substitute a natural-language authorization explanation");
+        prompt.Should().Contain("verify live typed readiness");
+        prompt.Should().Contain("`SERVICE_REGISTRATION_REQUIRED`");
+        prompt.Should().Contain("must not fabricate a missing-service blocker");
         prompt.Should().Contain("does not create a pending approval");
+    }
+
+    [Fact]
+    public void ComposedPrompt_ShouldUseFinalToolSchemasAsConnectedServiceAuthority()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("final request's tool schemas are the only capability authority");
+        prompt.Should().Contain("nyxid_service_inventory");
+        prompt.Should().Contain("nyxid_service_operation__");
+        prompt.Should().Contain("unprofiled turn");
+        prompt.Should().Contain("They do not add tools or expand the authority expressed by the final tool schemas");
+    }
+
+    [Fact]
+    public void DecorateSystemPrompt_ShouldUseCatalogSlotsWithoutShadowCandidateBody()
+    {
+        var agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider());
+        var profileLayer = new ProfileRoutingPromptLayer(
+            "profile routing layer",
+            new ProfileRoutingPromptProvenance("profile-test"),
+            new PromptLayerBounds(1_024, 256));
+        var selectedLayer = new SelectedSkillPromptLayer(
+            "selected skill body",
+            new SelectedSkillPromptProvenance("selected-test"),
+            new PromptLayerBounds(1_024, 256));
+        var enforced = new AgentProfileTurnCatalog(
+            [], profileLayer, selectedLayer, "intent-alpha", "intent-alpha");
+        var shadow = new AgentProfileTurnCatalog(
+            [], profileLayer, null, null, "intent-shadow");
+
+        var enforcedPrompt = Decorate(agent, enforced);
+        var shadowPrompt = Decorate(agent, shadow);
+
+        enforcedPrompt.Should().Contain("profile routing layer");
+        enforcedPrompt.Should().Contain("<selected-skill-procedure>\nselected skill body");
+        shadowPrompt.Should().Contain("profile routing layer");
+        shadowPrompt.Should().NotContain("selected skill body");
+        shadowPrompt.Should().NotContain("selected-skill-procedure");
+    }
+
+    private static string Decorate(NyxIdChatGAgent agent, AgentProfileTurnCatalog catalog)
+    {
+        var method = typeof(NyxIdChatGAgent).GetMethod(
+            "DecorateSystemPrompt",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return (string)method.Invoke(agent, ["kernel", catalog])!;
     }
 }

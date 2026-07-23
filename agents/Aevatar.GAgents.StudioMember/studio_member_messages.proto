@@ -3,6 +3,7 @@ package aevatar.gagents.studio_member;
 option csharp_namespace = "Aevatar.GAgents.StudioMember";
 
 import "google/protobuf/timestamp.proto";
+import "workflow_capability_admission.proto";
 
 // ─── Canonical enums ───
 //
@@ -102,6 +103,7 @@ message StudioMemberBindingAuthorityState {
 message StudioMemberWorkflowBindingRequest {
   repeated string workflow_yamls = 1;
   string workflow_id = 2;
+  aevatar.workflow.WorkflowCapabilityAdmissionPlan capability_admission_plan = 3;
 }
 
 message StudioMemberScriptBindingRequest {

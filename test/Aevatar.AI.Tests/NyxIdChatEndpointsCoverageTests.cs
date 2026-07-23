@@ -29,6 +29,7 @@ using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.AGUI.Contracts;
 using FluentAssertions;
 using Google.Protobuf;
@@ -1344,6 +1345,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-1");
+        request.CommandAttemptId.Should().Be(result.Receipt.CommandId);
         request.ScopeId.Should().Be("scope-a");
         request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         request.Metadata.Should().NotContainKey("scope_id");
@@ -2544,18 +2546,6 @@ public partial class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public void ComputeTokenHash_ShouldBeDeterministicShortLowercaseHex()
-    {
-        var method = EndpointsType.GetMethod("ComputeTokenHash", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var first = method.Invoke(null, ["abc"])!.Should().NotBeNull().And.BeOfType<string>().Subject;
-        var second = method.Invoke(null, ["abc"])!.Should().NotBeNull().And.BeOfType<string>().Subject;
-
-        first.Should().Be(second);
-        first.Length.Should().Be(16);
-        first.Should().MatchRegex("^[a-f0-9]{16}$");
-    }
-
-    [Fact]
     public void ResolveReplyTokenExpiresAtUnixMs_ShouldUseJwtExpiryAndFallbackTtl()
     {
         var relay = CreateRelayInvocationDependencies();
@@ -2588,45 +2578,6 @@ public partial class NyxIdChatEndpointsCoverageTests
         DateTimeOffset.FromUnixTimeMilliseconds(malformedFallback)
             .Should().BeOnOrAfter(before.AddSeconds(6))
             .And.BeOnOrBefore(after.AddSeconds(9));
-    }
-
-    [Fact]
-    public async Task BuildConnectedServicesContext_ShouldRenderServiceHintsAndFallbackMessage()
-    {
-        var arrayPayload = """
-            [
-              {"slug":"calendar","label":"Calendar","base_url":"https://api.example.com"}
-            ]
-            """;
-        var arrayContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            arrayPayload, null, "", CancellationToken.None);
-        arrayContext.Should().Contain("calendar");
-        arrayContext.Should().Contain("Use nyxid_proxy");
-
-        var emptyContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            """{"services":[]}""", null, "", CancellationToken.None);
-        emptyContext.Should().Contain("No services connected yet");
-    }
-
-    [Fact]
-    public async Task BuildConnectedServicesContext_ShouldHandleDataShape_AndInvalidJson()
-    {
-        var dataPayload = """
-            {
-              "data":[
-                {"slug":"github","name":"GitHub","endpoint_url":"https://api.github.com"}
-              ]
-            }
-            """;
-        var dataContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            dataPayload, null, "", CancellationToken.None);
-        dataContext.Should().Contain("GitHub");
-        dataContext.Should().Contain("https://api.github.com");
-
-        var invalidContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
-            "{ invalid", null, "", CancellationToken.None);
-        invalidContext.Should().Contain("No services connected yet");
-        invalidContext.Should().Contain("Use nyxid_proxy");
     }
 
     [Fact]
@@ -2671,66 +2622,6 @@ public partial class NyxIdChatEndpointsCoverageTests
         diag.Should().Contain("Token: present");
         diag.Should().Contain("timeout");
     }
-
-    [Fact]
-    public async Task NyxIdChatSessionEventProjector_ShouldPublishTypedAguiFrames_FromEventEnvelopeInput()
-    {
-        var sessionHub = new RecordingNyxIdChatSessionEventHub();
-        var projector = new NyxIdChatSessionEventProjector(sessionHub);
-        var context = new NyxIdChatSessionProjectionContext
-        {
-            RootActorId = "actor-1",
-            SessionId = "session-1",
-            ProjectionKind = NyxIdChatProjectionKinds.ChatSession,
-        };
-
-        await projector.ProjectAsync(
-            context,
-            CommittedNyxIdCompletionEnvelope(
-                context.RootActorId,
-                new RoleChatSessionCompletedEvent
-                {
-                    SessionId = "session-1",
-                    Content = "done",
-                    ContentEmitted = false,
-                    Usage = new TokenUsagePayload
-                    {
-                        PromptTokens = 2,
-                        CompletionTokens = 4,
-                        TotalTokens = 6,
-                    },
-                    Model = "nyxid-model",
-                }),
-            CancellationToken.None);
-
-        sessionHub.Published.Should().HaveCount(5);
-        sessionHub.Published[0].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageStart);
-        sessionHub.Published[1].Event.TextMessageContent.Delta.Should().Be("done");
-        sessionHub.Published[2].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.Usage);
-        sessionHub.Published[2].Event.Usage.Available.Should().BeTrue();
-        sessionHub.Published[2].Event.Usage.TotalTokens.Should().Be(6);
-        sessionHub.Published[3].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.TextMessageEnd);
-        sessionHub.Published[4].Event.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunFinished);
-        sessionHub.Published.Should().OnlyContain(x => x.RootActorId == "actor-1" && x.SessionId == "session-1");
-    }
-
-    private static EventEnvelope CommittedNyxIdCompletionEnvelope(string actorId, RoleChatSessionCompletedEvent evt) => new()
-    {
-        Id = Guid.NewGuid().ToString("N"),
-        Payload = Any.Pack(new CommittedStateEventPublished
-        {
-            StateEvent = new StateEvent
-            {
-                EventId = Guid.NewGuid().ToString("N"),
-                Version = 1,
-                EventData = Any.Pack(evt),
-                Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            },
-            StateRoot = Any.Pack(new RoleGAgentState()),
-        }),
-        Route = EnvelopeRouteSemantics.CreateObserverPublication(actorId),
-        Timestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-    };
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
     {
@@ -2876,7 +2767,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         var facade = new NyxIdChatLifecycleFacade(
             new DefaultCommandDispatchService<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
                 new DefaultCommandDispatchPipeline<NyxIdChatConversationCreateCommand, NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandReceipt, NyxIdChatLifecycleCommandStartError>(
-                    new NyxIdChatConversationCreateCommandTargetResolver(runtime, routeQueryPort, resolver),
+                    new NyxIdChatConversationCreateCommandTargetResolver(runtime, routeQueryPort, resolver, new DisabledNyxIdChatAgentProfileSnapshotSource()),
                     new DefaultCommandContextPolicy(),
                     new NyxIdChatLifecycleCommandEnvelopeFactory(),
                     new ActorCommandTargetDispatcher<NyxIdChatConversationCreateCommandTarget>(dispatchPort),
@@ -2888,7 +2779,6 @@ public partial class NyxIdChatEndpointsCoverageTests
                     new NyxIdChatLifecycleCommandEnvelopeFactory(),
                     new ActorCommandTargetDispatcher<NyxIdChatConversationDeleteCommandTarget>(dispatchPort),
                     new NyxIdChatDeleteLifecycleCommandReceiptFactory())));
-
         return RebuildArgs(parameters, args, facade);
     }
 
@@ -3456,7 +3346,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         {
             Id = id;
             _runtime = (StubActorRuntime)services.GetRequiredService<IActorRuntime>();
-            _agent = new NyxIdChatGAgent
+            _agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider())
             {
                 Services = services,
                 EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
@@ -3790,35 +3680,6 @@ public partial class NyxIdChatEndpointsCoverageTests
     private sealed record StubNyxIdChatSessionProjectionLease(string ActorId, string SessionId)
         : INyxIdChatSessionProjectionLease;
 
-    private sealed class RecordingNyxIdChatSessionEventHub : IProjectionSessionEventHub<AGUIEvent>
-    {
-        public List<(string RootActorId, string SessionId, AGUIEvent Event)> Published { get; } = [];
-
-        public Task PublishAsync(
-            string rootActorId,
-            string sessionId,
-            AGUIEvent evt,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            Published.Add((rootActorId, sessionId, evt));
-            return Task.CompletedTask;
-        }
-
-        public Task<IAsyncDisposable> SubscribeAsync(
-            string rootActorId,
-            string sessionId,
-            Func<AGUIEvent, ValueTask> handler,
-            CancellationToken ct = default)
-        {
-            _ = rootActorId;
-            _ = sessionId;
-            _ = handler;
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
-        }
-    }
-
     private sealed class ThrowingNyxIdChatSessionProjectionPort(Exception exception) : INyxIdChatSessionProjectionPort
     {
         public bool ProjectionEnabled => true;
@@ -3986,8 +3847,4 @@ public partial class NyxIdChatEndpointsCoverageTests
             Task.FromResult(promptSection);
     }
 
-    private sealed class NoopDisposable : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
 }

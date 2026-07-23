@@ -1,6 +1,7 @@
 using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -79,8 +80,17 @@ internal static class StudioProvisioningEndpoints
 
         try
         {
+            var executionMode = request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron)
+                ? ExternalCapabilityExecutionMode.Durable
+                : ExternalCapabilityExecutionMode.Interactive;
+            var admittedRequest = request with
+            {
+                CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
+                    http,
+                    executionMode),
+            };
             var response = await provisioningService.ProvisionAsync(
-                scopeId, callerCredential, request, ct);
+                scopeId, callerCredential, admittedRequest, ct);
 
             // The bind and the run are both asynchronous, so provisioning always
             // ACKs with 202 Accepted: the member + bind + schedule were accepted

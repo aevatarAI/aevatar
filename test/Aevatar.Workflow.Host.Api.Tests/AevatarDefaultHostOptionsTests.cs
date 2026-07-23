@@ -13,7 +13,8 @@ public sealed class AevatarDefaultHostOptionsTests
     {
         var builder = WebApplication.CreateBuilder();
 
-        builder.AddAevatarDefaultHost();
+        builder.AddAevatarDefaultHost(
+            configureHost: options => options.AllowLocalFileSecretsStore = false);
 
         var hostedServices = builder.Services
             .Where(x => x.ServiceType == typeof(IHostedService))
@@ -28,7 +29,11 @@ public sealed class AevatarDefaultHostOptionsTests
         var builder = WebApplication.CreateBuilder();
 
         builder.AddAevatarDefaultHost(
-            configureHost: options => options.EnableConnectorBootstrap = false);
+            configureHost: options =>
+            {
+                options.AllowLocalFileSecretsStore = false;
+                options.EnableConnectorBootstrap = false;
+            });
 
         var hostedServices = builder.Services
             .Where(x => x.ServiceType == typeof(IHostedService))

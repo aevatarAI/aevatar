@@ -26,6 +26,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Managed Codex Execution](canon/managed-codex-execution.md)
 - [Module Placement Map](canon/module-placement-map.md)
 - [NyxIdChat API Identity And Streaming Contract](canon/nyxid-chat-api.md)
+- [NyxID Chat Agent Profile Binding](canon/nyxid-chat-agent-profile-binding.md)
 - [NyxID Connected-Service LLM Tools](canon/nyxid-connected-service-tools.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
 - [NyxID Responses 直连](canon/nyxid-responses-direct.md)
@@ -39,6 +40,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Aevatar /status 状态面板架构](canon/status-dashboard.md)
 - [System Skill Overlay Authoring Contract](canon/system-skill-overlay-authoring-contract.md)
 - [Voice Presence Integration — aevatar as the /ws/voice Brain](canon/voice-presence-integration.md)
+- [Work Orders](canon/work-orders.md)
 - [Workflow Primitives 参考手册](canon/workflow-primitives.md)
 - [工作流引擎设计与实践](canon/workflow-runtime.md)
 
@@ -87,6 +89,7 @@ Immutable records of architectural choices and their rationale.
 - [定时任务 Agent Key 凭证引用补充决策](adr/0041-scheduled-invocation-agent-key-credential-reference.md)
 - [Scheduled Invocation Durable Credential Uses SecretReference](adr/0042-scheduled-invocation-durable-secret-reference.md)
 - [Scheduled Credential Lifecycle Compensation](adr/0043-scheduled-credential-lifecycle-compensation.md)
+- [Managed Codex gVisor Direct-Token Isolation Model](adr/0044-managed-codex-gvisor-direct-token.md)
 - [Agent Kind Primary-Only Identity](adr/2026-06-04-agent-kind-primary-only-identity.md)
 
 ## History

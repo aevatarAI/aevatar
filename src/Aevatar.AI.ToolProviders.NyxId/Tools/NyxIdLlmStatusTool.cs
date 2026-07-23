@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to check NyxID-confirmed LLM-capable services and models.</summary>
-public sealed class NyxIdLlmStatusTool : IAgentTool
+public sealed class NyxIdLlmStatusTool : INyxIdBuiltInTool
 {
     private readonly NyxIdApiClient _client;
 

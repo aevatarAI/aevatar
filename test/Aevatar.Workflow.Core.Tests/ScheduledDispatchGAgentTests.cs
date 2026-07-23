@@ -14,6 +14,7 @@ using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.Workflow.Core;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Time.Testing;
 
@@ -25,6 +26,37 @@ public sealed class ScheduledDispatchGAgentTests
     private const string NextFireCallbackId = "scheduled-dispatch-next-fire";
     private const string TeamCredentialExpiryCallbackId = "scheduled-dispatch-team-credential-expiry";
     private const string ManualFireIdempotencyKey = "manual-fire";
+
+    [Fact]
+    public void AuthorizationFactState_ShouldReserveRemovedRuntimeNodeGrantTopology()
+    {
+        var file = FileDescriptorProto.Parser.ParseFrom(
+            ScheduledInvocationAuthorizationFactState.Descriptor.File.SerializedData);
+        var authorizationFact = file.MessageType.Single(message =>
+            message.Name == nameof(ScheduledInvocationAuthorizationFactState));
+
+        authorizationFact.Field.Should().NotContain(field =>
+            field.Number == 10 || field.Name == "node_grants");
+        authorizationFact.ReservedName.Should().Contain("node_grants");
+        authorizationFact.ReservedRange.Should().Contain(range =>
+            range.Start <= 10 && 10 < range.End);
+        file.MessageType.Select(message => message.Name).Should()
+            .NotContain("ScheduledInvocationAuthorizationNodeGrantState");
+
+        var authority = file.MessageType.Single(message =>
+            message.Name == nameof(ScheduledInvocationAuthorizationAuthorityState));
+        authority.Field.Should().NotContain(field =>
+            field.Number == 8 || field.Name == "catalog_external_revision");
+        authority.ReservedName.Should().Contain("catalog_external_revision");
+        authority.ReservedRange.Should().Contain(range =>
+            range.Start <= 8 && 8 < range.End);
+        authority.Field.Should().Contain(field =>
+            field.Number == 10 && field.Name == "catalog_contract_version");
+        authority.Field.Should().Contain(field =>
+            field.Number == 11 && field.Name == "catalog_policy_version");
+        authority.Field.Should().Contain(field =>
+            field.Number == 12 && field.Name == "catalog_evaluated_at");
+    }
 
     [Fact]
     public async Task HandleFireAsync_ShouldSuppressDuplicateDispatchAfterTerminalRecordIsDurable()
@@ -1617,6 +1649,7 @@ public sealed class ScheduledDispatchGAgentTests
         await agent.ActivateAsync();
         var observedAt = new DateTimeOffset(2026, 7, 15, 7, 0, 0, TimeSpan.Zero);
         var freshUntil = observedAt.AddHours(2);
+        var evaluatedAt = observedAt.AddMinutes(-5);
         var expiresAt = observedAt.AddHours(1);
         var authorizationFact = new ScheduledInvocationAuthorizationFactState
         {
@@ -1648,8 +1681,10 @@ public sealed class ScheduledDispatchGAgentTests
                 CatalogStateVersion = 15,
                 CatalogObservedAt = Timestamp.FromDateTimeOffset(observedAt),
                 CatalogFreshUntil = Timestamp.FromDateTimeOffset(freshUntil),
-                CatalogExternalRevision = "catalog-rev-alpha",
                 CatalogContentDigest = "catalog-digest-alpha",
+                CatalogContractVersion = "scope-plan-contract/v1",
+                CatalogPolicyVersion = "scope-plan-policy/v1",
+                CatalogEvaluatedAt = Timestamp.FromDateTimeOffset(evaluatedAt),
             },
         };
         authorizationFact.ServiceGrants.Add(new ScheduledInvocationAuthorizationServiceGrantState
@@ -1701,8 +1736,10 @@ public sealed class ScheduledDispatchGAgentTests
             15,
             observedAt,
             freshUntil,
-            "catalog-rev-alpha",
-            "catalog-digest-alpha"));
+            "catalog-digest-alpha",
+            "scope-plan-contract/v1",
+            "scope-plan-policy/v1",
+            evaluatedAt));
     }
 
     [Fact]

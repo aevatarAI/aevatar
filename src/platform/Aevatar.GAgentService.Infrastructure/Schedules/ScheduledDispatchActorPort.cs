@@ -589,8 +589,10 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 CatalogStateVersion = fact.Authority.CatalogStateVersion,
                 CatalogObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogObservedAt),
                 CatalogFreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogFreshUntil),
-                CatalogExternalRevision = fact.Authority.CatalogExternalRevision,
                 CatalogContentDigest = fact.Authority.CatalogContentDigest,
+                CatalogContractVersion = fact.Authority.CatalogContractVersion,
+                CatalogPolicyVersion = fact.Authority.CatalogPolicyVersion,
+                CatalogEvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogEvaluatedAt),
             },
         };
         state.ServiceGrants.Add(fact.ServiceGrants.Select(static grant =>
@@ -603,17 +605,6 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             item.NodeIds.Add(grant.NodeIds);
             return item;
         }));
-        state.NodeGrants.Add(fact.NodeGrants.Select(static grant =>
-            new ScheduledInvocationAuthorizationNodeGrantState
-            {
-                UserServiceId = grant.UserServiceId,
-                NodeId = grant.NodeId,
-                DisplayName = grant.DisplayName,
-                Role = grant.Role,
-                EdgeKind = grant.EdgeKind,
-                BindingId = grant.BindingId,
-                RoutePriority = grant.RoutePriority,
-            }));
         return state;
     }
 

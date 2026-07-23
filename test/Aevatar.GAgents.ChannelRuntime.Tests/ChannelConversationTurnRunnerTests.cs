@@ -2721,6 +2721,51 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
+    public async Task RunInboundAsync_ShouldPreserveOwnerScopeId_WhenSenderNyxUserIdLookupFails()
+    {
+        var broker = new InMemoryCapabilityBroker();
+        broker.SeedBinding(
+            new ExternalSubjectRef
+            {
+                Platform = "lark",
+                Tenant = "scope-1",
+                ExternalUserId = "ou_user_1",
+            },
+            new BindingId { Value = "bnd-user-1" });
+
+        var userResolver = new StubNyxIdCurrentUserResolver();
+        var services = new ServiceCollection()
+            .AddSingleton<IExternalIdentityBindingQueryPort>(broker)
+            .AddSingleton<INyxIdCapabilityBroker>(broker)
+            .AddSingleton<INyxIdCurrentUserResolver>(userResolver)
+            .AddSingleton<IOwnerScopeResolver>(new StubOwnerScopeResolver("owner-user-1"))
+            .BuildServiceProvider();
+        var runner = CreateRunner(BuildRegistrationQueryPort(), new RecordingPlatformAdapter(), services);
+
+        var result = await runner.RunInboundAsync(
+            BuildInboundActivity(
+                "hello",
+                "msg-owner-scope-bound-private-users-me-fails-1",
+                ConversationScope.DirectMessage,
+                "oc_p2p_chat_1",
+                transportExtras: new TransportExtras
+                {
+                    NyxPlatform = "lark",
+                }),
+            CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        result.LlmReplyRequest.Should().NotBeNull();
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.Caller.ScopeId.Should().Be("scope-1");
+        toolContext.Caller.OwnerSubject.Should().Be("scope-1");
+        toolContext.Caller.OwnerScopeId.Should().Be("owner-user-1");
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        toolContext.SenderBinding.NyxUserId.Should().BeNull();
+        userResolver.Tokens.Should().ContainSingle().Which.Should().Be("test-access-token-for-bnd-user-1");
+    }
+
+    [Fact]
     public async Task RunInboundAsync_ShouldPreserveBinding_WhenGrantLacksRequiredService()
     {
         var subject = new ExternalSubjectRef

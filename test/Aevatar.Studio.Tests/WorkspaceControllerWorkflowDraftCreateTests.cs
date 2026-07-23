@@ -82,7 +82,7 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
             new WorkspaceService(workspaceQueryPort, workspaceCommandPort, yamlDocumentService),
             new AppScopedWorkflowService(
                 yamlDocumentService,
-                new RecordingWorkflowDefinitionParser(),
+                new StudioWorkflowCapabilityAdmissionTestService(),
                 workspaceQueryPort,
                 workspaceCommandPort),
             new StubAppScopeResolver(scopeContext),
@@ -149,11 +149,4 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
         }
     }
 
-    private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
-    {
-        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
-            string workflowYaml,
-            CancellationToken ct = default) =>
-            Task.FromResult(WorkflowYamlParseResult.Success("workflow"));
-    }
 }

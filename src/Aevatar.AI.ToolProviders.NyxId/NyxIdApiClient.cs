@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.GAgents.Channel.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -60,16 +61,12 @@ internal sealed record NyxIdApiErrorEnvelope(
 internal sealed record NyxIdProxyError(
     int HttpStatus,
     string ErrorKey,
-    int ErrorCode,
-    string Message)
+    int ErrorCode)
 {
     public bool IsAuthorizationRequired =>
-        (HttpStatus == 401 &&
-         ErrorCode == 1001 &&
-         string.Equals(ErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase)) ||
-        (HttpStatus == 403 &&
-         ErrorCode == 1002 &&
-         string.Equals(ErrorKey, "forbidden", StringComparison.OrdinalIgnoreCase));
+        HttpStatus == 401 &&
+        ErrorCode == 1001 &&
+        string.Equals(ErrorKey, "unauthorized", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
@@ -107,26 +104,31 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 !outer.TryGetProperty("error", out var errorMarker) ||
                 errorMarker.ValueKind != JsonValueKind.True ||
                 !outer.TryGetProperty("status", out var statusProperty) ||
-                !statusProperty.TryGetInt32(out var status) ||
-                !outer.TryGetProperty("body", out var bodyProperty) ||
-                bodyProperty.ValueKind != JsonValueKind.String)
+                !statusProperty.TryGetInt32(out var status))
             {
                 return false;
             }
 
-            var body = bodyProperty.GetString();
-            if (string.IsNullOrWhiteSpace(body))
-                return false;
+            var errorKey = string.Empty;
+            var errorCode = 0;
+            if (outer.TryGetProperty("body", out var bodyProperty) &&
+                bodyProperty.ValueKind == JsonValueKind.String &&
+                !string.IsNullOrWhiteSpace(bodyProperty.GetString()))
+            {
+                try
+                {
+                    using var bodyDocument = JsonDocument.Parse(bodyProperty.GetString()!);
+                    var bodyRoot = bodyDocument.RootElement;
+                    errorKey = TryGetString(bodyRoot, "error") ?? string.Empty;
+                    errorCode = TryGetInt(bodyRoot, "error_code") ?? 0;
+                }
+                catch (JsonException)
+                {
+                    // The typed outer envelope is sufficient to classify an upstream HTTP failure.
+                }
+            }
 
-            using var bodyDocument = JsonDocument.Parse(body);
-            var bodyRoot = bodyDocument.RootElement;
-            var errorKey = TryGetString(bodyRoot, "error");
-            var errorCode = TryGetInt(bodyRoot, "error_code");
-            var message = TryGetString(bodyRoot, "message");
-            if (string.IsNullOrWhiteSpace(errorKey) || errorCode is null || message is null)
-                return false;
-
-            error = new NyxIdProxyError(status, errorKey, errorCode.Value, message);
+            error = new NyxIdProxyError(status, errorKey, errorCode);
             return true;
         }
         catch (JsonException)
@@ -231,18 +233,41 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     // ─── Proxy ───
 
-    public async Task<string> ProxyRequestAsync(
+    public Task<string> ProxyRequestAsync(
         string token,
         string slug,
         string path,
         string method,
         string? body,
         Dictionary<string, string>? extraHeaders,
+        CancellationToken ct) =>
+        ProxyRequestCoreAsync(token, slug, userServiceId: null, path, method, body, extraHeaders, ct);
+
+    public Task<string> ProxyRequestAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
         CancellationToken ct)
     {
-        var baseUrl = GetBaseUrl();
-        var normalizedPath = path.TrimStart('/');
-        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        return ProxyRequestCoreAsync(token, slug, userServiceId.Trim(), path, method, body, extraHeaders, ct);
+    }
+
+    private async Task<string> ProxyRequestCoreAsync(
+        string token,
+        string slug,
+        string? userServiceId,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        var url = BuildProxyUrl(slug, userServiceId, path);
 
         var httpMethod = new HttpMethod(method.ToUpperInvariant());
         using var request = new HttpRequestMessage(httpMethod, url);
@@ -363,9 +388,26 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string path,
         Dictionary<string, string>? extraHeaders,
         CancellationToken ct) =>
-        await ProxyGetBinaryResponseAsync(
+        await ProxyGetBinaryResponseCoreAsync(
             token,
             slug,
+            userServiceId: null,
+            path,
+            extraHeaders,
+            NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes,
+            ct);
+
+    public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct) =>
+        await ProxyGetBinaryResponseCoreAsync(
+            token,
+            slug,
+            userServiceId,
             path,
             extraHeaders,
             NyxIdToolOptions.DefaultProxyFileArtifactMaxBytes,
@@ -377,11 +419,46 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         string path,
         Dictionary<string, string>? extraHeaders,
         long maxBytes,
+        CancellationToken ct) =>
+        await ProxyGetBinaryResponseCoreAsync(
+            token,
+            slug,
+            userServiceId: null,
+            path,
+            extraHeaders,
+            maxBytes,
+            ct);
+
+    public async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseAsync(
+        string token,
+        string slug,
+        string userServiceId,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
         CancellationToken ct)
     {
-        var baseUrl = GetBaseUrl();
-        var normalizedPath = path.TrimStart('/');
-        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
+        ArgumentException.ThrowIfNullOrWhiteSpace(userServiceId);
+        return await ProxyGetBinaryResponseCoreAsync(
+            token,
+            slug,
+            userServiceId.Trim(),
+            path,
+            extraHeaders,
+            maxBytes,
+            ct);
+    }
+
+    private async Task<NyxIdProxyBinaryResponse> ProxyGetBinaryResponseCoreAsync(
+        string token,
+        string slug,
+        string? userServiceId,
+        string path,
+        Dictionary<string, string>? extraHeaders,
+        long maxBytes,
+        CancellationToken ct)
+    {
+        var url = BuildProxyUrl(slug, userServiceId, path);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -391,6 +468,38 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
 
         return await SendBinaryResponseAsync(request, NormalizeProxyFileArtifactMaxBytes(maxBytes), ct);
+    }
+
+    private string BuildProxyUrl(string slug, string? userServiceId, string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(slug);
+        ArgumentNullException.ThrowIfNull(path);
+        var baseUrl = GetBaseUrl();
+        var normalizedPath = path.TrimStart('/');
+        var fragmentIndex = normalizedPath.IndexOf('#', StringComparison.Ordinal);
+        if (fragmentIndex >= 0)
+            normalizedPath = normalizedPath[..fragmentIndex];
+
+        var queryIndex = normalizedPath.IndexOf('?', StringComparison.Ordinal);
+        var resourcePath = queryIndex >= 0 ? normalizedPath[..queryIndex] : normalizedPath;
+        var query = queryIndex >= 0 ? normalizedPath[(queryIndex + 1)..] : string.Empty;
+        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug.Trim())}/{resourcePath}";
+        if (string.IsNullOrWhiteSpace(userServiceId))
+            return query.Length == 0 ? url : $"{url}?{query}";
+
+        // _nyxid_via is a NyxID-reserved routing fact. The exact server-selected
+        // identity must be the only value sent, because NyxID resolves the first one.
+        var businessQuery = string.Join(
+            '&',
+            query.Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Where(static part => !string.Equals(
+                    part.Split('=', 2)[0],
+                    "_nyxid_via",
+                    StringComparison.Ordinal)));
+        var exactRoute = $"_nyxid_via={Uri.EscapeDataString(userServiceId.Trim())}";
+        return businessQuery.Length == 0
+            ? $"{url}?{exactRoute}"
+            : $"{url}?{exactRoute}&{businessQuery}";
     }
 
     // ─── SSH ───
@@ -428,6 +537,58 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
 
     public Task<string> CreateApiKeyAsync(string token, string requestBody, CancellationToken ct) =>
         PostAsync(token, "/api/v1/api-keys", requestBody, ct);
+
+    /// <summary>
+    /// Returns the authenticated actor's permission-scoped personal and organization
+    /// <c>UserService</c> inventory from NyxID's published API.
+    /// </summary>
+    public Task<string> ListUserServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/user-services", ct);
+
+    /// <summary>
+    /// Requests NyxID's authoritative constrained API-key grants for an exact service set.
+    /// The raw response is parsed by <see cref="NyxIdApiAccessResponseParser"/> at this adapter boundary.
+    /// </summary>
+    public Task<string> PlanApiKeyScopeAsync(
+        string token,
+        IReadOnlyCollection<string> selectedServiceIds,
+        string? targetOrganizationId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(selectedServiceIds);
+        var serviceIds = selectedServiceIds.ToArray();
+        if (serviceIds.Any(static id =>
+                string.IsNullOrWhiteSpace(id) ||
+                !string.Equals(id, id.Trim(), StringComparison.Ordinal)))
+        {
+            throw new ArgumentException(
+                "Selected NyxID service ids must be non-empty normalized values.",
+                nameof(selectedServiceIds));
+        }
+        if (serviceIds.Distinct(StringComparer.Ordinal).Count() != serviceIds.Length)
+        {
+            throw new ArgumentException(
+                "Selected NyxID service ids must not contain duplicates.",
+                nameof(selectedServiceIds));
+        }
+        if (targetOrganizationId is not null &&
+            (string.IsNullOrWhiteSpace(targetOrganizationId) ||
+             !string.Equals(targetOrganizationId, targetOrganizationId.Trim(), StringComparison.Ordinal)))
+        {
+            throw new ArgumentException(
+                "The NyxID target organization id must be a normalized value when provided.",
+                nameof(targetOrganizationId));
+        }
+
+        var requestBody = targetOrganizationId is null
+            ? JsonSerializer.Serialize(new { selected_service_ids = serviceIds })
+            : JsonSerializer.Serialize(new
+            {
+                selected_service_ids = serviceIds,
+                target_org_id = targetOrganizationId,
+            });
+        return PostAsync(token, "/api/v1/api-keys/scope-plan", requestBody, ct);
+    }
 
     // ─── Nodes ───
 
@@ -487,6 +648,9 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     public Task<string> UpdateServiceAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", body, ct);
 
+    public Task<string> UpdateServiceRouteAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
+
     // ─── Proxy (additions) ───
 
     public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
@@ -499,6 +663,49 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
     /// </summary>
     public Task<string> GetProxyServiceOpenApiAsync(string token, string serviceId, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/proxy/services/{Uri.EscapeDataString(serviceId)}/openapi.json", ct);
+
+    public async Task<string> ProxyExactServiceRequestAsync(
+        string token,
+        NyxIdProxyRouteConstraint routeConstraint,
+        string userServiceId,
+        string relativePath,
+        NyxIdServiceHttpMethod method,
+        IReadOnlyList<KeyValuePair<string, string>> query,
+        string? jsonBody,
+        Dictionary<string, string>? headers,
+        CancellationToken ct)
+    {
+        var normalizedPath = NormalizeExactProxyPath(relativePath);
+        var route = routeConstraint.RouteCase switch
+        {
+            NyxIdProxyRouteConstraint.RouteOneofCase.CatalogServiceId =>
+                $"{Uri.EscapeDataString(routeConstraint.CatalogServiceId)}",
+            NyxIdProxyRouteConstraint.RouteOneofCase.ServiceSlug =>
+                $"s/{Uri.EscapeDataString(routeConstraint.ServiceSlug)}",
+            _ => throw new InvalidOperationException("missing_route_constraint"),
+        };
+        var queryParts = new List<string>(query.Count + 1);
+        foreach (var pair in query)
+        {
+            if (pair.Key.StartsWith("_nyxid_", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("reserved_query_name");
+            queryParts.Add($"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}");
+        }
+        queryParts.Add($"_nyxid_via={Uri.EscapeDataString(userServiceId)}");
+
+        var url = $"{GetBaseUrl()}/api/v1/proxy/{route}/{normalizedPath}?{string.Join('&', queryParts)}";
+        var httpMethod = ToHttpMethod(method);
+        using var request = new HttpRequestMessage(httpMethod, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var callerSpecifiedUserAgent = ApplyExtraHeaders(request, headers);
+        if (!callerSpecifiedUserAgent)
+            request.Headers.TryAddWithoutValidation(UserAgentHeaderName, DefaultProxyUserAgent);
+        if (!string.IsNullOrEmpty(jsonBody) && httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head)
+            request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+
+        ApplyIdempotencyKey(request, httpMethod);
+        return await SendAsync(request, ct);
+    }
 
     // ─── API Keys (additions) ───
 
@@ -955,6 +1162,46 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         return callerSpecifiedUserAgent;
     }
 
+    private static string NormalizeExactProxyPath(string relativePath)
+    {
+        var candidate = relativePath.Trim();
+        var withoutLeadingSlash = candidate.TrimStart('/');
+        if (string.IsNullOrWhiteSpace(candidate) ||
+            candidate.StartsWith("//", StringComparison.Ordinal) ||
+            Uri.TryCreate(withoutLeadingSlash, UriKind.Absolute, out _) ||
+            candidate.Contains('?', StringComparison.Ordinal) ||
+            candidate.Contains('#', StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("invalid_relative_path");
+        }
+
+        var segments = candidate.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0)
+            throw new InvalidOperationException("invalid_relative_path");
+        var normalized = new List<string>(segments.Length);
+        foreach (var segment in segments)
+        {
+            var decoded = Uri.UnescapeDataString(segment);
+            if (decoded is "." or "..")
+                throw new InvalidOperationException("invalid_relative_path");
+            normalized.Add(Uri.EscapeDataString(decoded));
+        }
+
+        return string.Join('/', normalized);
+    }
+
+    private static HttpMethod ToHttpMethod(NyxIdServiceHttpMethod method) => method switch
+    {
+        NyxIdServiceHttpMethod.Get => HttpMethod.Get,
+        NyxIdServiceHttpMethod.Head => HttpMethod.Head,
+        NyxIdServiceHttpMethod.Options => HttpMethod.Options,
+        NyxIdServiceHttpMethod.Post => HttpMethod.Post,
+        NyxIdServiceHttpMethod.Put => HttpMethod.Put,
+        NyxIdServiceHttpMethod.Patch => HttpMethod.Patch,
+        NyxIdServiceHttpMethod.Delete => HttpMethod.Delete,
+        _ => throw new InvalidOperationException("unsupported_http_method"),
+    };
+
     private static void ApplyIdempotencyKey(HttpRequestMessage request, HttpMethod httpMethod)
     {
         if (httpMethod == HttpMethod.Get ||
@@ -1031,8 +1278,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning(
-                    "NyxID API request failed: {Method} {Url} -> {Status}",
-                    request.Method, request.RequestUri, (int)response.StatusCode);
+                    "NyxID API request failed: {Method} -> {Status}",
+                    request.Method, (int)response.StatusCode);
                 var retryAfter = response.Headers.RetryAfter?.Delta;
                 var retryAfterJson = retryAfter.HasValue
                     ? $", \"retry_after_seconds\": {(int)Math.Ceiling(retryAfter.Value.TotalSeconds)}"
@@ -1053,8 +1300,11 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "NyxID API request exception: {Method} {Url}", request.Method, request.RequestUri);
-            return $"{{\"error\": true, \"message\": {EscapeJsonString(ex.Message)}}}";
+            _logger.LogWarning(
+                "NyxID API request exception: {Method} exceptionType={ExceptionType}",
+                request.Method,
+                ex.GetType().Name);
+            return """{"error":true,"status":0,"body":""}""";
         }
     }
 
@@ -1079,8 +1329,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                     Math.Min(maxBytes, 64 * 1024),
                     ct);
                 _logger.LogWarning(
-                    "NyxID binary proxy request failed: {Method} {Url} -> {Status}",
-                    request.Method, request.RequestUri, (int)response.StatusCode);
+                    "NyxID binary proxy request failed: {Method} -> {Status}",
+                    request.Method, (int)response.StatusCode);
                 return new NyxIdProxyBinaryResponse(
                     false,
                     [],
@@ -1094,8 +1344,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
                 contentLength > maxBytes)
             {
                 _logger.LogWarning(
-                    "NyxID binary proxy response content length exceeded max bytes: {Method} {Url} length={Length} max={MaxBytes}",
-                    request.Method, request.RequestUri, contentLength, maxBytes);
+                    "NyxID binary proxy response content length exceeded max bytes: {Method} length={Length} max={MaxBytes}",
+                    request.Method, contentLength, maxBytes);
                 return new NyxIdProxyBinaryResponse(
                     false,
                     [],
@@ -1109,8 +1359,8 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
             if (content.Exceeded)
             {
                 _logger.LogWarning(
-                    "NyxID binary proxy response exceeded max bytes while reading: {Method} {Url} max={MaxBytes}",
-                    request.Method, request.RequestUri, maxBytes);
+                    "NyxID binary proxy response exceeded max bytes while reading: {Method} max={MaxBytes}",
+                    request.Method, maxBytes);
                 return new NyxIdProxyBinaryResponse(
                     false,
                     [],
@@ -1133,11 +1383,14 @@ public sealed class NyxIdApiClient : IDisposable, INyxIdUserReadApi
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "NyxID binary proxy request exception: {Method} {Url}", request.Method, request.RequestUri);
+            _logger.LogWarning(
+                "NyxID binary proxy request exception: {Method} exceptionType={ExceptionType}",
+                request.Method,
+                ex.GetType().Name);
             return new NyxIdProxyBinaryResponse(
                 false,
                 [],
-                Detail: ex.Message);
+                Detail: "binary_proxy_transport_failure");
         }
     }
 

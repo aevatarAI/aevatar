@@ -23,6 +23,12 @@ public sealed partial class NyxIdAuthorizationCatalogDocument
         set => FreshUntilUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
     }
 
+    public DateTimeOffset EvaluatedAt
+    {
+        get => ServiceProjectionReadModelSupport.ToDateTimeOffset(EvaluatedAtUtcValue);
+        set => EvaluatedAtUtcValue = ServiceProjectionReadModelSupport.ToTimestamp(value);
+    }
+
     public DateTimeOffset? InvalidatedAt
     {
         get => ServiceProjectionReadModelSupport.ToNullableDateTimeOffset(InvalidatedAtUtcValue);

@@ -306,7 +306,14 @@ public class WorkflowRoleGAgent(
         var contentParts = new List<ContentPart>();
         TokenUsage? usage = null;
 
-        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, llmControl, toolContext, metadata, streamCt))
+        await foreach (var chunk in ChatStreamAsync(
+                           inputParts,
+                           request.SessionId,
+                           llmControl,
+                           toolContext,
+                           turnCatalog: null,
+                           metadata,
+                           streamCt))
         {
             if (chunk.Usage != null)
                 usage = chunk.Usage;

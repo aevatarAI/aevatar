@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 
@@ -45,7 +45,7 @@ internal sealed class ListStudioTeamsTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -139,7 +139,7 @@ internal sealed class GetStudioTeamTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -233,7 +233,7 @@ internal sealed class ListStudioMembersTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -335,7 +335,7 @@ internal sealed class GetStudioMemberTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -390,9 +390,9 @@ internal sealed class GetStudioMemberTool : IAgentTool
 internal sealed class ListStudioSchedulesTool : IAgentTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
-    private readonly IScheduledDispatchApplicationService _schedules;
+    private readonly IStudioMemberAutomationQueryPort _schedules;
 
-    public ListStudioSchedulesTool(IScheduledDispatchApplicationService schedules)
+    public ListStudioSchedulesTool(IStudioMemberAutomationQueryPort schedules)
     {
         _schedules = schedules ?? throw new ArgumentNullException(nameof(schedules));
     }
@@ -401,13 +401,17 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
 
     public string Description =>
         "List workflow schedules owned by one Studio member in the caller's current Aevatar scope. " +
-        "Supply member_id plus optional page_size, page_token, and include_total_count; do not provide scope_id because scope is taken from the session context.";
+        "Supply team_id and member_id plus optional page_size, page_token, and include_total_count; do not provide scope_id because scope is taken from the session context.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "team_id": {
+              "type": "string",
+              "description": "Studio team id that owns the member. Required."
+            },
             "member_id": {
               "type": "string",
               "description": "Studio member id whose schedules should be read. Required."
@@ -425,7 +429,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
               "description": "Optional flag requesting a total_count when the read model can provide it."
             }
           },
-          "required": ["member_id"]
+          "required": ["team_id", "member_id"]
         }
         """;
 
@@ -434,7 +438,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -447,7 +451,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
         {
             var unknownArgument = StudioQueryToolJson.FindUnknownArgument(
                 argumentsJson,
-                ["member_id", "page_size", "page_token", "include_total_count"]);
+                ["team_id", "member_id", "page_size", "page_token", "include_total_count"]);
             if (unknownArgument is not null)
                 return StudioQueryToolJson.ErrorJson("invalid_arguments", $"Unknown argument: {unknownArgument}");
 
@@ -458,14 +462,20 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
             return StudioQueryToolJson.ErrorJson("invalid_arguments", $"Could not parse tool arguments: {ex.Message}");
         }
 
+        var teamId = StudioQueryToolJson.Normalize(args?.TeamId);
+        if (teamId is null)
+            return StudioQueryToolJson.ErrorJson("invalid_arguments", "team_id is required.");
+
         var memberId = StudioQueryToolJson.Normalize(args?.MemberId);
         if (memberId is null)
             return StudioQueryToolJson.ErrorJson("invalid_arguments", "member_id is required.");
 
         try
         {
-            var result = await _schedules.ListTeamAutomationsAsync(
-                new TeamMemberAutomationOwner(scopeId, memberId),
+            var result = await _schedules.ListAsync(
+                scopeId,
+                teamId,
+                memberId,
                 args?.PageSize ?? 50,
                 StudioQueryToolJson.Normalize(args?.PageToken),
                 args?.IncludeTotalCount ?? false,
@@ -473,8 +483,9 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
             return JsonSerializer.Serialize(
                 new ListStudioSchedulesResultJson(
                     scopeId,
+                    teamId,
                     memberId,
-                    result.Items.Select(StudioScheduleSummaryResultJson.From).ToArray(),
+                    result.Items.Select(StudioScheduleResultJson.From).ToArray(),
                     result.NextCursor,
                     result.TotalCount),
                 s_jsonOptions);
@@ -498,6 +509,7 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
     }
 
     private sealed record ListStudioSchedulesArguments(
+        [property: JsonPropertyName("team_id")] string? TeamId,
         [property: JsonPropertyName("member_id")] string? MemberId,
         [property: JsonPropertyName("page_size")] int? PageSize,
         [property: JsonPropertyName("page_token")] string? PageToken,
@@ -505,8 +517,9 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
 
     private sealed record ListStudioSchedulesResultJson(
         string ScopeId,
+        string TeamId,
         string MemberId,
-        IReadOnlyList<StudioScheduleSummaryResultJson> Schedules,
+        IReadOnlyList<StudioScheduleResultJson> Schedules,
         string? NextPageToken,
         long? TotalCount);
 }
@@ -514,9 +527,9 @@ internal sealed class ListStudioSchedulesTool : IAgentTool
 internal sealed class GetStudioScheduleTool : IAgentTool
 {
     private static readonly JsonSerializerOptions s_jsonOptions = StudioQueryToolJson.Options;
-    private readonly IScheduledDispatchApplicationService _schedules;
+    private readonly IStudioMemberAutomationQueryPort _schedules;
 
-    public GetStudioScheduleTool(IScheduledDispatchApplicationService schedules)
+    public GetStudioScheduleTool(IStudioMemberAutomationQueryPort schedules)
     {
         _schedules = schedules ?? throw new ArgumentNullException(nameof(schedules));
     }
@@ -525,13 +538,17 @@ internal sealed class GetStudioScheduleTool : IAgentTool
 
     public string Description =>
         "Get one workflow schedule owned by a Studio member in the caller's current Aevatar scope. " +
-        "Supply member_id and schedule_id; do not provide scope_id because scope is taken from the session context.";
+        "Supply team_id, member_id, and schedule_id; do not provide scope_id because scope is taken from the session context.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "team_id": {
+              "type": "string",
+              "description": "Studio team id that owns the member. Required."
+            },
             "member_id": {
               "type": "string",
               "description": "Studio member id that owns the schedule. Required."
@@ -541,7 +558,7 @@ internal sealed class GetStudioScheduleTool : IAgentTool
               "description": "Schedule id to read. Required."
             }
           },
-          "required": ["member_id", "schedule_id"]
+          "required": ["team_id", "member_id", "schedule_id"]
         }
         """;
 
@@ -550,7 +567,7 @@ internal sealed class GetStudioScheduleTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = StudioQueryToolJson.Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return StudioQueryToolJson.ErrorJson(
@@ -561,7 +578,9 @@ internal sealed class GetStudioScheduleTool : IAgentTool
         GetStudioScheduleArguments? args;
         try
         {
-            var unknownArgument = StudioQueryToolJson.FindUnknownArgument(argumentsJson, ["member_id", "schedule_id"]);
+            var unknownArgument = StudioQueryToolJson.FindUnknownArgument(
+                argumentsJson,
+                ["team_id", "member_id", "schedule_id"]);
             if (unknownArgument is not null)
                 return StudioQueryToolJson.ErrorJson("invalid_arguments", $"Unknown argument: {unknownArgument}");
 
@@ -571,6 +590,10 @@ internal sealed class GetStudioScheduleTool : IAgentTool
         {
             return StudioQueryToolJson.ErrorJson("invalid_arguments", $"Could not parse tool arguments: {ex.Message}");
         }
+
+        var teamId = StudioQueryToolJson.Normalize(args?.TeamId);
+        if (teamId is null)
+            return StudioQueryToolJson.ErrorJson("invalid_arguments", "team_id is required.");
 
         var memberId = StudioQueryToolJson.Normalize(args?.MemberId);
         if (memberId is null)
@@ -582,14 +605,16 @@ internal sealed class GetStudioScheduleTool : IAgentTool
 
         try
         {
-            var schedule = await _schedules.GetTeamAutomationAsync(
+            var schedule = await _schedules.GetAsync(
+                scopeId,
+                teamId,
+                memberId,
                 scheduleId,
-                new TeamMemberAutomationOwner(scopeId, memberId),
                 ct);
             if (schedule is null)
-                return StudioQueryToolJson.ErrorJson("schedule_not_found", $"Studio schedule '{scheduleId}' was not found for member '{memberId}' in scope '{scopeId}'.");
+                return StudioQueryToolJson.ErrorJson("schedule_not_found", $"Studio schedule '{scheduleId}' was not found for member '{memberId}' in team '{teamId}' and scope '{scopeId}'.");
 
-            return JsonSerializer.Serialize(StudioScheduleDetailResultJson.From(scopeId, memberId, schedule), s_jsonOptions);
+            return JsonSerializer.Serialize(StudioScheduleResultJson.From(schedule), s_jsonOptions);
         }
         catch (InvalidOperationException ex)
         {
@@ -610,6 +635,7 @@ internal sealed class GetStudioScheduleTool : IAgentTool
     }
 
     private sealed record GetStudioScheduleArguments(
+        [property: JsonPropertyName("team_id")] string? TeamId,
         [property: JsonPropertyName("member_id")] string? MemberId,
         [property: JsonPropertyName("schedule_id")] string? ScheduleId);
 }
@@ -731,67 +757,52 @@ internal sealed record StudioMemberDetailResultJson(
             member.CurrentBindingRun);
 }
 
-internal sealed record StudioScheduleSummaryResultJson(
+internal sealed record StudioScheduleResultJson(
+    string ScopeId,
+    string TeamId,
+    string MemberId,
     string ScheduleId,
+    string PublishedServiceId,
     string DisplayName,
-    string CronExpression,
-    string Timezone,
+    string Prompt,
+    string ScheduleCron,
+    string ScheduleTimezone,
     bool Enabled,
-    DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt,
+    string AuthorizationStatus,
+    DateTimeOffset? CredentialExpiresAtUtc,
+    string LastAuthorizationErrorCode,
+    string OperationId,
+    long CredentialGeneration,
+    bool RevocationPending,
     DateTimeOffset? NextFireAt,
     DateTimeOffset? LastFireAt,
-    int FireCount,
-    int FailureCount,
-    string ScheduleActorId,
-    string? Prompt,
-    bool Completed,
-    TeamAutomationLifecycleStatus TeamAutomationLifecycleStatus,
-    bool RevocationPending,
-    string LastAuthorizationErrorCode,
     long StateVersion,
-    string PermissionDigest,
-    string PolicyVersion,
+    string CredentialSourceKind,
+    DateTimeOffset UpdatedAt,
     string ScheduleUrl)
 {
-    public static StudioScheduleSummaryResultJson From(ScheduledDispatchSummary schedule) =>
+    public static StudioScheduleResultJson From(StudioMemberAutomationView item) =>
         new(
-            schedule.ScheduleId,
-            schedule.DisplayName,
-            schedule.CronExpression,
-            schedule.Timezone,
-            schedule.Enabled,
-            schedule.CreatedAt,
-            schedule.UpdatedAt,
-            schedule.NextFireAt,
-            schedule.LastFireAt,
-            schedule.FireCount,
-            schedule.FailureCount,
-            schedule.ScheduleActorId,
-            schedule.Prompt,
-            schedule.Completed,
-            schedule.TeamAutomationLifecycleStatus,
-            schedule.RevocationPending,
-            schedule.LastAuthorizationErrorCode,
-            schedule.StateVersion,
-            schedule.PermissionDigest,
-            schedule.PolicyVersion,
-            $"/api/schedules/{Uri.EscapeDataString(schedule.ScheduleId)}");
-}
-
-internal sealed record StudioScheduleDetailResultJson(
-    string ScopeId,
-    string MemberId,
-    StudioScheduleSummaryResultJson Schedule,
-    IReadOnlyList<ScheduledDispatchFireRecord> RecentFires)
-{
-    public static StudioScheduleDetailResultJson From(
-        string scopeId,
-        string memberId,
-        ScheduledDispatchDetail detail) =>
-        new(
-            scopeId,
-            memberId,
-            StudioScheduleSummaryResultJson.From(detail.Schedule),
-            detail.RecentFires);
+            item.ScopeId,
+            item.TeamId,
+            item.MemberId,
+            item.ScheduleId,
+            item.PublishedServiceId,
+            item.DisplayName,
+            item.Prompt,
+            item.ScheduleCron,
+            item.ScheduleTimezone,
+            item.Enabled,
+            item.AuthorizationStatus,
+            item.CredentialExpiresAtUtc,
+            item.LastAuthorizationErrorCode,
+            item.OperationId,
+            item.CredentialGeneration,
+            item.RevocationPending,
+            item.NextFireAt,
+            item.LastFireAt,
+            item.StateVersion,
+            item.CredentialSourceKind,
+            item.UpdatedAt,
+            $"/api/scopes/{Uri.EscapeDataString(item.ScopeId)}/teams/{Uri.EscapeDataString(item.TeamId)}/members/{Uri.EscapeDataString(item.MemberId)}/automations/{Uri.EscapeDataString(item.ScheduleId)}");
 }

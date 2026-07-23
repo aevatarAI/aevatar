@@ -98,6 +98,10 @@ public partial class NyxIdChatEndpointsCoverageTests
         commands.Should().HaveCount(2);
         commands[0].TurnId.Should().Be(commands[1].TurnId);
         commands[0].TurnId.Should().StartWith("turn-");
+        var firstBody = await ReadResponseBodyAsync(firstContext);
+        var secondBody = await ReadResponseBodyAsync(secondContext);
+        firstBody.Should().Contain("RUN_FINISHED").And.Contain(commands[0].TurnId);
+        secondBody.Should().Contain("RUN_FINISHED").And.Contain(commands[1].TurnId);
     }
 
     [Fact]

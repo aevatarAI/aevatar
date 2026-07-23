@@ -37,7 +37,7 @@ namespace Aevatar.Workflow.Core;
 //   Old pattern: create/link/bind/start child before persisting invocation → orphan on crash
 //   New principle (narrow): persist PendingSubWorkflowInvocation before child side-effects; 4 phases idempotent by invocation_id + child_actor_id
 [GAgent("workflow.run")]
-public sealed class WorkflowRunGAgent
+public sealed partial class WorkflowRunGAgent
     : GAgentBase<WorkflowRunState>,
       IWorkflowExecutionStateHost,
       IRuntimeSecretStoreAccessor,
@@ -48,6 +48,7 @@ public sealed class WorkflowRunGAgent
     private const string FailedStatus = "failed";
     private const string StoppedStatus = "stopped";
     private static readonly TimeSpan ScheduledCallerCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
+    private const string StartedNotificationDispatchOperationPrefix = "workflow-started-notification";
     private const string TerminalNotificationDispatchOperationPrefix = "workflow-terminal-notification";
     private const string TerminalNotificationRetryCallbackPrefix = "workflow-terminal-notification-retry";
     private const int TerminalNotificationInitialRetryDelayMs = 250;
@@ -376,6 +377,9 @@ public sealed class WorkflowRunGAgent
         await base.OnActivateAsync(ct);
         InstallCognitiveModules();
 
+        if (string.Equals(State.Status, RunningStatus, StringComparison.OrdinalIgnoreCase))
+            await SendWorkflowRunStartedNotificationAsync(ct);
+
         // C4 (06-20-observatory-run-state-feed): a terminal run must never drive in-flight child handoffs.
         // ApplyWorkflowCompleted (unlike ApplyWorkflowStopped/RunStopped) does NOT clear
         // PendingSubWorkflowInvocations — those are cleared by HandleWorkflowCompleted's
@@ -451,6 +455,24 @@ public sealed class WorkflowRunGAgent
         ArgumentNullException.ThrowIfNull(request);
         var commandId = ActiveInboundEnvelope?.Id?.Trim() ?? string.Empty;
         var correlationId = ActiveInboundEnvelope?.Propagation?.CorrelationId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(State.LastCommandId))
+        {
+            if (!string.Equals(State.LastCommandId, commandId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"workflow Run '{Id}' is already bound to command '{State.LastCommandId}' and cannot execute '{commandId}'.");
+            }
+
+            // A crash after observing a command but before starting it leaves
+            // the Run bound and is recoverable by the same delivery. Once the
+            // Run has advanced, the persistent command identity makes replay
+            // an idempotent no-op across process restarts.
+            if (!string.Equals(State.Status, "bound", StringComparison.OrdinalIgnoreCase))
+            {
+                await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
+                return;
+            }
+        }
         var runId = string.IsNullOrWhiteSpace(State.RunId)
             ? WorkflowRunIdNormalizer.Normalize(Id)
             : WorkflowRunIdNormalizer.Normalize(State.RunId);
@@ -463,7 +485,8 @@ public sealed class WorkflowRunGAgent
             correlationId,
             CancellationToken.None);
 
-        if (!string.IsNullOrWhiteSpace(commandId))
+        if (!string.IsNullOrWhiteSpace(commandId) &&
+            !string.Equals(State.LastCommandId, commandId, StringComparison.Ordinal))
         {
             await PersistDomainEventAsync(
                 new WorkflowCommandObservedEvent
@@ -547,6 +570,7 @@ public sealed class WorkflowRunGAgent
         };
         start.InputFileRefs.Add(inputFileRefs.Select(static fileRef => fileRef.Clone()));
         await PublishStartWorkflowOrTerminalFailureAsync(start, request.SessionId, CancellationToken.None);
+        await SendWorkflowRunStartedNotificationAsync(CancellationToken.None);
     }
 
     [EventHandler]
@@ -2295,6 +2319,33 @@ public sealed class WorkflowRunGAgent
         !string.IsNullOrWhiteSpace(target.ActorId) &&
         !string.IsNullOrWhiteSpace(target.DeliveryId);
 
+    private async Task SendWorkflowRunStartedNotificationAsync(CancellationToken ct)
+    {
+        var target = State.CompletionNotificationTarget;
+        if (!HasCompletionNotificationTarget(target) ||
+            State.StartedAtUtc == null ||
+            string.IsNullOrWhiteSpace(State.LastCommandId) ||
+            target!.ExpiresAtUnixMs <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+        {
+            return;
+        }
+
+        var notification = new WorkflowRunStartedNotification
+        {
+            DeliveryId = target.DeliveryId.Trim(),
+            WorkflowActorId = Id,
+            WorkflowRunId = RunId,
+            WorkflowCommandId = State.LastCommandId.Trim(),
+            WorkflowCorrelationId = State.WorkflowCorrelationId?.Trim() ?? string.Empty,
+            StartedAt = State.StartedAtUtc.Clone(),
+        };
+        await SendToAsync(
+            target.ActorId.Trim(),
+            notification,
+            ct,
+            BuildStartedNotificationDispatchOptions(notification));
+    }
+
     private static TimeSpan ResolveTerminalNotificationRetryDelay(int attempt, long remainingMs)
     {
         var exponent = Math.Clamp(attempt - 1, 0, 16);
@@ -2313,6 +2364,19 @@ public sealed class WorkflowRunGAgent
             {
                 DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
                     TerminalNotificationDispatchOperationPrefix,
+                    notification.DeliveryId,
+                    notification.WorkflowCommandId),
+            },
+        };
+
+    private static EventEnvelopePublishOptions BuildStartedNotificationDispatchOptions(
+        WorkflowRunStartedNotification notification) =>
+        new()
+        {
+            Delivery = new EventEnvelopeDeliveryOptions
+            {
+                DeduplicationOperationId = RuntimeCallbackKeyComposer.BuildCallbackId(
+                    StartedNotificationDispatchOperationPrefix,
                     notification.DeliveryId,
                     notification.WorkflowCommandId),
             },

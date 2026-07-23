@@ -40,6 +40,7 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("nyx_provider_slug", out var nyxProviderSlug).Should().BeTrue();
         nyxProviderSlug.GetProperty("description").GetString().Should().Contain("one-shot reminder outbound delivery provider");
         nyxProviderSlug.GetProperty("description").GetString().Should().Contain("select a connected provider");
+        properties.TryGetProperty("nyx_user_service_id", out _).Should().BeTrue();
         properties.TryGetProperty("allowed_service_ids", out _).Should().BeFalse();
         properties.TryGetProperty("skill_content", out _).Should().BeFalse();
         properties.TryGetProperty("provider_base_url", out _).Should().BeFalse();
@@ -49,8 +50,11 @@ public sealed class ScheduledAgentCreatorToolTests
         properties.TryGetProperty("delay_seconds", out _).Should().BeTrue();
         properties.TryGetProperty("run_at_utc", out _).Should().BeTrue();
         properties.TryGetProperty("one_shot_message", out _).Should().BeTrue();
-        properties.TryGetProperty("required_service_slugs", out var requiredServiceSlugs).Should().BeTrue();
-        requiredServiceSlugs.GetProperty("items").GetProperty("type").GetString().Should().Be("string");
+        properties.TryGetProperty("required_service_slugs", out _).Should().BeFalse();
+        properties.TryGetProperty("required_nyx_services", out var requiredNyxServices).Should().BeTrue();
+        var requiredNyxServiceProperties = requiredNyxServices.GetProperty("items").GetProperty("properties");
+        requiredNyxServiceProperties.TryGetProperty("user_service_id", out _).Should().BeTrue();
+        requiredNyxServiceProperties.TryGetProperty("service_slug_snapshot", out _).Should().BeTrue();
         properties.TryGetProperty("output_format", out var outputFormat).Should().BeTrue();
         outputFormat.GetProperty("enum").EnumerateArray().Select(static x => x.GetString())
             .Should().BeEquivalentTo("auto", "text", "feishu_doc");
@@ -166,7 +170,12 @@ public sealed class ScheduledAgentCreatorToolTests
                 {
                   "skill_ref": "daily-report",
                   "schedule_cron": "*/15 9-18 * * MON-FRI",
-                  "schedule_timezone": "Asia/Singapore"
+                  "schedule_timezone": "Asia/Singapore",
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-ornn","service_slug_snapshot":"ornn-api"},
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ]
                 }
                 """);
 
@@ -299,6 +308,30 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenExactServiceIdentitiesAreMissing_ShouldFailBeforeKeyCreation()
+    {
+        var harness = CreateHarness();
+
+        await WithToolContext(async () =>
+        {
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "skill_ref": "daily-report",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC"
+                }
+                """);
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("error").GetString()
+                .Should().Be("DurableAuthorizationUnavailable");
+            document.RootElement.GetProperty("detail").GetString()
+                .Should().Be("nyxid_exact_service_identity_unavailable");
+            harness.Handler.Requests.Should().BeEmpty();
+        });
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenRequiredServiceMissing_ShouldFailClosedWithoutBroadKey()
     {
         var harness = CreateHarness(authorizationSnapshot: CreateSnapshot(
@@ -313,13 +346,13 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_slug_not_found:api-lark-bot-inbound");
+                .Should().Be("nyxid_service_not_found:svc-lark-failure");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
 
     [Fact]
-    public async Task ExecuteAsync_WhenRequiredServiceAmbiguous_ShouldFailClosedWithoutKeyCreation()
+    public async Task ExecuteAsync_ShouldNeverResolveRequiredServiceIdFromDuplicateSlug()
     {
         var harness = CreateHarness(authorizationSnapshot: CreateSnapshot(
             ServiceEvidence("svc-ornn-1", "ornn-api"),
@@ -333,15 +366,15 @@ public sealed class ScheduledAgentCreatorToolTests
             var result = await harness.Tool.ExecuteAsync(BaseArgs);
 
             using var document = JsonDocument.Parse(result);
-            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceAmbiguous");
+            document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_slug_ambiguous:ornn-api");
+                .Should().Be("nyxid_service_not_found:svc-ornn");
             harness.Handler.Requests.Should().BeEmpty();
         });
     }
 
     [Fact]
-    public async Task ExecuteAsync_RequiredServiceSlugs_ShouldBeResolvedIntoScopedKeyAllowlist()
+    public async Task ExecuteAsync_ExactRequiredServices_ShouldBeCopiedIntoScopedKeyAllowlist()
     {
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
@@ -359,19 +392,28 @@ public sealed class ScheduledAgentCreatorToolTests
                   "skill_ref": "daily-report",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC",
-                  "required_service_slugs": [" tavily-search ", "api-github", "api-github", "api-lark-bot"]
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-ornn","service_slug_snapshot":"ornn-api"},
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"},
+                    {"user_service_id":"svc-tavily","service_slug_snapshot":"tavily-search"},
+                    {"user_service_id":"svc-github","service_slug_snapshot":"api-github"},
+                    {"user_service_id":"svc-github","service_slug_snapshot":"api-github"},
+                    {"user_service_id":"svc-lark","service_slug_snapshot":"api-lark-bot"}
+                  ]
                 }
                 """);
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().Equal(
-                    "svc-ornn", "svc-lark", "svc-lark-failure", "svc-tavily", "svc-github", "svc-llm");
+                    "svc-github", "svc-lark", "svc-lark-failure", "svc-llm", "svc-ornn", "svc-tavily");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Get);
         });
     }
@@ -388,7 +430,7 @@ public sealed class ScheduledAgentCreatorToolTests
         var ownerLLMQueryPort = new RecordingOwnerLLMEvidenceQueryPort(
             new ScheduledInvocationOwnerLLMEvidence(
                 17,
-                string.Empty,
+                "svc-chrono",
                 "chrono-llm",
                 AuthorizationGrantRequirement.Required));
         var harness = CreateHarness(
@@ -409,7 +451,8 @@ public sealed class ScheduledAgentCreatorToolTests
 
             ownerLLMQueryPort.ScopeIds.Should().Equal("scope-bot-1", "scope-bot-1");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
@@ -439,7 +482,8 @@ public sealed class ScheduledAgentCreatorToolTests
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-ornn", "svc-lark", "svc-lark-failure");
@@ -479,14 +523,19 @@ public sealed class ScheduledAgentCreatorToolTests
                   "skill_ref": "daily-report",
                   "schedule_cron": "0 9 * * *",
                   "schedule_timezone": "UTC",
-                  "required_service_slugs": ["tavily-search"]
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-ornn","service_slug_snapshot":"ornn-api"},
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"},
+                    {"user_service_id":"svc-tavily","service_slug_snapshot":"tavily-search"}
+                  ]
                 }
                 """);
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_slug_not_found:tavily-search");
+                .Should().Be("nyxid_service_not_found:svc-tavily");
             handler.Requests.Should().BeEmpty();
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Post);
         });
@@ -510,7 +559,8 @@ public sealed class ScheduledAgentCreatorToolTests
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be(expectedError);
-            handler.Requests.Should().ContainSingle(request => request.Method == HttpMethod.Post);
+            handler.Requests.Should().ContainSingle(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             handler.Requests.Should().NotContain(request => request.Method == HttpMethod.Delete);
         });
     }
@@ -625,6 +675,11 @@ public sealed class ScheduledAgentCreatorToolTests
                   "max_history_messages": 12,
                   "requires_nyxid_proxy_success": true,
                   "output_format": "feishu_doc",
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-ornn","service_slug_snapshot":"ornn-api"},
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ],
                   "run_immediately": true
                 }
                 """);
@@ -695,7 +750,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.OutputFormat.Should().Be(ScheduledAgentOutputFormat.FeishuDoc);
             captured.CatalogEntry.OwnerScope.MatchesStrictly(caller).Should().BeTrue();
 
-            var createRequest = harness.Handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = harness.Handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allow_all_services").GetBoolean().Should().BeFalse();
             createBody.RootElement.GetProperty("allow_all_nodes").GetBoolean().Should().BeFalse();
@@ -750,7 +806,18 @@ public sealed class ScheduledAgentCreatorToolTests
 
         await WithToolContext(CreateToolContext(externalMetadata: metadata), async () =>
         {
-            var result = await harness.Tool.ExecuteAsync(BaseArgs);
+            var result = await harness.Tool.ExecuteAsync("""
+                {
+                  "skill_ref": "daily-report",
+                  "schedule_cron": "0 9 * * *",
+                  "schedule_timezone": "UTC",
+                  "nyx_user_service_id": "svc-scheduled-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-ornn","service_slug_snapshot":"ornn-api"},
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ]
+                }
+                """);
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should().Be("accepted");
@@ -759,7 +826,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot-scheduled");
             captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-scheduled");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-ornn", "svc-scheduled-lark", "svc-lark-failure", "svc-llm");
@@ -835,7 +903,11 @@ public sealed class ScheduledAgentCreatorToolTests
                   "schedule_mode": "one_shot",
                   "delay_seconds": 180,
                   "run_at_utc": null,
-                  "one_shot_message": "Send my daily report"
+                  "one_shot_message": "Send my daily report",
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ]
                 }
                 """);
 
@@ -877,7 +949,11 @@ public sealed class ScheduledAgentCreatorToolTests
                   "schedule_mode": "one_shot",
                   "delay_seconds": 180,
                   "run_at_utc": "",
-                  "one_shot_message": "Remind me to join the meeting"
+                  "one_shot_message": "Remind me to join the meeting",
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ]
                 }
                 """);
 
@@ -920,6 +996,10 @@ public sealed class ScheduledAgentCreatorToolTests
                   "schedule_mode": "one_shot",
                   "delay_seconds": 120,
                   "one_shot_message": "Submit the report",
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ],
                   "display_name": "Report reminder"
                 }
                 """);
@@ -940,7 +1020,8 @@ public sealed class ScheduledAgentCreatorToolTests
             handler.Requests.Should().NotContain(request =>
                 request.Method == HttpMethod.Get &&
                 request.Path.Contains("/proxy/s/ornn-api/", StringComparison.Ordinal));
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-lark", "svc-lark-failure", "svc-llm");
@@ -980,8 +1061,11 @@ public sealed class ScheduledAgentCreatorToolTests
                   "schedule_mode": "one_shot",
                   "delay_seconds": 600,
                   "one_shot_message": "Send the reminder",
+                  "nyx_user_service_id": "svc-lark-2",
                   "nyx_provider_slug": "api-lark-bot-2",
-                  "required_service_slugs": ["api-lark-bot-2"]
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ]
                 }
                 """);
 
@@ -993,7 +1077,8 @@ public sealed class ScheduledAgentCreatorToolTests
             captured.CatalogEntry.NyxProviderSlug.Should().Be("api-lark-bot-2");
             captured.CatalogEntry.ChannelAddress.ProviderSlug.Should().Be("api-lark-bot-2");
 
-            var createRequest = handler.Requests.Single(request => request.Method == HttpMethod.Post);
+            var createRequest = handler.Requests.Single(request =>
+                request.Method == HttpMethod.Post && request.Path == "/api/v1/api-keys");
             using var createBody = JsonDocument.Parse(createRequest.Body!);
             createBody.RootElement.GetProperty("allowed_service_ids").EnumerateArray().Select(static x => x.GetString())
                 .Should().BeEquivalentTo("svc-lark-2", "svc-lark-failure", "svc-llm");
@@ -1001,7 +1086,7 @@ public sealed class ScheduledAgentCreatorToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_RequiredServiceSlugsAlone_ShouldNotOverrideOneShotOutboundDeliveryProvider()
+    public async Task ExecuteAsync_AdditionalExactServices_ShouldNotOverrideOneShotOutboundDeliveryProvider()
     {
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
@@ -1018,14 +1103,18 @@ public sealed class ScheduledAgentCreatorToolTests
                   "schedule_mode": "one_shot",
                   "delay_seconds": 600,
                   "one_shot_message": "Send the reminder",
-                  "required_service_slugs": ["api-lark-bot-2"]
+                  "nyx_user_service_id": "svc-lark",
+                  "required_nyx_services": [
+                    {"user_service_id":"svc-lark-2","service_slug_snapshot":"api-lark-bot-2"},
+                    {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+                  ]
                 }
                 """);
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("error").GetString().Should().Be("ServiceNotFound");
             document.RootElement.GetProperty("detail").GetString()
-                .Should().Be("nyxid_service_slug_not_found:api-lark-bot");
+                .Should().Be("nyxid_service_not_found:svc-lark");
             handler.Requests.Should().BeEmpty();
         });
     }
@@ -1086,7 +1175,12 @@ public sealed class ScheduledAgentCreatorToolTests
         {
           "skill_ref": "daily-report",
           "schedule_cron": "0 9 * * *",
-          "schedule_timezone": "UTC"
+          "schedule_timezone": "UTC",
+          "nyx_user_service_id": "svc-lark",
+          "required_nyx_services": [
+            {"user_service_id":"svc-ornn","service_slug_snapshot":"ornn-api"},
+            {"user_service_id":"svc-lark-failure","service_slug_snapshot":"api-lark-bot-inbound"}
+          ]
         }
         """;
 
@@ -1154,7 +1248,7 @@ public sealed class ScheduledAgentCreatorToolTests
             ownerLLMQueryPort: ownerLLMQueryPort ?? new RecordingOwnerLLMEvidenceQueryPort(
                 new ScheduledInvocationOwnerLLMEvidence(
                     29,
-                    string.Empty,
+                    "svc-llm",
                     "chrono-llm-public",
                     AuthorizationGrantRequirement.Required)));
         var tool = new ScheduledAgentCreatorTool(
@@ -1185,6 +1279,48 @@ public sealed class ScheduledAgentCreatorToolTests
         handler.Add(HttpMethod.Post, "/api/v1/api-keys", createApiKeyResponse);
         handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-created", """{"ok":true}""");
         return handler;
+    }
+
+    private static string CreateScopePlanResponse(string? requestBody)
+    {
+        using var request = JsonDocument.Parse(requestBody ?? throw new InvalidOperationException(
+            "The scope-plan test request body is required."));
+        var serviceIds = request.RootElement.GetProperty("selected_service_ids")
+            .EnumerateArray()
+            .Select(static value => value.GetString()!)
+            .ToArray();
+        return JsonSerializer.Serialize(new
+        {
+            authority = "nyxid",
+            contract_version = "1",
+            policy_version = "api-key-scope-v1",
+            authenticated_actor = new { id = "nyx-user-1", type = "personal" },
+            intended_key_owner = new { id = "nyx-user-1", type = "personal" },
+            services = serviceIds.Select(static serviceId => new
+            {
+                user_service_id = serviceId,
+                resource_owner = new { id = "nyx-user-1", type = "personal" },
+                node_grant = new { type = "not_required" },
+            }),
+            allowed_service_ids = serviceIds,
+            allowed_node_ids = Array.Empty<string>(),
+            evaluated_at = "2026-07-21T00:00:00Z",
+            normalized_grant_digest =
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            freshness = new
+            {
+                mode = "mutation_revalidated_snapshot",
+                precondition_field = "scope_plan_digest",
+                post_creation_drift = "fail_closed",
+            },
+            completeness = new
+            {
+                list_complete = true,
+                no_duplicates = true,
+                route_candidate_basis = "active_configured_routes",
+                transient_node_state_excluded = true,
+            },
+        });
     }
 
     private static async Task WithToolContext(Func<Task> action) =>
@@ -1273,9 +1409,12 @@ public sealed class ScheduledAgentCreatorToolTests
             23,
             now.AddMinutes(-1),
             now.AddMinutes(10),
-            string.Empty,
+            "1",
+            "api-key-scope-v1",
+            now.AddMinutes(-2),
             NyxIdAuthorizationCatalogIntegrity.ComputeContentDigest(owner, clonedServices),
-            clonedServices);
+            clonedServices,
+            Activated: true);
     }
 
     private static NyxIdAuthorizationServiceEvidence ServiceEvidence(string id, string slug) => new()
@@ -1285,6 +1424,12 @@ public sealed class ScheduledAgentCreatorToolTests
         DisplayName = slug,
         Access = NyxIdAuthorizationAccess.Permitted,
         NodeGrantRequirement = AuthorizationGrantRequirement.NotRequired,
+        ResourceOwner = new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = "nyx-user-1",
+        },
     };
 
     private sealed record CreatorHarness(
@@ -1325,15 +1470,32 @@ public sealed class ScheduledAgentCreatorToolTests
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             Requests.Add(new RecordedRequest(request.Method, path, body, request.Headers.Authorization));
 
-            return _responses.TryGetValue($"{request.Method.Method}:{path}", out var response)
-                ? new HttpResponseMessage(response.Status)
+            if (_responses.TryGetValue($"{request.Method.Method}:{path}", out var response))
+            {
+                return new HttpResponseMessage(response.Status)
                 {
                     Content = new StringContent(response.Json, Encoding.UTF8, "application/json"),
-                }
-                : new HttpResponseMessage(HttpStatusCode.NotFound)
-                {
-                    Content = new StringContent("""{"error":true,"message":"not found"}""", Encoding.UTF8, "application/json"),
                 };
+            }
+
+            if (request.Method == HttpMethod.Post && path == "/api/v1/api-keys/scope-plan")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        CreateScopePlanResponse(body),
+                        Encoding.UTF8,
+                        "application/json"),
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent(
+                    """{"error":true,"message":"not found"}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            };
         }
     }
 
@@ -1363,6 +1525,7 @@ public sealed class ScheduledAgentCreatorToolTests
 
         public Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
             string scopeId,
+            AuthenticatedAuthorizationOwnerContext? ownerContext = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

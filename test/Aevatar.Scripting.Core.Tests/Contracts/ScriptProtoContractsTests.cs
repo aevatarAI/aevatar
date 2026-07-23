@@ -109,29 +109,39 @@ public class ScriptProtoContractsTests
     }
 
     [Fact]
-    public void ScriptBehaviorState_ShouldRoundTripLastRunOutcome()
+    public void ScriptBehaviorState_ShouldRoundTripRunOutcomeDelivery()
     {
         var state = new ScriptBehaviorState
         {
             DefinitionActorId = "definition-1",
             ScriptId = "script-1",
             Revision = "rev-1",
-            LastRunOutcome = new ScriptRunOutcomeRecordedEvent
+            RunOutcomes =
             {
-                ScriptRunId = "run-1",
-                CommandId = "command-1",
-                Status = ScriptRunOutcomeStatus.Failed,
-                Error = "failed",
+                ["run-1"] = new ScriptRunOutcomeDeliveryState
+                {
+                    DeliveryId = "delivery-1",
+                    Status = ScriptRunOutcomeDeliveryStatus.Prepared,
+                    Outcome = new ScriptRunOutcomeRecordedEvent
+                    {
+                        ScriptRunId = "run-1",
+                        CommandId = "command-1",
+                        Status = ScriptRunOutcomeStatus.Failed,
+                        Error = "failed",
+                    },
+                },
             },
         };
 
         var parsed = ScriptBehaviorState.Parser.ParseFrom(state.ToByteArray());
 
-        parsed.LastRunOutcome.Should().NotBeNull();
-        parsed.LastRunOutcome.ScriptRunId.Should().Be("run-1");
-        parsed.LastRunOutcome.CommandId.Should().Be("command-1");
-        parsed.LastRunOutcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
-        parsed.LastRunOutcome.Error.Should().Be("failed");
+        var delivery = parsed.RunOutcomes.Should().ContainKey("run-1").WhoseValue;
+        delivery.DeliveryId.Should().Be("delivery-1");
+        delivery.Status.Should().Be(ScriptRunOutcomeDeliveryStatus.Prepared);
+        delivery.Outcome.ScriptRunId.Should().Be("run-1");
+        delivery.Outcome.CommandId.Should().Be("command-1");
+        delivery.Outcome.Status.Should().Be(ScriptRunOutcomeStatus.Failed);
+        delivery.Outcome.Error.Should().Be("failed");
     }
 
     [Fact]

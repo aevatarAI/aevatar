@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
@@ -19,7 +20,7 @@ namespace Aevatar.Studio.Tests;
 /// orchestration contract for the NON-BLOCKING design:
 /// <list type="bullet">
 ///   <item>the workflow YAML is validated synchronously through the binding
-///   parser BEFORE anything is created — invalid YAML provisions nothing;</item>
+///   admission service BEFORE anything is created — invalid YAML provisions nothing;</item>
 ///   <item>validate → create → bind → ensure-scheduled-dispatch, threading the
 ///   scope through every call;</item>
 ///   <item>member id, workflow id and schedule id derive deterministically from
@@ -53,12 +54,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
         new(Platform: "nyxid", ExternalUserId: "user-42", Scope: "proxy", Tenant: "tenant-1");
 
     [Fact]
-    public async Task ProvisionAsync_RejectsMissingTeamId_BeforeYamlValidationOrProvisioning()
+    public async Task ProvisionAsync_RejectsMissingTeamId_BeforeAdmissionOrProvisioning()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var parser = new RecordingWorkflowDefinitionParser();
-        var sut = NewService(member, schedule, parser);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var sut = NewService(member, schedule, admission);
 
         var act = async () => await sut.ProvisionAsync(
             ScopeId,
@@ -67,7 +68,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
 
         (await act.Should().ThrowAsync<InvalidOperationException>())
             .Which.Message.Should().Be("teamId is required.");
-        parser.ParseCallCount.Should().Be(0);
+        admission.Requests.Should().BeEmpty();
         member.CreateInvoked.Should().BeFalse();
         member.BindScopeId.Should().BeNull();
         schedule.Ensured.Should().BeFalse();
@@ -95,6 +96,73 @@ public sealed class StudioWorkflowProvisioningServiceTests
         response.TeamId.Should().Be(TeamId);
         response.StudioUrl.Should()
             .Be($"/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/workflow");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenCapabilityAdmissionFails_ShouldMutateNothing()
+    {
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("external capability is not ready"));
+        var sut = NewService(member, schedule, admission);
+
+        var act = () => sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", "name: monitor")
+            {
+                TeamId = TeamId,
+                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                    "caller-alpha",
+                    "runtime-caller-credential"),
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("external capability is not ready");
+        var request = admission.Requests.Should().ContainSingle().Which;
+        request.Access.ScopeId.Should().Be(ScopeId);
+        request.Access.CallerId.Should().Be("caller-alpha");
+        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        request.SourceKind.Should().Be("studio_workflow_provisioning");
+        request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        member.GetCallCount.Should().Be(0);
+        member.CreateInvoked.Should().BeFalse();
+        member.BindRequest.Should().BeNull();
+        schedule.Ensured.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenScheduledPlanIsPersisted_ShouldRevalidateAsDurable()
+    {
+        const string workflowYaml = "name: monitor";
+        var persistedPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            workflowYaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            [],
+            []);
+        var member = NewMemberService();
+        var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var sut = NewService(member, schedule, admission);
+
+        await sut.ProvisionAsync(
+            ScopeId,
+            Caller,
+            new ProvisionWorkflowRequest("Monitor", workflowYaml)
+            {
+                TeamId = TeamId,
+                CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                    "caller-alpha",
+                    existingPlan: persistedPlan),
+            });
+
+        admission.Requests.Should().BeEmpty();
+        admission.PersistedRequests.Should().ContainSingle()
+            .Which.ExpectedExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Durable);
+        member.BindRequest!.CapabilityAdmission!.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Durable);
     }
 
     [Fact]
@@ -393,11 +461,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var parser = new RecordingWorkflowDefinitionParser
-        {
-            Error = "Unsupported workflow YAML root field 'version'.",
-        };
-        var sut = NewService(member, schedule, parser);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("Unsupported workflow YAML root field 'version'."));
+        var sut = NewService(member, schedule, admission);
 
         var act = async () => await sut.ProvisionAsync(
             ScopeId,
@@ -409,7 +475,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 TeamId = TeamId,
             });
 
-        // The parser's message travels to the caller so an authoring agent can
+        // The admission error travels to the caller so an authoring agent can
         // repair the YAML — and nothing was provisioned: no member, no bind, no
         // schedule to fire against a member that never bound.
         (await act.Should().ThrowAsync<InvalidOperationException>())
@@ -420,12 +486,12 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_ValidatesYamlThroughBindingParser_BeforeProvisioning()
+    public async Task ProvisionAsync_AdmitsYamlThroughUnifiedService_BeforeProvisioning()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
-        var parser = new RecordingWorkflowDefinitionParser();
-        var sut = NewService(member, schedule, parser);
+        var admission = new StudioWorkflowCapabilityAdmissionTestService();
+        var sut = NewService(member, schedule, admission);
 
         await sut.ProvisionAsync(
             ScopeId,
@@ -435,8 +501,8 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 TeamId = TeamId,
             });
 
-        parser.ParseCallCount.Should().Be(1);
-        parser.LastYaml.Should().Be("name: monitor");
+        admission.Requests.Should().ContainSingle()
+            .Which.WorkflowYaml.Should().Be("name: monitor");
     }
 
     [Fact]
@@ -667,28 +733,32 @@ public sealed class StudioWorkflowProvisioningServiceTests
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule) =>
-        NewService(member, schedule, new RecordingWorkflowDefinitionParser(), out _);
+        NewService(member, schedule, new StudioWorkflowCapabilityAdmissionTestService(), out _);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        RecordingWorkflowDefinitionParser parser) =>
-        NewService(member, schedule, parser, out _);
+        StudioWorkflowCapabilityAdmissionTestService admission) =>
+        NewService(member, schedule, admission, out _);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
         out FakeTimeProvider time) =>
-        NewService(member, schedule, new RecordingWorkflowDefinitionParser(), out time);
+        NewService(member, schedule, new StudioWorkflowCapabilityAdmissionTestService(), out time);
 
     private static StudioWorkflowProvisioningService NewService(
         RecordingMemberService member,
         RecordingScheduleService schedule,
-        RecordingWorkflowDefinitionParser parser,
+        StudioWorkflowCapabilityAdmissionTestService admission,
         out FakeTimeProvider time)
     {
         time = new FakeTimeProvider();
-        return new StudioWorkflowProvisioningService(member, schedule, parser, time);
+        return new StudioWorkflowProvisioningService(
+            member,
+            schedule,
+            admission,
+            time);
     }
 
     private static RecordingMemberService NewMemberService() =>
@@ -896,28 +966,6 @@ public sealed class StudioWorkflowProvisioningServiceTests
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
             string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
-    }
-
-    /// <summary>
-    /// Recording stand-in for the binding-path workflow parser. Succeeds by
-    /// default; set <see cref="Error"/> to simulate a parse/validation failure
-    /// (e.g. an unknown top-level YAML key rejected by the strict parser).
-    /// </summary>
-    private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
-    {
-        public string? Error { get; set; }
-        public int ParseCallCount { get; private set; }
-        public string? LastYaml { get; private set; }
-
-        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
-            string workflowYaml, CancellationToken ct = default)
-        {
-            ParseCallCount++;
-            LastYaml = workflowYaml;
-            return Task.FromResult(Error == null
-                ? WorkflowYamlParseResult.Success("monitor")
-                : WorkflowYamlParseResult.Invalid(Error));
-        }
     }
 
     /// <summary>

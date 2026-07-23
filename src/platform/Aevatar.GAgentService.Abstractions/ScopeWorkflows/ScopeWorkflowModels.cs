@@ -1,4 +1,5 @@
 using Aevatar.GAgentService.Abstractions.Commands;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.GAgentService.Abstractions;
 
@@ -9,7 +10,11 @@ public sealed record ScopeWorkflowUpsertRequest(
     string? WorkflowName = null,
     string? DisplayName = null,
     IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
-    string? RevisionId = null);
+    string? RevisionId = null)
+{
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+}
 
 public sealed record ScopeWorkflowSaveAndBindRequest(
     string ScopeId,
@@ -20,7 +25,11 @@ public sealed record ScopeWorkflowSaveAndBindRequest(
     IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
     string? AppId = null,
     string? ServiceId = null,
-    bool? ExposureDesired = null);
+    bool? ExposureDesired = null)
+{
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+}
 
 public enum ScopeWorkflowLookupStatus
 {

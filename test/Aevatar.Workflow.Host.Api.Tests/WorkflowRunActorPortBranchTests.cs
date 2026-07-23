@@ -350,6 +350,33 @@ public sealed class WorkflowRunActorPortBranchTests
         result.Error.Should().Contain("does_not_exist");
     }
 
+    [Theory]
+    [InlineData("{\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "service_id")]
+    [InlineData("{\"service_id\":\"us-home-alpha\",\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\",\"headers\":{\"Authorization\":\"forbidden\"}}", "sensitive header")]
+    public async Task ParseWorkflowYamlAsync_WhenNyxIdCapabilityIsNotExact_ShouldReturnInvalid(
+        string arguments,
+        string expectedError)
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+
+        var result = await port.ParseWorkflowYamlAsync(
+            $$"""
+            name: sample
+            roles: []
+            steps:
+              - id: proxy
+                type: tool_call
+                parameters:
+                  tool: nyxid_proxy
+                  arguments: '{{arguments}}'
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Contain(expectedError);
+        result.AuthorizationDependencies.Should().BeNull();
+    }
+
     [Fact]
     public async Task ParseWorkflowYamlAsync_WhenRoleAgentKindIsDefaultPrimary_ShouldReturnSuccess()
     {
@@ -381,6 +408,30 @@ public sealed class WorkflowRunActorPortBranchTests
         var port = CreatePort(
             new RecordingActorRuntime(),
             agentKindRegistry: CreateRoleAgentKindRegistry());
+
+        var result = await port.ParseWorkflowYamlAsync(
+            """
+            name: sample
+            roles:
+              - id: assistant
+                name: Assistant
+            steps:
+              - id: step1
+                type: llm_call
+                target_role: assistant
+            """,
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.WorkflowName.Should().Be("sample");
+    }
+
+    [Fact]
+    public async Task ParseWorkflowYamlAsync_WhenDefaultRoleImplementationIsNotLocallyRegistered_ShouldReturnSuccess()
+    {
+        var port = CreatePort(
+            new RecordingActorRuntime(),
+            agentKindRegistry: new AgentKindRegistry([]));
 
         var result = await port.ParseWorkflowYamlAsync(
             """
@@ -477,6 +528,15 @@ public sealed class WorkflowRunActorPortBranchTests
         var actor = new RecordingActor("definition-inline-bind", new WorkflowGAgent());
         runtime.StoredActors[actor.Id] = actor;
         var port = CreatePort(runtime);
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: direct\nroles: []\nsteps: []\n",
+            new Dictionary<string, string>
+            {
+                ["child"] = "name: child\nroles: []\nsteps: []\n",
+            },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
 
         await port.BindWorkflowDefinitionAsync(
             actor.Id,
@@ -486,6 +546,8 @@ public sealed class WorkflowRunActorPortBranchTests
             {
                 ["child"] = "name: child\nroles: []\nsteps: []\n",
             },
+            sourceKind: "service_revision",
+            capabilityAdmissionPlan: capabilityAdmissionPlan,
             ct: CancellationToken.None);
 
         actor.LastHandledEnvelope.Should().NotBeNull();
@@ -493,6 +555,8 @@ public sealed class WorkflowRunActorPortBranchTests
         var bind = actor.LastHandledEnvelope.Payload.Unpack<BindWorkflowDefinitionEvent>();
         bind.WorkflowName.Should().Be("direct");
         bind.InlineWorkflowYamls.Should().ContainKey("child");
+        bind.SourceKind.Should().Be("service_revision");
+        bind.CapabilityAdmissionPlan.AdmissionDigest.Should().Be(capabilityAdmissionPlan.AdmissionDigest);
     }
 
     [Fact]
@@ -684,6 +748,110 @@ public sealed class WorkflowRunActorPortBranchTests
         racedDefinition.LastHandledEnvelope!.Payload!.Is(BindWorkflowDefinitionEvent.Descriptor).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task EnsureRunAsync_ShouldUseExactRunIdentityAndIdempotentBindingCommand()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-stable"] = new RecordingActor("definition-stable", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("work-order-run-1", new StubAgent("work-order-run-1")));
+        var port = CreatePort(runtime);
+
+        var result = await port.EnsureRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-stable",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                "scope-1",
+                WorkflowRunOrigins.WorkOrder),
+            "work-order-run-1",
+            CancellationToken.None);
+
+        result.ActorId.Should().Be("work-order-run-1");
+        runtime.CreateRequests.Should().Contain((typeof(WorkflowRunGAgent), "work-order-run-1"));
+        var envelope = ((RecordingActor)runtime.StoredActors["work-order-run-1"]).LastHandledEnvelope;
+        envelope.Should().NotBeNull();
+        envelope!.Id.Should().Be("ensure-workflow-run-work-order-run-1");
+        var ensure = envelope.Payload!.Unpack<EnsureWorkflowRunDefinitionEvent>();
+        ensure.Binding.RunId.Should().Be("work-order-run-1");
+        ensure.Binding.ScopeId.Should().Be("scope-1");
+        ensure.Binding.RunOrigin.Should().Be(WorkflowRunOrigins.WorkOrder);
+    }
+
+    [Fact]
+    public async Task EnsureRunAsync_ShouldNotMutateTopologyBeforeAcceptedBindingIsHandled()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-stable"] = new RecordingActor("definition-stable", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("work-order-run-1", new StubAgent("work-order-run-1")));
+        var acceptedOnlyDispatch = new AcceptedOnlyDispatchPort();
+        var port = new WorkflowRunActorPort(
+            runtime,
+            acceptedOnlyDispatch,
+            new RuntimeBackedWorkflowActorBindingReader(runtime),
+            [new WorkflowCoreModulePack()]);
+
+        await port.EnsureRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-stable",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                "scope-1",
+                WorkflowRunOrigins.WorkOrder),
+            "work-order-run-1",
+            CancellationToken.None);
+
+        runtime.Linked.Should().BeEmpty();
+        acceptedOnlyDispatch.Envelopes.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task EnsureRunAndDispatchAsync_ShouldSendOneCombinedExactRunCommand()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-stable"] = new RecordingActor("definition-stable", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("work-order-run-1", new StubAgent("work-order-run-1")));
+        var acceptedOnlyDispatch = new AcceptedOnlyDispatchPort();
+        var port = new WorkflowRunActorPort(
+            runtime,
+            acceptedOnlyDispatch,
+            new RuntimeBackedWorkflowActorBindingReader(runtime),
+            [new WorkflowCoreModulePack()]);
+
+        var result = await port.EnsureRunAndDispatchAsync(
+            new WorkflowDefinitionBinding(
+                "definition-stable",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                "scope-1",
+                WorkflowRunOrigins.WorkOrder),
+            "work-order-run-1",
+            new WorkflowChatRequestEvent { Prompt = "execute once" },
+            "work-order-command-1",
+            "work-order-correlation-1",
+            CancellationToken.None);
+
+        result.ActorId.Should().Be("work-order-run-1");
+        var envelope = acceptedOnlyDispatch.Envelopes.Should().ContainSingle().Subject;
+        envelope.Id.Should().Be("work-order-command-1");
+        envelope.Propagation.CorrelationId.Should().Be("work-order-correlation-1");
+        var command = envelope.Payload!.Unpack<EnsureWorkflowRunDefinitionEvent>();
+        command.Binding.RunId.Should().Be("work-order-run-1");
+        command.ExecutionRequest.Prompt.Should().Be("execute once");
+        runtime.Linked.Should().BeEmpty();
+    }
+
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
         IWorkflowActorBindingReader? bindingReader = null,
@@ -820,6 +988,21 @@ public sealed class WorkflowRunActorPortBranchTests
         {
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class AcceptedOnlyDispatchPort : IActorDispatchPort
+    {
+        public List<EventEnvelope> Envelopes { get; } = [];
+
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Envelopes.Add(envelope.Clone());
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
         }
     }
 

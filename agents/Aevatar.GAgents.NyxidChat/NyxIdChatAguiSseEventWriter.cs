@@ -22,33 +22,45 @@ internal static class NyxIdChatAguiSseEventWriter
                     string.IsNullOrWhiteSpace(aguiEvent.TextMessageStart.MessageId)
                         ? messageId
                         : aguiEvent.TextMessageStart.MessageId,
+                    aguiEvent.Sequence,
                     ct);
                 return null;
             case AGUIEvent.EventOneofCase.TextMessageContent:
                 if (!string.IsNullOrEmpty(aguiEvent.TextMessageContent.Delta))
-                    await writer.WriteTextDeltaAsync(aguiEvent.TextMessageContent.Delta, ct);
+                    await writer.WriteTextDeltaAsync(
+                        aguiEvent.TextMessageContent.Delta,
+                        aguiEvent.Sequence,
+                        ct);
                 return null;
             case AGUIEvent.EventOneofCase.TextMessageEnd:
                 await writer.WriteTextEndAsync(
                     string.IsNullOrWhiteSpace(aguiEvent.TextMessageEnd.MessageId)
                         ? messageId
                         : aguiEvent.TextMessageEnd.MessageId,
+                    aguiEvent.Sequence,
                     ct);
                 return null;
             case AGUIEvent.EventOneofCase.ToolCallStart:
                 await writer.WriteToolCallStartAsync(
                     aguiEvent.ToolCallStart.ToolName,
                     aguiEvent.ToolCallStart.ToolCallId,
+                    aguiEvent.ToolCallStart.Presentation,
+                    aguiEvent.Sequence,
                     ct);
                 return null;
             case AGUIEvent.EventOneofCase.ToolCallEnd:
                 await writer.WriteToolCallEndAsync(
                     aguiEvent.ToolCallEnd.ToolCallId,
                     aguiEvent.ToolCallEnd.Result ?? string.Empty,
+                    aguiEvent.Sequence,
                     ct);
                 return null;
             case AGUIEvent.EventOneofCase.Custom:
-                await WriteCustomAguiEventAsync(aguiEvent.Custom, writer, ct);
+                await WriteCustomAguiEventAsync(
+                    aguiEvent.Custom,
+                    aguiEvent.Sequence,
+                    writer,
+                    ct);
                 return null;
             case AGUIEvent.EventOneofCase.RunError:
                 await writer.WriteRunErrorAsync(
@@ -57,6 +69,7 @@ internal static class NyxIdChatAguiSseEventWriter
                         : aguiEvent.RunError.RunId,
                     aguiEvent.RunError.Code ?? string.Empty,
                     ClassifyError(aguiEvent.RunError.Message ?? string.Empty),
+                    aguiEvent.Sequence,
                     ct);
                 return "RUN_ERROR";
             case AGUIEvent.EventOneofCase.Usage:
@@ -66,6 +79,7 @@ internal static class NyxIdChatAguiSseEventWriter
                     aguiEvent.Usage.CompletionTokens,
                     aguiEvent.Usage.TotalTokens,
                     aguiEvent.Usage.Model,
+                    aguiEvent.Sequence,
                     ct);
                 return null;
             case AGUIEvent.EventOneofCase.RunFinished:
@@ -74,6 +88,7 @@ internal static class NyxIdChatAguiSseEventWriter
                         ? messageId
                         : aguiEvent.RunFinished.RunId,
                     aguiEvent.RunFinished.Status,
+                    aguiEvent.Sequence,
                     ct);
                 return "RUN_FINISHED";
             default:
@@ -83,13 +98,27 @@ internal static class NyxIdChatAguiSseEventWriter
 
     private static async ValueTask WriteCustomAguiEventAsync(
         CustomEvent customEvent,
+        long sequence,
         NyxIdChatSseWriter writer,
         CancellationToken ct)
     {
         if (string.Equals(customEvent.Name, "MEDIA_CONTENT", StringComparison.Ordinal) &&
             customEvent.Payload?.Is(MediaContentEvent.Descriptor) == true)
         {
-            await writer.WriteMediaContentAsync(customEvent.Payload.Unpack<MediaContentEvent>(), ct);
+            await writer.WriteMediaContentAsync(
+                customEvent.Payload.Unpack<MediaContentEvent>(),
+                sequence,
+                ct);
+            return;
+        }
+
+        if (string.Equals(customEvent.Name, "aevatar.llm.reasoning", StringComparison.Ordinal) &&
+            customEvent.Payload?.Is(RoleChatReasoningDeltaProgress.Descriptor) == true)
+        {
+            await writer.WriteReasoningAsync(
+                customEvent.Payload.Unpack<RoleChatReasoningDeltaProgress>().Delta,
+                sequence,
+                ct);
             return;
         }
 
@@ -98,6 +127,7 @@ internal static class NyxIdChatAguiSseEventWriter
         {
             await writer.WriteAuthorizationRequiredAsync(
                 customEvent.Payload.Unpack<NyxIdAuthorizationRequiredEvent>(),
+                sequence,
                 ct);
             return;
         }
@@ -113,6 +143,7 @@ internal static class NyxIdChatAguiSseEventWriter
                 GetString(fields, "argumentsJson"),
                 GetBool(fields, "isDestructive"),
                 GetInt32(fields, "timeoutSeconds"),
+                sequence,
                 ct);
         }
     }

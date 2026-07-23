@@ -208,9 +208,6 @@ describe('StudioFilesPage', () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       {
         id: 'conversation-1',
-        actorId: 'NyxIdChat:scope-1',
-        commandId: 'command-1',
-        runId: 'run-1',
         title: 'Scope conversation',
         serviceId: 'service-1',
         serviceKind: 'nyxid-chat',
@@ -224,6 +221,7 @@ describe('StudioFilesPage', () => {
         id: 'message-1',
         role: 'user',
         content: 'hello from user',
+        authorName: 'Alice',
         timestamp: Date.parse('2026-03-18T01:00:00Z'),
         status: 'complete',
       },
@@ -231,8 +229,24 @@ describe('StudioFilesPage', () => {
         id: 'message-2',
         role: 'assistant',
         content: 'assistant reply',
+        thinking: 'Planning the response',
         timestamp: Date.parse('2026-03-18T01:01:00Z'),
         status: 'complete',
+      },
+      {
+        id: 'message-3',
+        role: 'user',
+        content: 'run it now',
+        timestamp: Date.parse('2026-03-18T01:02:00Z'),
+        status: 'complete',
+      },
+      {
+        id: 'message-4',
+        role: 'assistant',
+        content: '',
+        error: 'workflow_run_error: Dispatch failed.',
+        timestamp: Date.parse('2026-03-18T01:03:00Z'),
+        status: 'error',
       },
     ]);
     (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(undefined);
@@ -392,7 +406,7 @@ describe('StudioFilesPage', () => {
     expect(props.onOpenScriptInStudio).toHaveBeenCalledWith('script-alpha');
   });
 
-  it('shows chat histories and lets users delete a conversation', async () => {
+  it('shows chat-history turns and confirms conversation deletion', async () => {
     const props = createProps();
 
     renderWithQueryClient(React.createElement(StudioFilesPage, props));
@@ -406,9 +420,30 @@ describe('StudioFilesPage', () => {
     expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
       'assistant reply',
     );
+    expect(screen.getAllByText(/2 turns/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/2 messages/)).toBeNull();
+    expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
+      'Alice',
+    );
+    expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
+      'Planning the response',
+    );
+    expect(screen.getByLabelText('Chat history messages')).toHaveTextContent(
+      'workflow_run_error: Dispatch failed.',
+    );
+    expect(screen.queryByText('(empty message)')).toBeNull();
     expect(screen.queryByText(/NyxIdChat:scope-1/i)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(chatHistoryApi.deleteConversation).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete this conversation?')).toBeInTheDocument();
+    expect(screen.getByText(/Scope conversation will be removed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep conversation' }));
+    expect(screen.queryByText('Delete this conversation?')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
 
     await waitFor(() => {
       expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
@@ -416,6 +451,117 @@ describe('StudioFilesPage', () => {
         'conversation-1',
       );
     });
+    expect(screen.queryByText('Scope conversation')).toBeNull();
+  });
+
+  it('shows chat-history list failures and retries them from the tree', async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock)
+      .mockRejectedValueOnce(new Error('History access denied'))
+      .mockResolvedValueOnce([]);
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+    fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
+
+    expect(await screen.findByText('Failed to load conversations')).toBeInTheDocument();
+    expect(screen.getByText('History access denied')).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Retry conversations' }),
+    );
+
+    expect(await screen.findByText('No conversations matched.')).toBeInTheDocument();
+    expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not apply a delayed chat deletion to a new scope', async () => {
+    let resolveDelete = (): void => undefined;
+    let switchScope = (_scopeId: string): void => undefined;
+    const deletePromise = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    (chatHistoryApi.deleteConversation as jest.Mock).mockReturnValue(deletePromise);
+
+    function ScopeHarness() {
+      const [scopeId, setScopeId] = React.useState('scope-1');
+      switchScope = setScopeId;
+      return React.createElement(StudioFilesPage, createProps({ scopeId }));
+    }
+
+    renderWithQueryClient(React.createElement(ScopeHarness));
+    fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
+    fireEvent.click(await screen.findByText('Scope conversation'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
+    await waitFor(() =>
+      expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
+        'scope-1',
+        'conversation-1',
+      ),
+    );
+
+    React.act(() => switchScope('scope-2'));
+    await waitFor(() =>
+      expect(chatHistoryApi.listConversationMetas).toHaveBeenCalledWith('scope-2'),
+    );
+    expect(await screen.findByText('Scope conversation')).toBeInTheDocument();
+    await React.act(async () => resolveDelete());
+
+    expect(screen.getByText('Scope conversation')).toBeInTheDocument();
+  });
+
+  it('keeps a delayed deletion bound to its original conversation', async () => {
+    let resolveDelete = (): void => undefined;
+    const deletePromise = new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    });
+    (chatHistoryApi.deleteConversation as jest.Mock).mockReturnValue(deletePromise);
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      {
+        id: 'conversation-1',
+        title: 'Scope conversation',
+        serviceId: 'service-1',
+        serviceKind: 'nyxid-chat',
+        createdAt: '2026-03-18T00:00:00Z',
+        updatedAt: '2026-03-18T01:00:00Z',
+        messageCount: 2,
+      },
+      {
+        id: 'conversation-2',
+        title: 'Second conversation',
+        serviceId: 'service-1',
+        serviceKind: 'nyxid-chat',
+        createdAt: '2026-03-18T00:00:00Z',
+        updatedAt: '2026-03-18T02:00:00Z',
+        messageCount: 2,
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, createProps()));
+    fireEvent.click(screen.getByRole('button', { name: /chat-histories\//i }));
+    fireEvent.click(await screen.findByText('Scope conversation'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
+    await waitFor(() =>
+      expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
+        'scope-1',
+        'conversation-1',
+      ),
+    );
+
+    fireEvent.click(await screen.findByText('Second conversation'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeDisabled(),
+    );
+
+    await React.act(async () => resolveDelete());
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete' })).toBeEnabled(),
+    );
+    expect(screen.queryByText('Scope conversation')).toBeNull();
+    expect(screen.getAllByText('Second conversation').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Conversation deleted.')).toBeNull();
+    expect(chatHistoryApi.deleteConversation).toHaveBeenCalledTimes(1);
   });
 
   it('switches to explorer and previews chrono-storage files', async () => {
