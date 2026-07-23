@@ -45,6 +45,8 @@ const enUSMessages = {
     'Describe the workflow you want, or ask about the current setup...',
   'pages.chat.index.confirmAndCreate': 'Confirm and create',
   'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
+  'pages.chat.index.continuationContextMissing':
+    'The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing.',
   'pages.chat.index.cancel': 'Cancel',
   'pages.chat.index.delete': 'Delete',
   'pages.chat.index.deleteChat': 'Delete {title}',
@@ -63,6 +65,8 @@ const enUSMessages = {
   'pages.chat.index.historyTitle': 'Chat history',
   'pages.chat.index.loadingConversation': 'Loading conversation',
   'pages.chat.index.loadingHistory': 'Loading chat history',
+  'pages.chat.index.historySynchronizing':
+    'Conversation history is still synchronizing. Try again shortly.',
   'pages.chat.index.missingChatHistoryContext':
     'Chat completed without a conversation context.',
   'pages.chat.index.newChat': 'New chat',

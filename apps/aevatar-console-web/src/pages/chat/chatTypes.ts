@@ -107,6 +107,7 @@ export type ConversationSessionSnapshot = {
 export type ChatHistoryContext = {
   scopeId: string;
   conversationId: string;
+  stateVersion: number;
   turnId: string;
 };
 
@@ -140,6 +141,11 @@ export type StoredChatMessage = {
   authorId?: string | null;
   authorName?: string | null;
   thinking?: string | null;
+};
+
+export type ChatConversationDetail = {
+  messages: StoredChatMessage[];
+  stateVersion: number;
 };
 
 export type ChatHistoryIndex = {

@@ -44,6 +44,8 @@ const zhCNMessages = {
   'pages.chat.index.composerPlaceholder': '描述你想要的 workflow，或询问当前配置...',
   'pages.chat.index.confirmAndCreate': '确认并创建',
   'pages.chat.index.confirmPrompt': '确认，请现在创建。',
+  'pages.chat.index.continuationContextMissing':
+    '续聊请求可能已经被接受，但未收到本轮身份。请重新加载此页面后再继续。',
   'pages.chat.index.cancel': '取消',
   'pages.chat.index.delete': '删除',
   'pages.chat.index.deleteChat': '删除 {title}',
@@ -60,6 +62,7 @@ const zhCNMessages = {
   'pages.chat.index.historyTitle': '会话历史',
   'pages.chat.index.loadingConversation': '正在加载会话',
   'pages.chat.index.loadingHistory': '正在加载会话历史',
+  'pages.chat.index.historySynchronizing': '会话历史仍在同步，请稍后重试。',
   'pages.chat.index.missingChatHistoryContext': 'Chat 已完成，但未返回会话上下文。',
   'pages.chat.index.newChat': '新会话',
   'pages.chat.index.newChatAction': '新建会话',
