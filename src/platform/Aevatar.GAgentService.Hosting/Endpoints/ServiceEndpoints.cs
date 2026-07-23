@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Governance.Hosting.Endpoints;
 using Aevatar.GAgentService.Governance.Hosting.Identity;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
+using Aevatar.GAgentService.Hosting.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
@@ -45,6 +46,7 @@ public static partial class ServiceEndpoints
             app.MapScopeScriptCapabilityEndpoints();
         app.MapScopeGAgentCapabilityEndpoints();
         app.MapScheduledDispatchEndpoints();
+        app.MapAgentProfileEndpoints();
         return app;
     }
 
