@@ -69,8 +69,8 @@ public sealed class WorkOrderProjectionTests
         document.WorkflowId.Should().Be("workflow-1");
         document.PublishedServiceId.Should().Be("service-1");
         document.RunId.Should().Be("run-1");
-        document.RunStartedAtUnixMs.Should().Be(workOrderUpdatedAt.AddMinutes(-2).ToUnixTimeMilliseconds());
-        document.TerminalEvidence!.CorrelationId.Should().Be("correlation-1");
+        document.RunAcceptedAtUnixMs.Should().Be(workOrderUpdatedAt.AddMinutes(-1).ToUnixTimeMilliseconds());
+        document.RunOutcome!.CorrelationId.Should().Be("correlation-1");
         document.UpdatedAt!.ToDateTimeOffset().Should().Be(projectionObservedAt);
         document.WorkOrderUpdatedAtUtc!.ToDateTimeOffset().Should().Be(workOrderUpdatedAt);
     }
@@ -100,10 +100,9 @@ public sealed class WorkOrderProjectionTests
             EndpointId = "chat",
             Intent = "Produce the report",
             DedupKey = "dedup-1",
-            LifecycleStatus = WorkOrderLifecycleStatusNames.Running,
+            LifecycleStatus = WorkOrderLifecycleStatusNames.Completed,
             LifecycleVersion = 5,
             CreatedAtUnixMs = workOrderUpdatedAt.AddHours(-1).ToUnixTimeMilliseconds(),
-            ApprovalStatus = WorkOrderApprovalStatusNames.NotRequired,
             RunId = "run-1",
             RunActorId = "run-1",
             RunCommandId = "command-1",
@@ -111,8 +110,7 @@ public sealed class WorkOrderProjectionTests
             RunRevisionId = "revision-1",
             RunDeploymentId = "deployment-1",
             RunAcceptedAtUnixMs = workOrderUpdatedAt.AddMinutes(-1).ToUnixTimeMilliseconds(),
-            RunStartedAtUnixMs = workOrderUpdatedAt.ToUnixTimeMilliseconds(),
-            TerminalEvidence = new WorkOrderTerminalEvidenceDocument
+            RunOutcome = new WorkOrderRunOutcomeReferenceDocument
             {
                 DeliveryId = "delivery-1",
                 RunId = "run-1",
@@ -130,7 +128,7 @@ public sealed class WorkOrderProjectionTests
             ScopeId,
             new WorkOrderQueryRequest(
                 PageSize: 25,
-                Status: WorkOrderLifecycleStatusNames.Running,
+                Status: WorkOrderLifecycleStatusNames.Completed,
                 RequesterPrincipalId: "requester-1",
                 TeamId: "team-1",
                 MemberId: "member-1",
@@ -147,9 +145,8 @@ public sealed class WorkOrderProjectionTests
         response.MemberId.Should().Be("member-1");
         response.WorkflowId.Should().Be("workflow-1");
         response.PublishedServiceId.Should().Be("service-1");
-        response.Execution!.RunId.Should().Be("run-1");
-        response.Execution.StartedAtUtc.Should().Be(workOrderUpdatedAt);
-        response.TerminalEvidence!.CorrelationId.Should().Be("correlation-1");
+        response.Run!.RunId.Should().Be("run-1");
+        response.RunOutcome!.CorrelationId.Should().Be("correlation-1");
         reader.LastQuery!.Take.Should().Be(25);
         reader.LastQuery.Filters.Select(static filter => filter.FieldPath).Should().BeEquivalentTo(
             "scope_id",
@@ -187,16 +184,11 @@ public sealed class WorkOrderProjectionTests
             {
                 Chat = new WorkOrderChatInput { Prompt = "Create it" },
             },
-            PermissionPlan = new WorkOrderPermissionPlan(),
-            Approval = new WorkOrderApprovalState
-            {
-                Status = WorkOrderApprovalStatus.NotRequired,
-            },
-            LifecycleStatus = WorkOrderLifecycleStatus.Running,
+            LifecycleStatus = WorkOrderLifecycleStatus.Completed,
             LifecycleVersion = 5,
             CreatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddHours(-1)),
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAt),
-            Execution = new WorkOrderExecutionProvenance
+            Run = new WorkOrderRunLink
             {
                 RunId = "run-1",
                 RunActorId = "run-1",
@@ -205,9 +197,8 @@ public sealed class WorkOrderProjectionTests
                 RevisionId = "revision-1",
                 DeploymentId = "deployment-1",
                 AcceptedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddMinutes(-1)),
-                StartedAtUtc = Timestamp.FromDateTimeOffset(updatedAt.AddMinutes(-2)),
             },
-            TerminalEvidence = new WorkOrderTerminalEvidence
+            RunOutcome = new WorkOrderRunOutcomeReference
             {
                 DeliveryId = "delivery-1",
                 RunId = "run-1",

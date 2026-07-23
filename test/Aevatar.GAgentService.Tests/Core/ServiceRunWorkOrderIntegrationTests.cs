@@ -124,7 +124,6 @@ public sealed class ServiceRunWorkOrderIntegrationTests
             {
                 Chat = new WorkOrderChatInput { Prompt = "perform the work" },
             },
-            PermissionPlan = new WorkOrderPermissionPlan(),
             ExpectedLifecycleVersion = 0,
             RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
             TimeoutAtUtc = Timestamp.FromDateTimeOffset(requestedAt.AddHours(1)),
@@ -158,8 +157,7 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         });
 
         workOrder.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.DispatchPending);
-        workOrder.State.Execution.RunId.Should().Be(requestedRunId);
-        workOrder.State.Execution.StartedAtUtc.Should().BeNull();
+        workOrder.State.Run.RunId.Should().Be(requestedRunId);
 
         await serviceRun.HandleRegisterAsync(new RegisterServiceRunRequested
         {
@@ -233,12 +231,11 @@ public sealed class ServiceRunWorkOrderIntegrationTests
         serviceRun.State.PendingTerminalNotification.Should().BeNull();
 
         workOrder.State.LifecycleStatus.Should().Be(WorkOrderLifecycleStatus.Completed);
-        workOrder.State.Execution.StartedAtUtc.Should().BeNull();
-        workOrder.State.TerminalEvidence.RunId.Should().Be(requestedRunId);
-        workOrder.State.TerminalEvidence.RunActorId.Should().Be(scriptActorId);
-        workOrder.State.TerminalEvidence.CommandId.Should().Be(dispatchCommandId);
-        workOrder.State.TerminalEvidence.Outcome.Should().Be(WorkOrderTerminalOutcome.Succeeded);
-        workOrder.State.TerminalEvidence.TerminalAtUtc.Should().Be(
+        workOrder.State.RunOutcome.RunId.Should().Be(requestedRunId);
+        workOrder.State.RunOutcome.RunActorId.Should().Be(scriptActorId);
+        workOrder.State.RunOutcome.CommandId.Should().Be(dispatchCommandId);
+        workOrder.State.RunOutcome.Outcome.Should().Be(WorkOrderTerminalOutcome.Succeeded);
+        workOrder.State.RunOutcome.TerminalAtUtc.Should().Be(
             Timestamp.FromDateTimeOffset(
                 DateTimeOffset.FromUnixTimeMilliseconds(committedTerminal.OccurredAtUnixTimeMs)));
 

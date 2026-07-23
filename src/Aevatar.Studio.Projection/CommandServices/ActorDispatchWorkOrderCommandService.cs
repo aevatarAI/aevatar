@@ -30,9 +30,7 @@ internal sealed class ActorDispatchWorkOrderCommandService : IWorkOrderCommandPo
         CancellationToken ct = default)
     {
         var requestedAt = DateTimeOffset.UtcNow;
-        if (!request.TimeoutAtUtc.HasValue)
-            throw new InvalidOperationException("WorkOrder deadline is required before actor dispatch.");
-        if (request.TimeoutAtUtc.Value <= requestedAt)
+        if (request.TimeoutAtUtc.HasValue && request.TimeoutAtUtc.Value <= requestedAt)
             throw new InvalidOperationException("WorkOrder deadline must be later than the request time.");
 
         var workOrderId = WorkOrderConventions.BuildWorkOrderId(scopeId, request.DedupKey);
@@ -51,12 +49,11 @@ internal sealed class ActorDispatchWorkOrderCommandService : IWorkOrderCommandPo
             EndpointId = request.EndpointId,
             Intent = request.Intent,
             Input = ToInput(request.Input),
-            PermissionPlan = ToPermissionPlan(request.PermissionPlan),
-            ApprovalId = WorkOrderConventions.BuildApprovalId(workOrderId),
             RequestedAtUtc = Timestamp.FromDateTimeOffset(requestedAt),
-            TimeoutAtUtc = Timestamp.FromDateTimeOffset(request.TimeoutAtUtc.Value),
             ExpectedLifecycleVersion = 0,
         };
+        if (request.TimeoutAtUtc.HasValue)
+            command.TimeoutAtUtc = Timestamp.FromDateTimeOffset(request.TimeoutAtUtc.Value);
 
         return await DispatchAsync(
             scopeId,
@@ -90,50 +87,6 @@ internal sealed class ActorDispatchWorkOrderCommandService : IWorkOrderCommandPo
                 RequestedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             },
             "reassign",
-            request.ExpectedLifecycleVersion,
-            ct);
-
-    public Task<WorkOrderAcceptedReceipt> ApproveAsync(
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        WorkOrderPrincipalContract approver,
-        CancellationToken ct = default) =>
-        DispatchAsync(
-            scopeId,
-            workOrderId,
-            new ApproveWorkOrder
-            {
-                WorkOrderId = workOrderId,
-                ExpectedLifecycleVersion = request.ExpectedLifecycleVersion,
-                DecisionId = request.DecisionId,
-                DecidedBy = ToPrincipal(approver),
-                Reason = request.Reason ?? string.Empty,
-                DecidedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            },
-            "approve",
-            request.ExpectedLifecycleVersion,
-            ct);
-
-    public Task<WorkOrderAcceptedReceipt> DenyAsync(
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        WorkOrderPrincipalContract approver,
-        CancellationToken ct = default) =>
-        DispatchAsync(
-            scopeId,
-            workOrderId,
-            new DenyWorkOrder
-            {
-                WorkOrderId = workOrderId,
-                ExpectedLifecycleVersion = request.ExpectedLifecycleVersion,
-                DecisionId = request.DecisionId,
-                DecidedBy = ToPrincipal(approver),
-                Reason = request.Reason ?? string.Empty,
-                DecidedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            },
-            "deny",
             request.ExpectedLifecycleVersion,
             ct);
 
@@ -222,29 +175,6 @@ internal sealed class ActorDispatchWorkOrderCommandService : IWorkOrderCommandPo
         return result;
     }
 
-    private static WorkOrderPermissionPlan ToPermissionPlan(WorkOrderPermissionPlanContract? plan)
-    {
-        var result = new WorkOrderPermissionPlan();
-        result.ExternalActions.Add((plan?.ExternalActions ?? []).Select(action =>
-            new WorkOrderExternalActionReference
-            {
-                ActionId = action.ActionId,
-                System = action.System,
-                Action = action.Action,
-                ResourceId = action.ResourceId,
-            }));
-        result.Requirements.Add((plan?.Requirements ?? []).Select(requirement =>
-            new WorkOrderPermissionRequirement
-            {
-                PermissionId = requirement.PermissionId,
-                ActionId = requirement.ActionId,
-                Capability = requirement.Capability,
-                RequiresApproval = requirement.RequiresApproval,
-            }));
-        result.ApproverPrincipalIds.Add(plan?.ApproverPrincipalIds ?? []);
-        return result;
-    }
-
     private static WorkOrderArtifactReference ToArtifact(WorkOrderArtifactReferenceContract artifact) =>
         new()
         {
@@ -285,18 +215,6 @@ internal sealed class ActorDispatchWorkOrderCommandService : IWorkOrderCommandPo
             {
                 var canonical = command.Clone();
                 canonical.RequestedAtUtc = null;
-                return canonical.ToByteArray();
-            }
-            case ApproveWorkOrder command:
-            {
-                var canonical = command.Clone();
-                canonical.DecidedAtUtc = null;
-                return canonical.ToByteArray();
-            }
-            case DenyWorkOrder command:
-            {
-                var canonical = command.Clone();
-                canonical.DecidedAtUtc = null;
                 return canonical.ToByteArray();
             }
             case DispatchWorkOrder command:

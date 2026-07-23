@@ -104,38 +104,6 @@ public sealed class WorkOrderService : IWorkOrderService
             ct);
     }
 
-    public async Task<WorkOrderAcceptedReceipt> ApproveAsync(
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        WorkOrderPrincipalContract approver,
-        CancellationToken ct = default)
-    {
-        var current = await GetCurrentAtVersionAsync(scopeId, workOrderId, request.ExpectedLifecycleVersion, ct);
-        return await _commandPort.ApproveAsync(
-            current.ScopeId,
-            current.WorkOrderId,
-            NormalizeDecision(request),
-            NormalizePrincipal(approver),
-            ct);
-    }
-
-    public async Task<WorkOrderAcceptedReceipt> DenyAsync(
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        WorkOrderPrincipalContract approver,
-        CancellationToken ct = default)
-    {
-        var current = await GetCurrentAtVersionAsync(scopeId, workOrderId, request.ExpectedLifecycleVersion, ct);
-        return await _commandPort.DenyAsync(
-            current.ScopeId,
-            current.WorkOrderId,
-            NormalizeDecision(request),
-            NormalizePrincipal(approver),
-            ct);
-    }
-
     public async Task<WorkOrderAcceptedReceipt> DispatchAsync(
         string scopeId,
         string workOrderId,
@@ -237,45 +205,7 @@ public sealed class WorkOrderService : IWorkOrderService
                 new WorkOrderChatInputContract(NormalizeRequired(request.Input.Chat.Prompt, "input.chat.prompt")),
                 NormalizeArtifacts(request.Input.InputArtifacts),
                 NormalizeArtifacts(request.Input.DeclaredResultArtifacts)),
-            PermissionPlan = NormalizePermissionPlan(request.PermissionPlan),
         };
-    }
-
-    private static WorkOrderPermissionPlanContract NormalizePermissionPlan(WorkOrderPermissionPlanContract? plan)
-    {
-        var actions = (plan?.ExternalActions ?? [])
-            .Select(action => new WorkOrderExternalActionReferenceContract(
-                NormalizeRequired(action.ActionId, "permissionPlan.externalActions.actionId"),
-                NormalizeRequired(action.System, "permissionPlan.externalActions.system"),
-                NormalizeRequired(action.Action, "permissionPlan.externalActions.action"),
-                NormalizeRequired(action.ResourceId, "permissionPlan.externalActions.resourceId")))
-            .OrderBy(static action => action.ActionId, StringComparer.Ordinal)
-            .ToArray();
-        EnsureUnique(actions.Select(static action => action.ActionId), "external action id");
-
-        var requirements = (plan?.Requirements ?? [])
-            .Select(requirement => new WorkOrderPermissionRequirementContract(
-                NormalizeRequired(requirement.PermissionId, "permissionPlan.requirements.permissionId"),
-                NormalizeRequired(requirement.ActionId, "permissionPlan.requirements.actionId"),
-                NormalizeRequired(requirement.Capability, "permissionPlan.requirements.capability"),
-                requirement.RequiresApproval))
-            .OrderBy(static requirement => requirement.PermissionId, StringComparer.Ordinal)
-            .ToArray();
-        EnsureUnique(requirements.Select(static requirement => requirement.PermissionId), "permission id");
-
-        var actionIds = actions.Select(static action => action.ActionId).ToHashSet(StringComparer.Ordinal);
-        if (requirements.Any(requirement => !actionIds.Contains(requirement.ActionId)))
-            throw new InvalidOperationException("Every permission requirement must reference a declared external action.");
-
-        var approvers = (plan?.ApproverPrincipalIds ?? [])
-            .Select(id => NormalizeRequired(id, "permissionPlan.approverPrincipalIds"))
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        if (requirements.Any(static requirement => requirement.RequiresApproval) && approvers.Length == 0)
-            throw new InvalidOperationException("Approval-requiring permissions must declare at least one approver principal.");
-
-        return new WorkOrderPermissionPlanContract(actions, requirements, approvers);
     }
 
     private static IReadOnlyList<WorkOrderArtifactReferenceContract> NormalizeArtifacts(
@@ -291,16 +221,6 @@ public sealed class WorkOrderService : IWorkOrderService
             .ToArray();
         EnsureUnique(normalized.Select(static artifact => artifact.ArtifactId), "artifact id");
         return normalized;
-    }
-
-    private static DecideWorkOrderApprovalRequest NormalizeDecision(DecideWorkOrderApprovalRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return request with
-        {
-            DecisionId = NormalizeRequired(request.DecisionId, nameof(request.DecisionId)),
-            Reason = NormalizeOptional(request.Reason),
-        };
     }
 
     private static WorkOrderPrincipalContract NormalizePrincipal(WorkOrderPrincipalContract principal)
