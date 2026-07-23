@@ -288,6 +288,8 @@ public sealed class AgentProfileMutationRejectedAuditTranslator
 public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorBase<TEvent>
     where TEvent : class, IMessage<TEvent>, new()
 {
+    private const string AevatarPlatformAuditPartition = "platform:aevatar";
+
     protected static CommittedAuditSeed ProfileSeed(
         string operationName,
         AgentProfileIdentity? identity,
@@ -312,7 +314,7 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
             operationName,
             "agent_profile",
             identity?.ProfileId ?? string.Empty,
-            identity?.OwningScopeId ?? string.Empty,
+            AuditPartition(identity),
             AuditSensitivityLevel.Restricted,
             isDestructive,
             operation?.CommandId ?? string.Empty,
@@ -333,9 +335,7 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         string fallbackCode,
         IReadOnlyDictionary<string, string>? annotations = null)
     {
-        var failureCode = string.IsNullOrWhiteSpace(diagnostic?.Code)
-            ? fallbackCode
-            : diagnostic.Code;
+        var failureCode = StableFailureCode(diagnostic?.Code, fallbackCode);
         var merged = annotations is null
             ? new Dictionary<string, string>(StringComparer.Ordinal)
             : new Dictionary<string, string>(annotations, StringComparer.Ordinal);
@@ -457,6 +457,126 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         AgentProfileOwnerIdentity.OwnerOneofCase.System => "system",
         _ => "unspecified",
     };
+
+    private static string AuditPartition(AgentProfileIdentity? identity)
+    {
+        if (identity is null || AgentProfilePolicies.ValidateIdentity(identity).Count > 0)
+            return string.Empty;
+
+        return identity.Owner?.OwnerCase switch
+        {
+            AgentProfileOwnerIdentity.OwnerOneofCase.User => identity.OwningScopeId ?? string.Empty,
+            AgentProfileOwnerIdentity.OwnerOneofCase.System when
+                string.Equals(
+                    identity.Owner.System?.PlatformId,
+                    AgentProfilePolicies.AevatarPlatformId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    identity.Reference?.OwnerHandle,
+                    AgentProfilePolicies.SystemOwnerHandle,
+                    StringComparison.Ordinal) &&
+                string.IsNullOrEmpty(identity.OwningScopeId) => AevatarPlatformAuditPartition,
+            _ => string.Empty,
+        };
+    }
+
+    private static string StableFailureCode(string? candidate, string fallbackCode) =>
+        candidate is
+            "AGGREGATE_PROMPT_BYTES_EXCEEDED" or
+            "AGGREGATE_PROMPT_TOKENS_EXCEEDED" or
+            "CONFLICTING_ASSET_PATH" or
+            "CONFLICTING_SCRIPT_ID" or
+            "CONFLICTING_WORKFLOW_ID" or
+            "DRAFT_VERSION_CONFLICT" or
+            "DUPLICATE_BINDING_ID" or
+            "IDEMPOTENCY_PAYLOAD_CONFLICT" or
+            "INVALID_AGENT_PROFILE" or
+            "INVALID_ASSET_PATH" or
+            "INVALID_BINDING_ID" or
+            "INVALID_DECLARED_TOOL_NAME" or
+            "INVALID_DISPLAY_NAME" or
+            "INVALID_EXPECTED_PUBLISHER_ID" or
+            "INVALID_EXPECTED_SKILL_NAME" or
+            "INVALID_IDENTITY_PROVIDER" or
+            "INVALID_INSTRUCTIONS" or
+            "INVALID_LITERAL_VERSION" or
+            "INVALID_OWNER_HANDLE" or
+            "INVALID_OWNER_SUBJECT_ID" or
+            "INVALID_OWNING_SCOPE_ID" or
+            "INVALID_PROFILE_ACTOR_ID" or
+            "INVALID_PROFILE_ID" or
+            "INVALID_PROFILE_INITIALIZATION_IDENTITY" or
+            "INVALID_PROFILE_INITIALIZATION_REJECTION" or
+            "INVALID_PROFILE_OPERATION" or
+            "INVALID_PROFILE_OPERATION_KIND" or
+            "INVALID_PROFILE_OWNER" or
+            "INVALID_PROFILE_REPLAY_FINGERPRINT" or
+            "INVALID_PROFILE_SLUG" or
+            "INVALID_PUBLISHED_REVISION" or
+            "INVALID_PUBLISHED_SNAPSHOT_SHA256" or
+            "INVALID_PURPOSE" or
+            "INVALID_SCRIPT_ID" or
+            "INVALID_SEALED_SKILL_BINDING" or
+            "INVALID_SKILL_ACTIVATION_MODE" or
+            "INVALID_SKILL_GUID" or
+            "INVALID_SKILL_PACKAGE" or
+            "INVALID_SYSTEM_PLATFORM_ID" or
+            "INVALID_SYSTEM_PROFILE_REFERENCE" or
+            "INVALID_TOOL_NAME" or
+            "INVALID_TOOL_POLICY_MODE" or
+            "INVALID_TOOL_SET_REF" or
+            "INVALID_WORKFLOW_ID" or
+            "MISSING_INITIALIZATION_CONTINUATION" or
+            "MISSING_INITIALIZATION_REJECTION" or
+            "MISSING_PROFILE_CONTENT" or
+            "MISSING_PROFILE_IDENTITY" or
+            "MISSING_PROFILE_OWNER" or
+            "MISSING_PROFILE_REFERENCE" or
+            "MISSING_PUBLISHED_SNAPSHOT" or
+            "MISSING_RESOLVED_SKILL_PACKAGE" or
+            "MISSING_SEALED_SKILL" or
+            "MISSING_SKILL_BINDING" or
+            "MISSING_SKILL_REFERENCE" or
+            "MISSING_TOOL_POLICY" or
+            "MISSING_UPSTREAM_SKILL_HASH" or
+            "MULTIPLE_DEFAULT_SKILLS" or
+            "OPERATION_INPUT_SHA256_MISMATCH" or
+            "ORNN_ACCESS_TOKEN_REQUIRED" or
+            "ORNN_DEPENDENCY_UNAVAILABLE" or
+            "ORNN_SKILL_ACCESS_DENIED" or
+            "ORNN_SKILL_IDENTITY_MISMATCH" or
+            "ORNN_SKILL_NOT_FOUND" or
+            "ORNN_SKILL_PUBLISHER_MISMATCH" or
+            "OWNER_HANDLE_CONFLICT" or
+            "PROFILE_ACTOR_ID_TAKEN" or
+            "PROFILE_BINDING_CONFLICT" or
+            "PROFILE_IDENTITY_CONFLICT" or
+            "PROFILE_ID_TAKEN" or
+            "PROFILE_NOT_INITIALIZED" or
+            "PROFILE_PROTOCOL_PUBLISHER_MISMATCH" or
+            "PROFILE_PROVISIONING_CONTINUATION_MISMATCH" or
+            "PROFILE_PUBLISHED_SUMMARY_MISMATCH" or
+            "PROFILE_SLUG_TAKEN" or
+            "PUBLISHED_SNAPSHOT_SHA256_MISMATCH" or
+            "PUBLISHED_SNAPSHOT_TOO_LARGE" or
+            "PUBLISH_SOURCE_CHANGED" or
+            "RESERVED_OWNER_HANDLE" or
+            "SEALED_SKILL_CANONICAL_NAME_MISMATCH" or
+            "SEALED_SKILL_CONTENT_SHA256_MISMATCH" or
+            "SEALED_SKILL_GUID_MISMATCH" or
+            "SEALED_SKILL_LITERAL_VERSION_MISMATCH" or
+            "SEALED_SKILL_PUBLISHER_ID_MISMATCH" or
+            "SEALED_SKILL_TOO_LARGE" or
+            "SKILL_TOOL_DEPENDENCY_NOT_ALLOWED" or
+            "SYSTEM_PROFILE_SCOPE_FORBIDDEN" or
+            "TEXT_ASSET_TOO_LARGE" or
+            "TOO_MANY_SKILL_BINDINGS" or
+            "TOO_MANY_TOOL_NAMES" or
+            "TOO_MANY_TOOL_SET_REFS" or
+            "UNKNOWN_PROFILE_PROVISIONING" or
+            "UNKNOWN_TOOL_SET_REF"
+            ? candidate
+            : fallbackCode;
 
     private static string ActivationMode(AgentProfileSkillActivationMode mode) => mode switch
     {

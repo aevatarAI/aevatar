@@ -63,6 +63,29 @@ public sealed class ApplicationServiceGuardTests
     }
 
     [Fact]
+    public async Task AgentProfileBoundaryGuardSelfTest_ShouldRejectAllCommittedNegativeFixtures()
+    {
+        var startInfo = new ProcessStartInfo("bash")
+        {
+            WorkingDirectory = FindRepositoryRoot(),
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.ArgumentList.Add("tools/ci/agent_profile_boundary_guard.sh");
+        startInfo.ArgumentList.Add("--self-test");
+
+        using var process = Process.Start(startInfo)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await process.WaitForExitAsync(timeout.Token);
+        var output = await stdout + await stderr;
+
+        process.ExitCode.Should().Be(0, output);
+        output.Should().Contain("Agent Profile Phase 1 boundary guard self-tests passed.");
+    }
+
+    [Fact]
     public void ServiceCommandApplicationService_ShouldValidateConstructorArguments()
     {
         Action nullDispatch = () => new ServiceCommandApplicationService(
@@ -394,4 +417,24 @@ public sealed class ApplicationServiceGuardTests
         PropertyInfo property => property.PropertyType,
         _ => null,
     };
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(
+                    directory.FullName,
+                    "tools",
+                    "ci",
+                    "agent_profile_boundary_guard.sh")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root.");
+    }
 }

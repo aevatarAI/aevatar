@@ -167,6 +167,13 @@ owner contexts only. The execution fan-out does not create duplicate audit
 records. Draft instructions, sealed instructions/assets, owner subject ids,
 credentials, and raw dependency errors are structurally omitted.
 
+Audit partitioning does not rewrite domain identity. A valid user Profile keeps
+its `owningScopeId` as the audit partition. Only the fully valid canonical
+`system/aevatar` identity uses the audit-only `platform:aevatar` partition;
+missing or invalid identities receive no audit partition. `platform:aevatar` is
+an audit-store routing key, not a scope id, Profile owner, or authorization
+claim.
+
 ## 8. System Profile Bootstrap And Health
 
 Hosts may contribute `ISystemAgentProfileDefinitionSource` implementations.

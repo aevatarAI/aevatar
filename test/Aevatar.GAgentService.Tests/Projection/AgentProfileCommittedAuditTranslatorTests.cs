@@ -1,6 +1,8 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
 using Aevatar.Audit.Core.CommittedFacts;
+using Aevatar.Audit.Core.Projection;
+using Aevatar.Audit.Core.Stores;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
@@ -235,7 +237,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
     }
 
     [Fact]
-    public void MutationRejectedTranslator_ShouldUseStableFailureCodeAndOmitRawDiagnosticText()
+    public void MutationRejectedTranslator_ShouldPreserveKnownStableFailureCodeAndOmitRawDiagnosticText()
     {
         var evt = new AgentProfileMutationRejectedEvent
         {
@@ -250,7 +252,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
                 publishedSnapshotSha256: Digest(0x55),
                 diagnostic: new AgentProfileSafeDiagnostic
                 {
-                    Code = "AUTHORITY_VERSION_CONFLICT",
+                    Code = "DRAFT_VERSION_CONFLICT",
                     Message = $"{RawRemoteError}: {Bearer}",
                     Path = "expected_authority_state_version",
                 }),
@@ -261,10 +263,160 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         AssertCommon(record, "agent_profile.mutation.rejected", "rejected");
         record.Outcome.Should().Be(AuditOutcome.Error);
         record.TerminalOutcome.Should().Be(AuditTerminalOutcome.Failed);
-        record.Failure.Code.Should().Be("AUTHORITY_VERSION_CONFLICT");
-        record.Failure.SanitizedMessage.Should().Be("AUTHORITY_VERSION_CONFLICT");
-        record.Annotations.Should().Contain("failure_code", "AUTHORITY_VERSION_CONFLICT");
+        record.Failure.Code.Should().Be("DRAFT_VERSION_CONFLICT");
+        record.Failure.SanitizedMessage.Should().Be("DRAFT_VERSION_CONFLICT");
+        record.Annotations.Should().Contain("failure_code", "DRAFT_VERSION_CONFLICT");
         AssertSensitiveValuesOmitted(record);
+    }
+
+    [Theory]
+    [InlineData("provisioning", "UNKNOWN_REMOTE_FAILURE", "PROFILE_PROVISIONING_FAILED")]
+    [InlineData("initialization", " malformed code ", "PROFILE_INITIALIZATION_REJECTED")]
+    [InlineData("mutation", Bearer, "PROFILE_MUTATION_REJECTED")]
+    public void FailureTranslators_WhenDiagnosticCodeIsNotAllowlisted_ShouldUseEventFallback(
+        string eventKind,
+        string diagnosticCode,
+        string expectedCode)
+    {
+        var diagnostic = new AgentProfileSafeDiagnostic
+        {
+            Code = diagnosticCode,
+            Message = RawRemoteError,
+        };
+
+        var record = eventKind switch
+        {
+            "provisioning" => Translate(
+                new AgentProfileProvisioningFailedAuditTranslator(),
+                new AgentProfileProvisioningFailedEvent
+                {
+                    Operation = Operation("provisioning-failed"),
+                    Identity = Identity(),
+                    Diagnostic = diagnostic,
+                    FailureKind = AgentProfileProvisioningFailureKind.CreateValidation,
+                }),
+            "initialization" => Translate(
+                new AgentProfileInitializationRejectedAuditTranslator(),
+                new AgentProfileInitializationRejectedEvent
+                {
+                    Operation = Operation("initialization-rejected"),
+                    Identity = Identity(),
+                    Diagnostic = diagnostic,
+                }),
+            "mutation" => Translate(
+                new AgentProfileMutationRejectedAuditTranslator(),
+                new AgentProfileMutationRejectedEvent
+                {
+                    Operation = Operation("mutation-rejected"),
+                    Identity = Identity(),
+                    Outcome = Outcome(
+                        "mutation-rejected",
+                        AgentProfileMutationStatus.Rejected,
+                        draftRevision: 4,
+                        draftSha256: Digest(0x44),
+                        diagnostic: diagnostic),
+                }),
+            _ => throw new InvalidOperationException($"Unsupported test event kind '{eventKind}'."),
+        };
+
+        record.Failure.Code.Should().Be(expectedCode);
+        record.Failure.SanitizedMessage.Should().Be(expectedCode);
+        record.Annotations.Should().Contain("failure_code", expectedCode);
+        record.ToString().Should().NotContain(diagnosticCode);
+    }
+
+    [Fact]
+    public async Task SystemProfileCommittedAudit_ShouldAppendUsingPlatformPartitionWithoutChangingDomainScope()
+    {
+        var identity = SystemIdentity();
+        var evt = new AgentProfileInitializedEvent
+        {
+            Operation = Operation("system-create"),
+            Identity = identity,
+            InitialContent = SensitiveContent(),
+            DraftRevision = 1,
+            DraftSha256 = Digest(0x11),
+            NamespaceActorId = AgentProfileActorIds.Namespace,
+            ProfileActorId = AgentProfileActorIds.Profile(identity.ProfileId),
+        };
+
+        var document = await MaterializeAsync(
+            new AgentProfileInitializedAuditTranslator(),
+            evt,
+            "system-profile-event");
+
+        identity.OwningScopeId.Should().BeEmpty();
+        evt.Identity.OwningScopeId.Should().BeEmpty();
+        document.Should().NotBeNull();
+        document!.ScopeId.Should().Be("platform:aevatar");
+        document.Record.ScopeId.Should().Be("platform:aevatar");
+        document.Record.Provenance.ScopeId.Should().Be("platform:aevatar");
+    }
+
+    [Fact]
+    public void MissingOrInvalidSystemIdentity_ShouldNotAcquirePlatformAuditPartition()
+    {
+        var missingIdentity = new AgentProfileInitializedEvent
+        {
+            Operation = Operation("missing-system"),
+        };
+        var wrongPlatformIdentity = SystemIdentity();
+        wrongPlatformIdentity.Owner.System.PlatformId = "other-platform";
+        var wrongReferenceIdentity = SystemIdentity();
+        wrongReferenceIdentity.Reference.OwnerHandle = "not-system";
+
+        var records = new[]
+        {
+            Translate(new AgentProfileInitializedAuditTranslator(), missingIdentity),
+            Translate(
+                new AgentProfileInitializedAuditTranslator(),
+                new AgentProfileInitializedEvent
+                {
+                    Operation = Operation("wrong-platform"),
+                    Identity = wrongPlatformIdentity,
+                }),
+            Translate(
+                new AgentProfileInitializedAuditTranslator(),
+                new AgentProfileInitializedEvent
+                {
+                    Operation = Operation("wrong-reference"),
+                    Identity = wrongReferenceIdentity,
+                }),
+        };
+
+        records.Should().OnlyContain(record => string.IsNullOrEmpty(record.ScopeId));
+    }
+
+    [Fact]
+    public async Task HostileDiagnosticCode_ShouldPersistOnlyEventFallbackThroughRealAuditPipeline()
+    {
+        var evt = new AgentProfileMutationRejectedEvent
+        {
+            Operation = Operation("hostile-code"),
+            Identity = Identity(),
+            Outcome = Outcome(
+                "hostile-code",
+                AgentProfileMutationStatus.Rejected,
+                draftRevision: 4,
+                draftSha256: Digest(0x44),
+                diagnostic: new AgentProfileSafeDiagnostic
+                {
+                    Code = Bearer,
+                    Message = RawRemoteError,
+                }),
+        };
+
+        var document = await MaterializeAsync(
+            new AgentProfileMutationRejectedAuditTranslator(),
+            evt,
+            "hostile-code-event");
+
+        document.Should().NotBeNull();
+        document!.Record.Failure.Code.Should().Be("PROFILE_MUTATION_REJECTED");
+        document.Record.Failure.SanitizedMessage.Should().Be("PROFILE_MUTATION_REJECTED");
+        document.Record.Annotations.Should().Contain("failure_code", "PROFILE_MUTATION_REJECTED");
+        document.Record.ToString().Should().NotContain(Bearer);
+        document.Record.ToString().Should().NotContain(RawRemoteError);
     }
 
     [Fact]
@@ -404,6 +556,25 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
     private static AgentProfileIdentity Identity() =>
         GAgentServiceTestKit.CreateAgentProfileIdentity(ownerSubjectId: "owner-secret-subject");
 
+    private static AgentProfileIdentity SystemIdentity() =>
+        new()
+        {
+            ProfileId = "prof-system-studio",
+            Owner = new AgentProfileOwnerIdentity
+            {
+                System = new AgentProfileSystemOwnerIdentity
+                {
+                    PlatformId = AgentProfilePolicies.AevatarPlatformId,
+                },
+            },
+            OwningScopeId = string.Empty,
+            Reference = new AgentProfileReference
+            {
+                OwnerHandle = AgentProfilePolicies.SystemOwnerHandle,
+                ProfileSlug = "studio",
+            },
+        };
+
     private static AgentProfileOperationFact Operation(string suffix) =>
         new()
         {
@@ -541,6 +712,62 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
     private static string Hex(ByteString value) =>
         Convert.ToHexString(value.Span).ToLowerInvariant();
 
+    private static async Task<AuditTrailDocument?> MaterializeAsync<TEvent>(
+        IAuditCommittedEventTranslator translator,
+        TEvent evt,
+        string eventId)
+        where TEvent : class, IMessage<TEvent>
+    {
+        var store = new InMemoryAuditTrailStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+        var materializer = new CommittedAuditArtifactMaterializer<AgentProfileOwnerCurrentStateProjectionContext>(
+            new AuditCommittedEventTranslatorRegistry([translator]),
+            appender,
+            new FixedProjectionClock(ObservedAt.AddMinutes(1)));
+        var originActorId = evt switch
+        {
+            AgentProfileInitializedEvent initialized =>
+                AgentProfileActorIds.Profile(initialized.Identity?.ProfileId ?? "missing"),
+            AgentProfileMutationRejectedEvent rejected =>
+                AgentProfileActorIds.Profile(rejected.Identity?.ProfileId ?? "missing"),
+            _ => AgentProfileActorIds.Profile("unknown"),
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = $"envelope-{eventId}",
+            Timestamp = Timestamp.FromDateTimeOffset(ObservedAt),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = $"correlation-{eventId}",
+            },
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    AgentId = originActorId,
+                    EventId = eventId,
+                    Version = 17,
+                    EventData = Any.Pack(evt),
+                },
+            }),
+        };
+
+        await materializer.ProjectAsync(
+            new AgentProfileOwnerCurrentStateProjectionContext
+            {
+                RootActorId = originActorId,
+                ProjectionKind = "agent_profile_owner",
+            },
+            envelope);
+
+        return await store.GetAsync($"committed:{eventId}:{translator switch
+        {
+            AgentProfileInitializedAuditTranslator => "agent_profile.created",
+            AgentProfileMutationRejectedAuditTranslator => "agent_profile.mutation.rejected",
+            _ => throw new InvalidOperationException("Unsupported materializer test translator."),
+        }}");
+    }
+
     private static void AssertCommittedAuditMaterializerRegistered<TContext>(
         IServiceCollection services,
         IServiceProvider provider)
@@ -560,4 +787,9 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         type.Name.StartsWith("ObservedProjectionArtifactMaterializer`", StringComparison.Ordinal) &&
         type.GenericTypeArguments.Length == 2 &&
         type.GenericTypeArguments[1] == typeof(TMaterializer);
+
+    private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
 }
