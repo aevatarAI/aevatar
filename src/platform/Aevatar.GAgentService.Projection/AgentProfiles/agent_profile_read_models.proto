@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.projection.agentprofiles;
+
+option csharp_namespace = "Aevatar.GAgentService.Projection.AgentProfiles";
+
+import "google/protobuf/timestamp.proto";
+import "AgentProfiles/agent_profiles.proto";
+
+message AgentProfileCatalogEntryDocument {
+  string profile_id = 1;
+  aevatar.gagentservice.agentprofiles.AgentProfileReference reference = 2;
+  aevatar.gagentservice.agentprofiles.AgentProfileOwnerIdentity owner = 3;
+  string owning_scope_id = 4;
+  aevatar.gagentservice.agentprofiles.AgentProfileProvisioningStatus status = 5;
+  aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 6;
+}
+
+message AgentProfileNamespaceCatalogDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  repeated AgentProfileCatalogEntryDocument entries = 6;
+}
+
+message AgentProfileOwnerDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 6;
+  aevatar.gagentservice.agentprofiles.AgentProfileContent draft = 7;
+  int64 draft_revision = 8;
+  bytes draft_sha256 = 9;
+  int64 published_revision = 10;
+  bytes published_snapshot_sha256 = 11;
+  bytes published_source_draft_sha256 = 12;
+  aevatar.gagentservice.agentprofiles.AgentProfileMutationOutcome last_mutation = 13;
+}
+
+message AgentProfileExecutionDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  aevatar.gagentservice.agentprofiles.AgentProfilePublishedSnapshot snapshot = 6;
+}

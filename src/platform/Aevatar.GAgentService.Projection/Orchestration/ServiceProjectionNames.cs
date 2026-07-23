@@ -17,6 +17,9 @@ internal static class ServiceProjectionKinds
     public const string GAgentRunTerminalApproval = "gagent-run-terminal-approval";
     public const string ResponseSessions = "response-sessions";
     public const string ResponsesAgentTools = "responses-agent-tools";
+    public const string AgentProfileNamespaces = "agent-profile-namespaces";
+    public const string AgentProfileManagement = "agent-profile-management";
+    public const string AgentProfileExecution = "agent-profile-execution";
     public const string ScheduledDispatches = "scheduled-dispatches";
     public const string TeamAutomationOperationObservation = "team-automation-operation-observation";
     public const string NyxIdAuthorizationCatalog = "nyxid-authorization-catalog";

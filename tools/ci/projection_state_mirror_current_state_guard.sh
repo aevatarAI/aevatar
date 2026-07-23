@@ -14,6 +14,9 @@ FILES=(
   "src/Aevatar.Scripting.Projection/Projectors/ScriptNativeDocumentProjector.cs"
   "src/Aevatar.Scripting.Projection/Projectors/ScriptNativeGraphProjector.cs"
   "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
+  "src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileNamespaceCurrentStateProjector.cs"
+  "src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileOwnerCurrentStateProjector.cs"
+  "src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileExecutionCurrentStateProjector.cs"
 )
 MAPPED_CURRENT_STATE_HELPER="src/Aevatar.CQRS.Projection.Core/Orchestration/MappedCurrentStateProjectionMaterializer.cs"
 WORKFLOW_BINDING_PROJECTOR="src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowActorBindingProjector.cs"

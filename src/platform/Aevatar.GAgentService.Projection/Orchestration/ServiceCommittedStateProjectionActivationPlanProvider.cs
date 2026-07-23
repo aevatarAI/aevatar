@@ -2,10 +2,12 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.AI.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Core.GAgents;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
 using Aevatar.GAgentService.Projection.Contexts;
+using Aevatar.GAgentService.Projection.AgentProfiles;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Projection.Orchestration;
@@ -40,6 +42,8 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
             _ when payload.Is(RoleChatSessionCompletedEvent.Descriptor) => GAgentRunTerminalPlans(context),
             var type when type == typeof(LlmSessionGAgent) => LlmSessionPlans(context.ActorId),
             var type when type == typeof(ResponsesAgentToolStateGAgent) => ResponsesAgentToolPlans(context.ActorId),
+            var type when type == typeof(AgentProfileNamespaceGAgent) => AgentProfileNamespacePlans(context.ActorId),
+            var type when type == typeof(AgentProfileGAgent) => AgentProfilePlans(context.ActorId),
             var type when type == typeof(ScheduledDispatchGAgent) => ScheduledDispatchPlans(context.ActorId),
             var type when type == typeof(NyxIdAuthorizationCatalogGAgent) => NyxIdAuthorizationCatalogPlans(context.ActorId),
             _ => [],
@@ -177,6 +181,23 @@ public sealed class ServiceCommittedStateProjectionActivationPlanProvider : IPro
         DurablePlan<ResponsesAgentToolStateCurrentStateProjectionContext>(
             actorId,
             ServiceProjectionKinds.ResponsesAgentTools),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> AgentProfileNamespacePlans(string actorId) =>
+    [
+        DurablePlan<AgentProfileNamespaceCurrentStateProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.AgentProfileNamespaces),
+    ];
+
+    private static IEnumerable<ProjectionActivationPlan> AgentProfilePlans(string actorId) =>
+    [
+        DurablePlan<AgentProfileOwnerCurrentStateProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.AgentProfileManagement),
+        DurablePlan<AgentProfileExecutionCurrentStateProjectionContext>(
+            actorId,
+            ServiceProjectionKinds.AgentProfileExecution),
     ];
 
     private static ProjectionActivationPlan DurablePlan<TContext>(

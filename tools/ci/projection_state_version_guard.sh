@@ -16,6 +16,9 @@ FILES=(
   "src/Aevatar.Scripting.Projection/Materialization/ScriptNativeDocumentMaterializer.cs"
   "src/Aevatar.Scripting.Projection/Materialization/ScriptNativeGraphMaterializer.cs"
   "src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs"
+  "src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileNamespaceCurrentStateProjector.cs"
+  "src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileOwnerCurrentStateProjector.cs"
+  "src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileExecutionCurrentStateProjector.cs"
 )
 
 capabilities_artifact_surface_hits="$(

@@ -41,6 +41,7 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Hosting.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Projection.DependencyInjection;
+using Aevatar.GAgentService.Projection.AgentProfiles;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Capabilities.ExecutionActivity;
 using Aevatar.AGUI.Contracts;
@@ -298,6 +299,9 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<GAgentRunTerminalReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileNamespaceCatalogDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileOwnerDocument>(services, configuration, static readModel => readModel.Id);
+            TryAddElasticsearchDocumentProjectionStore<AgentProfileExecutionDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ScheduledDispatchDocument>(services, configuration, static readModel => readModel.ScheduleId);
             TryAddElasticsearchDocumentProjectionStore<NyxIdAuthorizationCatalogDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
@@ -317,6 +321,9 @@ public static class ServiceCollectionExtensions
             TryAddInMemoryDocumentProjectionStore<GAgentRunTerminalReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<LlmSessionCurrentStateReadModel>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<AgentProfileNamespaceCatalogDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<AgentProfileOwnerDocument>(services, static readModel => readModel.Id);
+            TryAddInMemoryDocumentProjectionStore<AgentProfileExecutionDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<ScheduledDispatchDocument>(services, static readModel => readModel.ScheduleId);
             TryAddInMemoryDocumentProjectionStore<NyxIdAuthorizationCatalogDocument>(services, static readModel => readModel.Id);
             TryAddInMemoryDocumentProjectionStore<UserConfigCurrentStateDocument>(services, static readModel => readModel.Id);
@@ -342,6 +349,9 @@ public static class ServiceCollectionExtensions
                && HasProjectionDocumentReaderForProvider<GAgentRunTerminalReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<LlmSessionCurrentStateReadModel>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ResponsesAgentToolStateCurrentStateReadModel>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileNamespaceCatalogDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileOwnerDocument>(services, providerKind)
+               && HasProjectionDocumentReaderForProvider<AgentProfileExecutionDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<ScheduledDispatchDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<NyxIdAuthorizationCatalogDocument>(services, providerKind)
                && HasProjectionDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
