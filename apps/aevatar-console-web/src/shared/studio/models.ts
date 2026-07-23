@@ -1044,7 +1044,7 @@ export interface StudioUserLlmRouteOption {
   readonly status: string;
   readonly allowed: boolean;
   readonly ready: boolean;
-  readonly serviceId?: string | null;
+  readonly userServiceId?: string | null;
   readonly serviceSlug?: string | null;
   readonly description?: string | null;
 }
@@ -1066,6 +1066,9 @@ export interface StudioUserLlmSettingsCapabilities {
 export interface StudioUserLlmSettings {
   readonly savedRoute: string;
   readonly savedRouteLabel: string;
+  readonly savedRouteKind: 'gateway' | 'nyx_id_user_service' | string;
+  readonly savedUserServiceId?: string | null;
+  readonly savedServiceSlug?: string | null;
   readonly effectiveRoute: string;
   readonly effectiveRouteLabel: string;
   readonly routeFallbackActive: boolean;

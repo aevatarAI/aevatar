@@ -385,6 +385,17 @@ function decodeStudioUserLlmSettings(
   return {
     savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
     savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
+    savedRouteKind: readString(record, "savedRouteKind", `${label}.savedRouteKind`),
+    savedUserServiceId: readNullableString(
+      record,
+      "savedUserServiceId",
+      `${label}.savedUserServiceId`
+    ),
+    savedServiceSlug: readNullableString(
+      record,
+      "savedServiceSlug",
+      `${label}.savedServiceSlug`
+    ),
     effectiveRoute: readString(record, "effectiveRoute", `${label}.effectiveRoute`),
     effectiveRouteLabel: readString(record, "effectiveRouteLabel", `${label}.effectiveRouteLabel`),
     routeFallbackActive: readBoolean(record, "routeFallbackActive", `${label}.routeFallbackActive`),
@@ -402,7 +413,11 @@ function decodeStudioUserLlmSettings(
           status: readString(option, "status", `${resolvedOptionLabel}.status`),
           allowed: readBoolean(option, "allowed", `${resolvedOptionLabel}.allowed`),
           ready: readBoolean(option, "ready", `${resolvedOptionLabel}.ready`),
-          serviceId: readNullableString(option, "serviceId", `${resolvedOptionLabel}.serviceId`),
+          userServiceId: readNullableString(
+            option,
+            "userServiceId",
+            `${resolvedOptionLabel}.userServiceId`
+          ),
           serviceSlug: readNullableString(option, "serviceSlug", `${resolvedOptionLabel}.serviceSlug`),
           description: readNullableString(option, "description", `${resolvedOptionLabel}.description`),
         };
@@ -3334,7 +3349,8 @@ export const studioApi = {
   },
 
   saveUserLlmSettings(input: {
-    routeValue: string;
+    userServiceId?: string | null;
+    routeValue?: string | null;
     model?: string | null;
   }): Promise<StudioUserConfigSaveReceipt> {
     return requestDecodedJson(
@@ -3344,7 +3360,8 @@ export const studioApi = {
         method: "PUT",
         headers: JSON_HEADERS,
         body: JSON.stringify({
-          routeValue: input.routeValue.trim(),
+          userServiceId: trimOptional(input.userServiceId) ?? null,
+          routeValue: input.routeValue?.trim() ?? null,
           model: input.model?.trim() ?? "",
         }),
       }

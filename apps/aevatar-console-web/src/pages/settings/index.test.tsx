@@ -37,6 +37,7 @@ const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(
   "crypto",
 );
 const originalNyxIDClientId = process.env.NYXID_CLIENT_ID;
+const gatewayRoute = "/api/v1/llm/gateway/v1";
 
 function installLocationAssignSpy() {
   const assign = jest.fn();
@@ -69,9 +70,12 @@ function installDeterministicCrypto() {
 
 function createLlmSettings(overrides: Record<string, unknown> = {}) {
   return {
-    savedRoute: "",
+    savedRoute: gatewayRoute,
     savedRouteLabel: "Backend saved gateway",
-    effectiveRoute: "",
+    savedRouteKind: "gateway",
+    savedUserServiceId: null,
+    savedServiceSlug: null,
+    effectiveRoute: gatewayRoute,
     effectiveRouteLabel: "Backend effective gateway",
     routeFallbackActive: false,
     fallbackReason: null,
@@ -85,13 +89,13 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
     },
     routeOptions: [
       {
-        routeValue: "",
+        routeValue: gatewayRoute,
         label: "Gateway route option",
         source: "gateway_provider",
         status: "ready",
         allowed: true,
         ready: true,
-        serviceId: null,
+        userServiceId: null,
         serviceSlug: null,
         description: null,
       },
@@ -102,7 +106,7 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
         status: "ready",
         allowed: true,
         ready: true,
-        serviceId: "svc-openai",
+        userServiceId: "us-openai",
         serviceSlug: "openai-team",
         description: null,
       },
@@ -113,20 +117,20 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
         status: "ready",
         allowed: true,
         ready: true,
-        serviceId: "svc-anthropic",
+        userServiceId: "us-anthropic",
         serviceSlug: "anthropic-team",
         description: null,
       },
     ],
     modelGroupsByRoute: [
       {
-        routeValue: "",
+        routeValue: gatewayRoute,
         groupId: "openai",
         label: "OpenAI Gateway",
         models: ["gpt-4o", "gpt-4o-mini"],
       },
       {
-        routeValue: "",
+        routeValue: gatewayRoute,
         groupId: "anthropic",
         label: "Anthropic Gateway",
         models: ["claude-3-5-sonnet", "claude-3-opus"],
@@ -178,13 +182,14 @@ describe("SettingsPage", () => {
         remoteMode: "remote",
       },
     });
-    mockStudioApi.saveUserLlmSettings.mockImplementation(async (input) =>
-      createLlmSettings({
-        savedRoute: input.routeValue,
-        effectiveRoute: input.routeValue,
-        defaultModel: input.model ?? "",
-      })
-    );
+    mockStudioApi.saveUserLlmSettings.mockResolvedValue({
+      accepted: true,
+      commandId: "cmd-settings-1",
+      ackStage: "accepted_for_dispatch",
+      actorId: "user-1",
+      correlationId: "corr-settings-1",
+      ackedAtUtc: "2026-07-23T08:00:00Z",
+    });
   });
 
   afterEach(() => {
@@ -350,6 +355,9 @@ describe("SettingsPage", () => {
       createLlmSettings({
         savedRoute: "/api/v1/proxy/s/anthropic-team",
         savedRouteLabel: "Anthropic Lab Service",
+        savedRouteKind: "nyx_id_user_service",
+        savedUserServiceId: "us-anthropic",
+        savedServiceSlug: "anthropic-team",
         effectiveRoute: "/api/v1/proxy/s/anthropic-team",
         effectiveRouteLabel: "Anthropic Lab Service",
       })
@@ -367,11 +375,14 @@ describe("SettingsPage", () => {
       createLlmSettings({
         savedRoute: "/api/v1/proxy/s/anthropic-team",
         savedRouteLabel: "Anthropic Lab Service",
+        savedRouteKind: "nyx_id_user_service",
+        savedUserServiceId: "us-anthropic",
+        savedServiceSlug: "anthropic-team",
         effectiveRoute: "/api/v1/proxy/s/anthropic-team",
         effectiveRouteLabel: "Anthropic Lab Service",
         modelGroupsByRoute: [
           {
-            routeValue: "",
+            routeValue: gatewayRoute,
             groupId: "openai",
             label: "OpenAI Gateway",
             models: ["gpt-4o", "gpt-4o-mini"],
@@ -397,25 +408,28 @@ describe("SettingsPage", () => {
         effectiveRouteLabel: "Retired Team",
         routeOptions: [
           {
-            routeValue: "",
+            routeValue: gatewayRoute,
             label: "NyxID Gateway",
             source: "gateway_provider",
             status: "ready",
             allowed: true,
             ready: true,
-            serviceId: null,
+            userServiceId: null,
             serviceSlug: null,
             description: null,
           },
         ],
         savedRoute: "/api/v1/proxy/s/retired-team",
         savedRouteLabel: "Retired Team",
+        savedRouteKind: "nyx_id_user_service",
+        savedUserServiceId: null,
+        savedServiceSlug: "retired-team",
       })
     );
 
     renderWithQueryClient(React.createElement(SettingsPage));
 
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Preferred route" }));
+    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Preferred LLM service" }));
 
     await waitFor(() => {
       expect(screen.getAllByText("NyxID Gateway").length).toBeGreaterThan(1);
@@ -442,8 +456,112 @@ describe("SettingsPage", () => {
     await waitFor(() => {
       expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledWith({
         model: "gpt-4o",
-        routeValue: "",
+        routeValue: gatewayRoute,
       });
     });
+  });
+
+  it("selects and saves duplicate-route services by exact user service ID", async () => {
+    const sharedRoute = "/api/v1/proxy/s/shared-openai";
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        defaultModel: "gpt-shared",
+        routeOptions: [
+          {
+            routeValue: gatewayRoute,
+            label: "Gateway route option",
+            source: "gateway_provider",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            userServiceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+          {
+            routeValue: sharedRoute,
+            label: "Shared OpenAI alpha",
+            source: "user_service",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            userServiceId: "us-alpha",
+            serviceSlug: "shared-openai",
+            description: null,
+          },
+          {
+            routeValue: sharedRoute,
+            label: "Shared OpenAI beta",
+            source: "user_service",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            userServiceId: "us-beta",
+            serviceSlug: "shared-openai",
+            description: null,
+          },
+          {
+            routeValue: "/api/v1/proxy/s/diagnostic-only",
+            label: "Provider diagnostic",
+            source: "provider_diagnostic",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            userServiceId: null,
+            serviceSlug: "diagnostic-only",
+            description: "Health only",
+          },
+        ],
+        modelGroupsByRoute: [
+          {
+            routeValue: sharedRoute,
+            groupId: "shared-openai",
+            label: "Shared OpenAI",
+            models: ["gpt-shared"],
+          },
+        ],
+      }),
+    );
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.mouseDown(
+      await screen.findByRole("combobox", { name: "Preferred LLM service" }),
+    );
+    expect(await screen.findByRole("option", { name: "Shared OpenAI alpha" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("option", { name: "Shared OpenAI beta" }));
+    expect(screen.queryByRole("option", { name: "Provider diagnostic" })).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Save config" }));
+
+    await waitFor(() => {
+      expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledWith({
+        userServiceId: "us-beta",
+        model: "gpt-shared",
+      });
+    });
+  });
+
+  it("treats a saved service without an exact ID as unavailable", async () => {
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        savedRoute: "/api/v1/proxy/s/openai-team",
+        savedRouteLabel: "Legacy OpenAI selection",
+        savedRouteKind: "nyx_id_user_service",
+        savedUserServiceId: null,
+        savedServiceSlug: "openai-team",
+        effectiveRoute: gatewayRoute,
+        routeFallbackActive: true,
+      }),
+    );
+
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    expect(
+      await screen.findByText(
+        "Saved service identity unavailable. Choose an exact connected service before saving.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
   });
 });

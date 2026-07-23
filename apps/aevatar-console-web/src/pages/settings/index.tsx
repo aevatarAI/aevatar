@@ -24,11 +24,7 @@ import {
   LLM_MODEL_HEADER_KEY,
   LLM_ROUTE_HEADER_KEY,
   buildConversationModelGroups,
-  buildConversationRouteOptions,
-  decodeConversationRouteSelectValue,
   describeConversationRoute,
-  encodeConversationRouteSelectValue,
-  findConversationRouteOption,
   normalizeUserLlmRoute,
   trimConversationValue,
 } from "@/pages/chat/chatConversationConfig";
@@ -55,6 +51,14 @@ import { AevatarPanel } from "@/shared/ui/aevatarPageShells";
 import { codeBlockStyle } from "@/shared/ui/proComponents";
 import AccountSettingsContent from "./accountContent";
 import {
+  buildUserLlmSelectionOptions,
+  decodeUserLlmSelectionValue,
+  encodeUserLlmSelectionValue,
+  resolveSavedUserLlmSelection,
+  userLlmSelectionsEqual,
+} from "./userLlmSelection";
+import type { UserLlmSelectionDraft } from "./userLlmSelection";
+import {
   buildSettingsInsetCardStyle,
   buildSettingsPanelStyle,
   buildSettingsSwitchButtonStyle,
@@ -69,7 +73,7 @@ type SettingsSection = "llm" | "account";
 
 type SettingsDraft = {
   readonly defaultModel: string;
-  readonly preferredLlmRoute: string;
+  readonly preferredLlmSelection: UserLlmSelectionDraft | undefined;
 };
 
 type ScopeChipProps = {
@@ -195,15 +199,17 @@ function buildSettingsHref(section: SettingsSection): string {
 function normalizeUserConfigDraft(config?: StudioUserLlmSettings): SettingsDraft {
   return {
     defaultModel: trimConversationValue(config?.defaultModel) ?? "",
-    preferredLlmRoute: normalizeUserLlmRoute(config?.savedRoute),
+    preferredLlmSelection: resolveSavedUserLlmSelection(config),
   };
 }
 
 function draftsEqual(left: SettingsDraft, right: SettingsDraft): boolean {
   return (
     trimConversationValue(left.defaultModel) === trimConversationValue(right.defaultModel) &&
-    normalizeUserLlmRoute(left.preferredLlmRoute) ===
-      normalizeUserLlmRoute(right.preferredLlmRoute)
+    userLlmSelectionsEqual(
+      left.preferredLlmSelection,
+      right.preferredLlmSelection,
+    )
   );
 }
 
@@ -440,11 +446,23 @@ const SettingsPage: React.FC = () => {
   }, [draftDirty, loadedDraft, userLlmSettingsQuery.isSuccess]);
 
   const saveMutation = useMutation({
-    mutationFn: async (nextDraft: SettingsDraft) =>
-      studioApi.saveUserLlmSettings({
-        routeValue: normalizeUserLlmRoute(nextDraft.preferredLlmRoute),
-        model: trimConversationValue(nextDraft.defaultModel) ?? "",
-      }),
+    mutationFn: async (nextDraft: SettingsDraft) => {
+      const model = trimConversationValue(nextDraft.defaultModel) ?? "";
+      const selection = nextDraft.preferredLlmSelection;
+      if (!selection) {
+        throw new Error("Choose an exact LLM service before saving.");
+      }
+
+      return selection.kind === "gateway"
+        ? studioApi.saveUserLlmSettings({
+            routeValue: selection.routeValue,
+            model,
+          })
+        : studioApi.saveUserLlmSettings({
+            userServiceId: selection.userServiceId,
+            model,
+          });
+    },
     onSuccess: async () => {
       setSaveError(null);
       await Promise.all([
@@ -459,23 +477,32 @@ const SettingsPage: React.FC = () => {
   });
 
   const routeCatalogOptions = userLlmSettingsQuery.data?.routeOptions ?? [];
-  const routeOptions = React.useMemo(
-    () => buildConversationRouteOptions(userLlmSettingsQuery.data),
-    [userLlmSettingsQuery.data],
+  const selectionOptions = React.useMemo(
+    () => buildUserLlmSelectionOptions(routeCatalogOptions),
+    [routeCatalogOptions],
   );
-  const savedRouteOption = React.useMemo(
-    () => findConversationRouteOption(userLlmSettingsQuery.data, draft.preferredLlmRoute),
-    [draft.preferredLlmRoute, userLlmSettingsQuery.data],
-  );
-  const preferredRouteAvailable = Boolean(savedRouteOption?.ready && savedRouteOption.allowed);
-  const effectiveRoute = React.useMemo(
+  const preferredSelectionValue = draft.preferredLlmSelection
+    ? encodeUserLlmSelectionValue(draft.preferredLlmSelection)
+    : undefined;
+  const preferredSelectionOption = React.useMemo(
     () =>
-      draftsEqual(draft, loadedDraft)
-        ? normalizeUserLlmRoute(userLlmSettingsQuery.data?.effectiveRoute)
-        : draft.preferredLlmRoute,
-    [draft, loadedDraft, userLlmSettingsQuery.data?.effectiveRoute],
+      preferredSelectionValue
+        ? selectionOptions.find((option) => option.value === preferredSelectionValue)
+        : undefined,
+    [preferredSelectionValue, selectionOptions],
+  );
+  const preferredSelectionAvailable = Boolean(
+    preferredSelectionOption?.ready && preferredSelectionOption.allowed,
   );
   const draftMatchesLoaded = draftsEqual(draft, loadedDraft);
+  const selectedRoute = draft.preferredLlmSelection?.routeValue;
+  const effectiveRoute = React.useMemo(
+    () =>
+      draftMatchesLoaded
+        ? normalizeUserLlmRoute(userLlmSettingsQuery.data?.effectiveRoute)
+        : normalizeUserLlmRoute(selectedRoute),
+    [draftMatchesLoaded, selectedRoute, userLlmSettingsQuery.data?.effectiveRoute],
+  );
   const routeFallbackActive = draftMatchesLoaded
     ? Boolean(userLlmSettingsQuery.data?.routeFallbackActive)
     : false;
@@ -485,21 +512,30 @@ const SettingsPage: React.FC = () => {
   const backendSavedRouteLabel = trimConversationValue(
     userLlmSettingsQuery.data?.savedRouteLabel,
   );
+  const routeDisplayOptions = React.useMemo(
+    () =>
+      routeCatalogOptions.map((option) => ({
+        label: option.label,
+        value: normalizeUserLlmRoute(option.routeValue),
+      })),
+    [routeCatalogOptions],
+  );
   const routeSummaryLabel =
     draftMatchesLoaded && backendEffectiveRouteLabel
       ? backendEffectiveRouteLabel
-      : describeConversationRoute(effectiveRoute, routeOptions);
+      : describeConversationRoute(effectiveRoute, routeDisplayOptions);
   const preferredRouteLabel =
     draftMatchesLoaded && backendSavedRouteLabel
       ? backendSavedRouteLabel
-      : describeConversationRoute(draft.preferredLlmRoute, routeOptions);
+      : preferredSelectionOption?.label ??
+        describeConversationRoute(selectedRoute, routeDisplayOptions);
   const modelGroups = React.useMemo(
     () =>
       buildConversationModelGroups({
-        effectiveRoute: draft.preferredLlmRoute,
+        effectiveRoute: selectedRoute ?? effectiveRoute,
         settings: userLlmSettingsQuery.data,
       }),
-    [draft.preferredLlmRoute, userLlmSettingsQuery.data],
+    [effectiveRoute, selectedRoute, userLlmSettingsQuery.data],
   );
   const modelOptions = React.useMemo<SelectProps["options"]>(
     () =>
@@ -530,11 +566,24 @@ const SettingsPage: React.FC = () => {
   );
   const readyProviderCount = routeCatalogOptions.filter((option) => option.ready && option.allowed).length;
   const unavailableProviderCount = Math.max(0, routeCatalogOptions.length - readyProviderCount);
+  const isCatalogOptionSelected = React.useCallback(
+    (option: StudioUserLlmRouteOption) => {
+      const selection = draft.preferredLlmSelection;
+      if (!selection) {
+        return false;
+      }
+
+      return selection.kind === "gateway"
+        ? option.source === "gateway_provider"
+        : option.userServiceId?.trim() === selection.userServiceId;
+    },
+    [draft.preferredLlmSelection],
+  );
   const providerDisplayList = React.useMemo(
     () =>
       [...routeCatalogOptions].sort((left, right) => {
-        const leftSelected = normalizeUserLlmRoute(left.routeValue) === effectiveRoute;
-        const rightSelected = normalizeUserLlmRoute(right.routeValue) === effectiveRoute;
+        const leftSelected = isCatalogOptionSelected(left);
+        const rightSelected = isCatalogOptionSelected(right);
         if (leftSelected !== rightSelected) {
           return leftSelected ? -1 : 1;
         }
@@ -547,13 +596,16 @@ const SettingsPage: React.FC = () => {
 
         return left.label.localeCompare(right.label);
       }),
-    [effectiveRoute, routeCatalogOptions],
+    [isCatalogOptionSelected, routeCatalogOptions],
   );
   const llmCapabilities = userLlmSettingsQuery.data?.capabilities;
   const canEditRoute = Boolean(llmCapabilities?.canEditRoute);
   const canEditModel = Boolean(llmCapabilities?.canEditModel);
   const canSaveLlmSettings = Boolean(llmCapabilities?.canSave);
   const catalogUnavailable = userLlmSettingsQuery.data?.catalogStatus === "unavailable";
+  const savedServiceIdentityMissing =
+    userLlmSettingsQuery.data?.savedRouteKind === "nyx_id_user_service" &&
+    !trimConversationValue(userLlmSettingsQuery.data.savedUserServiceId);
   const defaultModelPlaceholder = React.useMemo(() => {
     if (modelOptions && modelOptions.length > 0) {
       return `Search models for ${preferredRouteLabel || "the selected route"}`;
@@ -585,42 +637,39 @@ const SettingsPage: React.FC = () => {
     [screens.lg],
   );
 
-  const routeSelectOptions = React.useMemo<SelectProps["options"]>(() => {
-    const draftRouteSelectValue = encodeConversationRouteSelectValue(
-      normalizeUserLlmRoute(draft.preferredLlmRoute),
-    );
-    const readyOptions = routeCatalogOptions
+  const selectionSelectOptions = React.useMemo<SelectProps["options"]>(() => {
+    const readyOptions = selectionOptions
       .filter((option) => option.ready && option.allowed)
       .map((option) => ({
         label: option.label,
-        value: encodeConversationRouteSelectValue(normalizeUserLlmRoute(option.routeValue)),
+        value: option.value,
       }));
-    const hasDraftRoute = Boolean(
-      draftRouteSelectValue &&
-        readyOptions.some((option) => option.value === draftRouteSelectValue),
+    const hasDraftSelection = Boolean(
+      preferredSelectionValue &&
+        readyOptions.some((option) => option.value === preferredSelectionValue),
     );
     return [
       {
-        label: "Routes",
+        label: t("pages.settings.index.available.services", "Available services"),
         options: readyOptions,
       },
-      ...(draft.preferredLlmRoute && !hasDraftRoute
+      ...(preferredSelectionValue && !hasDraftSelection
         ? [
             {
-              label: t("pages.settings.index.current.saved.route", "Current saved route"),
+              label: t("pages.settings.index.current.saved.route", "Current saved service"),
               options: [
                 {
                   label: t("pages.settings.index.route.unavailable", "{route} (unavailable)", {
                     route: preferredRouteLabel,
                   }),
-                  value: encodeConversationRouteSelectValue(draft.preferredLlmRoute),
+                  value: preferredSelectionValue,
                 },
               ],
             },
           ]
         : []),
     ];
-  }, [draft.preferredLlmRoute, preferredRouteLabel, routeCatalogOptions]);
+  }, [preferredRouteLabel, preferredSelectionValue, selectionOptions]);
 
   const advancedItems = React.useMemo<CollapseProps["items"]>(
     () => [
@@ -700,13 +749,18 @@ const SettingsPage: React.FC = () => {
     setSaveError(null);
   }, [loadedDraft]);
 
-  const handlePreferredRouteChange = React.useCallback(
+  const handlePreferredServiceChange = React.useCallback(
     (nextValue: string) => {
-      const nextRoute = normalizeUserLlmRoute(
-        decodeConversationRouteSelectValue(nextValue),
+      const nextSelection = decodeUserLlmSelectionValue(
+        nextValue,
+        selectionOptions,
       );
+      if (!nextSelection) {
+        return;
+      }
+
       const nextRouteGroups = buildConversationModelGroups({
-        effectiveRoute: nextRoute,
+        effectiveRoute: nextSelection.routeValue,
         settings: userLlmSettingsQuery.data,
       });
       const currentModel = trimConversationValue(draft.defaultModel);
@@ -718,11 +772,12 @@ const SettingsPage: React.FC = () => {
       setDraft((currentDraft) => ({
         ...currentDraft,
         defaultModel: shouldClearModel ? "" : currentDraft.defaultModel,
-        preferredLlmRoute: nextRoute,
+        preferredLlmSelection: nextSelection,
       }));
     },
     [
       draft.defaultModel,
+      selectionOptions,
       userLlmSettingsQuery.data,
     ],
   );
@@ -751,7 +806,11 @@ const SettingsPage: React.FC = () => {
         >
           {t("pages.settings.index.reset", "Reset")}</Button>
         <Button
-          disabled={!draftDirty || !canSaveLlmSettings}
+          disabled={
+            !draftDirty ||
+            !canSaveLlmSettings ||
+            !draft.preferredLlmSelection
+          }
           loading={saveMutation.isPending}
           onClick={handleSave}
           type="primary"
@@ -865,12 +924,12 @@ const SettingsPage: React.FC = () => {
               <Alert
                 message={`Effective route is currently ${routeSummaryLabel}.`}
                 description={
-                  preferredRouteAvailable
-                    ? "The selected route is available and will be used for new requests."
+                  preferredSelectionAvailable
+                    ? "The selected service is available and will be used for new requests."
                     : `${preferredRouteLabel} is unavailable right now, so new requests fall back to ${routeSummaryLabel}.`
                 }
                 showIcon
-                type={preferredRouteAvailable ? "info" : "warning"}
+                type={preferredSelectionAvailable ? "info" : "warning"}
               />
             ) : null}
 
@@ -890,7 +949,7 @@ const SettingsPage: React.FC = () => {
                     <div style={{ ...panelStackStyle, padding: 20 }}>
                       <div style={{ ...insetCardStyle, ...fieldCardStyle }}>
                         <div style={fieldHeaderRowStyle}>
-                          <Typography.Text strong>{t("pages.settings.index.preferred.route", "Preferred route")}</Typography.Text>
+                          <Typography.Text strong>{t("pages.settings.index.preferred.route", "Preferred LLM service")}</Typography.Text>
                           <FieldMetaPill
                             label={
                               routeFallbackActive ? "Fallback active" : "In sync"
@@ -899,21 +958,27 @@ const SettingsPage: React.FC = () => {
                           />
                         </div>
                         <Typography.Text type="secondary">
-                          {t("pages.settings.index.choose.the.primary.route.used", "Choose the primary route used for requests.")}</Typography.Text>
+                          {t("pages.settings.index.choose.the.primary.route.used", "Choose the Gateway or an exact connected service used for requests.")}</Typography.Text>
                         <Select
-                          aria-label={t("pages.settings.index.preferred.route.2", "Preferred route")}
+                          aria-label={t("pages.settings.index.preferred.route.2", "Preferred LLM service")}
                           disabled={!canEditRoute}
-                          onChange={handlePreferredRouteChange}
+                          onChange={handlePreferredServiceChange}
                           optionFilterProp="label"
-                          options={routeSelectOptions}
+                          options={selectionSelectOptions}
                           showSearch
-                          value={encodeConversationRouteSelectValue(
-                            draft.preferredLlmRoute,
-                          )}
+                          value={preferredSelectionValue}
+                          virtual={false}
                         />
-                        {!preferredRouteAvailable && draft.preferredLlmRoute ? (
+                        {savedServiceIdentityMissing ? (
                           <Typography.Text type="warning">
-                            {t("pages.settings.index.saved.route.unavailable.new.requests", "Saved route unavailable. New requests will use")}{" "}
+                            {t(
+                              "pages.settings.index.saved.service.identity.unavailable",
+                              "Saved service identity unavailable. Choose an exact connected service before saving.",
+                            )}
+                          </Typography.Text>
+                        ) : !preferredSelectionAvailable && draft.preferredLlmSelection ? (
+                          <Typography.Text type="warning">
+                            {t("pages.settings.index.saved.route.unavailable.new.requests", "Saved service unavailable. New requests will use")}{" "}
                             {routeSummaryLabel}.
                           </Typography.Text>
                         ) : (
@@ -947,9 +1012,9 @@ const SettingsPage: React.FC = () => {
                           <div style={providerRailStyle}>
                             {providerDisplayList.map((option) => (
                               <ConnectedProviderChip
-                                key={`${option.source}-${option.routeValue}`}
+                                key={`${option.source}-${option.userServiceId ?? `${option.routeValue}-${option.serviceSlug ?? option.label}`}`}
                                 option={option}
-                                selected={normalizeUserLlmRoute(option.routeValue) === effectiveRoute}
+                                selected={isCatalogOptionSelected(option)}
                               />
                             ))}
                           </div>
@@ -1124,6 +1189,7 @@ const SettingsPage: React.FC = () => {
       bodyGridStyle,
       defaultModelPlaceholder,
       draft.defaultModel,
+      draft.preferredLlmSelection,
       displayedRuntimeBaseUrl,
       canEditModel,
       canEditRoute,
@@ -1132,15 +1198,18 @@ const SettingsPage: React.FC = () => {
       modelGroups,
       modelOptions,
       insetCardStyle,
-      preferredRouteAvailable,
+      preferredSelectionAvailable,
+      preferredSelectionValue,
       preferredRouteLabel,
       providerHealth.tone,
       providerHealth.value,
       providerDisplayList,
       readyProviderCount,
       routeFallbackActive,
-      handlePreferredRouteChange,
-      routeSelectOptions,
+      handlePreferredServiceChange,
+      isCatalogOptionSelected,
+      savedServiceIdentityMissing,
+      selectionSelectOptions,
       routeSummaryLabel,
       saveError,
       settingsPanelStyle,

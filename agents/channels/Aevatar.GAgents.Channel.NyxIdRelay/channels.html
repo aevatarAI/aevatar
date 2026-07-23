@@ -381,6 +381,45 @@
    =========================================================================== */
 
 const DEFAULT_LLM = { route: "chrono-llm-public", model: "gpt-5.5" };
+const USER_LLM_GATEWAY_ROUTE = "/api/v1/llm/gateway/v1";
+const USER_LLM_GATEWAY_SELECTION = "gateway";
+const USER_LLM_SERVICE_SELECTION_PREFIX = "user-service:";
+
+function llmServiceSelectionValue(userServiceId){
+  return USER_LLM_SERVICE_SELECTION_PREFIX + encodeURIComponent(userServiceId);
+}
+function buildLlmSelectionOptions(llm){
+  const routeOptions = (llm && llm.routeOptions) || [];
+  const gateway = routeOptions.find(option=>option.source==="gateway_provider");
+  const options = [{
+    value:USER_LLM_GATEWAY_SELECTION,
+    label:(gateway && gateway.label) || "NyxID Gateway",
+    kind:"gateway",
+    routeValue:USER_LLM_GATEWAY_ROUTE,
+    userServiceId:null
+  }];
+  const seenUserServiceIds = new Set();
+  routeOptions.forEach(option=>{
+    const userServiceId=String(option.userServiceId||"").trim();
+    if(!userServiceId || seenUserServiceIds.has(userServiceId) || !option.ready || !option.allowed) return;
+    seenUserServiceIds.add(userServiceId);
+    options.push({
+      value:llmServiceSelectionValue(userServiceId),
+      label:String(option.label||option.serviceSlug||userServiceId),
+      kind:"nyx_id_user_service",
+      routeValue:String(option.routeValue||"").trim(),
+      userServiceId
+    });
+  });
+  return options;
+}
+function savedLlmSelectionValue(llm){
+  if(!llm) return null;
+  if(llm.savedRouteKind==="gateway") return USER_LLM_GATEWAY_SELECTION;
+  if(llm.savedRouteKind!=="nyx_id_user_service") return null;
+  const userServiceId=String(llm.savedUserServiceId||"").trim();
+  return userServiceId ? llmServiceSelectionValue(userServiceId) : null;
+}
 
 /* Lark Tier-1 minimum scopes (skill §7 — the #1 silent-bot fix). */
 const LARK_SCOPES_T1 = [
@@ -534,7 +573,7 @@ const state = {
   registrations:[],                   // GET /api/channels/registrations
   statuses:{},                        // registrationId -> { status, last_event_at }
   llm:null,                           // GET /api/user-config/llm
-  llmSel:{ route:null, model:null },  // step4 selections
+  llmSel:{ value:null, model:null },  // step4 exact service selection + model
   llmSaving:false, llmSaved:false,
   manageReg:null,                     // registration row being managed
   workflowRepairing:{},               // registrationId -> request in flight
@@ -818,10 +857,14 @@ async function doDelete(regId, after){
   if(typeof after==="function") after();
 }
 async function saveLlm(){
-  if(!state.llmSel.route && state.llmSel.route!=="") return;
+  const option=buildLlmSelectionOptions(state.llm).find(item=>item.value===state.llmSel.value);
+  if(!option) return;
   state.llmSaving=true; state.llmSaved=false; render();
   try {
-    await apiSend("/api/user-config/llm", "PUT", { routeValue: state.llmSel.route, model: state.llmSel.model || null });
+    const body=option.kind==="gateway"
+      ? { routeValue:USER_LLM_GATEWAY_ROUTE, model:state.llmSel.model||null }
+      : { userServiceId:option.userServiceId, model:state.llmSel.model||null };
+    await apiSend("/api/user-config/llm", "PUT", body);
     state.llmSaved=true;
     await loadLlm(true);
   } catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm save failed", e); }
@@ -1269,7 +1312,9 @@ function renderStep3(){
 function renderStep4(){
   const wrap=el("section",{});
   const llm = state.llm;
-  const unset = !llm || !llm.savedRoute || llm.routeFallbackActive;
+  const unset = !llm || !llm.savedRouteKind ||
+    (llm.savedRouteKind==="nyx_id_user_service" && !llm.savedUserServiceId) ||
+    llm.routeFallbackActive;
   wrap.innerHTML=stepHead("STEP 4 / 5 · reply model", "配回复模型（owner LLM）", badge(state.llmSaved?"registered":"pending", state.llmSaved?"已保存":(unset?"未设置":"已设置")));
   wrap.insertAdjacentHTML("beforeend",`<p class="step-desc">bot 收到消息后，要用<b style="color:var(--fg)">一个 LLM</b> 生成回复 —— 用的是<b style="color:var(--fg)">你账户（bot owner）的回复模型配置</b>。没有模型，bot 收得到消息但回不了话。</p>`);
 
@@ -1285,10 +1330,12 @@ function renderStep4(){
     wrap.appendChild(el("div",{class:"callout info"},`${ICON.info}<div class="body"><span class="ct-title">当前回复模型</span><span class="mono">${esc(llm.effectiveRoute||llm.savedRoute||"")}</span>${llm.effectiveRouteLabel?` · ${esc(llm.effectiveRouteLabel)}`:""}。下面可以修改。</div>`));
   }
 
-  // route + model selectors
-  const routeOpts = (llm.routeOptions||[]).slice();
-  if(state.llmSel.route==null) state.llmSel.route = llm.savedRoute || llm.effectiveRoute || (routeOpts[0]&&routeOpts[0].routeValue) || "";
-  const curRoute = state.llmSel.route;
+  // Exact service identity drives persistence; route only scopes model choices.
+  const selectionOpts = buildLlmSelectionOptions(llm);
+  if(state.llmSel.value==null) state.llmSel.value = savedLlmSelectionValue(llm);
+  const selectedOption = selectionOpts.find(option=>option.value===state.llmSel.value);
+  if(!selectedOption) state.llmSel.value=null;
+  const curRoute = selectedOption ? selectedOption.routeValue : String(llm.effectiveRoute||"").trim();
   const modelsForRoute = (llm.modelGroupsByRoute||[]).filter(g=>g.routeValue===curRoute).flatMap(g=>g.models||[]);
   // No fabricated model names: only offer what NyxID actually lists for this route.
   // When the live catalog has a defaultModel it is a real option; otherwise the only honest
@@ -1299,9 +1346,10 @@ function renderStep4(){
   if(state.llmSel.model==null) state.llmSel.model = liveModels[0] || "";
 
   const grid=el("div",{class:"select-grid"});
-  const routeSel=selField("LLM 路由（route）", routeOpts.map(o=>({value:o.routeValue,label:o.label||o.routeValue})), curRoute);
-  routeSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.route=e.target.value; state.llmSel.model=null; state.llmSaved=false; render(); });
-  grid.appendChild(routeSel);
+  const selectionChoices = (state.llmSel.value==null ? [{value:"",label:"请选择 LLM 服务",disabled:true}] : []).concat(selectionOpts);
+  const serviceSel=selField("LLM 服务", selectionChoices, state.llmSel.value||"");
+  serviceSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.value=e.target.value; state.llmSel.model=null; state.llmSaved=false; render(); });
+  grid.appendChild(serviceSel);
   // Always offer the genuine "(平台默认)" sentinel; append real models when the catalog has them.
   const modelChoices = [{value:"",label:"（平台默认）"}].concat(liveModels.map(m=>({value:m,label:m})));
   const modelSel=selField("模型 model", modelChoices, state.llmSel.model);
@@ -1309,14 +1357,14 @@ function renderStep4(){
   grid.appendChild(modelSel);
   wrap.appendChild(grid);
 
-  const saveBtn = btn(state.llmSaving?"保存中…":(state.llmSaved?"已保存 ✓":"保存回复模型"),"ghost",ICON.gear, ()=>saveLlm(), {disabled:state.llmSaving});
+  const saveBtn = btn(state.llmSaving?"保存中…":(state.llmSaved?"已保存 ✓":"保存回复模型"),"ghost",ICON.gear, ()=>saveLlm(), {disabled:state.llmSaving||!selectedOption});
   const nextBtn = btn("下一步：验证","primary",ICON.arrow,()=>{ goStep(5); });
   wrap.appendChild(footer([ saveBtn, nextBtn, "spacer", btn("上一步","ghost",ICON.back,()=>{ goStep(3); }) ]));
   return wrap;
 }
 function selField(label,opts,sel){
   const f=el("div",{class:"field",style:"margin-bottom:0"});
-  f.innerHTML=`<label>${esc(label)}</label><div class="sel"><select aria-label="${esc(label)}">${opts.map(o=>`<option value="${esc(o.value)}" ${o.value===sel?"selected":""}>${esc(o.label)}</option>`).join("")}</select><span class="chev">${ICON.chev}</span></div>`;
+  f.innerHTML=`<label>${esc(label)}</label><div class="sel"><select aria-label="${esc(label)}">${opts.map(o=>`<option value="${esc(o.value)}" ${o.value===sel?"selected":""} ${o.disabled?"disabled":""}>${esc(o.label)}</option>`).join("")}</select><span class="chev">${ICON.chev}</span></div>`;
   return f;
 }
 
@@ -1444,7 +1492,7 @@ function renderManage(){
 /* ===========================================================================
    Compose / render
    =========================================================================== */
-function enterWizard(platformId){ state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
+function enterWizard(platformId){ state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.llmSel={ value:null, model:null }; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());
