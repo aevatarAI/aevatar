@@ -45,6 +45,8 @@ const enUSMessages = {
     'Describe the workflow you want, or ask about the current setup...',
   'pages.chat.index.confirmAndCreate': 'Confirm and create',
   'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
+  'pages.chat.index.continuationContextMissing':
+    'The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing.',
   'pages.chat.index.cancel': 'Cancel',
   'pages.chat.index.delete': 'Delete',
   'pages.chat.index.deleteChat': 'Delete {title}',

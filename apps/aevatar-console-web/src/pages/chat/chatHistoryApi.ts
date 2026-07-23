@@ -218,10 +218,6 @@ function decodeStoredChatMessagesAtPath(
   );
 }
 
-export function decodeStoredChatMessages(value: unknown): StoredChatMessage[] {
-  return decodeStoredChatMessagesAtPath(value, "$messages");
-}
-
 export function decodeChatConversationDetail(
   value: unknown
 ): ChatConversationDetail {
@@ -278,11 +274,13 @@ async function createApiError(response: Response): Promise<ChatHistoryApiError> 
 
 async function requestJson<T>(
   path: string,
-  decoder: (value: unknown) => T
+  decoder: (value: unknown) => T,
+  signal?: AbortSignal
 ): Promise<T> {
   const response = await authFetch(path, {
     headers: JSON_HEADERS,
     method: "GET",
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok) {
     throw await createApiError(response);
@@ -299,14 +297,18 @@ async function requestJson<T>(
 }
 
 export const chatHistoryApi = {
-  async listConversationMetas(scopeId: string): Promise<ConversationMeta[]> {
+  async listConversationMetas(
+    scopeId: string,
+    signal?: AbortSignal
+  ): Promise<ConversationMeta[]> {
     const conversations: ConversationMeta[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
       const index = await requestJson(
         buildIndexPagePath(scopeId, cursor),
-        decodeChatHistoryIndex
+        decodeChatHistoryIndex,
+        signal
       );
       conversations.push(...index.conversations);
       const nextCursor = index.nextCursor?.trim() || undefined;
@@ -326,21 +328,25 @@ export const chatHistoryApi = {
 
   async recoverCreate(
     scopeId: string,
-    commandId: string
+    commandId: string,
+    signal?: AbortSignal
   ): Promise<ChatCreateRecovery> {
     return requestJson(
       buildCreateRecoveryPath(scopeId, commandId),
-      decodeChatCreateRecovery
+      decodeChatCreateRecovery,
+      signal
     );
   },
 
   async loadConversation(
     scopeId: string,
-    conversationId: string
+    conversationId: string,
+    signal?: AbortSignal
   ): Promise<ChatConversationDetail> {
     return requestJson(
       buildConversationPath(scopeId, conversationId),
-      decodeChatConversationDetail
+      decodeChatConversationDetail,
+      signal
     );
   },
 

@@ -7,6 +7,10 @@ import type {
   ChatStudioTarget,
   ChatUsageSummary,
 } from "./chatTypes";
+import {
+  ChatHistoryApiError,
+  ChatHistoryContractError,
+} from "./chatHistoryApi";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -45,6 +49,23 @@ export class ChatApiError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+export class ChatRetryPreparationError extends Error {
+  readonly cause: unknown;
+  readonly mayHaveBeenAccepted = false;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "ChatRetryPreparationError";
+    this.cause = cause;
+  }
+}
+
+export function chatRequestMayHaveBeenAccepted(error: unknown): boolean {
+  return !(
+    error instanceof ChatApiError || error instanceof ChatRetryPreparationError
+  );
 }
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
@@ -376,7 +397,18 @@ export async function startChatStream(
   });
 
   if (!response.ok) {
-    const details = await readResponseErrorDetails(response);
+    let details: Awaited<ReturnType<typeof readResponseErrorDetails>>;
+    try {
+      details = await readResponseErrorDetails(response);
+    } catch {
+      const statusText = response.statusText.trim();
+      throw new ChatApiError(
+        statusText
+          ? `HTTP ${response.status} ${statusText}`
+          : `HTTP ${response.status}`,
+        response.status
+      );
+    }
     throw new ChatApiError(details.message, details.status, details.code);
   }
 
@@ -404,8 +436,42 @@ function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+function isAbortError(error: unknown, signal: AbortSignal): boolean {
+  return (
+    signal.aborted ||
+    (error instanceof DOMException && error.name === "AbortError")
+  );
+}
+
+function throwIfAbortedBeforeDispatch(signal: AbortSignal): void {
+  if (!signal.aborted) {
+    return;
+  }
+
+  throw new ChatRetryPreparationError(
+    signal.reason ?? new DOMException("Aborted", "AbortError")
+  );
+}
+
+function isRetryableHistoryRefreshError(error: unknown): boolean {
+  if (error instanceof ChatHistoryContractError) {
+    return false;
+  }
+
+  if (error instanceof ChatHistoryApiError) {
+    return error.status >= 500 && error.status < 600;
+  }
+
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    return typeof status === "number" && status >= 500 && status < 600;
+  }
+
+  return true;
+}
+
 export type ChatHistoryRefreshRetryOptions = {
-  refreshMinimumStateVersion?: () => Promise<number>;
+  refreshMinimumStateVersion?: (signal: AbortSignal) => Promise<number>;
   retryDelaysMs?: readonly number[];
 };
 
@@ -418,17 +484,34 @@ export async function startChatStreamWithHistoryRefreshRetry(
   const attempts = [0, ...retryDelaysMs];
   let requestForAttempt = request;
   let refreshBeforeAttempt = false;
+  let lastReservationError: ChatApiError | undefined;
 
   for (let attempt = 0; attempt < attempts.length; attempt += 1) {
     if (attempt > 0) {
-      await abortableDelay(attempts[attempt], signal);
+      try {
+        await abortableDelay(attempts[attempt], signal);
+      } catch (error) {
+        throw new ChatRetryPreparationError(error);
+      }
     }
 
     if (refreshBeforeAttempt && options.refreshMinimumStateVersion) {
-      const refreshedStateVersion = await options.refreshMinimumStateVersion();
+      let refreshedStateVersion: number;
+      try {
+        refreshedStateVersion = await options.refreshMinimumStateVersion(signal);
+      } catch (error) {
+        if (
+          isAbortError(error, signal) ||
+          !isRetryableHistoryRefreshError(error)
+        ) {
+          throw new ChatRetryPreparationError(error);
+        }
+
+        continue;
+      }
       if (
         !Number.isSafeInteger(refreshedStateVersion) ||
-        refreshedStateVersion <= 0
+        refreshedStateVersion < 0
       ) {
         throw new ChatApiError(
           "Conversation state version is invalid.",
@@ -445,6 +528,9 @@ export async function startChatStreamWithHistoryRefreshRetry(
           "INVALID_CONVERSATION_INPUT"
         );
       }
+      if (refreshedStateVersion < conversation.minimumStateVersion) {
+        continue;
+      }
       const minimumStateVersion = Math.max(
         conversation.minimumStateVersion,
         refreshedStateVersion
@@ -459,6 +545,7 @@ export async function startChatStreamWithHistoryRefreshRetry(
       refreshBeforeAttempt = false;
     }
 
+    throwIfAbortedBeforeDispatch(signal);
     try {
       return await startChatStream(requestForAttempt, signal);
     } catch (error) {
@@ -476,11 +563,14 @@ export async function startChatStreamWithHistoryRefreshRetry(
       if (!canRetry) {
         throw error;
       }
+      lastReservationError = error;
       refreshBeforeAttempt = true;
     }
   }
 
-  throw new Error("Chat stream could not be started.");
+  throw (
+    lastReservationError ?? new Error("Chat stream could not be started.")
+  );
 }
 
 export async function* readChatStreamFrames(

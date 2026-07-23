@@ -10,7 +10,6 @@ import {
   decodeChatConversationDetail,
   decodeChatCreateRecovery,
   decodeChatHistoryIndex,
-  decodeStoredChatMessages,
 } from "./chatHistoryApi";
 
 function jsonResponse(payload: unknown): Response {
@@ -97,11 +96,23 @@ describe("chatHistoryApi", () => {
         })
       );
 
-    await expect(chatHistoryApi.listConversationMetas("scope-a")).resolves.toEqual(
+    const controller = new AbortController();
+    await expect(
+      chatHistoryApi.listConversationMetas("scope-a", controller.signal)
+    ).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "conversation-new" }),
         expect.objectContaining({ id: "conversation-old" }),
       ])
+    );
+    expect(authFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/scopes/scope-a/chat-history",
+      {
+        headers: { Accept: "application/json" },
+        method: "GET",
+        signal: controller.signal,
+      }
     );
     expect(authFetch).toHaveBeenNthCalledWith(
       2,
@@ -109,6 +120,7 @@ describe("chatHistoryApi", () => {
       {
         headers: { Accept: "application/json" },
         method: "GET",
+        signal: controller.signal,
       }
     );
   });
@@ -169,8 +181,13 @@ describe("chatHistoryApi", () => {
       })
     );
 
+    const controller = new AbortController();
     await expect(
-      chatHistoryApi.loadConversation("scope/a", "conversation/a")
+      chatHistoryApi.loadConversation(
+        "scope/a",
+        "conversation/a",
+        controller.signal
+      )
     ).resolves.toEqual({
       messages: [
         {
@@ -193,6 +210,7 @@ describe("chatHistoryApi", () => {
       {
         headers: { Accept: "application/json" },
         method: "GET",
+        signal: controller.signal,
       }
     );
   });
@@ -201,7 +219,6 @@ describe("chatHistoryApi", () => {
     expect(decodeChatHistoryIndex({ conversations: [] })).toEqual({
       conversations: [],
     });
-    expect(decodeStoredChatMessages([])).toEqual([]);
     expect(
       decodeChatConversationDetail({ messages: [], stateVersion: 0 })
     ).toEqual({ messages: [], stateVersion: 0 });
@@ -218,19 +235,22 @@ describe("chatHistoryApi", () => {
       decodeChatConversationDetail({ messages: [], stateVersion: -1 })
     ).toThrow(expect.objectContaining({ path: "$conversation.stateVersion" }));
     expect(() =>
-      decodeStoredChatMessages([
-        {
-          content: "hello",
-          id: "message-a",
-          role: "user",
-          status: "complete",
-          timestamp: "not-a-number",
-        },
-      ])
+      decodeChatConversationDetail({
+        messages: [
+          {
+            content: "hello",
+            id: "message-a",
+            role: "user",
+            status: "complete",
+            timestamp: "not-a-number",
+          },
+        ],
+        stateVersion: 7,
+      })
     ).toThrow(
       expect.objectContaining({
         code: "INVALID_CHAT_HISTORY_RESPONSE",
-        path: "$messages[0].timestamp",
+        path: "$conversation.messages[0].timestamp",
       })
     );
   });

@@ -1,12 +1,18 @@
 import { authFetch } from "@/shared/auth/fetch";
 import {
   ChatApiError,
+  ChatRetryPreparationError,
+  chatRequestMayHaveBeenAccepted,
   extractChatHistoryContext,
   extractChatStreamArtifacts,
   readChatStreamFrames,
   startChatStream,
   startChatStreamWithHistoryRefreshRetry,
 } from "./chatApi";
+import {
+  ChatHistoryApiError,
+  ChatHistoryContractError,
+} from "./chatHistoryApi";
 
 jest.mock("@/shared/auth/fetch", () => ({
   authFetch: jest.fn(),
@@ -231,12 +237,40 @@ describe("chatApi", () => {
     });
   });
 
+  it("keeps a non-success response definitive when its error body cannot be read", async () => {
+    (authFetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      status: 409,
+      statusText: "Conflict",
+      text: jest.fn().mockRejectedValue(new Error("Response body disconnected")),
+    } as unknown as Response);
+
+    await expect(
+      startChatStream(
+        {
+          conversation: {
+            conversationId: "conversation-a",
+            minimumStateVersion: 7,
+          },
+          prompt: "Continue",
+          sessionId: "session-a",
+        },
+        new AbortController().signal
+      )
+    ).rejects.toMatchObject({
+      message: "HTTP 409 Conflict",
+      name: "ChatApiError",
+      status: 409,
+    });
+  });
+
   it("refreshes the server watermark before retrying a 503 continuation", async () => {
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(historyReservationUnavailableResponse())
       .mockResolvedValueOnce(successfulStreamResponse());
     const refreshMinimumStateVersion = jest.fn().mockResolvedValue(8);
 
+    const controller = new AbortController();
     await expect(
       startChatStreamWithHistoryRefreshRetry(
         {
@@ -247,11 +281,12 @@ describe("chatApi", () => {
           prompt: "Continue",
           sessionId: "session-a",
         },
-        new AbortController().signal,
+        controller.signal,
         { refreshMinimumStateVersion, retryDelaysMs: [0] }
       )
     ).resolves.toEqual(successfulStreamResponse());
     expect(refreshMinimumStateVersion).toHaveBeenCalledTimes(1);
+    expect(refreshMinimumStateVersion).toHaveBeenCalledWith(controller.signal);
     expect(authFetch).toHaveBeenCalledTimes(2);
     expect(
       JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body).conversation
@@ -304,10 +339,15 @@ describe("chatApi", () => {
     expect(refreshMinimumStateVersion).not.toHaveBeenCalled();
   });
 
-  it("never lowers a continuation watermark after a refresh", async () => {
+  it("accepts a zero refresh watermark and waits for 0 -> 6 -> 8 without sending a stale retry", async () => {
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(historyReservationUnavailableResponse())
       .mockResolvedValueOnce(successfulStreamResponse());
+    const refreshMinimumStateVersion = jest
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(6)
+      .mockResolvedValueOnce(8);
 
     await startChatStreamWithHistoryRefreshRetry(
       {
@@ -320,15 +360,174 @@ describe("chatApi", () => {
       },
       new AbortController().signal,
       {
-        refreshMinimumStateVersion: async () => 6,
-        retryDelaysMs: [0],
+        refreshMinimumStateVersion,
+        retryDelaysMs: [0, 0, 0],
       }
     );
 
+    expect(refreshMinimumStateVersion).toHaveBeenCalledTimes(3);
+    expect(authFetch).toHaveBeenCalledTimes(2);
     expect(
       JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body).conversation
-    ).toEqual({ conversationId: "conversation-a", minimumStateVersion: 7 });
+    ).toEqual({ conversationId: "conversation-a", minimumStateVersion: 8 });
   });
+
+  it("preserves the reservation error when refreshed history never catches up", async () => {
+    (authFetch as jest.Mock).mockResolvedValueOnce(
+      historyReservationUnavailableResponse()
+    );
+    const refreshMinimumStateVersion = jest.fn().mockResolvedValue(6);
+
+    await expect(
+      startChatStreamWithHistoryRefreshRetry(
+        {
+          conversation: {
+            conversationId: "conversation-a",
+            minimumStateVersion: 7,
+          },
+          prompt: "Continue",
+          sessionId: "session-a",
+        },
+        new AbortController().signal,
+        {
+          refreshMinimumStateVersion,
+          retryDelaysMs: [0, 0],
+        }
+      )
+    ).rejects.toMatchObject({
+      code: "CHAT_HISTORY_RESERVATION_UNAVAILABLE",
+      status: 503,
+    });
+    expect(refreshMinimumStateVersion).toHaveBeenCalledTimes(2);
+    expect(authFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch or lock after cancellation at the refresh boundary", async () => {
+    (authFetch as jest.Mock).mockResolvedValueOnce(
+      historyReservationUnavailableResponse()
+    );
+    const controller = new AbortController();
+    const refreshMinimumStateVersion = jest.fn(async () => {
+      controller.abort();
+      return 8;
+    });
+
+    let thrown: unknown;
+    try {
+      await startChatStreamWithHistoryRefreshRetry(
+        {
+          conversation: {
+            conversationId: "conversation-a",
+            minimumStateVersion: 7,
+          },
+          prompt: "Continue",
+          sessionId: "session-a",
+        },
+        controller.signal,
+        { refreshMinimumStateVersion, retryDelaysMs: [0] }
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ChatRetryPreparationError);
+    expect(chatRequestMayHaveBeenAccepted(thrown)).toBe(false);
+    expect(refreshMinimumStateVersion).toHaveBeenCalledTimes(1);
+    expect(authFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["transport", new Error("History detail temporarily unavailable")],
+    [
+      "server",
+      new ChatHistoryApiError("History detail temporarily unavailable", 500),
+    ],
+  ])(
+    "uses the remaining retry budget after a transient %s history refresh failure",
+    async (_kind, refreshError) => {
+      (authFetch as jest.Mock)
+        .mockResolvedValueOnce(historyReservationUnavailableResponse())
+        .mockResolvedValueOnce(successfulStreamResponse());
+      const refreshMinimumStateVersion = jest
+        .fn()
+        .mockRejectedValueOnce(refreshError)
+        .mockResolvedValueOnce(8);
+
+      await expect(
+        startChatStreamWithHistoryRefreshRetry(
+          {
+            conversation: {
+              conversationId: "conversation-a",
+              minimumStateVersion: 7,
+            },
+            prompt: "Continue",
+            sessionId: "session-a",
+          },
+          new AbortController().signal,
+          {
+            refreshMinimumStateVersion,
+            retryDelaysMs: [0, 0],
+          }
+        )
+      ).resolves.toEqual(successfulStreamResponse());
+      expect(refreshMinimumStateVersion).toHaveBeenCalledTimes(2);
+      expect(authFetch).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it.each([
+    [
+      "a non-retryable history response",
+      new ChatHistoryApiError("History request was rejected", 422),
+    ],
+    [
+      "a malformed history contract",
+      new ChatHistoryContractError(
+        "$conversation.stateVersion",
+        "a non-negative safe integer"
+      ),
+    ],
+  ])(
+    "preserves %s as a definitive retry preparation failure",
+    async (_kind, refreshError) => {
+      (authFetch as jest.Mock).mockResolvedValueOnce(
+        historyReservationUnavailableResponse()
+      );
+      const refreshMinimumStateVersion = jest
+        .fn()
+        .mockRejectedValue(refreshError);
+
+      let error: unknown;
+      try {
+        await startChatStreamWithHistoryRefreshRetry(
+          {
+            conversation: {
+              conversationId: "conversation-a",
+              minimumStateVersion: 7,
+            },
+            prompt: "Continue",
+            sessionId: "session-a",
+          },
+          new AbortController().signal,
+          {
+            refreshMinimumStateVersion,
+            retryDelaysMs: [0, 0],
+          }
+        );
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(ChatRetryPreparationError);
+      expect(error).toMatchObject({
+        cause: refreshError,
+        mayHaveBeenAccepted: false,
+        message: refreshError.message,
+      });
+      expect(refreshMinimumStateVersion).toHaveBeenCalledTimes(1);
+      expect(authFetch).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("extracts the exact flat chat history Any context", () => {
     const frame = {
