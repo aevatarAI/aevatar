@@ -1,14 +1,14 @@
 import { Alert, Spin } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
+import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPanel";
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
-import WorkflowStudioDraftRunPanel from "./components/WorkflowStudioDraftRunPanel";
 import WorkflowStudioYamlPanel from "./components/WorkflowStudioYamlPanel";
 import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
-import { t } from "@/shared/i18n/messages";
 
 const SIDE_PANEL_DEFAULT_WIDTH = 420;
 const SIDE_PANEL_MIN_WIDTH = 320;
@@ -453,11 +453,13 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
       ) : null}
       <WorkflowStudioExecutionPanel
         activeLogIndex={studio.activeExecutionLogIndex}
+        clearDisabled={studio.currentDraftRunPending}
         detail={studio.executionDetail}
         error={studio.executionError}
         height={executionPanelHeight}
         onClear={studio.clearExecutionLogs}
         onSelectLog={studio.selectExecutionLog}
+        workflowNodes={studio.executionWorkflowNodes}
       />
     </main>
   );

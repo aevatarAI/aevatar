@@ -7,17 +7,18 @@ import {
   LoadingOutlined,
   PauseCircleOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Segmented, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Button, message, Segmented, Tag, Tooltip, Typography } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 import {
   buildExecutionTrace,
+  type ExecutionLogItem,
+  type ExecutionLogStatus,
   formatDurationBetween,
   formatExecutionLogsClipboard,
   normalizeExecutionLogStatus,
-  type ExecutionLogItem,
-  type ExecutionLogStatus,
 } from "@/shared/studio/execution";
+import type { StudioGraphNodeData } from "@/shared/studio/graph";
 import type { StudioExecutionDetail } from "@/shared/studio/models";
 import {
   getUserFacingIdentifierLabel,
@@ -26,16 +27,22 @@ import {
 
 type WorkflowStudioExecutionPanelProps = {
   readonly activeLogIndex?: number | null;
+  readonly clearDisabled?: boolean;
   readonly detail: StudioExecutionDetail | null;
   readonly error?: string;
   readonly height?: number;
   readonly onClear?: () => void;
   readonly onSelectLog?: (index: number | null) => void;
+  readonly workflowNodes?: readonly Pick<
+    StudioGraphNodeData,
+    "stepId" | "stepType" | "subtitle" | "targetRole" | "title"
+  >[];
 };
 
 type OverviewMode = "nodes" | "events";
 type DetailPanelState = "both" | "input" | "output";
 type OverviewEntryType = "node" | "run" | "event";
+type ExecutionOverviewStatus = ExecutionLogStatus | "pending";
 
 type ExecutionOverviewEntry = {
   readonly category: NonNullable<ExecutionLogItem["category"]>;
@@ -46,6 +53,7 @@ type ExecutionOverviewEntry = {
   readonly inputText: string;
   readonly interactionText: string;
   readonly logIndex: number;
+  readonly logIndexes: readonly number[];
   readonly meta: string;
   readonly outputText: string;
   readonly payloadText: string;
@@ -54,8 +62,8 @@ type ExecutionOverviewEntry = {
   readonly rawText: string;
   readonly rowType: OverviewEntryType;
   readonly startedAt: string;
-  readonly status: ExecutionLogStatus;
-  readonly statusLog: ExecutionLogItem;
+  readonly status: ExecutionOverviewStatus;
+  readonly statusLog?: ExecutionLogItem;
   readonly stepId: string;
   readonly subtitle: string;
   readonly title: string;
@@ -70,6 +78,7 @@ type MutableExecutionOverviewEntry = {
   inputText: string;
   interactionText: string;
   logIndex: number;
+  logIndexes: number[];
   meta: string;
   outputText: string;
   payloadText: string;
@@ -78,8 +87,8 @@ type MutableExecutionOverviewEntry = {
   rawText: string;
   rowType: OverviewEntryType;
   startedAt: string;
-  status: ExecutionLogStatus;
-  statusLog: ExecutionLogItem;
+  status: ExecutionOverviewStatus;
+  statusLog?: ExecutionLogItem;
   stepId: string;
   subtitle: string;
   title: string;
@@ -90,6 +99,9 @@ type ExecutionTokenUsage = {
   readonly promptTokens: number;
   readonly totalTokens: number;
 };
+
+type ExecutionPanelCssVariables = React.CSSProperties &
+  Record<`--${string}`, string | number>;
 
 const categoryLabels: Record<NonNullable<ExecutionLogItem["category"]>, string> = {
   custom: "Custom",
@@ -111,8 +123,9 @@ const categoryColors: Record<NonNullable<ExecutionLogItem["category"]>, string> 
   usage: "gold",
 };
 
-const statusColors: Record<ExecutionLogStatus, string> = {
+const statusColors: Record<ExecutionOverviewStatus, string> = {
   error: "red",
+  pending: "default",
   recorded: "default",
   running: "processing",
   success: "green",
@@ -120,6 +133,36 @@ const statusColors: Record<ExecutionLogStatus, string> = {
 };
 
 const nodeDetailBlockHeight = 230;
+const overviewRowHeight = 80;
+const workflowStudioExecutionPanelCss = `
+.workflow-studio-execution-panel__body {
+  grid-template-columns: var(--workflow-execution-panel-columns);
+}
+
+.workflow-studio-execution-panel__overview {
+  border-right: var(--workflow-execution-panel-overview-border-right);
+  grid-template-rows: min-content minmax(0, 1fr);
+}
+
+@media (max-width: 720px) {
+  .workflow-studio-execution-panel__body {
+    align-content: start;
+    grid-auto-rows: max-content;
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .workflow-studio-execution-panel__overview {
+    border-bottom: 1px solid #edf2f7;
+    border-right: 0;
+    grid-template-rows: min-content max-content;
+  }
+
+  .workflow-studio-execution-panel__details {
+    min-height: 280px;
+  }
+}
+`;
 
 function formatConsoleDateTime(value: string | null | undefined): string {
   if (!value) {
@@ -164,7 +207,7 @@ function isTerminalStepLog(log: ExecutionLogItem | undefined): boolean {
   return log?.tone === "completed" || log?.tone === "failed";
 }
 
-function readStatusLabel(status: ExecutionLogStatus): string {
+function readStatusLabel(status: ExecutionOverviewStatus): string {
   switch (status) {
     case "error":
       return t("teamMemberWorkflowStudio.executionPanel.status.error", "Error");
@@ -173,6 +216,8 @@ function readStatusLabel(status: ExecutionLogStatus): string {
         "teamMemberWorkflowStudio.executionPanel.status.recorded",
         "Recorded",
       );
+    case "pending":
+      return t("teamMemberWorkflowStudio.executionPanel.status.pending", "Pending");
     case "success":
       return t("teamMemberWorkflowStudio.executionPanel.status.success", "Success");
     case "waiting":
@@ -182,12 +227,14 @@ function readStatusLabel(status: ExecutionLogStatus): string {
   }
 }
 
-function renderStatusIcon(status: ExecutionLogStatus): React.ReactNode {
+function renderStatusIcon(status: ExecutionOverviewStatus): React.ReactNode {
   switch (status) {
     case "error":
       return <CloseCircleOutlined style={{ color: "#dc2626" }} />;
     case "recorded":
       return <CheckCircleOutlined style={{ color: "#64748b" }} />;
+    case "pending":
+      return <ClockCircleOutlined style={{ color: "#94a3b8" }} />;
     case "success":
       return <CheckCircleOutlined style={{ color: "#16a34a" }} />;
     case "waiting":
@@ -301,6 +348,7 @@ function buildOverviewEntries(
         inputText: "",
         interactionText: "",
         logIndex,
+        logIndexes: [logIndex],
         meta: log.meta,
         outputText: category === "output" ? log.clipboardText.trim() : "",
         payloadText: (log.payloadText || log.clipboardText || "").trim(),
@@ -331,6 +379,7 @@ function buildOverviewEntries(
       inputText: log.tone === "started" ? log.clipboardText.trim() : "",
       interactionText: log.tone === "run" ? log.clipboardText.trim() : "",
       logIndex,
+      logIndexes: [logIndex],
       meta: log.meta,
       outputText:
         log.tone === "completed" || log.tone === "failed"
@@ -362,6 +411,7 @@ function buildOverviewEntries(
       activeEntry.eventCount += 1;
       activeEntry.eventType = log.eventType || activeEntry.eventType;
       activeEntry.logIndex = logIndex;
+      activeEntry.logIndexes.push(logIndex);
       activeEntry.meta = log.meta || activeEntry.meta;
       activeEntry.payloadText = (log.payloadText || activeEntry.payloadText).trim();
       activeEntry.previewText = log.previewText || activeEntry.previewText;
@@ -398,41 +448,88 @@ function buildOverviewEntries(
   return entries;
 }
 
+function buildNodeOverviewEntries(
+  entries: readonly ExecutionOverviewEntry[],
+  workflowNodes: WorkflowStudioExecutionPanelProps["workflowNodes"],
+): ExecutionOverviewEntry[] {
+  const loggedNodeEntries = entries.filter((entry) => entry.rowType === "node");
+  if (!workflowNodes?.length) {
+    return loggedNodeEntries;
+  }
+
+  const loggedEntriesByStepId = new Map<string, ExecutionOverviewEntry[]>();
+  loggedNodeEntries.forEach((entry) => {
+    const matchingEntries = loggedEntriesByStepId.get(entry.stepId) ?? [];
+    matchingEntries.push(entry);
+    loggedEntriesByStepId.set(entry.stepId, matchingEntries);
+  });
+
+  const definitionStepIds = new Set<string>();
+  const orderedEntries: ExecutionOverviewEntry[] = [];
+  workflowNodes.forEach((node) => {
+    const stepId = node.stepId.trim();
+    if (!stepId || definitionStepIds.has(stepId)) {
+      return;
+    }
+
+    definitionStepIds.add(stepId);
+    const matchingEntries = loggedEntriesByStepId.get(stepId);
+    if (matchingEntries?.length) {
+      orderedEntries.push(...matchingEntries);
+      return;
+    }
+
+    orderedEntries.push({
+      category: "step",
+      completedAt: "",
+      entryId: `node:${stepId}:pending`,
+      eventCount: 0,
+      eventType: "",
+      inputText: "",
+      interactionText: "",
+      logIndex: -1,
+      logIndexes: [],
+      meta: [node.stepType, node.targetRole].filter(Boolean).join(" · "),
+      outputText: "",
+      payloadText: "",
+      pendingText: "",
+      previewText: "",
+      rawText: "",
+      rowType: "node",
+      startedAt: "",
+      status: "pending",
+      stepId,
+      subtitle: [node.subtitle, node.targetRole].filter(Boolean).join(" · "),
+      title: node.title || stepId,
+    });
+  });
+
+  orderedEntries.push(
+    ...loggedNodeEntries.filter((entry) => !definitionStepIds.has(entry.stepId)),
+  );
+  return orderedEntries;
+}
+
 function findSelectedEntry(
   entries: readonly ExecutionOverviewEntry[],
-  logs: readonly ExecutionLogItem[],
   activeLogIndex: number | null | undefined,
 ): ExecutionOverviewEntry | null {
   if (typeof activeLogIndex !== "number") {
     return null;
   }
 
-  const direct = entries.find((entry) => entry.logIndex === activeLogIndex);
+  const direct = entries.find((entry) => entry.logIndexes.includes(activeLogIndex));
   if (direct) {
     return direct;
   }
-
-  const activeLog = logs[activeLogIndex];
-  if (!activeLog?.stepId) {
-    return null;
-  }
-
-  return entries.find((entry) => entry.stepId === activeLog.stepId) || null;
+  return null;
 }
 
 function isEntrySelected(
   entry: ExecutionOverviewEntry,
   selectedEntry: ExecutionOverviewEntry | null,
 ): boolean {
-  if (!selectedEntry) {
-    return false;
-  }
-
-  if (entry.logIndex === selectedEntry.logIndex) {
-    return true;
-  }
-
-  return Boolean(entry.stepId && entry.stepId === selectedEntry.stepId);
+  return entry.entryId === selectedEntry?.entryId;
 }
 
 function renderMetric(label: string, value: React.ReactNode): React.ReactNode {
@@ -544,6 +641,7 @@ function renderOverviewRow(
   selected: boolean,
   onSelectLog?: (index: number | null) => void,
 ): React.ReactNode {
+  const selectable = entry.logIndex >= 0;
   const duration =
     entry.startedAt && entry.completedAt
       ? formatDurationBetween(entry.startedAt, entry.completedAt)
@@ -553,17 +651,26 @@ function renderOverviewRow(
     <button
       aria-pressed={selected}
       data-testid={`workflow-execution-log-row-${entry.rowType}-${entry.stepId || entry.logIndex}`}
+      disabled={!selectable}
       key={entry.entryId}
-      onClick={() => onSelectLog?.(entry.logIndex)}
+      onClick={() => {
+        if (selectable) {
+          onSelectLog?.(entry.logIndex);
+        }
+      }}
       style={{
         appearance: "none",
         background: selected ? "#eef4ff" : "#ffffff",
         border: `1px solid ${selected ? "#b7cdfd" : "#e5e7eb"}`,
         borderRadius: 6,
+        boxSizing: "border-box",
         color: "inherit",
-        cursor: "pointer",
+        cursor: selectable ? "pointer" : "default",
         display: "grid",
         gap: 6,
+        height: overviewRowHeight,
+        minHeight: overviewRowHeight,
+        overflow: "hidden",
         padding: "8px 10px",
         textAlign: "left",
         width: "100%",
@@ -591,8 +698,12 @@ function renderOverviewRow(
             strong
             style={{
               color: "#111827",
+              display: "block",
               fontSize: 12,
               lineHeight: "17px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
             }}
           >
             {entry.title}
@@ -618,9 +729,10 @@ function renderOverviewRow(
         style={{
           alignItems: "center",
           display: "flex",
-          flexWrap: "wrap",
+          flexWrap: "nowrap",
           gap: 5,
           minWidth: 0,
+          overflow: "hidden",
         }}
       >
         <Tag color={statusColors[entry.status]} style={{ marginInlineEnd: 0 }}>
@@ -792,11 +904,13 @@ function renderSelectedDetails(
 
 const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> = ({
   activeLogIndex,
+  clearDisabled = false,
   detail,
   error,
   height = 210,
   onClear,
   onSelectLog,
+  workflowNodes,
 }) => {
   const [overviewMode, setOverviewMode] = React.useState<OverviewMode>("nodes");
   const [detailPanelState, setDetailPanelState] =
@@ -804,13 +918,16 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
   const trace = React.useMemo(() => buildExecutionTrace(detail), [detail]);
   const logs = trace?.logs ?? [];
   const entries = React.useMemo(() => buildOverviewEntries(logs), [logs]);
-  const nodeEntries = entries.filter((entry) => entry.rowType === "node");
+  const nodeEntries = React.useMemo(
+    () => buildNodeOverviewEntries(entries, workflowNodes),
+    [entries, workflowNodes],
+  );
   const eventEntries = entries.filter((entry) => entry.rowType !== "node");
   const baseSelectedEntry =
-    findSelectedEntry(entries, logs, activeLogIndex) ||
+    findSelectedEntry(entries, activeLogIndex) ||
     entries.find((entry) => entry.status === "error") ||
-    nodeEntries[0] ||
-    entries[0] ||
+    nodeEntries.find((entry) => entry.logIndex >= 0) ||
+    entries.find((entry) => entry.logIndex >= 0) ||
     null;
   const rawFrames = detail?.frames ?? [];
   const hasExecutionContent = Boolean(error || detail);
@@ -828,8 +945,9 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
       : eventEntries;
   const selectedEntry =
     visibleEntries.find((entry) => isEntrySelected(entry, baseSelectedEntry)) ||
-    visibleEntries[0] ||
-    baseSelectedEntry;
+    visibleEntries.find((entry) => entry.logIndex >= 0) ||
+    (baseSelectedEntry?.status === "error" ? baseSelectedEntry : null);
+  const selectableEntries = visibleEntries.filter((entry) => entry.logIndex >= 0);
   const runStatus: ExecutionLogStatus =
     detail?.status === "failed"
       ? "error"
@@ -838,7 +956,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
         : "running";
   const handleOverviewKeyDown = React.useCallback(
     (event: React.KeyboardEvent<HTMLElement>) => {
-      if (!visibleEntries.length || !onSelectLog) {
+      if (!selectableEntries.length || !onSelectLog) {
         return;
       }
 
@@ -847,20 +965,20 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
       }
 
       event.preventDefault();
-      const selectedVisibleIndex = visibleEntries.findIndex((entry) =>
+      const selectedVisibleIndex = selectableEntries.findIndex((entry) =>
         isEntrySelected(entry, selectedEntry),
       );
-      const fallbackIndex = event.key === "ArrowDown" ? -1 : visibleEntries.length;
+      const fallbackIndex = event.key === "ArrowDown" ? -1 : selectableEntries.length;
       const currentIndex =
         selectedVisibleIndex >= 0 ? selectedVisibleIndex : fallbackIndex;
       const nextIndex =
         event.key === "ArrowDown"
-          ? Math.min(currentIndex + 1, visibleEntries.length - 1)
+          ? Math.min(currentIndex + 1, selectableEntries.length - 1)
           : Math.max(currentIndex - 1, 0);
 
-      onSelectLog(visibleEntries[nextIndex]?.logIndex ?? null);
+      onSelectLog(selectableEntries[nextIndex]?.logIndex ?? null);
     },
-    [onSelectLog, selectedEntry, visibleEntries],
+    [onSelectLog, selectableEntries, selectedEntry],
   );
 
   if (!hasExecutionContent) {
@@ -1008,6 +1126,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                       "teamMemberWorkflowStudio.executionPanel.clear",
                       "Clear logs",
                     )}
+                    disabled={clearDisabled}
                     icon={<CloseOutlined />}
                     onClick={onClear}
                     size="small"
@@ -1018,25 +1137,33 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
             </div>
 
             <div
-              style={{
-                display: "grid",
-                gap: 0,
-                gridTemplateColumns: selectedEntry
-                  ? "minmax(300px, 0.82fr) minmax(420px, 1.18fr)"
-                  : "minmax(420px, 1fr)",
-                minHeight: 0,
-                minWidth: 0,
-              }}
-            >
-              <section
-                style={{
-                  borderRight: selectedEntry ? "1px solid #edf2f7" : 0,
+              className="workflow-studio-execution-panel__body"
+              style={
+                {
+                  "--workflow-execution-panel-columns": visibleEntries.length
+                    ? "minmax(300px, 0.82fr) minmax(420px, 1.18fr)"
+                    : "minmax(420px, 1fr)",
                   display: "grid",
-                  gridTemplateRows: "min-content minmax(0, 1fr)",
+                  gap: 0,
                   minHeight: 0,
                   minWidth: 0,
-                  padding: "10px 12px 12px",
-                }}
+                } as ExecutionPanelCssVariables
+              }
+            >
+              <section
+                className="workflow-studio-execution-panel__overview"
+                style={
+                  {
+                    "--workflow-execution-panel-overview-border-right":
+                      visibleEntries.length
+                        ? "1px solid #edf2f7"
+                        : "0",
+                    display: "grid",
+                    minHeight: 0,
+                    minWidth: 0,
+                    padding: "10px 12px 12px",
+                  } as ExecutionPanelCssVariables
+                }
               >
                 <div
                   style={{
@@ -1097,6 +1224,8 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                   style={{
                     display: "grid",
                     gap: 8,
+                    alignContent: "start",
+                    gridAutoRows: `${overviewRowHeight}px`,
                     minHeight: 0,
                     overflow: "auto",
                     paddingRight: 3,
@@ -1132,12 +1261,13 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                 </div>
               </section>
 
-              {selectedEntry ? (
+              {visibleEntries.length ? (
                 <section
                   aria-label={t(
                     "teamMemberWorkflowStudio.executionPanel.logDetails",
                     "Log details",
                   )}
+                  className="workflow-studio-execution-panel__details"
                   style={{
                     display: "grid",
                     gridTemplateRows: "min-content minmax(0, 1fr)",
@@ -1165,24 +1295,28 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                         minWidth: 0,
                       }}
                     >
-                      {renderStatusIcon(selectedEntry.status)}
-                      <Typography.Text
-                        strong
-                        style={{
-                          fontSize: 13,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {selectedEntry.title}
-                      </Typography.Text>
-                      <Tag
-                        color={statusColors[selectedEntry.status]}
-                        style={{ marginInlineEnd: 0 }}
-                      >
-                        {readStatusLabel(selectedEntry.status)}
-                      </Tag>
+                      {selectedEntry ? (
+                        <>
+                          {renderStatusIcon(selectedEntry.status)}
+                          <Typography.Text
+                            strong
+                            style={{
+                              fontSize: 13,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {selectedEntry.title}
+                          </Typography.Text>
+                          <Tag
+                            color={statusColors[selectedEntry.status]}
+                            style={{ marginInlineEnd: 0 }}
+                          >
+                            {readStatusLabel(selectedEntry.status)}
+                          </Tag>
+                        </>
+                      ) : null}
                     </div>
                     <div
                       style={{
@@ -1192,7 +1326,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                         gap: 8,
                       }}
                     >
-                      {selectedEntry.rowType === "node" ? (
+                      {selectedEntry?.rowType === "node" ? (
                         <div
                           style={{
                             alignItems: "center",
@@ -1247,7 +1381,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                           })}
                         </div>
                       ) : null}
-                      {overviewMode === "events" ? (
+                      {overviewMode === "events" && selectedEntry ? (
                         <Tooltip
                           title={t(
                             "teamMemberWorkflowStudio.executionPanel.copySelected",
@@ -1288,6 +1422,7 @@ const WorkflowStudioExecutionPanel: React.FC<WorkflowStudioExecutionPanelProps> 
                 </section>
               ) : null}
             </div>
+            <style>{workflowStudioExecutionPanelCss}</style>
           </>
         ) : null}
       </section>
