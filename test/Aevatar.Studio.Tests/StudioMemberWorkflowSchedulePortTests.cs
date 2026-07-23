@@ -159,13 +159,24 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         exception.Message.Should().Be("The authorization catalog could not be refreshed. Retry this request.");
     }
 
-    [Fact]
-    public async Task PreflightAsync_WhenCatalogSnapshotMissingAndBearerAvailable_ShouldReturnPlannerResultWithoutSideEffects()
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+        "nyxid_catalog_snapshot_stale")]
+    public async Task PreflightAsync_WhenCatalogSnapshotUnavailableAndBearerAvailable_ShouldReturnPlannerResultWithoutSideEffects(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        string detail)
     {
         var planner = new RecordingAuthorizationPlanner();
         planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
-            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
-            "nyxid_catalog_snapshot_not_found"));
+            failureCode,
+            detail));
         planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
         var refresh = new RecordingCatalogRefreshPort();
         var request = Request("scope-1", "member-1");
@@ -177,8 +188,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var result = await port.PreflightAsync(request);
 
         result.Success.Should().BeFalse();
-        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound);
-        result.Detail.Should().Be("nyxid_catalog_snapshot_not_found");
+        result.FailureCode.Should().Be(failureCode);
+        result.Detail.Should().Be(detail);
         planner.Requests.Should().ContainSingle();
         refresh.RefreshCallCount.Should().Be(0);
     }
@@ -217,6 +228,217 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     [InlineData(
         ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
         "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
+        "nyxid_catalog_snapshot_stale")]
+    public async Task PreflightForWriteAsync_WhenCatalogSnapshotUnavailableAndBearerAvailable_ShouldRefreshAndRetryPlanner(
+        ScheduledInvocationAuthorizationFailureCode failureCode,
+        string detail)
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            failureCode,
+            detail));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var request = Request("scope-1", "member-1");
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var result = await port.PreflightForWriteAsync(request);
+
+        result.Success.Should().BeTrue();
+        result.Plan!.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        refresh.LastOwner.Should().BeEquivalentTo(request.AuthenticatedOwner.Owner);
+        refresh.LastBearerToken.Should().Be("bearer-alpha");
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenRetryReturnsNonCatalogFailureWithoutCatalogObservation_ShouldReturnPlannerFailure()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+            "owner_llm_exact_service_identity_unavailable"));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var result = await port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        result.Success.Should().BeFalse();
+        result.FailureCode.Should().Be(ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
+        result.Detail.Should().Be("owner_llm_exact_service_identity_unavailable");
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenRetryReturnsNonCatalogFailureFromStaleCatalogObservation_ShouldThrowProjectionPending()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+            "owner_llm_exact_service_identity_unavailable",
+            observedCatalogStateVersion: 22));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var materializer = new RecordingCredentialMaterializer();
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            materializer: materializer,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenBearerMissingButTypedAuthorityAvailable_ShouldIssueFreshTokenAndRefresh()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated"));
+        planner.Results.Enqueue(RecordingAuthorizationPlanner.SuccessResult());
+        var refresh = new RecordingCatalogRefreshPort();
+        var tokenProvider = new RecordingWorkflowCallerAccessTokenProvider();
+        var port = NewPort(
+            new RecordingScheduleService(),
+            planner: planner,
+            catalogRefresh: refresh,
+            callerAccessTokenProvider: tokenProvider);
+
+        var result = await port.PreflightForWriteAsync(Request("scope-1", "member-1") with
+        {
+            ProvisioningBearerToken = null,
+        });
+
+        result.Success.Should().BeTrue();
+        refresh.LastBearerToken.Should().Be("issued-bearer-alpha");
+        tokenProvider.Requests.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            new WorkflowCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "binding-alpha",
+            });
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenCommittedRefreshVersionIsNotYetVisible_ShouldThrowProjectionPending()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        var stalePlan = RecordingAuthorizationPlanner.SuccessResult().Plan!.Clone();
+        stalePlan.CatalogAuthority.ActorStateVersion = 22;
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Succeeded(stalePlan));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(23),
+        };
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        planner.Requests.Should().HaveCount(2);
+        refresh.RefreshCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task PreflightForWriteAsync_WhenSupersededRefreshVersionIsAheadOfObservedSnapshot_ShouldThrowProjectionPending()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        planner.Results.Enqueue(ScheduledInvocationAuthorizationPlanResult.Failed(
+            ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+            "nyxid_catalog_snapshot_invalidated",
+            observedCatalogStateVersion: 22));
+        var refresh = new RecordingCatalogRefreshPort
+        {
+            Result = new NyxIdAuthorizationCatalogRefreshResult(
+                NyxIdAuthorizationCatalogRefreshStatus.Superseded,
+                "nyxid_catalog_refresh_superseded",
+                StateVersion: 23),
+        };
+        var scheduleService = new RecordingScheduleService();
+        var port = NewPort(
+            scheduleService,
+            planner: planner,
+            catalogRefresh: refresh);
+
+        var act = () => port.PreflightForWriteAsync(Request("scope-1", "member-1"));
+
+        var pending = await act.Should().ThrowAsync<StudioMemberAutomationProjectionPendingException>();
+        pending.Which.RequiredStateVersion.Should().Be(23);
+        planner.Requests.Should().ContainSingle();
+        refresh.RefreshCallCount.Should().Be(1);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_not_found")]
+    [InlineData(
+        ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
+        "nyxid_catalog_snapshot_invalidated")]
     [InlineData(
         ScheduledInvocationAuthorizationFailureCode.SnapshotStale,
         "nyxid_catalog_snapshot_stale")]

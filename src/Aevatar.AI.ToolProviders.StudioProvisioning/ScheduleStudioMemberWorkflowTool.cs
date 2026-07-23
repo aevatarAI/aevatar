@@ -150,7 +150,7 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
 
         try
         {
-            var preflight = await _schedulePort.PreflightAsync(request, ct);
+            var preflight = await _schedulePort.PreflightForWriteAsync(request, ct);
             if (!preflight.Success)
                 return ErrorJson(preflight.FailureCode.ToString(), preflight.Detail);
 
@@ -184,11 +184,51 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
         {
             throw;
         }
+        catch (StudioMemberAutomationProjectionPendingException)
+        {
+            return ErrorJson(
+                "authorization_catalog_projection_pending",
+                "The refreshed authorization catalog is still being projected. Retry this request.");
+        }
+        catch (StudioMemberAutomationCatalogRefreshUnavailableException)
+        {
+            return ErrorJson(
+                "authorization_catalog_refresh_unavailable",
+                "The authorization catalog could not be refreshed. Retry this request.");
+        }
+        catch (StudioMemberAutomationCatalogRefreshSupersededException)
+        {
+            return ErrorJson(
+                "authorization_catalog_refresh_superseded",
+                "A newer authorization catalog refresh superseded this request. Retry this request.");
+        }
+        catch (StudioMemberAutomationPlanConflictException ex)
+        {
+            return ErrorJson(
+                ToPlanConflictCode(ex.Code),
+                ToPlanConflictMessage(ex.Code));
+        }
         catch (Exception ex)
         {
             return ErrorJson("member_workflow_schedule_failed", $"Studio member workflow schedule failed: {ex.GetType().Name}");
         }
     }
+
+    private static string ToPlanConflictCode(string code) => code switch
+    {
+        "authorization_plan_changed" => "authorization_plan_changed",
+        "reauthorization_required" => "reauthorization_required",
+        _ => "authorization_conflict",
+    };
+
+    private static string ToPlanConflictMessage(string code) => code switch
+    {
+        "authorization_plan_changed" =>
+            "The authorization plan changed. Run schedule preflight again before retrying.",
+        "reauthorization_required" =>
+            "The schedule requires a fresh authorization review before it can be created.",
+        _ => "The schedule request conflicts with the current authorization state.",
+    };
 
     private static string ErrorJson(string code, string message) =>
         JsonSerializer.Serialize(new ScheduleStudioMemberWorkflowErrorJson(
