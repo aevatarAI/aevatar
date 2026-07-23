@@ -144,7 +144,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
         if (identity is null)
             return;
 
@@ -157,7 +157,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             await PersistUncanonicalizedRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.FirstDiagnostic(exception));
+                AgentProfileActorInvariants.FirstDiagnostic(exception),
+                ComputeRejectedSemanticInputSha256(command));
             return;
         }
 
@@ -206,7 +207,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
         if (identity is null)
             return;
 
@@ -219,7 +220,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             await PersistUncanonicalizedRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.FirstDiagnostic(exception));
+                AgentProfileActorInvariants.FirstDiagnostic(exception),
+                ComputeRejectedSemanticInputSha256(command));
             return;
         }
 
@@ -275,7 +277,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
         if (identity is null)
             return;
 
@@ -290,7 +292,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             await PersistUncanonicalizedRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.FirstDiagnostic(exception));
+                AgentProfileActorInvariants.FirstDiagnostic(exception),
+                ComputeRejectedSemanticInputSha256(command));
             return;
         }
 
@@ -336,7 +339,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity);
+        var identity = await NormalizeMutationIdentityAsync(operation, command.Identity, command);
         if (identity is null)
             return;
 
@@ -349,7 +352,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             await PersistUncanonicalizedRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.FirstDiagnostic(exception));
+                AgentProfileActorInvariants.FirstDiagnostic(exception),
+                ComputeRejectedSemanticInputSha256(command));
             return;
         }
 
@@ -474,7 +478,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
 
     private async Task<AgentProfileIdentity?> NormalizeMutationIdentityAsync(
         AgentProfileOperationFact operation,
-        AgentProfileIdentity? candidate)
+        AgentProfileIdentity? candidate,
+        IMessage command)
     {
         if (State.Identity is null)
         {
@@ -493,7 +498,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             await PersistUncanonicalizedRejectionAsync(
                 operation,
-                AgentProfileActorInvariants.IdentityConflict());
+                AgentProfileActorInvariants.IdentityConflict(),
+                ComputeRejectedSemanticInputSha256(command));
             return null;
         }
 
@@ -509,6 +515,12 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         var existing = FindOperation(operation.OperationId);
         if (existing is not null)
         {
+            if (existing.RejectedSemanticInputSha256.Length > 0)
+            {
+                throw AgentProfileActorInvariants.Error(
+                    "IDEMPOTENCY_PAYLOAD_CONFLICT",
+                    "An operation id rejected before canonicalization cannot be reused with canonical input.");
+            }
             EnsureReplay(existing, operation, expectedInput);
             if (replay is not null)
                 await replay(existing);
@@ -553,7 +565,8 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
 
     private Task PersistNewRejectionAsync(
         AgentProfileOperationFact operation,
-        AgentProfileSafeDiagnostic diagnostic)
+        AgentProfileSafeDiagnostic diagnostic,
+        ByteString? rejectedSemanticInputSha256 = null)
     {
         var existing = FindOperation(operation.OperationId);
         if (existing is not null)
@@ -569,6 +582,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         {
             Operation = operation.Clone(),
             Identity = State.Identity?.Clone() ?? new AgentProfileIdentity(),
+            RejectedSemanticInputSha256 = rejectedSemanticInputSha256 ?? ByteString.Empty,
             Outcome = AgentProfileActorInvariants.Outcome(
                 State,
                 operation,
@@ -579,16 +593,58 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
 
     private Task PersistUncanonicalizedRejectionAsync(
         AgentProfileOperationFact operation,
-        AgentProfileSafeDiagnostic diagnostic)
+        AgentProfileSafeDiagnostic diagnostic,
+        ByteString rejectedSemanticInputSha256)
     {
-        if (FindOperation(operation.OperationId) is not null)
+        var existing = FindOperation(operation.OperationId);
+        if (existing is not null)
         {
+            if (AgentProfileActorInvariants.SameInput(existing.Operation, operation) &&
+                AgentProfileActorInvariants.DigestEquals(
+                    existing.RejectedSemanticInputSha256,
+                    rejectedSemanticInputSha256))
+            {
+                return Task.CompletedTask;
+            }
+
             throw AgentProfileActorInvariants.Error(
                 "IDEMPOTENCY_PAYLOAD_CONFLICT",
                 "An operation id cannot be reused with input that cannot be canonicalized.");
         }
 
-        return PersistNewRejectionAsync(operation, diagnostic);
+        return PersistNewRejectionAsync(operation, diagnostic, rejectedSemanticInputSha256);
+    }
+
+    private static ByteString ComputeRejectedSemanticInputSha256(IMessage command)
+    {
+        var material = new AgentProfileMutationSemanticInputFingerprintMaterial();
+        switch (command)
+        {
+            case UpdateAgentProfileDraftCommand update:
+                if (update.Identity is not null)
+                    material.Identity = update.Identity.Clone();
+                material.UpdateDraft = update.Content?.Clone() ?? new AgentProfileContent();
+                break;
+            case UpsertAgentProfileSkillBindingCommand upsert:
+                if (upsert.Identity is not null)
+                    material.Identity = upsert.Identity.Clone();
+                material.UpsertSkillBinding = upsert.Binding?.Clone() ?? new AgentProfileSkillBinding();
+                break;
+            case RemoveAgentProfileSkillBindingCommand remove:
+                if (remove.Identity is not null)
+                    material.Identity = remove.Identity.Clone();
+                material.RemoveSkillBindingId = remove.BindingId;
+                break;
+            case PublishAgentProfileCommand publish:
+                if (publish.Identity is not null)
+                    material.Identity = publish.Identity.Clone();
+                material.PublishSnapshot = publish.Snapshot?.Clone() ?? new AgentProfilePublishedSnapshot();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(command));
+        }
+
+        return AgentProfileDeterminism.Sha256(material);
     }
 
     private Task SendInitializedAsync(
@@ -698,6 +754,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         var storedNamespaceActorId = existing.InitializationRejection?.NamespaceActorId ??
             State.NamespaceActorId;
         if (!AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
+            existing.InitializationContinuation is not null &&
             !AgentProfileActorInvariants.DigestEquals(candidate.InputSha256, expectedInput) ||
             !AgentProfileActorInvariants.SameIdentity(storedIdentity, identity) ||
             !string.Equals(storedProfileActorId, Id, StringComparison.Ordinal) ||
@@ -867,19 +924,21 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         var next = state.Clone();
         next.LastMutation = evt.Outcome.Clone();
-        AddOperation(next, evt.Outcome, null);
+        AddOperation(next, evt.Outcome, null, evt.RejectedSemanticInputSha256);
         return next;
     }
 
     private static void AddOperation(
         AgentProfileState state,
         AgentProfileMutationOutcome outcome,
-        AgentProfilePublishedSummary? summary)
+        AgentProfilePublishedSummary? summary,
+        ByteString? rejectedSemanticInputSha256 = null)
     {
         var operation = new AgentProfileOperationState
         {
             Operation = outcome.Operation.Clone(),
             Outcome = outcome.Clone(),
+            RejectedSemanticInputSha256 = rejectedSemanticInputSha256 ?? ByteString.Empty,
         };
         if (summary is not null)
             operation.PublishedSummary = summary.Clone();

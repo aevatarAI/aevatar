@@ -152,6 +152,79 @@ public sealed class AgentProfileNamespaceGAgentTests
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
     }
 
+    [Theory]
+    [InlineData(false, "identity")]
+    [InlineData(false, "content")]
+    [InlineData(true, "identity")]
+    [InlineData(true, "content")]
+    public async Task MalformedCreateReplayAgainstExistingEntry_ShouldNotMutateAuthority(
+        bool activate,
+        string boundary)
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var original = CreateCommand();
+        await agent.HandleCreateAsync(original);
+        if (activate)
+            await agent.HandleInitializedAsync(Initialized(original));
+        var version = agent.EventSourcing!.CurrentVersion;
+        var malicious = original.Clone();
+        if (boundary == "identity")
+            malicious.Identity.Reference.ProfileSlug = "INVALID";
+        else
+            malicious.InitialContent.DisplayName = new string('x', 257);
+
+        var act = () => agent.HandleCreateAsync(malicious);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(version);
+        agent.State.Profiles.Should().ContainSingle().Which.Status.Should().Be(
+            activate
+                ? AgentProfileProvisioningStatus.Active
+                : AgentProfileProvisioningStatus.Provisioning);
+        agent.State.Operations.Should().ContainSingle()
+            .Which.Diagnostic.Should().BeNull();
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)version);
+        publisher.Sends.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task MalformedCreateRejection_ShouldReplayExactlyRejectDriftAndLeaveCoordinatesReusable()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var malformed = CreateCommand();
+        malformed.InitialContent.DisplayName = new string('x', 257);
+        await agent.HandleCreateAsync(malformed);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        var replay = malformed.Clone();
+        replay.Operation.CommandId = "cmd-malformed-create-retry";
+        replay.Operation.CorrelationId = "corr-malformed-create-retry";
+
+        await agent.HandleCreateAsync(replay);
+
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        agent.State.Profiles.Should().BeEmpty();
+        agent.State.HandleClaims.Should().BeEmpty();
+        agent.State.Operations.Should().ContainSingle()
+            .Which.Diagnostic.Code.Should().Be("INVALID_DISPLAY_NAME");
+        publisher.Sends.Should().BeEmpty();
+
+        var drifted = malformed.Clone();
+        drifted.InitialContent.DisplayName = new string('y', 257);
+        var driftAct = () => agent.HandleCreateAsync(drifted);
+        var driftException = await driftAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        driftException.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+
+        var valid = CreateCommand(operationId: "op-create-after-malformed");
+        await agent.HandleCreateAsync(valid);
+
+        agent.State.Profiles.Should().ContainSingle()
+            .Which.Status.Should().Be(AgentProfileProvisioningStatus.Provisioning);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion + 1);
+        publisher.Sends.Should().ContainSingle();
+    }
+
     [Fact]
     public async Task Continuation_ShouldRejectPreCreateFailureWithMatchingProfileCoordinates()
     {

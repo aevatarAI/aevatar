@@ -315,6 +315,34 @@ public sealed class AgentProfileContractsTests
     }
 
     [Fact]
+    public void ValidatePublishedSnapshotHardLimits_ShouldBoundEveryDiagnosticFieldByUtf8Bytes()
+    {
+        var snapshot = PublishedSnapshot(Content(
+            purpose: "Control devices.",
+            instructions: "Follow the Profile procedure.",
+            toolNames: []));
+        var skill = ValidSealedSkill();
+        skill.Package.Assets.Add(new AgentProfileNamedTextAsset
+        {
+            Path = new string('\u00e9', 600),
+            Content = new string('a', AgentProfileValidationLimits.TextAssetMaxUtf8Bytes + 1),
+        });
+        snapshot.SkillBindings.Add(new SealedAgentProfileSkillBinding
+        {
+            BindingId = "bind-alpha",
+            ActivationMode = AgentProfileSkillActivationMode.Routed,
+            Skill = skill,
+        });
+
+        var diagnostic = AgentProfilePolicies.ValidatePublishedSnapshotHardLimits(snapshot)
+            .Single(candidate => candidate.Code == "TEXT_ASSET_TOO_LARGE");
+
+        Encoding.UTF8.GetByteCount(diagnostic.Code).Should().BeLessThanOrEqualTo(512);
+        Encoding.UTF8.GetByteCount(diagnostic.Message).Should().BeLessThanOrEqualTo(512);
+        Encoding.UTF8.GetByteCount(diagnostic.Path).Should().BeLessThanOrEqualTo(512);
+    }
+
+    [Fact]
     public void Purpose_ShouldAffectDraftDigestButNotExecutionSnapshotDigest()
     {
         var firstContent = Content("First purpose", "Instructions", ["alpha"]);

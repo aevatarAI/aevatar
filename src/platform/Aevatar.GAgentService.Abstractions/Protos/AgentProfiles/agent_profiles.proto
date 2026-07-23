@@ -169,6 +169,12 @@ enum AgentProfileProvisioningStatus {
   AGENT_PROFILE_PROVISIONING_STATUS_FAILED = 3;
 }
 
+enum AgentProfileProvisioningFailureKind {
+  AGENT_PROFILE_PROVISIONING_FAILURE_KIND_UNSPECIFIED = 0;
+  AGENT_PROFILE_PROVISIONING_FAILURE_KIND_CREATE_VALIDATION = 1;
+  AGENT_PROFILE_PROVISIONING_FAILURE_KIND_INITIALIZATION_CONTINUATION = 2;
+}
+
 message AgentProfilePublishedSummary {
   AgentProfileReference reference = 1;
   string display_name = 2;
@@ -260,6 +266,8 @@ message AgentProfileProvisioningFailedEvent {
   AgentProfileIdentity identity = 2;
   string profile_actor_id = 3;
   AgentProfileSafeDiagnostic diagnostic = 4;
+  bytes rejected_semantic_input_sha256 = 5;
+  AgentProfileProvisioningFailureKind failure_kind = 6;
 }
 
 message AgentProfilePublishedSummaryObservedEvent {
@@ -340,4 +348,5 @@ message AgentProfileMutationRejectedEvent {
   AgentProfileOperationFact operation = 1;
   AgentProfileIdentity identity = 2;
   AgentProfileMutationOutcome outcome = 3;
+  bytes rejected_semantic_input_sha256 = 4;
 }

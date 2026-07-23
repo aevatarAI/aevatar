@@ -713,14 +713,12 @@ public static class AgentProfilePolicies
     private static AgentProfileSafeDiagnostic PrefixPath(
         AgentProfileSafeDiagnostic diagnostic,
         string prefix) =>
-        new()
-        {
-            Code = diagnostic.Code,
-            Message = diagnostic.Message,
-            Path = string.IsNullOrEmpty(diagnostic.Path)
+        Diagnostic(
+            diagnostic.Code,
+            diagnostic.Message,
+            string.IsNullOrEmpty(diagnostic.Path)
                 ? prefix
-                : $"{prefix}.{diagnostic.Path}",
-        };
+                : $"{prefix}.{diagnostic.Path}");
 
     private static void AddOrdinalMismatch(
         ICollection<AgentProfileSafeDiagnostic> diagnostics,
@@ -739,8 +737,24 @@ public static class AgentProfilePolicies
         string path) =>
         new()
         {
-            Code = code,
-            Message = message,
-            Path = path,
+            Code = BoundDiagnosticField(code),
+            Message = BoundDiagnosticField(message),
+            Path = BoundDiagnosticField(path),
         };
+
+    private static string BoundDiagnosticField(string? value)
+    {
+        var normalized = (value ?? string.Empty)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Normalize(NormalizationForm.FormC);
+        var bytes = Encoding.UTF8.GetBytes(normalized);
+        if (bytes.Length <= AgentProfileValidationLimits.DiagnosticMessageMaxUtf8Bytes)
+            return normalized;
+
+        var length = AgentProfileValidationLimits.DiagnosticMessageMaxUtf8Bytes;
+        while (length > 0 && (bytes[length] & 0xC0) == 0x80)
+            length--;
+        return Encoding.UTF8.GetString(bytes, 0, length);
+    }
 }

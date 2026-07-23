@@ -1,3 +1,4 @@
+using System.Text;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
@@ -114,6 +115,95 @@ public sealed class AgentProfileGAgentTests
         continuation.Identity.Should().BeEquivalentTo(command.Identity);
         continuation.ProfileActorId.Should().Be(agent.Id);
         continuation.Diagnostic.Code.Should().Be("MULTIPLE_DEFAULT_SKILLS");
+    }
+
+    [Theory]
+    [InlineData("input-digest", "OPERATION_INPUT_SHA256_MISMATCH")]
+    [InlineData("default-binding", "MULTIPLE_DEFAULT_SKILLS")]
+    [InlineData("identity", "PROFILE_IDENTITY_CONFLICT")]
+    public async Task InitializeStoredRejection_ShouldRecoverFailedSendFromExactReplay(
+        string rejection,
+        string expectedDiagnostic)
+    {
+        var fixture = rejection == "identity"
+            ? await CreateInitializedActorAsync()
+            : await CreateActorAsync();
+        var (agent, store, publisher) = fixture;
+        var command = rejection switch
+        {
+            "default-binding" => InitializeCommand(
+                content: ContentWithMultipleDefaultBindings(),
+                operationId: "op-initialize-default-rejection"),
+            "identity" => InitializeCommand(
+                identity: GAgentServiceTestKit.CreateAgentProfileIdentity(
+                    profileId: "prof-other",
+                    profileSlug: "other"),
+                operationId: "op-initialize-identity-rejection"),
+            _ => InitializeCommand(operationId: "op-initialize-digest-rejection"),
+        };
+        if (rejection == "input-digest")
+            command.Operation.InputSha256 = Digest(0x71);
+        var eventCountBeforeRejection = (await store.GetEventsAsync(agent.Id)).Count;
+        var sendCountBeforeRejection = publisher.Sends.Count;
+        publisher.SendFailuresRemaining = 1;
+
+        var initialize = () => agent.HandleInitializeAsync(command);
+        await initialize.Should().ThrowAsync<InvalidOperationException>();
+
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCountBeforeRejection + 1);
+        agent.State.Operations.Single(x => x.Operation.OperationId == command.Operation.OperationId)
+            .InitializationRejection.Continuation.Diagnostic.Code.Should().Be(expectedDiagnostic);
+        var replay = command.Clone();
+        replay.Operation.CommandId = $"cmd-{rejection}-rejection-retry";
+        replay.Operation.CorrelationId = $"corr-{rejection}-rejection-retry";
+
+        await agent.HandleInitializeAsync(replay);
+
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCountBeforeRejection + 1);
+        publisher.Sends.Should().HaveCount(sendCountBeforeRejection + 1);
+        var continuation = publisher.Sends[^1].Payload
+            .Unpack<AgentProfileInitializationRejectedContinuation>();
+        continuation.Operation.CommandId.Should().Be(replay.Operation.CommandId);
+        continuation.Diagnostic.Code.Should().Be(expectedDiagnostic);
+    }
+
+    [Theory]
+    [InlineData("input-digest")]
+    [InlineData("default-binding")]
+    [InlineData("identity")]
+    public async Task InitializeStoredRejection_ShouldRejectSemanticDrift(string rejection)
+    {
+        var fixture = rejection == "identity"
+            ? await CreateInitializedActorAsync()
+            : await CreateActorAsync();
+        var (agent, store, publisher) = fixture;
+        var command = rejection switch
+        {
+            "default-binding" => InitializeCommand(
+                content: ContentWithMultipleDefaultBindings(),
+                operationId: "op-initialize-default-drift"),
+            "identity" => InitializeCommand(
+                identity: GAgentServiceTestKit.CreateAgentProfileIdentity(
+                    profileId: "prof-other",
+                    profileSlug: "other"),
+                operationId: "op-initialize-identity-drift"),
+            _ => InitializeCommand(operationId: "op-initialize-digest-drift"),
+        };
+        if (rejection == "input-digest")
+            command.Operation.InputSha256 = Digest(0x72);
+        await agent.HandleInitializeAsync(command);
+        var committedVersion = agent.EventSourcing!.CurrentVersion;
+        var sendCount = publisher.Sends.Count;
+        var drifted = command.Clone();
+        drifted.InitialContent.DisplayName = "Drifted initialization content";
+
+        var act = () => agent.HandleInitializeAsync(drifted);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(committedVersion);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)committedVersion);
+        publisher.Sends.Should().HaveCount(sendCount);
     }
 
     [Fact]
@@ -263,6 +353,75 @@ public sealed class AgentProfileGAgentTests
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCount);
         agent.State.LastMutation.Diagnostic.Code.Should().Be("PROFILE_IDENTITY_CONFLICT");
+    }
+
+    [Theory]
+    [InlineData("update", "identity")]
+    [InlineData("update", "payload")]
+    [InlineData("upsert", "identity")]
+    [InlineData("upsert", "payload")]
+    [InlineData("remove", "identity")]
+    [InlineData("remove", "payload")]
+    [InlineData("publish", "identity")]
+    [InlineData("publish", "payload")]
+    public async Task UncanonicalizableMutation_ExactReplayShouldNotCommitAnotherEvent(
+        string mutation,
+        string boundary)
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var operationId = $"op-uncanonicalized-{mutation}-{boundary}";
+        var command = MalformedMutationCommand(agent, mutation, boundary, operationId);
+
+        await DispatchMutationAsync(agent, command);
+
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        agent.State.LastMutation.Diagnostic.Code.Should().Be(
+            boundary == "identity"
+                ? "PROFILE_IDENTITY_CONFLICT"
+                : mutation is "upsert" or "remove"
+                    ? "INVALID_BINDING_ID"
+                    : "INVALID_DISPLAY_NAME");
+        var replay = CloneMutation(command);
+        MutationOperation(replay).CommandId = $"cmd-{mutation}-{boundary}-retry";
+        MutationOperation(replay).CorrelationId = $"corr-{mutation}-{boundary}-retry";
+
+        await DispatchMutationAsync(agent, replay);
+
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        agent.State.Operations.Count(x => x.Operation.OperationId == operationId).Should().Be(1);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+    }
+
+    [Theory]
+    [InlineData("update", "identity")]
+    [InlineData("update", "payload")]
+    [InlineData("upsert", "identity")]
+    [InlineData("upsert", "payload")]
+    [InlineData("remove", "identity")]
+    [InlineData("remove", "payload")]
+    [InlineData("publish", "identity")]
+    [InlineData("publish", "payload")]
+    public async Task UncanonicalizableMutation_SemanticDriftShouldConflict(
+        string mutation,
+        string boundary)
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var command = MalformedMutationCommand(
+            agent,
+            mutation,
+            boundary,
+            $"op-uncanonicalized-{mutation}-{boundary}-drift");
+        await DispatchMutationAsync(agent, command);
+        var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        var drifted = CloneMutation(command);
+        InvalidateMutation(drifted, boundary, drifted: true);
+
+        var act = () => DispatchMutationAsync(agent, drifted);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
     }
 
     [Fact]
@@ -626,6 +785,39 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
+    public async Task PublishHardLimitRejection_ShouldPersistBoundedDiagnosticFields()
+    {
+        var content = GAgentServiceTestKit.CreateAgentProfileContent();
+        content.SkillBindings.Add(Binding(
+            "bind-alpha",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidAlpha, "skill-alpha")));
+        var (agent, store, _) = await CreateInitializedActorAsync(content: content);
+        var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+        snapshot.SkillBindings[0].Skill.Package.Assets.Add(new AgentProfileNamedTextAsset
+        {
+            Path = new string('\u00e9', 600),
+            Content = new string('a', AgentProfileValidationLimits.TextAssetMaxUtf8Bytes + 1),
+        });
+        snapshot.SkillBindings[0].Skill.ContentSha256 =
+            AgentProfileDeterminism.ComputeSealedSkillSha256(snapshot.SkillBindings[0].Skill);
+        snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+
+        await agent.HandlePublishAsync(PublishCommand(
+            agent,
+            snapshot,
+            "op-publish-bounded-hard-limit-diagnostic"));
+
+        var diagnostic = agent.State.LastMutation.Diagnostic;
+        Encoding.UTF8.GetByteCount(diagnostic.Code).Should().BeLessThanOrEqualTo(512);
+        Encoding.UTF8.GetByteCount(diagnostic.Message).Should().BeLessThanOrEqualTo(512);
+        Encoding.UTF8.GetByteCount(diagnostic.Path).Should().BeLessThanOrEqualTo(512);
+        var rejection = (await store.GetEventsAsync(agent.Id))[^1].EventData
+            .Unpack<AgentProfileMutationRejectedEvent>();
+        rejection.Outcome.Diagnostic.Should().Be(diagnostic);
+    }
+
+    [Fact]
     public async Task Publish_ShouldRequireExactDraftBindingMatch()
     {
         var content = GAgentServiceTestKit.CreateAgentProfileContent();
@@ -800,6 +992,104 @@ public sealed class AgentProfileGAgentTests
         await fixture.Agent.HandleInitializeAsync(InitializeCommand(identity, content));
         return fixture;
     }
+
+    private static IMessage MalformedMutationCommand(
+        AgentProfileGAgent agent,
+        string mutation,
+        string boundary,
+        string operationId)
+    {
+        IMessage command = mutation switch
+        {
+            "update" => UpdateCommand(
+                agent.State.Identity,
+                GAgentServiceTestKit.CreateAgentProfileContent(displayName: "Changed"),
+                operationId,
+                agent.EventSourcing!.CurrentVersion),
+            "upsert" => UpsertCommand(
+                agent,
+                Binding(
+                    "bind-alpha",
+                    AgentProfileSkillActivationMode.Routed,
+                    ExactReference(SkillGuidAlpha, "skill-alpha")),
+                operationId),
+            "remove" => RemoveCommand(agent, "bind-alpha", operationId),
+            "publish" => PublishCommand(
+                agent,
+                Snapshot(agent.State.Identity, agent.State.Draft),
+                operationId),
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null),
+        };
+        InvalidateMutation(command, boundary, drifted: false);
+        return command;
+    }
+
+    private static void InvalidateMutation(IMessage command, string boundary, bool drifted)
+    {
+        if (boundary == "identity")
+        {
+            MutationIdentity(command).Reference.ProfileSlug = drifted ? "ALSO-INVALID" : "INVALID";
+            return;
+        }
+
+        switch (command)
+        {
+            case UpdateAgentProfileDraftCommand update:
+                update.Content.DisplayName = drifted ? new string('u', 257) : string.Empty;
+                break;
+            case UpsertAgentProfileSkillBindingCommand upsert:
+                upsert.Binding.BindingId = drifted ? new string('u', 129) : string.Empty;
+                break;
+            case RemoveAgentProfileSkillBindingCommand remove:
+                remove.BindingId = drifted ? new string('r', 129) : string.Empty;
+                break;
+            case PublishAgentProfileCommand publish:
+                publish.Snapshot.DisplayName = drifted ? new string('p', 257) : string.Empty;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(command));
+        }
+    }
+
+    private static IMessage CloneMutation(IMessage command) =>
+        command switch
+        {
+            UpdateAgentProfileDraftCommand update => update.Clone(),
+            UpsertAgentProfileSkillBindingCommand upsert => upsert.Clone(),
+            RemoveAgentProfileSkillBindingCommand remove => remove.Clone(),
+            PublishAgentProfileCommand publish => publish.Clone(),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+    private static AgentProfileIdentity MutationIdentity(IMessage command) =>
+        command switch
+        {
+            UpdateAgentProfileDraftCommand update => update.Identity,
+            UpsertAgentProfileSkillBindingCommand upsert => upsert.Identity,
+            RemoveAgentProfileSkillBindingCommand remove => remove.Identity,
+            PublishAgentProfileCommand publish => publish.Identity,
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+    private static AgentProfileOperationFact MutationOperation(IMessage command) =>
+        command switch
+        {
+            UpdateAgentProfileDraftCommand update => update.Operation,
+            UpsertAgentProfileSkillBindingCommand upsert => upsert.Operation,
+            RemoveAgentProfileSkillBindingCommand remove => remove.Operation,
+            PublishAgentProfileCommand publish => publish.Operation,
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
+
+    private static Task DispatchMutationAsync(AgentProfileGAgent agent, IMessage command) =>
+        command switch
+        {
+            UpdateAgentProfileDraftCommand update => agent.HandleUpdateDraftAsync(update),
+            UpsertAgentProfileSkillBindingCommand upsert => agent.HandleUpsertSkillBindingAsync(upsert),
+            RemoveAgentProfileSkillBindingCommand remove => agent.HandleRemoveSkillBindingAsync(remove),
+            PublishAgentProfileCommand publish => agent.HandlePublishAsync(publish),
+            _ => throw new ArgumentOutOfRangeException(nameof(command)),
+        };
 
     private static InitializeAgentProfileCommand InitializeCommand(
         AgentProfileIdentity? identity = null,

@@ -20,33 +20,55 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         var profileActorId = AgentProfileActorInvariants.RequireActorId(
             command.ProfileActorId,
             "profile_actor_id");
+        var rejectedSemanticInputSha256 = ComputeCreateSemanticInputSha256(command, profileActorId);
+        var existingOperation = FindOperation(operation.OperationId);
 
         var identityDiagnostics = AgentProfilePolicies.ValidateIdentity(command.Identity);
         if (identityDiagnostics.Count > 0)
         {
+            if (existingOperation is not null)
+            {
+                EnsureCreateValidationRejectionReplay(
+                    existingOperation,
+                    operation,
+                    profileActorId,
+                    rejectedSemanticInputSha256);
+                return;
+            }
             await PersistCreateFailureAsync(
                 operation,
-                command.Identity,
+                null,
                 profileActorId,
-                identityDiagnostics[0]);
-            return;
-        }
-
-        var contentDiagnostics = AgentProfilePolicies.ValidateContent(command.InitialContent);
-        if (contentDiagnostics.Count > 0)
-        {
-            await PersistCreateFailureAsync(
-                operation,
-                command.Identity,
-                profileActorId,
-                contentDiagnostics[0]);
+                identityDiagnostics[0],
+                rejectedSemanticInputSha256);
             return;
         }
 
         var identity = AgentProfileDeterminism.NormalizeIdentity(command.Identity);
+
+        var contentDiagnostics = AgentProfilePolicies.ValidateContent(command.InitialContent);
+        if (contentDiagnostics.Count > 0)
+        {
+            if (existingOperation is not null)
+            {
+                EnsureCreateValidationRejectionReplay(
+                    existingOperation,
+                    operation,
+                    profileActorId,
+                    rejectedSemanticInputSha256);
+                return;
+            }
+            await PersistCreateFailureAsync(
+                operation,
+                identity,
+                profileActorId,
+                contentDiagnostics[0],
+                rejectedSemanticInputSha256);
+            return;
+        }
+
         var content = AgentProfileDeterminism.NormalizeContent(command.InitialContent);
         var expectedInput = AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content);
-        var existingOperation = FindOperation(operation.OperationId);
         if (existingOperation is not null)
         {
             EnsureReplayInput(existingOperation.Operation, operation, expectedInput);
@@ -247,6 +269,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             Identity = entry.Identity.Clone(),
             ProfileActorId = entry.ProfileActorId,
             Diagnostic = continuation.Diagnostic.Clone(),
+            FailureKind = AgentProfileProvisioningFailureKind.InitializationContinuation,
         });
     }
 
@@ -343,13 +366,16 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         AgentProfileOperationFact operation,
         AgentProfileIdentity? identity,
         string profileActorId,
-        AgentProfileSafeDiagnostic diagnostic) =>
+        AgentProfileSafeDiagnostic diagnostic,
+        ByteString? rejectedSemanticInputSha256 = null) =>
         await PersistDomainEventAsync(new AgentProfileProvisioningFailedEvent
         {
             Operation = operation.Clone(),
             Identity = identity?.Clone() ?? new AgentProfileIdentity(),
             ProfileActorId = profileActorId,
             Diagnostic = diagnostic.Clone(),
+            RejectedSemanticInputSha256 = rejectedSemanticInputSha256 ?? ByteString.Empty,
+            FailureKind = AgentProfileProvisioningFailureKind.CreateValidation,
         });
 
     private Task SendInitializationAsync(
@@ -414,6 +440,42 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         }
     }
 
+    private static void EnsureCreateValidationRejectionReplay(
+        AgentProfileNamespaceOperationState existing,
+        AgentProfileOperationFact candidate,
+        string profileActorId,
+        ByteString rejectedSemanticInputSha256)
+    {
+        if (existing.FailureKind != AgentProfileProvisioningFailureKind.CreateValidation ||
+            existing.ProvisioningStarted ||
+            existing.Diagnostic is null ||
+            !AgentProfileActorInvariants.SameInput(existing.Operation, candidate) ||
+            !string.Equals(existing.ProfileActorId, profileActorId, StringComparison.Ordinal) ||
+            !AgentProfileActorInvariants.DigestEquals(
+                existing.RejectedSemanticInputSha256,
+                rejectedSemanticInputSha256))
+        {
+            throw AgentProfileActorInvariants.Error(
+                "IDEMPOTENCY_PAYLOAD_CONFLICT",
+                "A rejected create operation cannot change its typed semantic input or Actor relation.");
+        }
+    }
+
+    private static ByteString ComputeCreateSemanticInputSha256(
+        CreateAgentProfileCommand command,
+        string profileActorId)
+    {
+        var material = new AgentProfileCreateSemanticInputFingerprintMaterial
+        {
+            ProfileActorId = profileActorId,
+        };
+        if (command.Identity is not null)
+            material.Identity = command.Identity.Clone();
+        if (command.InitialContent is not null)
+            material.InitialContent = command.InitialContent.Clone();
+        return AgentProfileDeterminism.Sha256(material);
+    }
+
     private static AgentProfileNamespaceState ApplyProvisioningStarted(
         AgentProfileNamespaceState state,
         AgentProfileProvisioningStartedEvent evt)
@@ -465,7 +527,9 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         var next = state.Clone();
         var operation = next.Operations.FirstOrDefault(candidate =>
             string.Equals(candidate.Operation.OperationId, evt.Operation.OperationId, StringComparison.Ordinal));
-        if (operation is not null &&
+        if (evt.FailureKind == AgentProfileProvisioningFailureKind.InitializationContinuation &&
+            operation is not null &&
+            operation.ProvisioningStarted &&
             string.Equals(operation.ProfileId, evt.Identity.ProfileId, StringComparison.Ordinal) &&
             string.Equals(operation.ProfileActorId, evt.ProfileActorId, StringComparison.Ordinal))
         {
@@ -487,11 +551,18 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 ProfileId = evt.Identity.ProfileId,
                 ProfileActorId = evt.ProfileActorId,
                 Diagnostic = evt.Diagnostic.Clone(),
+                RejectedSemanticInputSha256 = evt.RejectedSemanticInputSha256,
+                FailureKind = evt.FailureKind,
             });
         }
-        else
+        else if (evt.FailureKind == AgentProfileProvisioningFailureKind.InitializationContinuation &&
+                 operation is not null &&
+                 operation.ProvisioningStarted &&
+                 string.Equals(operation.ProfileId, evt.Identity.ProfileId, StringComparison.Ordinal) &&
+                 string.Equals(operation.ProfileActorId, evt.ProfileActorId, StringComparison.Ordinal))
         {
             operation.Diagnostic = evt.Diagnostic.Clone();
+            operation.FailureKind = evt.FailureKind;
         }
         return next;
     }

@@ -27,6 +27,14 @@ message AgentProfileNamespaceOperationState {
   aevatar.gagentservice.agentprofiles.AgentProfileSafeDiagnostic diagnostic = 4;
   aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 5;
   bool provisioning_started = 6;
+  bytes rejected_semantic_input_sha256 = 7;
+  aevatar.gagentservice.agentprofiles.AgentProfileProvisioningFailureKind failure_kind = 8;
+}
+
+message AgentProfileCreateSemanticInputFingerprintMaterial {
+  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+  aevatar.gagentservice.agentprofiles.AgentProfileContent initial_content = 2;
+  string profile_actor_id = 3;
 }
 
 message AgentProfileNamespaceState {
@@ -41,12 +49,23 @@ message AgentProfileInitializationRejectionState {
   bytes rejected_content_sha256 = 3;
 }
 
+message AgentProfileMutationSemanticInputFingerprintMaterial {
+  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+  oneof mutation {
+    aevatar.gagentservice.agentprofiles.AgentProfileContent update_draft = 2;
+    aevatar.gagentservice.agentprofiles.AgentProfileSkillBinding upsert_skill_binding = 3;
+    string remove_skill_binding_id = 4;
+    aevatar.gagentservice.agentprofiles.AgentProfilePublishedSnapshot publish_snapshot = 5;
+  }
+}
+
 message AgentProfileOperationState {
   aevatar.gagentservice.agentprofiles.AgentProfileOperationFact operation = 1;
   aevatar.gagentservice.agentprofiles.AgentProfileMutationOutcome outcome = 2;
   aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 3;
   aevatar.gagentservice.agentprofiles.AgentProfileInitializedContinuation initialization_continuation = 4;
   AgentProfileInitializationRejectionState initialization_rejection = 5;
+  bytes rejected_semantic_input_sha256 = 6;
 }
 
 message AgentProfileState {
