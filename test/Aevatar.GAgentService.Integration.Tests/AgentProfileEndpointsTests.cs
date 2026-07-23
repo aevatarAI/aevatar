@@ -456,6 +456,89 @@ public sealed class AgentProfileEndpointsTests
     }
 
     [Theory]
+    [MemberData(nameof(ReviewInvalidBodyTransportCases))]
+    public async Task ReviewMedia_ValidGates_InvalidBodyTransport_ShouldReturnBoundedClientError(
+        BodyRouteKind routeKind,
+        InvalidBodyTransportKind transportKind)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyTransportRequest(routeKind, transportKind);
+
+        using var response = await host.Client.SendAsync(request);
+
+        var expectedStatus = transportKind == InvalidBodyTransportKind.AbsentBody
+            ? HttpStatusCode.BadRequest
+            : HttpStatusCode.UnsupportedMediaType;
+        var expectedCode = transportKind == InvalidBodyTransportKind.AbsentBody
+            ? "INVALID_AGENT_PROFILE_HTTP_BODY"
+            : "UNSUPPORTED_MEDIA_TYPE";
+        response.StatusCode.Should().Be(expectedStatus, transportKind.ToString());
+        var responseBody = await response.Content.ReadAsStringAsync();
+        responseBody.Should().NotContain(SecretInstructions);
+        responseBody.Should().NotContain(SecretSkillBody);
+        responseBody.Should().NotContain("System.");
+        responseBody.Should().NotContain("Microsoft.");
+        using var json = JsonDocument.Parse(responseBody);
+        json.RootElement.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("code");
+        json.RootElement.GetProperty("code").GetString().Should().Be(expectedCode);
+        host.TotalServiceCalls.Should().Be(0, transportKind.ToString());
+    }
+
+    [Theory]
+    [InlineData(BodyRouteKind.Create)]
+    [InlineData(BodyRouteKind.Draft)]
+    [InlineData(BodyRouteKind.Skill)]
+    public async Task ReviewMedia_WrongScope_ShouldPrecedeMediaValidation(BodyRouteKind routeKind)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyTransportRequest(
+            routeKind,
+            InvalidBodyTransportKind.UnsupportedMediaType,
+            scopeClaims: "scope-other");
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("SCOPE_ACCESS_DENIED");
+        host.TotalServiceCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(BodyRouteKind.Draft)]
+    [InlineData(BodyRouteKind.Skill)]
+    public async Task ReviewMedia_MissingIfMatch_ShouldPrecedeMediaValidation(BodyRouteKind routeKind)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyTransportRequest(
+            routeKind,
+            InvalidBodyTransportKind.NonemptyWithoutContentType,
+            includeIfMatch: false);
+
+        using var response = await host.Client.SendAsync(request);
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status428PreconditionRequired);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("AGENT_PROFILE_IF_MATCH_REQUIRED");
+        host.TotalServiceCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ReviewMedia_MissingCreateIdempotencyKey_ShouldPrecedeMediaValidation()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyTransportRequest(
+            BodyRouteKind.Create,
+            InvalidBodyTransportKind.UnsupportedCharset,
+            includeIdempotencyKey: false);
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("IDEMPOTENCY_KEY_REQUIRED");
+        host.TotalServiceCalls.Should().Be(0);
+    }
+
+    [Theory]
     [MemberData(nameof(ReviewInvalidStructureBodies))]
     public async Task ReviewStructure_NullOrMissingRequiredMember_ShouldReturnSafeBadRequest(
         BodyRouteKind routeKind,
@@ -767,6 +850,61 @@ public sealed class AgentProfileEndpointsTests
     }
 
     [Theory]
+    [InlineData("scope%alpha")]
+    [InlineData("scope?alpha")]
+    [InlineData("scope#alpha")]
+    public async Task ReviewEncodedScope_AcceptedReceipt_ShouldEncodeExternalResourceSegmentsOnce(
+        string decodedScopeId)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.CommandService.Receipt = host.CommandService.Receipt with
+        {
+            ResourceUrl = ManagementRoute(decodedScopeId),
+        };
+        using var request = CreateRequest(
+            HttpMethod.Post,
+            PublishRoute(decodedScopeId),
+            scopeClaims: decodedScopeId);
+        request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-v14\"");
+
+        using var response = await host.Client.SendAsync(request);
+
+        var expectedExternalUrl = EncodedManagementRoute(decodedScopeId);
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.OriginalString.Should().Be(expectedExternalUrl);
+        using var json = await ReadJsonAsync(response);
+        json.RootElement.GetProperty("resourceUrl").GetString().Should().Be(expectedExternalUrl);
+        var call = host.CommandService.PublishCalls.Should().ContainSingle().Which;
+        call.Caller.ScopeId.Should().Be(decodedScopeId);
+        call.ProfileSlug.Should().Be(ProfileSlug);
+    }
+
+    [Fact]
+    public async Task ReviewEncodedScope_ExternallyEncodedReceipt_ShouldStillFailClosed()
+    {
+        const string decodedScopeId = "scope?alpha";
+        await using var host = await EndpointTestHost.StartAsync();
+        host.CommandService.Receipt = host.CommandService.Receipt with
+        {
+            ResourceUrl = EncodedManagementRoute(decodedScopeId),
+        };
+        using var request = CreateRequest(
+            HttpMethod.Post,
+            PublishRoute(decodedScopeId),
+            scopeClaims: decodedScopeId);
+        request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-v14\"");
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        response.Headers.Location.Should().BeNull();
+        (await response.Content.ReadAsStringAsync()).Should()
+            .Contain("AGENT_PROFILE_DISPATCH_REJECTED");
+        host.TotalServiceCalls.Should().Be(1);
+    }
+
+    [Theory]
     [InlineData(FailureKind.Request, HttpStatusCode.BadRequest)]
     [InlineData(FailureKind.NotFound, HttpStatusCode.NotFound)]
     [InlineData(FailureKind.Stale, HttpStatusCode.PreconditionFailed)]
@@ -842,6 +980,15 @@ public sealed class AgentProfileEndpointsTests
         }
     }
 
+    public static IEnumerable<object[]> ReviewInvalidBodyTransportCases()
+    {
+        foreach (var routeKind in Enum.GetValues<BodyRouteKind>())
+        {
+            foreach (var transportKind in Enum.GetValues<InvalidBodyTransportKind>())
+                yield return [routeKind, transportKind];
+        }
+    }
+
     private static HttpRequestMessage MutationRequest(MutationKind kind)
     {
         var request = kind switch
@@ -897,6 +1044,55 @@ public sealed class AgentProfileEndpointsTests
             request.Headers.Add("Idempotency-Key", "create-alpha");
         else if (ifMatch is not null)
             request.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        return request;
+    }
+
+    private static HttpRequestMessage BodyTransportRequest(
+        BodyRouteKind routeKind,
+        InvalidBodyTransportKind transportKind,
+        string? scopeClaims = ScopeId,
+        bool includeIfMatch = true,
+        bool includeIdempotencyKey = true)
+    {
+        var request = routeKind switch
+        {
+            BodyRouteKind.Create => CreateRequest(
+                HttpMethod.Post,
+                CollectionRoute(),
+                scopeClaims: scopeClaims),
+            BodyRouteKind.Draft => CreateRequest(
+                HttpMethod.Put,
+                DraftRoute(),
+                scopeClaims: scopeClaims),
+            BodyRouteKind.Skill => CreateRequest(
+                HttpMethod.Put,
+                SkillRoute(),
+                scopeClaims: scopeClaims),
+            _ => throw new ArgumentOutOfRangeException(nameof(routeKind), routeKind, null),
+        };
+
+        if (transportKind != InvalidBodyTransportKind.AbsentBody)
+        {
+            var content = new ByteArrayContent(Encoding.UTF8.GetBytes(BodyNode(routeKind).ToJsonString()));
+            if (transportKind == InvalidBodyTransportKind.UnsupportedMediaType)
+                content.Headers.TryAddWithoutValidation("Content-Type", "text/plain");
+            else if (transportKind == InvalidBodyTransportKind.UnsupportedCharset)
+                content.Headers.TryAddWithoutValidation(
+                    "Content-Type",
+                    "application/json; charset=x-agent-profile-unsupported");
+            request.Content = content;
+        }
+
+        if (routeKind == BodyRouteKind.Create)
+        {
+            if (includeIdempotencyKey)
+                request.Headers.Add("Idempotency-Key", "create-alpha");
+        }
+        else if (includeIfMatch)
+        {
+            request.Headers.TryAddWithoutValidation("If-Match", "\"agent-profile-v14\"");
+        }
+
         return request;
     }
 
@@ -1129,11 +1325,19 @@ public sealed class AgentProfileEndpointsTests
     }
 
     private static string CollectionRoute() => $"/api/scopes/{ScopeId}/agent-profiles";
+    private static string CollectionRoute(string decodedScopeId) =>
+        $"/api/scopes/{Uri.EscapeDataString(decodedScopeId)}/agent-profiles";
     private static string ManagementRoute() => $"{CollectionRoute()}/{ProfileSlug}";
+    private static string ManagementRoute(string decodedScopeId) =>
+        $"/api/scopes/{decodedScopeId}/agent-profiles/{ProfileSlug}";
+    private static string EncodedManagementRoute(string decodedScopeId) =>
+        $"{CollectionRoute(decodedScopeId)}/{Uri.EscapeDataString(ProfileSlug)}";
     private static string DraftRoute() => $"{ManagementRoute()}/draft";
     private static string SkillRoute() => $"{DraftRoute()}/skills/binding-alpha";
     private static string ValidateRoute() => $"{ManagementRoute()}:validate";
     private static string PublishRoute() => $"{ManagementRoute()}:publish";
+    private static string PublishRoute(string decodedScopeId) =>
+        $"{EncodedManagementRoute(decodedScopeId)}:publish";
     private static string DiscoveryRoute() => $"/api/agent-profiles/{OwnerHandle}/{ProfileSlug}";
 
     public enum MutationKind
@@ -1156,6 +1360,14 @@ public sealed class AgentProfileEndpointsTests
     {
         Malformed,
         Unmapped,
+    }
+
+    public enum InvalidBodyTransportKind
+    {
+        AbsentBody,
+        NonemptyWithoutContentType,
+        UnsupportedMediaType,
+        UnsupportedCharset,
     }
 
     public enum FailureKind

@@ -1,8 +1,11 @@
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
@@ -50,7 +53,9 @@ public static class AgentProfileEndpoints
             return rejected;
         }
 
-        var request = await ReadRequestAsync<CreateAgentProfileHttpRequest>(http, ct);
+        var (request, bodyRejected) = await ReadRequestAsync<CreateAgentProfileHttpRequest>(http, ct);
+        if (bodyRejected is not null)
+            return bodyRejected;
         if (!AgentProfileHttpRequestMapper.TryMap(request, out var mappedRequest))
             return InvalidHttpBody();
 
@@ -114,7 +119,9 @@ public static class AgentProfileEndpoints
             return rejected;
         }
 
-        var request = await ReadRequestAsync<UpdateAgentProfileDraftHttpRequest>(http, ct);
+        var (request, bodyRejected) = await ReadRequestAsync<UpdateAgentProfileDraftHttpRequest>(http, ct);
+        if (bodyRejected is not null)
+            return bodyRejected;
         if (!AgentProfileHttpRequestMapper.TryMap(request, out var mappedRequest))
             return InvalidHttpBody();
 
@@ -155,7 +162,9 @@ public static class AgentProfileEndpoints
             return rejected;
         }
 
-        var request = await ReadRequestAsync<AgentProfileSkillBindingHttpRequest>(http, ct);
+        var (request, bodyRejected) = await ReadRequestAsync<AgentProfileSkillBindingHttpRequest>(http, ct);
+        if (bodyRejected is not null)
+            return bodyRejected;
         if (!AgentProfileHttpRequestMapper.TryMap(request, out var mappedRequest))
             return InvalidHttpBody();
 
@@ -325,18 +334,49 @@ public static class AgentProfileEndpoints
             out rejected);
     }
 
-    private static async Task<T?> ReadRequestAsync<T>(
+    private static async Task<(T? Request, IResult? Rejected)> ReadRequestAsync<T>(
         HttpContext http,
         CancellationToken ct)
         where T : class
     {
+        var canHaveBody = http.Features.Get<IHttpRequestBodyDetectionFeature>()?.CanHaveBody ??
+            http.Request.ContentLength.GetValueOrDefault() > 0;
+        if (!canHaveBody || http.Request.ContentLength == 0)
+            return (null, InvalidHttpBody());
+
+        if (!HasSupportedJsonContentType(http.Request))
+            return (null, UnsupportedMediaType());
+
         try
         {
-            return await http.Request.ReadFromJsonAsync<T>(cancellationToken: ct);
+            return (await http.Request.ReadFromJsonAsync<T>(cancellationToken: ct), null);
         }
         catch (JsonException)
         {
-            return null;
+            return (null, InvalidHttpBody());
+        }
+    }
+
+    private static bool HasSupportedJsonContentType(HttpRequest request)
+    {
+        if (!request.HasJsonContentType() ||
+            !MediaTypeHeaderValue.TryParse(request.ContentType, out var mediaType))
+        {
+            return false;
+        }
+
+        var charset = mediaType.CharSet?.Trim('"');
+        if (string.IsNullOrEmpty(charset))
+            return true;
+
+        try
+        {
+            _ = Encoding.GetEncoding(charset);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
         }
     }
 
@@ -344,4 +384,9 @@ public static class AgentProfileEndpoints
         AgentProfileHttpResults.Error(
             StatusCodes.Status400BadRequest,
             "INVALID_AGENT_PROFILE_HTTP_BODY");
+
+    private static IResult UnsupportedMediaType() =>
+        AgentProfileHttpResults.Error(
+            StatusCodes.Status415UnsupportedMediaType,
+            "UNSUPPORTED_MEDIA_TYPE");
 }

@@ -13,7 +13,9 @@ internal static class AgentProfileHttpResults
         string profileSlug)
     {
         ArgumentNullException.ThrowIfNull(receipt);
-        var expectedResourceUrl = $"/api/scopes/{scopeId}/agent-profiles/{profileSlug}";
+        var expectedReceiptResourceUrl = $"/api/scopes/{scopeId}/agent-profiles/{profileSlug}";
+        var externalResourceUrl =
+            $"/api/scopes/{Uri.EscapeDataString(scopeId)}/agent-profiles/{Uri.EscapeDataString(profileSlug)}";
         if (!receipt.Accepted ||
             !string.Equals(receipt.AckStage, "accepted", StringComparison.Ordinal) ||
             string.IsNullOrWhiteSpace(receipt.OperationId) ||
@@ -21,7 +23,7 @@ internal static class AgentProfileHttpResults
             string.IsNullOrWhiteSpace(receipt.CorrelationId) ||
             string.IsNullOrWhiteSpace(receipt.ActorId) ||
             string.IsNullOrWhiteSpace(receipt.ProfileId) ||
-            !string.Equals(receipt.ResourceUrl, expectedResourceUrl, StringComparison.Ordinal))
+            !string.Equals(receipt.ResourceUrl, expectedReceiptResourceUrl, StringComparison.Ordinal))
         {
             return Error(
                 StatusCodes.Status503ServiceUnavailable,
@@ -29,7 +31,7 @@ internal static class AgentProfileHttpResults
         }
 
         return Results.Accepted(
-            expectedResourceUrl,
+            externalResourceUrl,
             new AgentProfileAcceptedHttpResponse(
                 receipt.Accepted,
                 receipt.AckStage,
@@ -38,7 +40,7 @@ internal static class AgentProfileHttpResults
                 receipt.CorrelationId,
                 receipt.ActorId,
                 receipt.ProfileId,
-                expectedResourceUrl));
+                externalResourceUrl));
     }
 
     public static IResult Management(
