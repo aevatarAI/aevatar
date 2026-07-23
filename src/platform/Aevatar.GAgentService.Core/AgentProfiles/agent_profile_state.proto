@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package aevatar.gagentservice.agentprofiles.state;
+
+option csharp_namespace = "Aevatar.GAgentService.Core.AgentProfiles";
+
+import "AgentProfiles/agent_profiles.proto";
+
+message AgentProfileOwnerHandleClaimState {
+  string owner_handle = 1;
+  aevatar.gagentservice.agentprofiles.AgentProfileOwnerIdentity owner = 2;
+}
+
+message AgentProfileNamespaceEntryState {
+  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+  string profile_actor_id = 2;
+  aevatar.gagentservice.agentprofiles.AgentProfileProvisioningStatus status = 3;
+  aevatar.gagentservice.agentprofiles.AgentProfileContent initial_content = 4;
+  aevatar.gagentservice.agentprofiles.AgentProfileSafeDiagnostic failure = 5;
+  aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 6;
+}
+
+message AgentProfileNamespaceOperationState {
+  aevatar.gagentservice.agentprofiles.AgentProfileOperationFact operation = 1;
+  string profile_id = 2;
+  string profile_actor_id = 3;
+  aevatar.gagentservice.agentprofiles.AgentProfileSafeDiagnostic diagnostic = 4;
+  aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 5;
+}
+
+message AgentProfileNamespaceState {
+  repeated AgentProfileOwnerHandleClaimState handle_claims = 1;
+  repeated AgentProfileNamespaceEntryState profiles = 2;
+  repeated AgentProfileNamespaceOperationState operations = 3;
+}
+
+message AgentProfileOperationState {
+  aevatar.gagentservice.agentprofiles.AgentProfileOperationFact operation = 1;
+  aevatar.gagentservice.agentprofiles.AgentProfileMutationOutcome outcome = 2;
+  aevatar.gagentservice.agentprofiles.AgentProfilePublishedSummary published_summary = 3;
+}
+
+message AgentProfileState {
+  aevatar.gagentservice.agentprofiles.AgentProfileIdentity identity = 1;
+  string namespace_actor_id = 2;
+  aevatar.gagentservice.agentprofiles.AgentProfileContent draft = 3;
+  int64 draft_revision = 4;
+  bytes draft_sha256 = 5;
+  aevatar.gagentservice.agentprofiles.AgentProfilePublishedSnapshot published = 6;
+  int64 published_revision = 7;
+  aevatar.gagentservice.agentprofiles.AgentProfileMutationOutcome last_mutation = 8;
+  repeated AgentProfileOperationState operations = 9;
+}

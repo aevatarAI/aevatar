@@ -12,6 +12,7 @@ using Aevatar.Foundation.Runtime.Callbacks;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.Foundation.Runtime.Streaming;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgentService.Core.GAgents;
@@ -39,6 +40,57 @@ internal static class GAgentServiceTestKit
             AppId = "app",
             Namespace = "default",
             ServiceId = serviceId,
+        };
+
+    public static AgentProfileIdentity CreateAgentProfileIdentity(
+        string profileId = "prof-alpha",
+        string ownerSubjectId = "owner-alpha",
+        string scopeId = "scope-alpha",
+        string ownerHandle = "alice",
+        string profileSlug = "assistant") =>
+        new()
+        {
+            ProfileId = profileId,
+            Owner = new AgentProfileOwnerIdentity
+            {
+                User = new AgentProfileUserOwnerIdentity
+                {
+                    IdentityProvider = AgentProfilePolicies.NyxIdIdentityProvider,
+                    SubjectId = ownerSubjectId,
+                },
+            },
+            OwningScopeId = scopeId,
+            Reference = new AgentProfileReference
+            {
+                OwnerHandle = ownerHandle,
+                ProfileSlug = profileSlug,
+            },
+        };
+
+    public static AgentProfileContent CreateAgentProfileContent(
+        string displayName = "Assistant",
+        string purpose = "Help with focused work",
+        string instructions = "Answer precisely.") =>
+        new()
+        {
+            DisplayName = displayName,
+            Purpose = purpose,
+            Instructions = instructions,
+            ToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.InheritRouteMaximum,
+            },
+        };
+
+    public static AgentProfileOperationFact CreateAgentProfileOperation(
+        string operationId,
+        ByteString inputSha256) =>
+        new()
+        {
+            OperationId = operationId,
+            CommandId = $"cmd-{operationId}",
+            CorrelationId = $"corr-{operationId}",
+            InputSha256 = inputSha256,
         };
 
     public static ServiceEndpointSpec CreateEndpointSpec(
@@ -391,6 +443,36 @@ internal sealed class RecordingActorDispatchPort : IActorDispatchPort
     {
         Calls.Add((actorId, envelope));
         return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+    }
+}
+
+internal sealed class RecordingProfileEventPublisher : IEventPublisher
+{
+    public List<(string TargetActorId, Google.Protobuf.WellKnownTypes.Any Payload)> Sends { get; } = [];
+
+    public Task PublishAsync<TEvent>(
+        TEvent evt,
+        TopologyAudience audience = TopologyAudience.Children,
+        CancellationToken ct = default,
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : IMessage
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task SendToAsync<TEvent>(
+        string targetActorId,
+        TEvent evt,
+        CancellationToken ct = default,
+        EventEnvelope? sourceEnvelope = null,
+        EventEnvelopePublishOptions? options = null)
+        where TEvent : IMessage
+    {
+        ct.ThrowIfCancellationRequested();
+        Sends.Add((targetActorId, Google.Protobuf.WellKnownTypes.Any.Pack(evt)));
+        return Task.CompletedTask;
     }
 }
 

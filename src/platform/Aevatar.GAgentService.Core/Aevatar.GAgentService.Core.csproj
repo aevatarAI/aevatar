@@ -22,6 +22,9 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Protobuf Include="AgentProfiles/agent_profile_state.proto"
+              GrpcServices="None"
+              AdditionalImportDirs="..\Aevatar.GAgentService.Abstractions\Protos" />
     <Protobuf Include="Schedules/scheduled_dispatch_state.proto"
               GrpcServices="None"
               AdditionalImportDirs="..\..\Aevatar.Foundation.Abstractions;..\Aevatar.GAgentService.Abstractions\Protos" />
