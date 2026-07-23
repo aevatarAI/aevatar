@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -54,6 +55,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ArgumentNullException.ThrowIfNull(dispatch);
         ArgumentNullException.ThrowIfNull(dispatch.Request);
         ValidateAuthorizationFact(dispatch);
+        ValidateWorkflowAgentKeyIntegrity(dispatch);
 
         var prepared = await BuildInvocationRequestAsync(dispatch, ct);
         try
@@ -143,6 +145,76 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         !disclosure.DedicatedToSchedule ||
         !disclosure.SecretManagedByAevatar ||
         disclosure.BrowserReceivesRawKey;
+
+    private static void ValidateWorkflowAgentKeyIntegrity(
+        ScheduledServiceInvocationDispatchRequest dispatch)
+    {
+        if (!dispatch.ProjectNyxIdAccessTokenToWorkflowCallerCredential ||
+            dispatch.Auth?.Source is not ScheduledInvocationAgentKeyCredentialReference)
+        {
+            return;
+        }
+
+        var authority = dispatch.Auth.CallerAuthority;
+        if (authority == null ||
+            !IsCanonicalAuthorityValue(authority.Platform) ||
+            !IsCanonicalAuthorityValue(authority.ExternalUserId) ||
+            !IsCanonicalAuthorityValue(authority.Scope) ||
+            !IsCanonicalAuthorityValue(authority.BindingId))
+        {
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.CallerAuthorityInvalid,
+                "Scheduled workflow Agent Key caller authority is missing or malformed.");
+        }
+
+        ValidateOwnerLLMSelectionAndPayload(dispatch.Request, dispatch.AuthorizationFact!);
+    }
+
+    private static bool IsCanonicalAuthorityValue(string? value) =>
+        !string.IsNullOrEmpty(value) && string.Equals(value, value.Trim(), StringComparison.Ordinal);
+
+    private static void ValidateOwnerLLMSelectionAndPayload(
+        ServiceInvocationRequest request,
+        ScheduledInvocationAuthorizationFact fact)
+    {
+        var chatRequest = new ChatRequestEvent();
+        var hasChatPayload = request.Payload?.TryUnpack(out chatRequest) == true;
+        var control = hasChatPayload ? chatRequest?.LlmControl : null;
+        var route = control?.NyxIdRoutePreference ?? string.Empty;
+        var model = control?.ModelOverride ?? string.Empty;
+
+        if (fact.Authority.OwnerLlmStateVersion <= 0)
+        {
+            if (route.Length > 0 || model.Length > 0)
+                ThrowOwnerLLMPayloadMismatch();
+            return;
+        }
+
+        var selection = fact.OwnerLLMSelection;
+        if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(selection) ||
+            (selection!.RouteKind == ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService &&
+             !fact.ServiceGrants.Any(grant => string.Equals(
+                 grant.ServiceId,
+                 selection.NyxIdUserServiceId,
+                 StringComparison.Ordinal))))
+        {
+            throw new ScheduledServiceInvocationAuthorizationException(
+                ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMSelectionInvalid,
+                "Scheduled workflow owner LLM selection is missing or malformed.");
+        }
+
+        if (!hasChatPayload ||
+            !string.Equals(route, selection.RouteValue, StringComparison.Ordinal) ||
+            !string.Equals(model, selection.Model, StringComparison.Ordinal))
+        {
+            ThrowOwnerLLMPayloadMismatch();
+        }
+    }
+
+    private static void ThrowOwnerLLMPayloadMismatch() =>
+        throw new ScheduledServiceInvocationAuthorizationException(
+            ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMPayloadMismatch,
+            "Scheduled workflow owner LLM payload does not match the authorization fact.");
 
     private async Task<PreparedInvocationRequest> BuildInvocationRequestAsync(
         ScheduledServiceInvocationDispatchRequest dispatch,

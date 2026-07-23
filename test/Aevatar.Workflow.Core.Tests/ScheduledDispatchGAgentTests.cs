@@ -2993,15 +2993,29 @@ public sealed class ScheduledDispatchGAgentTests
             .Should().ContainSingle(x => x.EventType == TeamAutomationAuthorizationRequiredEvent.Descriptor.FullName);
     }
 
-    [Fact]
-    public async Task TeamAutomationAutomaticFire_WithInvalidAuthorizationFact_ShouldFailOccurrenceAndRequireAuthorization()
+    [Theory]
+    [InlineData(
+        ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid,
+        "authorization_fact_invalid")]
+    [InlineData(
+        ScheduledServiceInvocationAuthorizationFailureCode.CallerAuthorityInvalid,
+        "caller_authority_invalid")]
+    [InlineData(
+        ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMSelectionInvalid,
+        "owner_llm_selection_invalid")]
+    [InlineData(
+        ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMPayloadMismatch,
+        "owner_llm_payload_mismatch")]
+    public async Task TeamAutomationAutomaticFire_WithAuthorizationFailure_ShouldFailOccurrenceAndRequireAuthorization(
+        ScheduledServiceInvocationAuthorizationFailureCode failureCode,
+        string stableCode)
     {
         var eventStore = new TestEventStore();
         var scheduler = new RecordingRuntimeCallbackScheduler();
         var serviceDispatch = new RecordingScheduledServiceInvocationDispatchPort
         {
             DispatchException = new ScheduledServiceInvocationAuthorizationException(
-                ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid,
+                failureCode,
                 "expired authorization detail must not become product state"),
         };
         var agent = CreateAgent(
@@ -3023,10 +3037,10 @@ public sealed class ScheduledDispatchGAgentTests
 
         agent.State.TeamAutomationLifecycleStatus.Should()
             .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
-        agent.State.LastAuthorizationErrorCode.Should().Be("authorization_fact_invalid");
+        agent.State.LastAuthorizationErrorCode.Should().Be(stableCode);
         var idempotencyKey = ScheduledDispatchCalculator.BuildIdempotencyKey("schedule-1", scheduledFireAt);
         agent.State.FireRecords[idempotencyKey].Status.Should().Be(ScheduledDispatchFireStatusState.Failed);
-        agent.State.FireRecords[idempotencyKey].Error.Should().Be("authorization_fact_invalid");
+        agent.State.FireRecords[idempotencyKey].Error.Should().Be(stableCode);
         agent.State.ToString().Should().NotContain("expired authorization detail");
         serviceDispatch.Requests.Should().ContainSingle();
         agent.State.NextFireAt.Should().BeNull();
