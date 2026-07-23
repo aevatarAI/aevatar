@@ -134,6 +134,32 @@ public sealed class AgentProfileQueryApplicationServiceTests
         managementPort.ProfileIds.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(PublishedDisplayFact.DisplayName)]
+    [InlineData(PublishedDisplayFact.Purpose)]
+    public async Task ResolveVisibleAsync_DriftedPublishedDisplayFact_ShouldReportUnavailable(
+        PublishedDisplayFact driftedFact)
+    {
+        var entry = UserEntry();
+        var summary = entry.PublishedSummary!;
+        if (driftedFact == PublishedDisplayFact.DisplayName)
+            summary.DisplayName = "Forged display name";
+        else
+            summary.Purpose = "Forged purpose";
+        entry = entry with { PublishedSummary = summary };
+        var service = new AgentProfileQueryApplicationService(
+            new RecordingNamespaceQueryPort { ReferenceResult = entry },
+            new RecordingManagementQueryPort(),
+            new RecordingExecutionQueryPort { Result = Execution() });
+
+        var result = await service.ResolveVisibleAsync(Caller(), Reference());
+
+        result.Should().NotBeNull();
+        result!.DisplayName.Should().Be(summary.DisplayName);
+        result.Purpose.Should().Be(summary.Purpose);
+        result.Available.Should().BeFalse();
+    }
+
     [Fact]
     public async Task ResolveVisibleAsync_MissingOrLaggingExecutionSnapshot_ShouldReportUnavailable()
     {
@@ -494,6 +520,12 @@ public sealed class AgentProfileQueryApplicationServiceTests
         Missing,
         Inactive,
         Unpublished,
+    }
+
+    public enum PublishedDisplayFact
+    {
+        DisplayName,
+        Purpose,
     }
 
     private sealed class RecordingNamespaceQueryPort : IAgentProfileNamespaceQueryPort

@@ -103,8 +103,18 @@ public sealed class AgentProfileQueryApplicationService : IAgentProfileQueryServ
 
         try
         {
-            return snapshot.SnapshotSha256.Equals(
-                AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot));
+            var normalizedSummary = AgentProfileDeterminism.NormalizePublishedSummary(summary);
+            var normalizedSnapshot = AgentProfileDeterminism.NormalizePublishedSnapshot(snapshot);
+            return string.Equals(
+                    normalizedSummary.DisplayName,
+                    normalizedSnapshot.DisplayName,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    normalizedSummary.Purpose,
+                    normalizedSnapshot.Purpose,
+                    StringComparison.Ordinal) &&
+                normalizedSnapshot.SnapshotSha256.Equals(
+                    AgentProfileDeterminism.ComputeExecutionSnapshotSha256(normalizedSnapshot));
         }
         catch (AgentProfileContractValidationException)
         {
