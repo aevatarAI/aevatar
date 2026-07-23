@@ -979,8 +979,14 @@ const zhCNMessages = {
   'pages.runs.memberPublishedRuns.timeline': '时间线',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     '你可以在这里搭建或编辑 Workflow YAML。保存时会创建可恢复的 Workflow 草稿，直到成员关联完成物化。',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     '这个成员还没有关联 Workflow 草稿。',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': '关闭',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': '草稿运行控制台',
   'teamMemberWorkflowStudio.executionPanel.duration': '耗时',

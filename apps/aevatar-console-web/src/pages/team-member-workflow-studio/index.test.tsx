@@ -1696,6 +1696,121 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.listWorkflows).not.toHaveBeenCalled();
   });
 
+  it("recovers the draft workflow id from the member read model when Invoke opens Studio without a query hint", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-alpha",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+      lastBinding: {
+        boundAt: "2026-06-08T00:00:00Z",
+        implementationKind: "workflow",
+        publishedServiceId: "svc-alpha",
+        revisionId: "rev-alpha",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Workflow Alpha",
+      workflowId: "wf-alpha",
+      yaml: "name: Workflow Alpha\nsteps: []\n",
+      document: mockWorkflowDocument,
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    expect(await screen.findByDisplayValue("Workflow Alpha")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("m-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("svc-alpha", "scope-1");
+    expect(studioApi.getPublishedWorkflow).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText("No workflow draft is linked to this member yet."),
+    ).toBeNull();
+  });
+
+  it("distinguishes draft load failure from a missing member draft link", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Workflow Alpha",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-alpha",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+      lastBinding: {
+        boundAt: "2026-06-08T00:00:00Z",
+        implementationKind: "workflow",
+        publishedServiceId: "svc-alpha",
+        revisionId: "rev-alpha",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockRejectedValue(
+      new StudioApiError("Draft read model unavailable.", 503),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    expect(
+      await screen.findByText("Workflow draft could not be loaded."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Studio resolved draft workflow wf-alpha, but loading it failed: Draft read model unavailable.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("No workflow draft is linked to this member yet."),
+    ).toBeNull();
+    expect(studioApi.getWorkflow).toHaveBeenCalledWith("wf-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("m-alpha", "scope-1");
+    expect(studioApi.getWorkflow).not.toHaveBeenCalledWith("svc-alpha", "scope-1");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
   it("opens recurring work for a published member without passing workflow or service identities", async () => {
     window.history.replaceState(
       {},
@@ -5859,7 +5974,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();
   });
 
-  it("does not recover a workflow draft from published service or revision facts", async () => {
+  it("does not recover a workflow draft from published service or revision facts when the member read model omits the draft link", async () => {
     window.history.replaceState(
       {},
       "",
@@ -5868,7 +5983,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     (studioApi.getMember as jest.Mock).mockResolvedValue({
       implementationRef: {
         implementationKind: "workflow",
-        workflowId: "workflow-from-member-detail",
+        workflowId: "",
         workflowRevision: "rev-alpha",
       },
       summary: {
@@ -5900,6 +6015,12 @@ describe("TeamMemberWorkflowStudioPage", () => {
         "No workflow draft is linked to this member yet.",
       ),
     ).not.toHaveLength(0);
+    expect(
+      screen.getByText(
+        "This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(studioApi.getWorkflow).not.toHaveBeenCalled();
     expect(studioApi.listWorkflows).not.toHaveBeenCalled();
     expect(scopeRuntimeApi.listServices).not.toHaveBeenCalled();
