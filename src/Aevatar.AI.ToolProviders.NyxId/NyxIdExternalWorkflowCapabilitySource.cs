@@ -5,6 +5,8 @@ using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
@@ -20,17 +22,20 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     private readonly NyxIdToolOptions _options;
     private readonly TimeProvider _timeProvider;
     private readonly INyxIdAuthorizationCatalogQueryPort? _catalogQueryPort;
+    private readonly ILogger<NyxIdExternalWorkflowCapabilitySource> _logger;
 
     public NyxIdExternalWorkflowCapabilitySource(
         NyxIdApiClient client,
         NyxIdToolOptions options,
         TimeProvider? timeProvider = null,
-        INyxIdAuthorizationCatalogQueryPort? catalogQueryPort = null)
+        INyxIdAuthorizationCatalogQueryPort? catalogQueryPort = null,
+        ILogger<NyxIdExternalWorkflowCapabilitySource>? logger = null)
     {
         _client = client;
         _options = options;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _catalogQueryPort = catalogQueryPort;
+        _logger = logger ?? NullLogger<NyxIdExternalWorkflowCapabilitySource>.Instance;
     }
 
     public ExternalWorkflowCapabilityRef.CapabilityOneofCase CapabilityKind =>
@@ -89,6 +94,17 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
 
         var snapshot = await ReadServicesAsync(access, cancellationToken);
         var selected = capability.NyxIdUserService;
+        _logger.LogInformation(
+            "NyxID workflow capability readiness inspection started. executionMode={ExecutionMode}, callerIdPresent={CallerIdPresent}, selectedUserServiceIdPresent={SelectedUserServiceIdPresent}, selectedServiceSlug={SelectedServiceSlug}, selectedOperationId={SelectedOperationId}, selectedHttpMethod={SelectedHttpMethod}, serviceCount={ServiceCount}, accessDenied={AccessDenied}, sourceUnavailable={SourceUnavailable}",
+            executionMode,
+            !string.IsNullOrWhiteSpace(access.CallerId),
+            !string.IsNullOrWhiteSpace(selected.UserServiceId),
+            selected.ServiceSlugSnapshot,
+            selected.OperationId,
+            selected.HttpMethod,
+            snapshot.Services.Count,
+            snapshot.AccessDenied,
+            snapshot.SourceUnavailable);
         if (string.IsNullOrWhiteSpace(selected.UserServiceId))
         {
             var matches = snapshot.Services.Count(service =>
@@ -96,6 +112,13 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                     service.ServiceSlug,
                     selected.ServiceSlugSnapshot,
                     StringComparison.OrdinalIgnoreCase));
+            _logger.LogInformation(
+                "NyxID workflow capability exact service selection required. executionMode={ExecutionMode}, selectedServiceSlug={SelectedServiceSlug}, selectedOperationId={SelectedOperationId}, matchingServiceCount={MatchingServiceCount}, visibleServiceCount={VisibleServiceCount}",
+                executionMode,
+                selected.ServiceSlugSnapshot,
+                selected.OperationId,
+                matches,
+                snapshot.Services.Count);
             if (matches == 0)
             {
                 var sourceFailure = BuildSnapshotFailure(capability, executionMode, snapshot);
@@ -241,6 +264,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 cancellationToken);
             if (durableReadiness.Status != ExternalCapabilityReadinessStatus.Ready)
             {
+                _logger.LogInformation(
+                    "NyxID workflow capability durable authorization inspection blocked. status={Status}, blockerCodes={BlockerCodes}, selectedUserServiceId={SelectedUserServiceId}, selectedOperationId={SelectedOperationId}",
+                    durableReadiness.Status,
+                    FormatBlockerCodes(durableReadiness.Blockers),
+                    selected.UserServiceId,
+                    selected.OperationId);
                 durableReadiness.Sources.Add(service.Source);
                 durableReadiness.Sources.Add(openApi.Source);
                 return durableReadiness;
@@ -257,6 +286,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         ready.Sources.Add(openApi.Source);
         if (durableReadiness is not null)
             ready.Sources.Add(durableReadiness.Sources);
+        _logger.LogInformation(
+            "NyxID workflow capability readiness inspection completed. executionMode={ExecutionMode}, selectedUserServiceId={SelectedUserServiceId}, selectedOperationId={SelectedOperationId}, status={Status}",
+            executionMode,
+            selected.UserServiceId,
+            selected.OperationId,
+            ready.Status);
         return ready;
     }
 
@@ -800,7 +835,29 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         });
         if (sources is not null)
             result.Sources.Add(sources.Select(static source => source.Clone()));
+        var selected = capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService
+            ? capability.NyxIdUserService
+            : null;
+        _logger.LogInformation(
+            "NyxID workflow capability readiness inspection blocked. executionMode={ExecutionMode}, status={Status}, code={Code}, selectedUserServiceId={SelectedUserServiceId}, selectedServiceSlug={SelectedServiceSlug}, selectedOperationId={SelectedOperationId}, remediation={Remediation}",
+            executionMode,
+            status,
+            code,
+            selected?.UserServiceId ?? string.Empty,
+            selected?.ServiceSlugSnapshot ?? string.Empty,
+            selected?.OperationId ?? string.Empty,
+            actionKind);
         return result;
+    }
+
+    private static string FormatBlockerCodes(IEnumerable<ExternalCapabilityBlocker> blockers)
+    {
+        var codes = blockers
+            .Select(static blocker => blocker.Code?.Trim())
+            .Where(static code => !string.IsNullOrWhiteSpace(code))
+            .OrderBy(static code => code, StringComparer.Ordinal)
+            .ToArray();
+        return codes.Length == 0 ? "<none>" : string.Join(",", codes);
     }
 
     private string TrustedLocator() =>
