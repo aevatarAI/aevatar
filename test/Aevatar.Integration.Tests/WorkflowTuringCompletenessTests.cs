@@ -1,9 +1,23 @@
+using System.Net;
+using System.Text;
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Integration.AI;
+using Aevatar.Workflow.Presentation.AGUIAdapter;
+using Aevatar.Workflow.Projection;
+using Aevatar.Workflow.Projection.Projectors;
+using Aevatar.Workflow.Projection.ReadModels;
 using Aevatar.Workflow.Core.Validation;
 using FluentAssertions;
 using Google.Protobuf;
@@ -11,12 +25,13 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using WorkflowCallerCredential = Aevatar.Workflow.Abstractions.WorkflowCallerCredential;
 
 namespace Aevatar.Integration.Tests;
 
 [Trait("Category", "Integration")]
 [Trait("Feature", "WorkflowTuringCompleteness")]
-public sealed class WorkflowTuringCompletenessTests
+public sealed class WorkflowTuringCompletenessTests : WorkflowGAgentTestBase
 {
     [Fact]
     public async Task IncDecJzProgram_ShouldTransferCounterValueInClosedWorldMode()
@@ -84,6 +99,113 @@ public sealed class WorkflowTuringCompletenessTests
         completed.Success.Should().BeFalse();
         completed.Error.Should().Contain("NYXID_PROXY_HTTP_503");
         completed.Error.Should().Contain("The service request failed.");
+    }
+
+    [Fact]
+    public async Task NyxIdMissingServiceId_ShouldRemainFailedThroughSchedulingProjectionAndSse()
+    {
+        const string arguments =
+            """{"slug":"home-assistant-q1000","path":"/q1000","method":"GET"}""";
+        var workflow = new WorkflowDefinition
+        {
+            Name = "nyxid_failure",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "call_service",
+                    Type = "tool_call",
+                    Next = "report_q1000",
+                    Parameters = new Dictionary<string, string>
+                    {
+                        ["tool"] = "nyxid_proxy",
+                        ["arguments"] = arguments,
+                    },
+                },
+                new StepDefinition
+                {
+                    Id = "report_q1000",
+                    Type = "transform",
+                },
+            ],
+        };
+        var requestHandler = new CountingHandler();
+        var nyxIdTool = new NyxIdProxyTool(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            new HttpClient(requestHandler)));
+        var adapter = new AgentWorkflowToolSourceAdapter([new SingleAgentToolSource(nyxIdTool)]);
+        var toolCallModule = new ToolCallModule([adapter], NullLogger<ToolCallModule>.Instance);
+        var requestedStepIds = new List<string>();
+
+        var completed = await ExecuteClosedWorldWorkflowAsync(
+            workflow,
+            maxTransitions: 16,
+            toolCallModule,
+            requestedStepIds,
+            new WorkflowCallerCredential { BearerToken = "user-token" });
+
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("NYXID_PROXY_SERVICE_ID_REQUIRED");
+        requestedStepIds.Should().ContainSingle().Which.Should().Be("call_service");
+        requestedStepIds.Should().NotContain("report_q1000");
+        requestHandler.RequestCount.Should().Be(0);
+
+        var committedPublisher = new RecordingEventPublisher();
+        var runAgent = CreateRunAgent();
+        SetAgentId(runAgent, "workflow-run-nyxid-failure");
+        runAgent.EventPublisher = committedPublisher;
+        runAgent.CommittedStateEventPublisher = committedPublisher;
+        await runAgent.BindWorkflowRunDefinitionAsync(
+            "definition-nyxid-failure",
+            """
+            name: nyxid_failure
+            steps:
+              - id: call_service
+                type: tool_call
+            """,
+            workflow.Name,
+            runId: completed.RunId);
+        await runAgent.HandleWorkflowCompleted(completed);
+
+        var committed = committedPublisher.Published
+            .Select(static publication => publication.evt)
+            .OfType<CommittedStateEventPublished>()
+            .Single(static publication =>
+                publication.StateEvent.EventData.Is(WorkflowCompletedEvent.Descriptor));
+        var committedEnvelope = new EventEnvelope
+        {
+            Id = committed.StateEvent.EventId,
+            Timestamp = committed.StateEvent.Timestamp?.Clone(),
+            Route = EnvelopeRouteSemantics.CreateObserverPublication(runAgent.Id),
+            Payload = Any.Pack(committed),
+        };
+
+        var reportStore = new RecordingReportStore();
+        var reportProjector = new WorkflowRunInsightReportArtifactProjector(
+            reportStore,
+            reportStore,
+            reportStore);
+        await reportProjector.ProjectAsync(
+            new WorkflowExecutionMaterializationContext
+            {
+                RootActorId = runAgent.Id,
+                ProjectionKind = "workflow-execution",
+            },
+            committedEnvelope);
+
+        reportStore.Document.Should().NotBeNull();
+        reportStore.Document!.CompletionStatus.Should().Be(WorkflowExecutionCompletionStatus.Failed);
+        reportStore.Document.Success.Should().BeFalse();
+
+        var sseFrames = new EventEnvelopeToWorkflowRunEventMapper(
+            [new WorkflowCompletedRunEventEnvelopeMappingHandler()])
+            .Map(committedEnvelope);
+
+        sseFrames.Should().ContainSingle();
+        sseFrames[0].EventCase.Should().Be(WorkflowRunEventEnvelope.EventOneofCase.RunError);
+        sseFrames.Should().NotContain(static frame =>
+            frame.EventCase == WorkflowRunEventEnvelope.EventOneofCase.RunFinished);
     }
 
     private static WorkflowDefinition BuildCounterTransferWorkflow() =>
@@ -287,7 +409,9 @@ public sealed class WorkflowTuringCompletenessTests
     private static async Task<WorkflowCompletedEvent> ExecuteClosedWorldWorkflowAsync(
         WorkflowDefinition workflow,
         int maxTransitions,
-        IEventModule<IWorkflowExecutionContext>? toolCallModule = null)
+        IEventModule<IWorkflowExecutionContext>? toolCallModule = null,
+        ICollection<string>? requestedStepIds = null,
+        WorkflowCallerCredential? callerCredential = null)
     {
         var loop = new WorkflowLoopModule();
         loop.SetWorkflow(workflow);
@@ -305,6 +429,13 @@ public sealed class WorkflowTuringCompletenessTests
 
         var queue = new Queue<IMessage>();
         var workflowRunAgent = new TestWorkflowRunAgent("workflow-turing-proof-agent", "proof-run");
+        if (callerCredential != null)
+        {
+            await workflowRunAgent.UpdateExecutionContextAsync(new WorkflowRunExecutionContextDelta
+            {
+                CallerCredential = callerCredential,
+            });
+        }
         queue.Enqueue(new StartWorkflowEvent
         {
             RunId = "proof-run",
@@ -332,6 +463,7 @@ public sealed class WorkflowTuringCompletenessTests
                         break;
                     case StepRequestEvent request:
                     {
+                        requestedStepIds?.Add(request.StepId);
                         var completedStep = await ExecuteStepAsync(request, modules, workflowRunAgent);
                         queue.Enqueue(completedStep);
                         break;
@@ -392,6 +524,73 @@ public sealed class WorkflowTuringCompletenessTests
         }
     }
 
+    private sealed class SingleAgentToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+        }
+    }
+
+    private sealed class CountingHandler : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestCount++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    private sealed class RecordingReportStore :
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>,
+        IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>,
+        IProjectionGraphWriter<WorkflowRunInsightReportDocument>
+    {
+        public WorkflowRunInsightReportDocument? Document { get; private set; }
+
+        public Task<WorkflowRunInsightReportDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Document);
+        }
+
+        public Task<ProjectionDocumentQueryResult<WorkflowRunInsightReportDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException("This regression reads a single projected run by id.");
+
+        public Task<ProjectionWriteResult> UpsertAsync(
+            WorkflowRunInsightReportDocument readModel,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Document = readModel.Clone();
+            return Task.FromResult(ProjectionWriteResult.Applied());
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            throw new NotSupportedException("This regression does not delete projected runs.");
+
+        Task IProjectionGraphWriter<WorkflowRunInsightReportDocument>.UpsertAsync(
+            WorkflowRunInsightReportDocument readModel,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class SingleToolSource(IWorkflowTool tool) : IWorkflowToolSource
     {
         public Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
@@ -400,5 +599,4 @@ public sealed class WorkflowTuringCompletenessTests
             return Task.FromResult<IReadOnlyList<IWorkflowTool>>([tool]);
         }
     }
-
 }
