@@ -217,6 +217,22 @@ describe("NyxID relay owner LLM selection", () => {
     expect(document.body).toHaveTextContent("保存失败");
   });
 
+  it("treats a 2xx receipt without accepted true as failed", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: false }))
+      .mockResolvedValueOnce(fetchResponse(200, relaySettings("us-beta")));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(hooks.state.llmSaved).toBe(false);
+    expect(hooks.state.llmSaveState).toBe("failed");
+  });
+
   it("keeps an accepted service intent pending until exact identity is observed", async () => {
     const hooks = loadRelayHooks();
     configureDraft(hooks);
@@ -239,10 +255,16 @@ describe("NyxID relay owner LLM selection", () => {
   it("claims saved only after the exact service ID is observed", async () => {
     const hooks = loadRelayHooks();
     configureDraft(hooks);
+    hooks.state.llmSel.model = "  gpt-new  ";
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
-      .mockResolvedValueOnce(fetchResponse(200, relaySettings("us-beta")));
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...relaySettings("us-beta"),
+          defaultModel: "gpt-new",
+        }),
+      );
     global.fetch = fetchMock as typeof global.fetch;
 
     await hooks.saveLlm();
@@ -253,8 +275,45 @@ describe("NyxID relay owner LLM selection", () => {
     expect(document.body).toHaveTextContent("已保存 ✓");
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       userServiceId: "us-beta",
-      model: "gpt-shared",
+      model: "gpt-new",
     });
+  });
+
+  it("keeps an exact service accepted while its old model is still observed", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    hooks.state.llmSel.model = "gpt-new";
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...relaySettings("us-beta"),
+          defaultModel: "gpt-old",
+        }),
+      );
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(hooks.state.llmSaved).toBe(false);
+    expect(hooks.state.llmSaveState).toBe("accepted");
+  });
+
+  it("does not guess a service default model when the save omits model", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    hooks.state.llmSel.model = null;
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(fetchResponse(200, relaySettings("us-beta")));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(hooks.state.llmSaved).toBe(false);
+    expect(hooks.state.llmSaveState).toBe("accepted");
   });
 
   it("observes Gateway only through typed kind and the canonical route", async () => {
@@ -275,5 +334,90 @@ describe("NyxID relay owner LLM selection", () => {
       routeValue: gatewayRoute,
       model: null,
     });
+  });
+
+  it("keeps Gateway accepted while an explicit model change is stale", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks, relaySettings("us-alpha"));
+    hooks.state.llmSel = { value: "gateway", model: "gpt-new" };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...relaySettings(null, "gateway"),
+          defaultModel: "gpt-old",
+        }),
+      );
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(hooks.state.llmSaved).toBe(false);
+    expect(hooks.state.llmSaveState).toBe("accepted");
+  });
+
+  it("observes Gateway after its explicit normalized model is visible", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks, relaySettings("us-alpha"));
+    hooks.state.llmSel = { value: "gateway", model: "  gpt-new  " };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...relaySettings(null, "gateway"),
+          defaultModel: "gpt-new",
+        }),
+      );
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(hooks.state.llmSaved).toBe(true);
+    expect(hooks.state.llmSaveState).toBe("observed");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      routeValue: gatewayRoute,
+      model: "gpt-new",
+    });
+  });
+
+  it("preserves the observed model on initial load and defaults only after a service switch", () => {
+    const hooks = loadRelayHooks();
+    const betaRoute = "/api/v1/proxy/s/beta-openai";
+    const settings = {
+      ...relaySettings("us-alpha"),
+      defaultModel: "gpt-saved",
+      routeOptions: relaySettings("us-alpha").routeOptions.map((option) =>
+        option.userServiceId === "us-beta"
+          ? { ...option, routeValue: betaRoute }
+          : option,
+      ),
+      modelGroupsByRoute: [
+        {
+          routeValue: sharedRoute,
+          groupId: "shared-openai",
+          label: "Shared OpenAI",
+          models: ["gpt-first", "gpt-saved"],
+        },
+        {
+          routeValue: betaRoute,
+          groupId: "beta-openai",
+          label: "Beta OpenAI",
+          models: ["beta-first"],
+        },
+      ],
+    };
+    hooks.state.llm = settings;
+    hooks.state.llmSel = { value: null, model: null };
+
+    renderStep(hooks);
+
+    expect(hooks.state.llmSel.model).toBe("gpt-saved");
+
+    hooks.state.llmSel = { value: "user-service:us-beta", model: null };
+    renderStep(hooks);
+
+    expect(hooks.state.llmSel.model).toBe("beta-first");
   });
 });

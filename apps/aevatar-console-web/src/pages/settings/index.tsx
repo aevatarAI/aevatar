@@ -76,6 +76,23 @@ type SettingsDraft = {
   readonly preferredLlmSelection: UserLlmSelectionDraft | undefined;
 };
 
+type PendingSettingsSave = {
+  readonly revision: number;
+  readonly target: SettingsDraft;
+};
+
+type SettingsDraftState = {
+  readonly baseline: SettingsDraft;
+  readonly pendingSave: PendingSettingsSave | null;
+  readonly revision: number;
+  readonly value: SettingsDraft;
+};
+
+type SettingsSaveRequest = {
+  readonly draft: SettingsDraft;
+  readonly revision: number;
+};
+
 type ScopeChipProps = {
   readonly icon: React.ReactNode;
   readonly label: string;
@@ -437,24 +454,70 @@ const SettingsPage: React.FC = () => {
     () => normalizeUserConfigDraft(userLlmSettingsQuery.data),
     [userLlmSettingsQuery.data],
   );
-  const [draft, setDraft] = React.useState<SettingsDraft>(loadedDraft);
-  const [draftTouched, setDraftTouched] = React.useState(false);
+  const [draftState, setDraftState] = React.useState<SettingsDraftState>(() => ({
+    baseline: loadedDraft,
+    pendingSave: null,
+    revision: 0,
+    value: loadedDraft,
+  }));
+  const draft = draftState.value;
+  const pendingSave = draftState.pendingSave;
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const draftDirty = React.useMemo(
-    () => draftTouched && !draftsEqual(draft, loadedDraft),
-    [draft, draftTouched, loadedDraft],
+    () => !draftsEqual(draft, draftState.baseline),
+    [draft, draftState.baseline],
   );
 
   React.useEffect(() => {
-    if (!userLlmSettingsQuery.isSuccess || draftTouched) {
+    if (!userLlmSettingsQuery.isSuccess) {
       return;
     }
 
-    setDraft(loadedDraft);
-  }, [draftTouched, loadedDraft, userLlmSettingsQuery.isSuccess]);
+    setDraftState((current) => {
+      const currentPending = current.pendingSave;
+      if (currentPending && draftsEqual(currentPending.target, loadedDraft)) {
+        const hasNewerEdit =
+          current.revision !== currentPending.revision ||
+          !draftsEqual(current.value, currentPending.target);
+        return hasNewerEdit
+          ? {
+              ...current,
+              baseline: loadedDraft,
+              pendingSave: null,
+            }
+          : {
+              ...current,
+              baseline: loadedDraft,
+              pendingSave: null,
+              value: loadedDraft,
+            };
+      }
+
+      if (draftsEqual(current.value, current.baseline)) {
+        return draftsEqual(current.value, loadedDraft) &&
+          draftsEqual(current.baseline, loadedDraft)
+          ? current
+          : {
+              ...current,
+              baseline: loadedDraft,
+              value: loadedDraft,
+            };
+      }
+
+      if (!current.pendingSave && draftsEqual(current.value, loadedDraft)) {
+        return {
+          ...current,
+          baseline: loadedDraft,
+          value: loadedDraft,
+        };
+      }
+
+      return current;
+    });
+  }, [loadedDraft, pendingSave, userLlmSettingsQuery.isSuccess]);
 
   const saveMutation = useMutation({
-    mutationFn: async (nextDraft: SettingsDraft) => {
+    mutationFn: async ({ draft: nextDraft }: SettingsSaveRequest) => {
       const model = trimConversationValue(nextDraft.defaultModel) ?? "";
       const selection = nextDraft.preferredLlmSelection;
       if (!selection) {
@@ -466,7 +529,7 @@ const SettingsPage: React.FC = () => {
         );
       }
 
-      return selection.kind === "gateway"
+      const receipt = selection.kind === "gateway"
         ? studioApi.saveUserLlmSettings({
             routeValue: selection.routeValue,
             model,
@@ -475,15 +538,32 @@ const SettingsPage: React.FC = () => {
             userServiceId: selection.userServiceId,
             model,
           });
+      const observedReceipt = await receipt;
+      if (!observedReceipt.accepted) {
+        throw new Error(
+          t(
+            "pages.settings.index.save.not.accepted",
+            "The settings write was not accepted.",
+          ),
+        );
+      }
+
+      return observedReceipt;
     },
-    onSuccess: async () => {
+    onSuccess: async (_receipt, request) => {
       setSaveError(null);
+      setDraftState((current) => ({
+        ...current,
+        pendingSave: {
+          revision: request.revision,
+          target: request.draft,
+        },
+      }));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["settings", "user-llm-settings"] }),
         queryClient.invalidateQueries({ queryKey: ["studio-user-llm-settings"] }),
         queryClient.invalidateQueries({ queryKey: ["chat", "user-llm-settings"] }),
       ]);
-      setDraftTouched(false);
     },
     onError: (error) => {
       setSaveError(describeError(error, "Failed to save settings."));
@@ -621,13 +701,24 @@ const SettingsPage: React.FC = () => {
     userLlmSettingsQuery.data?.savedRouteKind === "nyx_id_user_service" &&
     !trimConversationValue(userLlmSettingsQuery.data.savedUserServiceId);
   const defaultModelPlaceholder = React.useMemo(() => {
+    const routeLabel =
+      preferredRouteLabel ||
+      t("pages.settings.index.selected.route", "the selected route");
     if (modelOptions && modelOptions.length > 0) {
-      return `Search models for ${preferredRouteLabel || "the selected route"}`;
+      return t(
+        "pages.settings.index.model.search.for",
+        "Search models for {route}",
+        { route: routeLabel },
+      );
     }
 
     return preferredRouteLabel
-      ? `Type a model ID for ${preferredRouteLabel}`
-      : "Type a model ID";
+      ? t(
+          "pages.settings.index.model.type.for",
+          "Type a model ID for {route}",
+          { route: preferredRouteLabel },
+        )
+      : t("pages.settings.index.model.type", "Type a model ID");
   }, [modelOptions, preferredRouteLabel]);
   const summaryGridStyle = React.useMemo<React.CSSProperties>(
     () => ({
@@ -755,12 +846,19 @@ const SettingsPage: React.FC = () => {
   );
 
   const handleSave = React.useCallback(() => {
-    saveMutation.mutate(draft);
-  }, [draft, saveMutation]);
+    saveMutation.mutate({
+      draft,
+      revision: draftState.revision,
+    });
+  }, [draft, draftState.revision, saveMutation]);
 
   const handleReset = React.useCallback(() => {
-    setDraft(loadedDraft);
-    setDraftTouched(false);
+    setDraftState((current) => ({
+      ...current,
+      baseline: loadedDraft,
+      revision: current.revision + 1,
+      value: loadedDraft,
+    }));
     setSaveError(null);
   }, [loadedDraft]);
 
@@ -774,36 +872,38 @@ const SettingsPage: React.FC = () => {
         return;
       }
 
-      setDraftTouched(true);
-
       const nextRouteGroups = buildConversationModelGroups({
         effectiveRoute: nextSelection.routeValue,
         settings: userLlmSettingsQuery.data,
       });
-      const currentModel = trimConversationValue(draft.defaultModel);
-      const shouldClearModel =
-        Boolean(currentModel) &&
-        nextRouteGroups.length > 0 &&
-        !nextRouteGroups.some((group) => group.models.includes(currentModel!));
-
-      setDraft((currentDraft) => ({
-        ...currentDraft,
-        defaultModel: shouldClearModel ? "" : currentDraft.defaultModel,
-        preferredLlmSelection: nextSelection,
-      }));
+      setDraftState((current) => {
+        const currentModel = trimConversationValue(current.value.defaultModel);
+        const shouldClearModel =
+          Boolean(currentModel) &&
+          nextRouteGroups.length > 0 &&
+          !nextRouteGroups.some((group) => group.models.includes(currentModel!));
+        return {
+          ...current,
+          revision: current.revision + 1,
+          value: {
+            ...current.value,
+            defaultModel: shouldClearModel ? "" : current.value.defaultModel,
+            preferredLlmSelection: nextSelection,
+          },
+        };
+      });
     },
-    [
-      draft.defaultModel,
-      selectionOptions,
-      userLlmSettingsQuery.data,
-    ],
+    [selectionOptions, userLlmSettingsQuery.data],
   );
 
   const handleDefaultModelChange = React.useCallback((nextValue: unknown) => {
-    setDraftTouched(true);
-    setDraft((currentDraft) => ({
-      ...currentDraft,
-      defaultModel: String(nextValue || ""),
+    setDraftState((current) => ({
+      ...current,
+      revision: current.revision + 1,
+      value: {
+        ...current.value,
+        defaultModel: String(nextValue || ""),
+      },
     }));
   }, []);
 
@@ -926,6 +1026,17 @@ const SettingsPage: React.FC = () => {
               />
             ) : null}
 
+            {pendingSave ? (
+              <Alert
+                message={t(
+                  "pages.settings.index.save.accepted.awaiting.observation",
+                  "Save accepted. Waiting for the exact service and model to be observed.",
+                )}
+                showIcon
+                type="info"
+              />
+            ) : null}
+
             {catalogUnavailable ? (
               <Alert
                 action={
@@ -991,9 +1102,28 @@ const SettingsPage: React.FC = () => {
                           <Typography.Text strong>{t("pages.settings.index.preferred.route", "Preferred LLM service")}</Typography.Text>
                           <FieldMetaPill
                             label={
-                              routeFallbackActive ? "Fallback active" : "In sync"
+                              pendingSave
+                                ? t(
+                                    "pages.settings.index.save.pending",
+                                    "Save pending",
+                                  )
+                                : routeFallbackActive
+                                  ? t(
+                                      "pages.settings.index.fallback.active",
+                                      "Fallback active",
+                                    )
+                                  : t(
+                                      "pages.settings.index.in.sync",
+                                      "In sync",
+                                    )
                             }
-                            tone={routeFallbackActive ? "warning" : "success"}
+                            tone={
+                              pendingSave
+                                ? "info"
+                                : routeFallbackActive
+                                  ? "warning"
+                                  : "success"
+                            }
                           />
                         </div>
                         <Typography.Text type="secondary">
@@ -1245,6 +1375,7 @@ const SettingsPage: React.FC = () => {
       providerDisplayList,
       readyProviderCount,
       routeFallbackActive,
+      pendingSave,
       handleDefaultModelChange,
       handlePreferredServiceChange,
       isCatalogOptionSelected,

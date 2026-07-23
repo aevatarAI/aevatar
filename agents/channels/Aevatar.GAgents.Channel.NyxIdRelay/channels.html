@@ -425,14 +425,28 @@ function savedLlmSelectionValue(llm){
   const userServiceId=String(llm.savedUserServiceId||"").trim();
   return userServiceId ? llmServiceSelectionValue(userServiceId) : null;
 }
-function llmSelectionObserved(option,llm){
+function normalizeLlmModel(value){
+  return String(value==null?"":value).trim();
+}
+function expectedLlmModel(option,requestedModel,llm){
+  const explicitModel=normalizeLlmModel(requestedModel);
+  if(explicitModel) return { known:true, value:explicitModel };
+  return option.kind==="gateway"
+    ? { known:true, value:normalizeLlmModel(llm && llm.defaultModel) }
+    : { known:false, value:"" };
+}
+function llmSelectionObserved(option,llm,expectedModel){
   if(!option || !llm) return false;
+  let identityObserved=false;
   if(option.kind==="gateway"){
-    return llm.savedRouteKind==="gateway" &&
+    identityObserved=llm.savedRouteKind==="gateway" &&
       String(llm.savedRoute||"").trim()===USER_LLM_GATEWAY_ROUTE;
+  } else {
+    identityObserved=llm.savedRouteKind==="nyx_id_user_service" &&
+      String(llm.savedUserServiceId||"").trim()===option.userServiceId;
   }
-  return llm.savedRouteKind==="nyx_id_user_service" &&
-    String(llm.savedUserServiceId||"").trim()===option.userServiceId;
+  return identityObserved && expectedModel.known &&
+    normalizeLlmModel(llm.defaultModel)===expectedModel.value;
 }
 
 /* Lark Tier-1 minimum scopes (skill §7 — the #1 silent-bot fix). */
@@ -877,13 +891,17 @@ async function saveLlm(){
   if(!option) return;
   state.llmSaveState="saving"; state.llmSaveError=null; state.llmSaved=false; render();
   try {
+    const requestedModel=normalizeLlmModel(state.llmSel.model);
+    state.llmSel.model=requestedModel;
+    const modelExpectation=expectedLlmModel(option,requestedModel,state.llm);
     const body=option.kind==="gateway"
-      ? { routeValue:USER_LLM_GATEWAY_ROUTE, model:state.llmSel.model||null }
-      : { userServiceId:option.userServiceId, model:state.llmSel.model||null };
+      ? { routeValue:USER_LLM_GATEWAY_ROUTE, model:requestedModel||null }
+      : { userServiceId:option.userServiceId, model:requestedModel||null };
     const result=await apiSend("/api/user-config/llm", "PUT", body);
-    if(!result.ok){
+    if(!result.ok || !result.data || result.data.accepted!==true){
       state.llmSaveState="failed";
-      state.llmSaveError=(result.data && (result.data.error||result.data.note)) || ("HTTP " + result.status);
+      state.llmSaveError=(result.data && (result.data.error||result.data.note)) ||
+        (result.ok ? "保存请求未被接受" : ("HTTP " + result.status));
       return;
     }
 
@@ -891,7 +909,7 @@ async function saveLlm(){
     const previousLlm=state.llm;
     const observedLlm=await loadLlm(true);
     if(!observedLlm && previousLlm) state.llm=previousLlm;
-    if(llmSelectionObserved(option,observedLlm)){
+    if(llmSelectionObserved(option,observedLlm,modelExpectation)){
       state.llmSaveState="observed";
       state.llmSaved=true;
     }
@@ -1379,7 +1397,11 @@ function renderStep4(){
 
   // Exact service identity drives persistence; route only scopes model choices.
   const selectionOpts = buildLlmSelectionOptions(llm);
-  if(state.llmSel.value==null) state.llmSel.value = savedLlmSelectionValue(llm);
+  const initializingSavedDraft=state.llmSel.value==null;
+  if(initializingSavedDraft){
+    state.llmSel.value = savedLlmSelectionValue(llm);
+    if(state.llmSel.model==null) state.llmSel.model=normalizeLlmModel(llm.defaultModel);
+  }
   const selectedOption = selectionOpts.find(option=>option.value===state.llmSel.value);
   if(!selectedOption) state.llmSel.value=null;
   const curRoute = selectedOption ? selectedOption.routeValue : String(llm.effectiveRoute||"").trim();
@@ -1398,7 +1420,11 @@ function renderStep4(){
   serviceSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.value=e.target.value; state.llmSel.model=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; render(); });
   grid.appendChild(serviceSel);
   // Always offer the genuine "(平台默认)" sentinel; append real models when the catalog has them.
-  const modelChoices = [{value:"",label:"（平台默认）"}].concat(liveModels.map(m=>({value:m,label:m})));
+  const currentModel=normalizeLlmModel(state.llmSel.model);
+  const currentModelChoice=currentModel && !liveModels.includes(currentModel)
+    ? [{value:currentModel,label:currentModel}]
+    : [];
+  const modelChoices = [{value:"",label:"（平台默认）"}].concat(currentModelChoice,liveModels.map(m=>({value:m,label:m})));
   const modelSel=selField("模型 model", modelChoices, state.llmSel.model);
   modelSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.model=e.target.value; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; render(); });
   grid.appendChild(modelSel);

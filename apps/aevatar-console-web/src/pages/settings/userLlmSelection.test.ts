@@ -108,4 +108,24 @@ describe("userLlmSelection", () => {
       routeValue: "/api/v1/llm/gateway/v1",
     });
   });
+
+  it("resolves an exact saved ID through its current inventory route", () => {
+    const settings = {
+      savedRoute: "/api/v1/proxy/s/shared-openai-old",
+      savedRouteKind: "nyx_id_user_service" as const,
+      savedUserServiceId: "us-alpha",
+      routeOptions: [
+        {
+          ...routeOptions[1],
+          routeValue: "/api/v1/proxy/s/shared-openai-current",
+        },
+      ],
+    };
+
+    expect(resolveSavedUserLlmSelection(settings)).toEqual({
+      kind: "nyx_id_user_service",
+      userServiceId: "us-alpha",
+      routeValue: "/api/v1/proxy/s/shared-openai-current",
+    });
+  });
 });
