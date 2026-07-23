@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using WorkflowProtocol = Aevatar.Workflow.Abstractions;
 
@@ -27,6 +28,7 @@ public static class WorkflowCallerCredentialExtractor
     public static ValueTask<WorkflowCallerCredentialExtractionResult> ExtractAsync(
         HttpContext? http,
         IExternalIdentityBindingQueryPort? bindingQueryPort,
+        ILogger? logger = null,
         CancellationToken ct = default)
     {
         var token = ExtractCredentialToken(http);
@@ -34,7 +36,7 @@ public static class WorkflowCallerCredentialExtractor
             return ValueTask.FromResult(Invalid());
         return token.RawToken == null
             ? ValueTask.FromResult(WorkflowCallerCredentialExtractionResult.Success(null))
-            : ParseCredentialAsync(token.RawToken, http, bindingQueryPort, ct);
+            : ParseCredentialAsync(token.RawToken, http, bindingQueryPort, logger, ct);
     }
 
     private static CallerCredentialTokenExtractionResult ExtractCredentialToken(HttpContext? http)
@@ -76,6 +78,7 @@ public static class WorkflowCallerCredentialExtractor
         string? rawToken,
         HttpContext? http,
         IExternalIdentityBindingQueryPort? bindingQueryPort,
+        ILogger? logger,
         CancellationToken ct)
     {
         var parsed = WorkflowProtocol.WorkflowCallerCredentialTokens.ParseOptional(rawToken);
@@ -84,7 +87,7 @@ public static class WorkflowCallerCredentialExtractor
             return WorkflowCallerCredentialExtractionResult.Success(
                 new WorkflowCallerCredential(
                     parsed.NormalizedBearerToken,
-                    await ResolveAuthenticatedNyxIdAuthorityAsync(http, bindingQueryPort, ct)));
+                    await ResolveAuthenticatedNyxIdAuthorityAsync(http, bindingQueryPort, logger, ct)));
         }
 
         return Invalid();
@@ -115,6 +118,7 @@ public static class WorkflowCallerCredentialExtractor
     private static async ValueTask<WorkflowCallerNyxIdAuthority?> ResolveAuthenticatedNyxIdAuthorityAsync(
         HttpContext? http,
         IExternalIdentityBindingQueryPort? bindingQueryPort,
+        ILogger? logger,
         CancellationToken ct)
     {
         var principal = http?.User;
@@ -132,7 +136,7 @@ public static class WorkflowCallerCredentialExtractor
             return null;
 
         const string tenant = "";
-        var bindingId = await ResolveBindingIdAsync(bindingQueryPort, externalUserId, tenant, ct);
+        var bindingId = await ResolveBindingIdAsync(bindingQueryPort, externalUserId, tenant, logger, ct);
         return new WorkflowCallerNyxIdAuthority(
             OwnerScope.NyxIdPlatform,
             tenant,
@@ -145,22 +149,40 @@ public static class WorkflowCallerCredentialExtractor
         IExternalIdentityBindingQueryPort? bindingQueryPort,
         string externalUserId,
         string tenant,
+        ILogger? logger,
         CancellationToken ct)
     {
         if (bindingQueryPort == null)
             return null;
 
-        var bindingId = await bindingQueryPort.ResolveAsync(
-            new ExternalSubjectRef
-            {
-                Platform = OwnerScope.NyxIdPlatform,
-                Tenant = tenant,
-                ExternalUserId = externalUserId,
-            },
-            ct);
-        return string.IsNullOrWhiteSpace(bindingId?.Value)
-            ? null
-            : bindingId.Value.Trim();
+        var subject = new ExternalSubjectRef
+        {
+            Platform = OwnerScope.NyxIdPlatform,
+            Tenant = tenant,
+            ExternalUserId = externalUserId,
+        };
+
+        try
+        {
+            var bindingId = await bindingQueryPort.ResolveAsync(subject, ct);
+            return string.IsNullOrWhiteSpace(bindingId?.Value)
+                ? null
+                : bindingId.Value.Trim();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Caller NyxID binding lookup failed; continuing workflow chat without verified sender binding. subject={Platform}:{Tenant}:{User}",
+                subject.Platform,
+                subject.Tenant,
+                subject.ExternalUserId);
+            return null;
+        }
     }
 
     private static string? ReadFirstClaim(ClaimsPrincipal principal, params string[] claimTypes)

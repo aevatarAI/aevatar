@@ -689,6 +689,50 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleChat_WhenBindingLookupFails_ShouldContinueWithoutBinding()
+    {
+        var capturedCommand = default(WorkflowChatRunRequest);
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (command, _, _, _) =>
+            {
+                capturedCommand = command;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.WorkflowBindingMismatch));
+            },
+        };
+        var bindingQueryPort = new ThrowingBindingQueryPort(new TimeoutException("binding read timeout"));
+        var http = CreateHttpContext("Bearer trusted-token");
+        http.RequestServices = CreateRequestServices(bindingQueryPort: bindingQueryPort);
+        http.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("uid", "nyx-user-from-uid"),
+        ], "test"));
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput { Prompt = "hello" },
+            interactionService,
+            CancellationToken.None);
+
+        capturedCommand.Should().NotBeNull();
+        capturedCommand!.CallerCredential!.BearerToken.Should().Be("trusted-token");
+        capturedCommand.CallerCredential.NyxIdAuthority.Should().BeEquivalentTo(
+            new Aevatar.Workflow.Application.Abstractions.Runs.WorkflowCallerNyxIdAuthority(
+                "nyxid",
+                string.Empty,
+                "nyx-user-from-uid",
+                "proxy"));
+        bindingQueryPort.Subject.Should().BeEquivalentTo(new ExternalSubjectRef
+        {
+            Platform = "nyxid",
+            Tenant = string.Empty,
+            ExternalUserId = "nyx-user-from-uid",
+        });
+    }
+
+    [Fact]
     public async Task HandleChat_ShouldUseDelegationCredentialAndAuthenticatedScope()
     {
         var capturedCommand = default(WorkflowChatRunRequest);
@@ -2559,6 +2603,24 @@ public sealed class ChatEndpointsInternalTests
         {
             Subject = externalSubject.Clone();
             return Task.FromResult(_bindingId);
+        }
+    }
+
+    private sealed class ThrowingBindingQueryPort : IExternalIdentityBindingQueryPort
+    {
+        private readonly Exception _exception;
+
+        public ThrowingBindingQueryPort(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public ExternalSubjectRef? Subject { get; private set; }
+
+        public Task<BindingId?> ResolveAsync(ExternalSubjectRef externalSubject, CancellationToken ct = default)
+        {
+            Subject = externalSubject.Clone();
+            throw _exception;
         }
     }
 

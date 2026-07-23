@@ -183,6 +183,7 @@ public static class WorkflowCapabilityEndpoints
             var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
                 http,
                 serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                logger,
                 ct);
             if (!callerCredential.Succeeded)
             {
@@ -287,6 +288,7 @@ public static class WorkflowCapabilityEndpoints
             var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
                 http,
                 serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                logger,
                 ct);
             if (!callerCredential.Succeeded)
             {
