@@ -630,7 +630,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_ForScheduledAgent_ShouldNeverResolveOwnerLlmIdentityFromSlug()
+    public async Task PlanAsync_ForScheduledAgent_ShouldFailClosedWithoutExactOwnerLlmIdentity()
     {
         var evidence = new StudioEvidencePorts
         {
@@ -640,10 +640,10 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 "provider-b",
                 AuthorizationGrantRequirement.Required),
         };
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired)));
         var planner = new ScheduledInvocationAuthorizationPlanner(
-            new MutableCatalogQueryPort(Snapshot(
-                Service("svc-b-one", "provider-b", AuthorizationGrantRequirement.NotRequired),
-                Service("svc-b-two", "provider-b", AuthorizationGrantRequirement.NotRequired))),
+            catalog,
             ownerLLMQueryPort: evidence);
 
         var result = await planner.PlanAsync(Request(["svc-a"]));
@@ -652,34 +652,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.FailureCode.Should().Be(
             ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
         result.Detail.Should().Be("owner_llm_exact_service_identity_unavailable");
-    }
-
-    [Fact]
-    public async Task PlanAsync_ForScheduledAgent_ShouldResolveMissingOwnerLlmServiceIdThroughResolver()
-    {
-        var evidence = new StudioEvidencePorts
-        {
-            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
-                11,
-                string.Empty,
-                "provider-b",
-                AuthorizationGrantRequirement.Required,
-                "/api/v1/proxy/s/provider-b"),
-            ResolvedOwnerLLMServiceId = "svc-b",
-        };
-        var planner = new ScheduledInvocationAuthorizationPlanner(
-            new MutableCatalogQueryPort(Snapshot(
-                Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired),
-                Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired))),
-            ownerLLMQueryPort: evidence,
-            ownerLLMServiceIdentityResolver: evidence);
-
-        var result = await planner.PlanAsync(Request(["svc-a"]));
-
-        result.Success.Should().BeTrue();
-        result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
-            .Should().Equal("svc-a", "svc-b");
-        evidence.OwnerLLMServiceIdentityQueries.Should().Be(1);
+        catalog.QueryCount.Should().Be(0);
     }
 
     [Fact]
@@ -922,17 +895,14 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         IScheduledInvocationMemberEvidenceQueryPort,
         IScheduledInvocationWorkflowEvidenceQueryPort,
         IScheduledInvocationConnectorEvidenceQueryPort,
-        IScheduledInvocationOwnerLLMEvidenceQueryPort,
-        IScheduledInvocationOwnerLLMServiceIdentityResolver
+        IScheduledInvocationOwnerLLMEvidenceQueryPort
     {
         public ScheduledInvocationMemberEvidence? Member { get; init; }
         public ScheduledInvocationWorkflowEvidence? Workflow { get; init; }
         public ScheduledInvocationConnectorEvidence? Connector { get; init; }
         public ScheduledInvocationOwnerLLMEvidence? OwnerLLM { get; init; }
-        public string ResolvedOwnerLLMServiceId { get; init; } = string.Empty;
         public int ConnectorQueries { get; private set; }
         public int OwnerLLMQueries { get; private set; }
-        public int OwnerLLMServiceIdentityQueries { get; private set; }
         public string? LastOwnerLLMScopeId { get; private set; }
 
         Task<ScheduledInvocationMemberEvidence?> IScheduledInvocationMemberEvidenceQueryPort.GetAsync(
@@ -953,21 +923,11 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
         Task<ScheduledInvocationOwnerLLMEvidence?> IScheduledInvocationOwnerLLMEvidenceQueryPort.GetAsync(
             string scopeId,
-            AuthenticatedAuthorizationOwnerContext? ownerContext,
             CancellationToken ct)
         {
             OwnerLLMQueries++;
             LastOwnerLLMScopeId = scopeId;
             return Task.FromResult(OwnerLLM);
-        }
-
-        Task<string> IScheduledInvocationOwnerLLMServiceIdentityResolver.ResolveAsync(
-            ScheduledInvocationOwnerLLMEvidence evidence,
-            AuthenticatedAuthorizationOwnerContext ownerContext,
-            CancellationToken ct)
-        {
-            OwnerLLMServiceIdentityQueries++;
-            return Task.FromResult(ResolvedOwnerLLMServiceId);
         }
     }
 
@@ -993,7 +953,6 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
         Task<ScheduledInvocationOwnerLLMEvidence?> IScheduledInvocationOwnerLLMEvidenceQueryPort.GetAsync(
             string scopeId,
-            AuthenticatedAuthorizationOwnerContext? ownerContext,
             CancellationToken ct) => Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
     }
 
@@ -1003,7 +962,6 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
 
         public Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
             string scopeId,
-            AuthenticatedAuthorizationOwnerContext? ownerContext = null,
             CancellationToken ct = default) =>
             Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(new ScheduledInvocationOwnerLLMEvidence(
                 0,

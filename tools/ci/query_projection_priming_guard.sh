@@ -83,6 +83,21 @@ schedule_preflight_hits="$(
     || true
 )"
 
+owner_llm_resolver_hits="$(
+  rg -n "StudioOwnerLLMServiceIdentityResolver|IScheduledInvocationOwnerLLMServiceIdentityResolver" \
+    src \
+    -g '!**/bin/**' \
+    -g '!**/obj/**' \
+    || true
+)"
+
+owner_llm_live_authority_hits="$(
+  rg -n "IUserLlmCatalogPort|GetServicesAsync|IWorkflowCallerAccessTokenProvider|Issue[A-Za-z0-9_]*Async|BearerToken" \
+    src/Aevatar.Studio.Projection/QueryPorts/ProjectionScheduledInvocationAuthorityQueryPorts.cs \
+    src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/ScheduledInvocationAuthorizationPlanner.cs \
+    || true
+)"
+
 schedule_preflight_contract_error=""
 if [[ -z "${schedule_preflight_body}" ]]; then
   schedule_preflight_contract_error="Studio schedule PreflightAsync was not found in ${schedule_port}."
@@ -90,7 +105,7 @@ elif ! printf '%s\n' "${schedule_preflight_body}" | rg -q "_authorizationPlanner
   schedule_preflight_contract_error="Studio schedule PreflightAsync must query the authorization planner directly."
 fi
 
-if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}${schedule_preflight_hits}${schedule_preflight_contract_error}" ]]; then
+if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}${schedule_preflight_hits}${owner_llm_resolver_hits}${owner_llm_live_authority_hits}${schedule_preflight_contract_error}" ]]; then
   if [[ -n "${hits}" ]]; then
     echo "${hits}"
   fi
@@ -117,6 +132,14 @@ if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${
   if [[ -n "${schedule_preflight_hits}" ]]; then
     echo "${schedule_preflight_hits}"
     echo "Studio schedule PreflightAsync must not refresh catalogs, issue credentials, observe/poll materialization, or invoke projection lifecycle helpers."
+  fi
+  if [[ -n "${owner_llm_resolver_hits}" ]]; then
+    echo "${owner_llm_resolver_hits}"
+    echo "Scheduled owner LLM identity must come from the projected user-config document; the live identity resolver must not return."
+  fi
+  if [[ -n "${owner_llm_live_authority_hits}" ]]; then
+    echo "${owner_llm_live_authority_hits}"
+    echo "Scheduled owner LLM query/planner paths must not call live LLM catalogs or issue access tokens."
   fi
   if [[ -n "${schedule_preflight_contract_error}" ]]; then
     echo "${schedule_preflight_contract_error}"

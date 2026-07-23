@@ -257,13 +257,7 @@ public sealed record ScheduledInvocationOwnerLLMEvidence(
     long StateVersion,
     string NyxIdServiceId,
     string NyxIdServiceSlug,
-    AuthorizationGrantRequirement ServiceGrantRequirement,
-    string NyxIdRoute = "");
-
-public sealed class ScheduledInvocationOwnerLLMRouteOptions
-{
-    public string DefaultRoutePreference { get; set; } = string.Empty;
-}
+    AuthorizationGrantRequirement ServiceGrantRequirement);
 
 public interface INyxIdAuthorizationCatalogQueryPort
 {
@@ -360,15 +354,6 @@ public interface IScheduledInvocationOwnerLLMEvidenceQueryPort
 {
     Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
         string scopeId,
-        AuthenticatedAuthorizationOwnerContext? ownerContext = null,
-        CancellationToken ct = default);
-}
-
-public interface IScheduledInvocationOwnerLLMServiceIdentityResolver
-{
-    Task<string> ResolveAsync(
-        ScheduledInvocationOwnerLLMEvidence evidence,
-        AuthenticatedAuthorizationOwnerContext ownerContext,
         CancellationToken ct = default);
 }
 
