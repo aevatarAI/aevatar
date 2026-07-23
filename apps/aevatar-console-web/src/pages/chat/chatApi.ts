@@ -14,9 +14,14 @@ const CHAT_HISTORY_CONTEXT_NAME = "aevatar.chat.context";
 const CHAT_HISTORY_CONTEXT_TYPE_URL =
   "type.googleapis.com/aevatar.workflow.runs.WorkflowChatContextPayload";
 
-export type ChatConversationIntent = {
-  conversationId?: string | null;
-};
+export type ChatConversationIntent =
+  | {
+      conversationId: null;
+    }
+  | {
+      conversationId: string;
+      minimumStateVersion: number;
+    };
 
 export type ChatStreamRequest = {
   commandId?: string;
@@ -231,10 +236,17 @@ export function extractChatHistoryContext(
   const context: ChatHistoryContext = {
     conversationId: readString(payload, "conversationId"),
     scopeId: readString(payload, "scopeId"),
+    stateVersion: readNumber(payload, "stateVersion") ?? Number.NaN,
     turnId: readString(payload, "turnId"),
   };
 
-  return Object.values(context).every(Boolean) ? context : null;
+  return context.conversationId &&
+    context.scopeId &&
+    context.turnId &&
+    Number.isSafeInteger(context.stateVersion) &&
+    context.stateVersion >= 0
+    ? context
+    : null;
 }
 
 export function extractChatStreamArtifacts(frames: readonly unknown[]): {
@@ -290,9 +302,9 @@ function normalizeConversationIntent(
   const record = asRecord(conversation);
   if (
     !record ||
-    Object.keys(record).some((key) => key !== "conversationId") ||
-    (record.conversationId != null &&
-      typeof record.conversationId !== "string")
+    Object.keys(record).some(
+      (key) => key !== "conversationId" && key !== "minimumStateVersion"
+    )
   ) {
     throw new ChatApiError(
       "Conversation input is invalid.",
@@ -301,11 +313,23 @@ function normalizeConversationIntent(
     );
   }
 
+  if (record.conversationId === null) {
+    if (record.minimumStateVersion !== undefined) {
+      throw new ChatApiError(
+        "Conversation input is invalid.",
+        400,
+        "INVALID_CONVERSATION_INPUT"
+      );
+    }
+
+    return { conversationId: null };
+  }
+
   const conversationId =
     typeof record.conversationId === "string"
       ? record.conversationId.trim()
-      : undefined;
-  if (record.conversationId != null && !conversationId) {
+      : "";
+  if (!conversationId) {
     throw new ChatApiError(
       "Conversation id is invalid.",
       400,
@@ -313,7 +337,20 @@ function normalizeConversationIntent(
     );
   }
 
-  return compactObject({ conversationId });
+  const minimumStateVersion = record.minimumStateVersion;
+  if (
+    typeof minimumStateVersion !== "number" ||
+    !Number.isSafeInteger(minimumStateVersion) ||
+    minimumStateVersion <= 0
+  ) {
+    throw new ChatApiError(
+      "Conversation state version is invalid.",
+      400,
+      "INVALID_CONVERSATION_STATE_VERSION"
+    );
+  }
+
+  return { conversationId, minimumStateVersion };
 }
 
 export async function startChatStream(
@@ -367,31 +404,79 @@ function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-export async function startChatStreamWithProjectionRetry(
+export type ChatHistoryRefreshRetryOptions = {
+  refreshMinimumStateVersion?: () => Promise<number>;
+  retryDelaysMs?: readonly number[];
+};
+
+export async function startChatStreamWithHistoryRefreshRetry(
   request: ChatStreamRequest,
   signal: AbortSignal,
-  retryDelaysMs: readonly number[] = [0, 300, 900]
+  options: ChatHistoryRefreshRetryOptions = {}
 ): Promise<Response> {
-  const attempts = retryDelaysMs.length > 0 ? retryDelaysMs : [0];
-  const isContinuation = Boolean(request.conversation?.conversationId?.trim());
+  const retryDelaysMs = options.retryDelaysMs ?? [300, 900];
+  const attempts = [0, ...retryDelaysMs];
+  let requestForAttempt = request;
+  let refreshBeforeAttempt = false;
 
   for (let attempt = 0; attempt < attempts.length; attempt += 1) {
     if (attempt > 0) {
       await abortableDelay(attempts[attempt], signal);
     }
 
+    if (refreshBeforeAttempt && options.refreshMinimumStateVersion) {
+      const refreshedStateVersion = await options.refreshMinimumStateVersion();
+      if (
+        !Number.isSafeInteger(refreshedStateVersion) ||
+        refreshedStateVersion <= 0
+      ) {
+        throw new ChatApiError(
+          "Conversation state version is invalid.",
+          400,
+          "INVALID_CONVERSATION_STATE_VERSION"
+        );
+      }
+
+      const conversation = requestForAttempt.conversation;
+      if (!conversation || conversation.conversationId === null) {
+        throw new ChatApiError(
+          "Conversation input is invalid.",
+          400,
+          "INVALID_CONVERSATION_INPUT"
+        );
+      }
+      const minimumStateVersion = Math.max(
+        conversation.minimumStateVersion,
+        refreshedStateVersion
+      );
+      requestForAttempt = {
+        ...requestForAttempt,
+        conversation: {
+          conversationId: conversation.conversationId,
+          minimumStateVersion,
+        },
+      };
+      refreshBeforeAttempt = false;
+    }
+
     try {
-      return await startChatStream(request, signal);
+      return await startChatStream(requestForAttempt, signal);
     } catch (error) {
+      const conversation = requestForAttempt.conversation;
+      const isContinuation = Boolean(
+        conversation && conversation.conversationId !== null
+      );
       const canRetry =
         isContinuation &&
         error instanceof ChatApiError &&
-        error.status === 404 &&
-        error.code === "CONVERSATION_NOT_FOUND" &&
+        error.status === 503 &&
+        error.code === "CHAT_HISTORY_RESERVATION_UNAVAILABLE" &&
+        Boolean(options.refreshMinimumStateVersion) &&
         attempt < attempts.length - 1;
       if (!canRetry) {
         throw error;
       }
+      refreshBeforeAttempt = true;
     }
   }
 

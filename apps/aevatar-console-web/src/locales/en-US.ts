@@ -63,6 +63,8 @@ const enUSMessages = {
   'pages.chat.index.historyTitle': 'Chat history',
   'pages.chat.index.loadingConversation': 'Loading conversation',
   'pages.chat.index.loadingHistory': 'Loading chat history',
+  'pages.chat.index.historySynchronizing':
+    'Conversation history is still synchronizing. Try again shortly.',
   'pages.chat.index.missingChatHistoryContext':
     'Chat completed without a conversation context.',
   'pages.chat.index.newChat': 'New chat',

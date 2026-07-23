@@ -1,6 +1,7 @@
 import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { authFetch } from "@/shared/auth/fetch";
 import type {
+  ChatConversationDetail,
   ChatCreateRecovery,
   ChatHistoryIndex,
   ConversationMeta,
@@ -204,14 +205,42 @@ export function decodeChatCreateRecovery(value: unknown): ChatCreateRecovery {
   };
 }
 
-export function decodeStoredChatMessages(value: unknown): StoredChatMessage[] {
+function decodeStoredChatMessagesAtPath(
+  value: unknown,
+  path: string
+): StoredChatMessage[] {
   if (!Array.isArray(value)) {
-    return failContract("$messages", "an array");
+    return failContract(path, "an array");
   }
 
   return value.map((message, index) =>
-    decodeStoredChatMessage(message, `$messages[${index}]`)
+    decodeStoredChatMessage(message, `${path}[${index}]`)
   );
+}
+
+export function decodeStoredChatMessages(value: unknown): StoredChatMessage[] {
+  return decodeStoredChatMessagesAtPath(value, "$messages");
+}
+
+export function decodeChatConversationDetail(
+  value: unknown
+): ChatConversationDetail {
+  const record = asRecord(value, "$conversation");
+  const stateVersion = readNumber(record, "stateVersion", "$conversation");
+  if (!Number.isSafeInteger(stateVersion) || stateVersion < 0) {
+    return failContract(
+      "$conversation.stateVersion",
+      "a non-negative safe integer"
+    );
+  }
+
+  return {
+    messages: decodeStoredChatMessagesAtPath(
+      record.messages,
+      "$conversation.messages"
+    ),
+    stateVersion,
+  };
 }
 
 function encodeSegment(value: string): string {
@@ -308,10 +337,10 @@ export const chatHistoryApi = {
   async loadConversation(
     scopeId: string,
     conversationId: string
-  ): Promise<StoredChatMessage[]> {
+  ): Promise<ChatConversationDetail> {
     return requestJson(
       buildConversationPath(scopeId, conversationId),
-      decodeStoredChatMessages
+      decodeChatConversationDetail
     );
   },
 

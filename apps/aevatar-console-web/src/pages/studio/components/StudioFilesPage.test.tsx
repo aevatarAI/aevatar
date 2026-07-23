@@ -216,39 +216,42 @@ describe('StudioFilesPage', () => {
         messageCount: 2,
       },
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([
-      {
-        id: 'message-1',
-        role: 'user',
-        content: 'hello from user',
-        authorName: 'Alice',
-        timestamp: Date.parse('2026-03-18T01:00:00Z'),
-        status: 'complete',
-      },
-      {
-        id: 'message-2',
-        role: 'assistant',
-        content: 'assistant reply',
-        thinking: 'Planning the response',
-        timestamp: Date.parse('2026-03-18T01:01:00Z'),
-        status: 'complete',
-      },
-      {
-        id: 'message-3',
-        role: 'user',
-        content: 'run it now',
-        timestamp: Date.parse('2026-03-18T01:02:00Z'),
-        status: 'complete',
-      },
-      {
-        id: 'message-4',
-        role: 'assistant',
-        content: '',
-        error: 'workflow_run_error: Dispatch failed.',
-        timestamp: Date.parse('2026-03-18T01:03:00Z'),
-        status: 'error',
-      },
-    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue({
+      messages: [
+        {
+          id: 'message-1',
+          role: 'user',
+          content: 'hello from user',
+          authorName: 'Alice',
+          timestamp: Date.parse('2026-03-18T01:00:00Z'),
+          status: 'complete',
+        },
+        {
+          id: 'message-2',
+          role: 'assistant',
+          content: 'assistant reply',
+          thinking: 'Planning the response',
+          timestamp: Date.parse('2026-03-18T01:01:00Z'),
+          status: 'complete',
+        },
+        {
+          id: 'message-3',
+          role: 'user',
+          content: 'run it now',
+          timestamp: Date.parse('2026-03-18T01:02:00Z'),
+          status: 'complete',
+        },
+        {
+          id: 'message-4',
+          role: 'assistant',
+          content: '',
+          error: 'workflow_run_error: Dispatch failed.',
+          timestamp: Date.parse('2026-03-18T01:03:00Z'),
+          status: 'error',
+        },
+      ],
+      stateVersion: 7,
+    });
     (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(undefined);
     (explorerApi.putFile as jest.Mock).mockResolvedValue(undefined);
     (explorerApi.deleteFile as jest.Mock).mockResolvedValue(undefined);

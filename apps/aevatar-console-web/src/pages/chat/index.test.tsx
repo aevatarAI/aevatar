@@ -93,10 +93,30 @@ const serverMessages = [
   },
 ];
 
+type StoredMessageFixture = {
+  authorName?: string;
+  content: string;
+  error?: string;
+  id: string;
+  role: string;
+  status: string;
+  thinking?: string;
+  timestamp: number;
+  turnId?: string;
+};
+
+function conversationDetail(
+  messages: StoredMessageFixture[] = serverMessages,
+  stateVersion = 7
+): { messages: StoredMessageFixture[]; stateVersion: number } {
+  return { messages, stateVersion };
+}
+
 function chatContextFrame(
   conversationId = "conversation-a",
   turnId = "turn-a",
-  scopeId = "scope-a"
+  scopeId = "scope-a",
+  stateVersion = 7
 ): unknown {
   return {
     custom: {
@@ -105,6 +125,7 @@ function chatContextFrame(
         "@type": CHAT_HISTORY_CONTEXT_TYPE,
         conversationId,
         scopeId,
+        stateVersion,
         turnId,
       },
     },
@@ -218,8 +239,12 @@ describe("ChatPage server-backed history", () => {
     window.history.replaceState({}, "", "/chat");
     window.localStorage.clear();
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([]);
-    (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(undefined);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail([])
+    );
+    (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(
+      undefined
+    );
     const { ChatHistoryApiError } = jest.requireMock("./chatHistoryApi");
     (chatHistoryApi.recoverCreate as jest.Mock).mockRejectedValue(
       new ChatHistoryApiError("Recovery is not materialized.", 404)
@@ -230,7 +255,9 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(serverMessages);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail()
+    );
 
     renderWithQueryClient(<ChatPage />);
 
@@ -268,7 +295,7 @@ describe("ChatPage server-backed history", () => {
 
     expect(await screen.findByText("Recovered response")).toBeTruthy();
     const [body] = chatRequestBodies();
-    expect(body.conversation).toEqual({});
+    expect(body.conversation).toEqual({ conversationId: null });
     expect(body.commandId).toEqual(expect.any(String));
     const createCommandId = String(body.commandId);
     await waitFor(() =>
@@ -392,23 +419,25 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([
-      {
-        authorName: "Release automation",
-        content: "Queued for review",
-        id: "turn-open:observer",
-        role: "observer",
-        status: "complete",
-        timestamp: 1784255700000,
-      },
-      {
-        content: "Review recorded",
-        id: "turn-open:auditor",
-        role: "auditor",
-        status: "complete",
-        timestamp: 1784255701000,
-      },
-    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail([
+        {
+          authorName: "Release automation",
+          content: "Queued for review",
+          id: "turn-open:observer",
+          role: "observer",
+          status: "complete",
+          timestamp: 1784255700000,
+        },
+        {
+          content: "Review recorded",
+          id: "turn-open:auditor",
+          role: "auditor",
+          status: "complete",
+          timestamp: 1784255701000,
+        },
+      ])
+    );
 
     renderWithQueryClient(<ChatPage />);
     fireEvent.click(
@@ -425,31 +454,33 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([
-      ...serverMessages,
-      {
-        content: "The first attempt failed.",
-        error: "Dispatch failed.",
-        id: "turn-b:assistant",
-        role: "assistant",
-        status: "error",
-        timestamp: 1784255701000,
-      },
-      {
-        content: "Try again",
-        id: "turn-c:user",
-        role: "user",
-        status: "complete",
-        timestamp: 1784255702000,
-      },
-      {
-        content: "The retry succeeded.",
-        id: "turn-c:assistant",
-        role: "assistant",
-        status: "complete",
-        timestamp: 1784255703000,
-      },
-    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail([
+        ...serverMessages,
+        {
+          content: "The first attempt failed.",
+          error: "Dispatch failed.",
+          id: "turn-b:assistant",
+          role: "assistant",
+          status: "error",
+          timestamp: 1784255701000,
+        },
+        {
+          content: "Try again",
+          id: "turn-c:user",
+          role: "user",
+          status: "complete",
+          timestamp: 1784255702000,
+        },
+        {
+          content: "The retry succeeded.",
+          id: "turn-c:assistant",
+          role: "assistant",
+          status: "complete",
+          timestamp: 1784255703000,
+        },
+      ])
+    );
 
     renderWithQueryClient(<ChatPage />);
     fireEvent.click(
@@ -483,7 +514,7 @@ describe("ChatPage server-backed history", () => {
     const [body] = chatRequestBodies();
     expect(body).toEqual({
       commandId: expect.any(String),
-      conversation: {},
+      conversation: { conversationId: null },
       prompt: "Create a support team",
       sessionId: expect.any(String),
       workflow: "studio",
@@ -545,36 +576,86 @@ describe("ChatPage server-backed history", () => {
     expect(changedBody.commandId).not.toBe(firstBody.commandId);
   });
 
-  it("binds the server conversation id and reuses the independent session id", async () => {
+  it("uses the reconciled server watermark for a second Team-selection turn", async () => {
+    const firstProjectedConversation = {
+      ...serverConversation,
+      id: "server-conversation",
+      messageCount: 1,
+      title: "Create a fund analysis workflow",
+    };
+    const secondProjectedConversation = {
+      ...firstProjectedConversation,
+      messageCount: 2,
+    };
+    (chatHistoryApi.listConversationMetas as jest.Mock)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([firstProjectedConversation])
+      .mockResolvedValue([secondProjectedConversation]);
+    (chatHistoryApi.loadConversation as jest.Mock)
+      .mockResolvedValueOnce(
+        conversationDetail(
+          [
+            {
+              content: "Choose a Team: team01 or team02.",
+              id: "turn-1:assistant",
+              role: "assistant",
+              status: "complete",
+              timestamp: 1784255700000,
+              turnId: "turn-1",
+            },
+          ],
+          8
+        )
+      )
+      .mockResolvedValue(
+        conversationDetail(
+          [
+            {
+              content: "Continuing with team01.",
+              id: "turn-2:assistant",
+              role: "assistant",
+              status: "complete",
+              timestamp: 1784255701000,
+              turnId: "turn-2",
+            },
+          ],
+          9
+        )
+      );
     (authFetch as jest.Mock)
       .mockResolvedValueOnce(
         createSseResponse([
-          chatContextFrame("server-conversation", "turn-1"),
-          { runFinished: { result: { output: "First answer" } } },
+          chatContextFrame("server-conversation", "turn-1", "scope-a", 0),
+          {
+            runFinished: {
+              result: { output: "Choose a Team: team01 or team02." },
+            },
+          },
         ])
       )
       .mockResolvedValueOnce(
         createSseResponse([
-          chatContextFrame("server-conversation", "turn-2"),
-          { runFinished: { result: { output: "Second answer" } } },
+          chatContextFrame("server-conversation", "turn-2", "scope-a", 8),
+          { runFinished: { result: { output: "Continuing with team01." } } },
         ])
       );
 
     renderWithQueryClient(<ChatPage />);
-    await sendPrompt("First prompt");
-    await screen.findByText("First answer");
-    await sendPrompt("Second prompt");
-    await screen.findByText("Second answer");
+    await sendPrompt("Create a workflow that generates fund analysis reports");
+    await screen.findByText("Choose a Team: team01 or team02.");
+    await sendPrompt("team01");
+    await screen.findByText("Continuing with team01.");
 
     const [firstBody, secondBody] = chatRequestBodies();
     expect(firstBody.commandId).toEqual(expect.any(String));
-    expect(firstBody.conversation).toEqual({});
+    expect(firstBody.conversation).toEqual({ conversationId: null });
     expect(secondBody.conversation).toEqual({
       conversationId: "server-conversation",
+      minimumStateVersion: 8,
     });
     expect(secondBody).not.toHaveProperty("commandId");
     expect(secondBody.sessionId).toBe(firstBody.sessionId);
-    expect(secondBody.prompt).toBe("Second prompt");
+    expect(secondBody.prompt).toBe("team01");
     expect(String(secondBody.prompt)).not.toContain("<conversation_history>");
   });
 
@@ -582,7 +663,9 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(serverMessages);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail()
+    );
     (authFetch as jest.Mock).mockResolvedValue(
       createSseResponse([
         { runFinished: { result: { output: "Unbound follow-up" } } },
@@ -673,6 +756,18 @@ describe("ChatPage server-backed history", () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([projectedConversation]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail([
+        {
+          content: "Live response",
+          id: "turn-projected:assistant",
+          role: "assistant",
+          status: "complete",
+          timestamp: 1784255700000,
+          turnId: "turn-projected",
+        },
+      ])
+    );
     (authFetch as jest.Mock).mockResolvedValue(
       createSseResponse([
         chatContextFrame("server-projected", "turn-projected"),
@@ -712,7 +807,10 @@ describe("ChatPage server-backed history", () => {
     );
     expect(screen.queryByRole("button", { name: "Projection-safe prompt" })).toBeNull();
     expect(screen.getByText("Live response")).toBeTruthy();
-    expect(chatHistoryApi.loadConversation).not.toHaveBeenCalled();
+    expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
+      "scope-a",
+      "server-projected"
+    );
   });
 
   it("uses typed turn identity only when metadata cannot prove observation", async () => {
@@ -725,16 +823,18 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([projectedConversation]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValueOnce([
-      {
-        content: "Projected response",
-        id: "opaque-message-id",
-        role: "assistant",
-        status: "complete",
-        timestamp: 1784255700000,
-        turnId: "turn-typed",
-      },
-    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValueOnce(
+      conversationDetail([
+        {
+          content: "Projected response",
+          id: "opaque-message-id",
+          role: "assistant",
+          status: "complete",
+          timestamp: 1784255700000,
+          turnId: "turn-typed",
+        },
+      ])
+    );
     (authFetch as jest.Mock).mockResolvedValue(
       createSseResponse([
         chatContextFrame("server-typed-turn", "turn-typed"),
@@ -772,6 +872,18 @@ describe("ChatPage server-backed history", () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([projectedConversation]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail([
+        {
+          content: "Chat stopped.",
+          id: "turn-stopped:assistant",
+          role: "assistant",
+          status: "error",
+          timestamp: 1784255700000,
+          turnId: "turn-stopped",
+        },
+      ])
+    );
 
     renderWithQueryClient(<ChatPage />);
     await screen.findByText("No chat history");
@@ -793,7 +905,10 @@ describe("ChatPage server-backed history", () => {
         { timeout: 1_500 }
       )
     ).toBeTruthy();
-    expect(chatHistoryApi.loadConversation).not.toHaveBeenCalled();
+    expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
+      "scope-a",
+      "server-stopped"
+    );
   });
 
   it("discards an old-scope stream before it can recreate pending history", async () => {
@@ -862,6 +977,21 @@ describe("ChatPage server-backed history", () => {
         title: "Late authoritative conversation",
       },
     ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValueOnce(
+      conversationDetail(
+        [
+          {
+            content: "Optimistic response",
+            id: "turn-late:assistant",
+            role: "assistant",
+            status: "complete",
+            timestamp: 1784255700000,
+            turnId: "turn-late",
+          },
+        ],
+        8
+      )
+    );
     fireEvent.click(
       screen.getByRole("button", {
         name: "Retry saving Late projection prompt",
@@ -873,7 +1003,10 @@ describe("ChatPage server-backed history", () => {
       })
     ).toBeTruthy();
     expect(screen.queryByText("History save was not confirmed")).toBeNull();
-    expect(chatHistoryApi.loadConversation).not.toHaveBeenCalled();
+    expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
+      "scope-a",
+      "server-late"
+    );
   });
 
   it("shows list failure separately and retries without disabling chat", async () => {
@@ -900,7 +1033,7 @@ describe("ChatPage server-backed history", () => {
     ]);
     (chatHistoryApi.loadConversation as jest.Mock)
       .mockRejectedValueOnce(new Error("Detail is not available"))
-      .mockResolvedValueOnce(serverMessages);
+      .mockResolvedValueOnce(conversationDetail());
 
     renderWithQueryClient(<ChatPage />);
     fireEvent.click(
@@ -914,10 +1047,13 @@ describe("ChatPage server-backed history", () => {
   });
 
   it("prevents sending while a selected conversation is still loading", async () => {
-    let resolveDetail: (messages: typeof serverMessages) => void = () => undefined;
-    const detailPromise = new Promise<typeof serverMessages>((resolve) => {
-      resolveDetail = resolve;
-    });
+    let resolveDetail: (detail: ReturnType<typeof conversationDetail>) => void =
+      () => undefined;
+    const detailPromise = new Promise<ReturnType<typeof conversationDetail>>(
+      (resolve) => {
+        resolveDetail = resolve;
+      }
+    );
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
@@ -929,16 +1065,22 @@ describe("ChatPage server-backed history", () => {
     );
 
     await waitFor(() => expect(screen.getByRole("textbox")).toBeDisabled());
-    act(() => resolveDetail(serverMessages));
-    expect(await screen.findByText("The support workflow is ready.")).toBeTruthy();
+    act(() => resolveDetail(conversationDetail()));
+    expect(
+      await screen.findByText("The support workflow is ready.")
+    ).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeEnabled();
   });
 
   it("ignores an older detail response after the user selects another conversation", async () => {
-    let resolveFirst: ((value: typeof serverMessages) => void) | undefined;
-    const firstDetail = new Promise<typeof serverMessages>((resolve) => {
-      resolveFirst = resolve;
-    });
+    let resolveFirst:
+      | ((value: ReturnType<typeof conversationDetail>) => void)
+      | undefined;
+    const firstDetail = new Promise<ReturnType<typeof conversationDetail>>(
+      (resolve) => {
+        resolveFirst = resolve;
+      }
+    );
     const secondConversation = {
       ...serverConversation,
       id: "conversation-b",
@@ -952,13 +1094,13 @@ describe("ChatPage server-backed history", () => {
       async (_scopeId: string, conversationId: string) =>
         conversationId === "conversation-a"
           ? firstDetail
-          : [
+          : conversationDetail([
               {
                 ...serverMessages[1],
                 content: "Second conversation answer",
                 id: "turn-b:assistant",
               },
-            ]
+            ])
     );
 
     renderWithQueryClient(<ChatPage />);
@@ -971,7 +1113,7 @@ describe("ChatPage server-backed history", () => {
     expect(await screen.findByText("Second conversation answer")).toBeTruthy();
 
     await act(async () => {
-      resolveFirst?.(serverMessages);
+      resolveFirst?.(conversationDetail());
       await firstDetail;
     });
     expect(screen.queryByText("The support workflow is ready.")).toBeNull();
@@ -982,7 +1124,9 @@ describe("ChatPage server-backed history", () => {
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
       serverConversation,
     ]);
-    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(serverMessages);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue(
+      conversationDetail()
+    );
     (authFetch as jest.Mock).mockResolvedValue(
       createSseResponse([
         chatContextFrame("conversation-a", "turn-b"),
@@ -1000,7 +1144,10 @@ describe("ChatPage server-backed history", () => {
 
     const [body] = chatRequestBodies();
     expect(body).toMatchObject({
-      conversation: { conversationId: "conversation-a" },
+      conversation: {
+        conversationId: "conversation-a",
+        minimumStateVersion: 7,
+      },
       prompt: "Add retry handling",
     });
     expect(body).not.toHaveProperty("commandId");

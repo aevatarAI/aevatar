@@ -7,6 +7,7 @@ import {
   ChatHistoryApiError,
   ChatHistoryContractError,
   chatHistoryApi,
+  decodeChatConversationDetail,
   decodeChatCreateRecovery,
   decodeChatHistoryIndex,
   decodeStoredChatMessages,
@@ -149,7 +150,29 @@ describe("chatHistoryApi", () => {
 
   it("preserves documented message fields and unknown role or status strings", async () => {
     (authFetch as jest.Mock).mockResolvedValue(
-      jsonResponse([
+      jsonResponse({
+        messages: [
+          {
+            authorId: null,
+            authorName: "Automation",
+            content: "Queued for review",
+            error: null,
+            id: "turn-a:observer",
+            role: "observer",
+            status: "queued",
+            thinking: null,
+            timestamp: 1784255700000,
+            turnId: "turn-a",
+          },
+        ],
+        stateVersion: 7,
+      })
+    );
+
+    await expect(
+      chatHistoryApi.loadConversation("scope/a", "conversation/a")
+    ).resolves.toEqual({
+      messages: [
         {
           authorId: null,
           authorName: "Automation",
@@ -162,25 +185,9 @@ describe("chatHistoryApi", () => {
           timestamp: 1784255700000,
           turnId: "turn-a",
         },
-      ])
-    );
-
-    await expect(
-      chatHistoryApi.loadConversation("scope/a", "conversation/a")
-    ).resolves.toEqual([
-      {
-        authorId: null,
-        authorName: "Automation",
-        content: "Queued for review",
-        error: null,
-        id: "turn-a:observer",
-        role: "observer",
-        status: "queued",
-        thinking: null,
-        timestamp: 1784255700000,
-        turnId: "turn-a",
-      },
-    ]);
+      ],
+      stateVersion: 7,
+    });
     expect(authFetch).toHaveBeenCalledWith(
       "/api/scopes/scope%2Fa/chat-history/conversations/conversation%2Fa",
       {
@@ -195,12 +202,21 @@ describe("chatHistoryApi", () => {
       conversations: [],
     });
     expect(decodeStoredChatMessages([])).toEqual([]);
+    expect(
+      decodeChatConversationDetail({ messages: [], stateVersion: 0 })
+    ).toEqual({ messages: [], stateVersion: 0 });
   });
 
   it("rejects malformed successful response bodies explicitly", () => {
     expect(() => decodeChatHistoryIndex({ conversations: {} })).toThrow(
       ChatHistoryContractError
     );
+    expect(() => decodeChatConversationDetail([])).toThrow(
+      ChatHistoryContractError
+    );
+    expect(() =>
+      decodeChatConversationDetail({ messages: [], stateVersion: -1 })
+    ).toThrow(expect.objectContaining({ path: "$conversation.stateVersion" }));
     expect(() =>
       decodeStoredChatMessages([
         {

@@ -5,7 +5,7 @@ import {
   extractChatStreamArtifacts,
   readChatStreamFrames,
   startChatStream,
-  startChatStreamWithProjectionRetry,
+  startChatStreamWithHistoryRefreshRetry,
 } from "./chatApi";
 
 jest.mock("@/shared/auth/fetch", () => ({
@@ -43,6 +43,20 @@ function missingConversationResponse(): Response {
       JSON.stringify({
         code: "CONVERSATION_NOT_FOUND",
         message: "Conversation was not found.",
+      })
+    ),
+  } as unknown as Response;
+}
+
+function historyReservationUnavailableResponse(): Response {
+  return {
+    ok: false,
+    status: 503,
+    statusText: "Service Unavailable",
+    text: jest.fn().mockResolvedValue(
+      JSON.stringify({
+        code: "CHAT_HISTORY_RESERVATION_UNAVAILABLE",
+        message: "Conversation history is still materializing.",
       })
     ),
   } as unknown as Response;
@@ -97,7 +111,10 @@ describe("chatApi", () => {
     );
     await startChatStream(
       {
-        conversation: { conversationId: " conversation-a " },
+        conversation: {
+          conversationId: " conversation-a ",
+          minimumStateVersion: 7,
+        },
         prompt: "Continue conversation",
         sessionId: "runtime-session-b",
       },
@@ -108,13 +125,16 @@ describe("chatApi", () => {
     const secondBody = JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body);
     expect(firstBody).toEqual({
       commandId: "create-command-a",
-      conversation: {},
+      conversation: { conversationId: null },
       prompt: "New conversation",
       sessionId: "runtime-session-a",
       workflow: "studio",
     });
     expect(secondBody).toEqual({
-      conversation: { conversationId: "conversation-a" },
+      conversation: {
+        conversationId: "conversation-a",
+        minimumStateVersion: 7,
+      },
       prompt: "Continue conversation",
       sessionId: "runtime-session-b",
       workflow: "studio",
@@ -128,6 +148,7 @@ describe("chatApi", () => {
           conversation: {
             conversationId: "conversation-a",
             createIdempotencyKey: "create-key-a",
+            minimumStateVersion: 7,
           } as never,
           prompt: "Continue",
           sessionId: "session-a",
@@ -147,7 +168,10 @@ describe("chatApi", () => {
     await expect(
       startChatStream(
         {
-          conversation: { conversationId: "   " },
+          conversation: {
+            conversationId: "   ",
+            minimumStateVersion: 7,
+          },
           prompt: "Continue",
           sessionId: "session-a",
         },
@@ -186,7 +210,10 @@ describe("chatApi", () => {
     try {
       await startChatStream(
         {
-          conversation: { conversationId: "missing" },
+          conversation: {
+            conversationId: "missing",
+            minimumStateVersion: 3,
+          },
           prompt: "Continue",
           sessionId: "session-a",
         },
@@ -204,58 +231,103 @@ describe("chatApi", () => {
     });
   });
 
-  it("retries only a continuing conversation while its projection is unavailable", async () => {
+  it("refreshes the server watermark before retrying a 503 continuation", async () => {
     (authFetch as jest.Mock)
-      .mockResolvedValueOnce(missingConversationResponse())
-      .mockResolvedValueOnce(missingConversationResponse())
+      .mockResolvedValueOnce(historyReservationUnavailableResponse())
       .mockResolvedValueOnce(successfulStreamResponse());
+    const refreshMinimumStateVersion = jest.fn().mockResolvedValue(8);
 
     await expect(
-      startChatStreamWithProjectionRetry(
+      startChatStreamWithHistoryRefreshRetry(
         {
-          conversation: { conversationId: "conversation-a" },
+          conversation: {
+            conversationId: "conversation-a",
+            minimumStateVersion: 7,
+          },
           prompt: "Continue",
           sessionId: "session-a",
         },
         new AbortController().signal,
-        [0, 0, 0]
+        { refreshMinimumStateVersion, retryDelaysMs: [0] }
       )
     ).resolves.toEqual(successfulStreamResponse());
-    expect(authFetch).toHaveBeenCalledTimes(3);
+    expect(refreshMinimumStateVersion).toHaveBeenCalledTimes(1);
+    expect(authFetch).toHaveBeenCalledTimes(2);
+    expect(
+      JSON.parse((authFetch as jest.Mock).mock.calls[0][1].body).conversation
+    ).toEqual({ conversationId: "conversation-a", minimumStateVersion: 7 });
+    expect(
+      JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body).conversation
+    ).toEqual({ conversationId: "conversation-a", minimumStateVersion: 8 });
   });
 
-  it("caps continuation retries and never retries a new conversation", async () => {
-    (authFetch as jest.Mock).mockImplementation(async () =>
-      missingConversationResponse()
-    );
+  it("does not retry a missing conversation or a new conversation", async () => {
+    const refreshMinimumStateVersion = jest.fn().mockResolvedValue(8);
+    (authFetch as jest.Mock).mockResolvedValue(missingConversationResponse());
 
     await expect(
-      startChatStreamWithProjectionRetry(
+      startChatStreamWithHistoryRefreshRetry(
         {
-          conversation: { conversationId: "conversation-a" },
+          conversation: {
+            conversationId: "conversation-a",
+            minimumStateVersion: 7,
+          },
           prompt: "Continue",
           sessionId: "session-a",
         },
         new AbortController().signal,
-        [0, 0, 0]
+        { refreshMinimumStateVersion, retryDelaysMs: [0, 0] }
       )
     ).rejects.toMatchObject({ code: "CONVERSATION_NOT_FOUND", status: 404 });
-    expect(authFetch).toHaveBeenCalledTimes(3);
+    expect(authFetch).toHaveBeenCalledTimes(1);
+    expect(refreshMinimumStateVersion).not.toHaveBeenCalled();
 
     jest.clearAllMocks();
-    (authFetch as jest.Mock).mockResolvedValue(missingConversationResponse());
+    (authFetch as jest.Mock).mockResolvedValue(
+      historyReservationUnavailableResponse()
+    );
     await expect(
-      startChatStreamWithProjectionRetry(
+      startChatStreamWithHistoryRefreshRetry(
         {
-          conversation: {},
+          conversation: { conversationId: null },
           prompt: "Create",
           sessionId: "session-b",
         },
         new AbortController().signal,
-        [0, 0, 0]
+        { refreshMinimumStateVersion, retryDelaysMs: [0, 0] }
       )
-    ).rejects.toMatchObject({ code: "CONVERSATION_NOT_FOUND", status: 404 });
+    ).rejects.toMatchObject({
+      code: "CHAT_HISTORY_RESERVATION_UNAVAILABLE",
+      status: 503,
+    });
     expect(authFetch).toHaveBeenCalledTimes(1);
+    expect(refreshMinimumStateVersion).not.toHaveBeenCalled();
+  });
+
+  it("never lowers a continuation watermark after a refresh", async () => {
+    (authFetch as jest.Mock)
+      .mockResolvedValueOnce(historyReservationUnavailableResponse())
+      .mockResolvedValueOnce(successfulStreamResponse());
+
+    await startChatStreamWithHistoryRefreshRetry(
+      {
+        conversation: {
+          conversationId: "conversation-a",
+          minimumStateVersion: 7,
+        },
+        prompt: "Continue",
+        sessionId: "session-a",
+      },
+      new AbortController().signal,
+      {
+        refreshMinimumStateVersion: async () => 6,
+        retryDelaysMs: [0],
+      }
+    );
+
+    expect(
+      JSON.parse((authFetch as jest.Mock).mock.calls[1][1].body).conversation
+    ).toEqual({ conversationId: "conversation-a", minimumStateVersion: 7 });
   });
 
   it("extracts the exact flat chat history Any context", () => {
@@ -266,6 +338,7 @@ describe("chatApi", () => {
           "@type": CHAT_HISTORY_CONTEXT_TYPE,
           conversationId: "conversation-a",
           scopeId: "scope-a",
+          stateVersion: 7,
           turnId: "turn-a",
         },
       },
@@ -275,12 +348,14 @@ describe("chatApi", () => {
     expect(extractChatHistoryContext(frame)).toEqual({
       conversationId: "conversation-a",
       scopeId: "scope-a",
+      stateVersion: 7,
       turnId: "turn-a",
     });
     expect(extractChatStreamArtifacts([frame])).toEqual({
       chatHistoryContext: {
         conversationId: "conversation-a",
         scopeId: "scope-a",
+        stateVersion: 7,
         turnId: "turn-a",
       },
     });

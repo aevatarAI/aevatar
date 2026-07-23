@@ -60,6 +60,7 @@ const zhCNMessages = {
   'pages.chat.index.historyTitle': '会话历史',
   'pages.chat.index.loadingConversation': '正在加载会话',
   'pages.chat.index.loadingHistory': '正在加载会话历史',
+  'pages.chat.index.historySynchronizing': '会话历史仍在同步，请稍后重试。',
   'pages.chat.index.missingChatHistoryContext': 'Chat 已完成，但未返回会话上下文。',
   'pages.chat.index.newChat': '新会话',
   'pages.chat.index.newChatAction': '新建会话',
