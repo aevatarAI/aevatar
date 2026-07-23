@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Microsoft.AspNetCore.Builder;
@@ -36,7 +37,6 @@ public static class AgentProfileEndpoints
     private static async Task<IResult> HandleCreateAsync(
         HttpContext http,
         string scopeId,
-        CreateAgentProfileHttpRequest request,
         [FromServices] IAgentProfileCommandService commands,
         CancellationToken ct)
     {
@@ -49,23 +49,19 @@ public static class AgentProfileEndpoints
         {
             return rejected;
         }
-        if (!TryMapToolPolicy(request.ToolPolicy, out var toolPolicy, out rejected))
-            return rejected;
+
+        var request = await ReadRequestAsync<CreateAgentProfileHttpRequest>(http, ct);
+        if (!AgentProfileHttpRequestMapper.TryMap(request, out var mappedRequest))
+            return InvalidHttpBody();
 
         try
         {
             var receipt = await commands.CreateAsync(
                 caller,
-                new CreateAgentProfileRequest(
-                    request.ProfileSlug,
-                    request.OwnerHandle,
-                    request.DisplayName,
-                    request.Purpose,
-                    request.Instructions,
-                    toolPolicy),
+                mappedRequest,
                 idempotencyKey,
                 ct);
-            return AgentProfileHttpResults.Accepted(receipt);
+            return AgentProfileHttpResults.Accepted(receipt, scopeId, mappedRequest.ProfileSlug);
         }
         catch (Exception exception) when (
             AgentProfileHttpResults.TryMapException(exception, out var result))
@@ -104,7 +100,6 @@ public static class AgentProfileEndpoints
         HttpContext http,
         string scopeId,
         string profileSlug,
-        UpdateAgentProfileDraftHttpRequest request,
         [FromServices] IAgentProfileCommandService commands,
         CancellationToken ct)
     {
@@ -118,8 +113,10 @@ public static class AgentProfileEndpoints
         {
             return rejected;
         }
-        if (!TryMapToolPolicy(request.ToolPolicy, out var toolPolicy, out rejected))
-            return rejected;
+
+        var request = await ReadRequestAsync<UpdateAgentProfileDraftHttpRequest>(http, ct);
+        if (!AgentProfileHttpRequestMapper.TryMap(request, out var mappedRequest))
+            return InvalidHttpBody();
 
         try
         {
@@ -127,14 +124,10 @@ public static class AgentProfileEndpoints
                 caller,
                 profileSlug,
                 expectedVersion,
-                new UpdateAgentProfileDraftRequest(
-                    request.DisplayName,
-                    request.Purpose,
-                    request.Instructions,
-                    toolPolicy),
+                mappedRequest,
                 idempotencyKey,
                 ct);
-            return AgentProfileHttpResults.Accepted(receipt);
+            return AgentProfileHttpResults.Accepted(receipt, scopeId, profileSlug);
         }
         catch (Exception exception) when (
             AgentProfileHttpResults.TryMapException(exception, out var result))
@@ -148,7 +141,6 @@ public static class AgentProfileEndpoints
         string scopeId,
         string profileSlug,
         string bindingId,
-        AgentProfileSkillBindingHttpRequest request,
         [FromServices] IAgentProfileCommandService commands,
         CancellationToken ct)
     {
@@ -162,12 +154,10 @@ public static class AgentProfileEndpoints
         {
             return rejected;
         }
-        if (request.Skill is null)
-        {
-            return AgentProfileHttpResults.Error(
-                StatusCodes.Status400BadRequest,
-                "INVALID_AGENT_PROFILE_SKILL_REFERENCE");
-        }
+
+        var request = await ReadRequestAsync<AgentProfileSkillBindingHttpRequest>(http, ct);
+        if (!AgentProfileHttpRequestMapper.TryMap(request, out var mappedRequest))
+            return InvalidHttpBody();
 
         try
         {
@@ -176,18 +166,10 @@ public static class AgentProfileEndpoints
                 profileSlug,
                 bindingId,
                 expectedVersion,
-                new UpsertAgentProfileSkillBindingRequest(
-                    request.ActivationMode,
-                    new ExactOrnnSkillReference
-                    {
-                        SkillGuid = request.Skill.SkillGuid,
-                        LiteralVersion = request.Skill.LiteralVersion,
-                        ExpectedName = request.Skill.ExpectedName,
-                        ExpectedPublisherId = request.Skill.ExpectedPublisherId,
-                    }),
+                mappedRequest,
                 idempotencyKey,
                 ct);
-            return AgentProfileHttpResults.Accepted(receipt);
+            return AgentProfileHttpResults.Accepted(receipt, scopeId, profileSlug);
         }
         catch (Exception exception) when (
             AgentProfileHttpResults.TryMapException(exception, out var result))
@@ -224,7 +206,7 @@ public static class AgentProfileEndpoints
                 expectedVersion,
                 idempotencyKey,
                 ct);
-            return AgentProfileHttpResults.Accepted(receipt);
+            return AgentProfileHttpResults.Accepted(receipt, scopeId, profileSlug);
         }
         catch (Exception exception) when (
             AgentProfileHttpResults.TryMapException(exception, out var result))
@@ -281,7 +263,7 @@ public static class AgentProfileEndpoints
                 expectedVersion,
                 idempotencyKey,
                 ct);
-            return AgentProfileHttpResults.Accepted(receipt);
+            return AgentProfileHttpResults.Accepted(receipt, scopeId, profileSlug);
         }
         catch (Exception exception) when (
             AgentProfileHttpResults.TryMapException(exception, out var result))
@@ -343,24 +325,23 @@ public static class AgentProfileEndpoints
             out rejected);
     }
 
-    private static bool TryMapToolPolicy(
-        AgentProfileToolPolicyHttpRequest? request,
-        out AgentProfileToolPolicy policy,
-        out IResult rejected)
+    private static async Task<T?> ReadRequestAsync<T>(
+        HttpContext http,
+        CancellationToken ct)
+        where T : class
     {
-        policy = new AgentProfileToolPolicy();
-        if (request is null)
+        try
         {
-            rejected = AgentProfileHttpResults.Error(
-                StatusCodes.Status400BadRequest,
-                "INVALID_AGENT_PROFILE_TOOL_POLICY");
-            return false;
+            return await http.Request.ReadFromJsonAsync<T>(cancellationToken: ct);
         }
-
-        policy.Mode = request.Mode;
-        policy.ToolNames.Add(request.ToolNames ?? []);
-        policy.ToolSetRefs.Add(request.ToolSetRefs ?? []);
-        rejected = Results.Empty;
-        return true;
+        catch (JsonException)
+        {
+            return null;
+        }
     }
+
+    private static IResult InvalidHttpBody() =>
+        AgentProfileHttpResults.Error(
+            StatusCodes.Status400BadRequest,
+            "INVALID_AGENT_PROFILE_HTTP_BODY");
 }

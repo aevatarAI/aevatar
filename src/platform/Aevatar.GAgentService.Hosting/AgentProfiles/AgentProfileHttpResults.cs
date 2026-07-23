@@ -7,13 +7,21 @@ namespace Aevatar.GAgentService.Hosting.AgentProfiles;
 
 internal static class AgentProfileHttpResults
 {
-    public static IResult Accepted(AgentProfileAcceptedReceipt receipt)
+    public static IResult Accepted(
+        AgentProfileAcceptedReceipt receipt,
+        string scopeId,
+        string profileSlug)
     {
         ArgumentNullException.ThrowIfNull(receipt);
+        var expectedResourceUrl = $"/api/scopes/{scopeId}/agent-profiles/{profileSlug}";
         if (!receipt.Accepted ||
             !string.Equals(receipt.AckStage, "accepted", StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(receipt.ResourceUrl) ||
-            !receipt.ResourceUrl.StartsWith("/api/scopes/", StringComparison.Ordinal))
+            string.IsNullOrWhiteSpace(receipt.OperationId) ||
+            string.IsNullOrWhiteSpace(receipt.CommandId) ||
+            string.IsNullOrWhiteSpace(receipt.CorrelationId) ||
+            string.IsNullOrWhiteSpace(receipt.ActorId) ||
+            string.IsNullOrWhiteSpace(receipt.ProfileId) ||
+            !string.Equals(receipt.ResourceUrl, expectedResourceUrl, StringComparison.Ordinal))
         {
             return Error(
                 StatusCodes.Status503ServiceUnavailable,
@@ -21,7 +29,7 @@ internal static class AgentProfileHttpResults
         }
 
         return Results.Accepted(
-            receipt.ResourceUrl,
+            expectedResourceUrl,
             new AgentProfileAcceptedHttpResponse(
                 receipt.Accepted,
                 receipt.AckStage,
@@ -30,7 +38,7 @@ internal static class AgentProfileHttpResults
                 receipt.CorrelationId,
                 receipt.ActorId,
                 receipt.ProfileId,
-                receipt.ResourceUrl));
+                expectedResourceUrl));
     }
 
     public static IResult Management(

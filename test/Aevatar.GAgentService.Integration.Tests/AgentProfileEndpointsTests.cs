@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Hosting.Endpoints;
@@ -368,6 +370,115 @@ public sealed class AgentProfileEndpointsTests
     }
 
     [Theory]
+    [InlineData(BodyRouteKind.Create, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Create, InvalidJsonKind.Unmapped)]
+    [InlineData(BodyRouteKind.Draft, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Draft, InvalidJsonKind.Unmapped)]
+    [InlineData(BodyRouteKind.Skill, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Skill, InvalidJsonKind.Unmapped)]
+    public async Task ReviewOrdering_WrongScope_ShouldPrecedeBodyBinding(
+        BodyRouteKind routeKind,
+        InvalidJsonKind jsonKind)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyRequest(
+            routeKind,
+            InvalidJson(jsonKind),
+            scopeClaims: "scope-other",
+            ifMatch: "\"agent-profile-v14\"");
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("SCOPE_ACCESS_DENIED");
+        host.TotalServiceCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(BodyRouteKind.Draft, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Draft, InvalidJsonKind.Unmapped)]
+    [InlineData(BodyRouteKind.Skill, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Skill, InvalidJsonKind.Unmapped)]
+    public async Task ReviewOrdering_MissingIfMatch_ShouldPrecedeBodyBinding(
+        BodyRouteKind routeKind,
+        InvalidJsonKind jsonKind)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyRequest(routeKind, InvalidJson(jsonKind), ifMatch: null);
+
+        using var response = await host.Client.SendAsync(request);
+
+        ((int)response.StatusCode).Should().Be(StatusCodes.Status428PreconditionRequired);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("AGENT_PROFILE_IF_MATCH_REQUIRED");
+        host.TotalServiceCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(BodyRouteKind.Draft)]
+    [InlineData(BodyRouteKind.Skill)]
+    public async Task ReviewOrdering_InvalidIfMatch_ShouldPrecedeBodyBinding(BodyRouteKind routeKind)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyRequest(
+            routeKind,
+            InvalidJson(InvalidJsonKind.Malformed),
+            ifMatch: "W/\"agent-profile-v14\"");
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("INVALID_AGENT_PROFILE_IF_MATCH");
+        host.TotalServiceCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(BodyRouteKind.Create, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Create, InvalidJsonKind.Unmapped)]
+    [InlineData(BodyRouteKind.Draft, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Draft, InvalidJsonKind.Unmapped)]
+    [InlineData(BodyRouteKind.Skill, InvalidJsonKind.Malformed)]
+    [InlineData(BodyRouteKind.Skill, InvalidJsonKind.Unmapped)]
+    public async Task ReviewOrdering_ValidGates_InvalidBodyShouldRemainSafeBadRequest(
+        BodyRouteKind routeKind,
+        InvalidJsonKind jsonKind)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyRequest(
+            routeKind,
+            InvalidJson(jsonKind),
+            ifMatch: "\"agent-profile-v14\"");
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("INVALID_AGENT_PROFILE_HTTP_BODY");
+        host.TotalServiceCalls.Should().Be(0);
+    }
+
+    [Theory]
+    [MemberData(nameof(ReviewInvalidStructureBodies))]
+    public async Task ReviewStructure_NullOrMissingRequiredMember_ShouldReturnSafeBadRequest(
+        BodyRouteKind routeKind,
+        string caseName,
+        string json)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = BodyRequest(
+            routeKind,
+            json,
+            ifMatch: "\"agent-profile-v14\"");
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, caseName);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        responseBody.Should().Contain("INVALID_AGENT_PROFILE_HTTP_BODY", caseName);
+        responseBody.Should().NotContain(SecretInstructions);
+        responseBody.Should().NotContain(SecretSkillBody);
+        host.TotalServiceCalls.Should().Be(0, caseName);
+    }
+
+    [Theory]
     [InlineData("owner")]
     [InlineData("ownerSubject")]
     [InlineData("scopeId")]
@@ -588,6 +699,74 @@ public sealed class AgentProfileEndpointsTests
     }
 
     [Theory]
+    [InlineData("accepted-false")]
+    [InlineData("ack-stage")]
+    [InlineData("operation-empty")]
+    [InlineData("operation-whitespace")]
+    [InlineData("command-empty")]
+    [InlineData("command-whitespace")]
+    [InlineData("correlation-empty")]
+    [InlineData("correlation-whitespace")]
+    [InlineData("actor-empty")]
+    [InlineData("actor-whitespace")]
+    [InlineData("profile-empty")]
+    [InlineData("profile-whitespace")]
+    [InlineData("resource-empty")]
+    [InlineData("resource-whitespace")]
+    [InlineData("resource-absolute")]
+    [InlineData("resource-wrong-scope")]
+    [InlineData("resource-wrong-slug")]
+    [InlineData("resource-query")]
+    [InlineData("resource-fragment")]
+    [InlineData("resource-traversal")]
+    [InlineData("resource-encoded-slash")]
+    [InlineData("resource-encoded-backslash")]
+    [InlineData("resource-trailing-slash")]
+    [InlineData("resource-double-slash")]
+    public async Task ReviewReceipt_InvalidAcceptedReceipt_ShouldFailClosedWithoutLocation(string caseName)
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        host.CommandService.Receipt = InvalidReceipt(host.CommandService.Receipt, caseName);
+        using var request = MutationRequest(MutationKind.Publish);
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable, caseName);
+        response.Headers.Location.Should().BeNull(caseName);
+        using var json = await ReadJsonAsync(response);
+        json.RootElement.EnumerateObject().Select(static property => property.Name)
+            .Should().Equal("code");
+        json.RootElement.GetProperty("code").GetString()
+            .Should().Be("AGENT_PROFILE_DISPATCH_REJECTED");
+        host.TotalServiceCalls.Should().Be(1, caseName);
+    }
+
+    [Fact]
+    public async Task ReviewReceipt_ValidAcceptedReceipt_ShouldUseCanonicalSameResourceLocation()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        using var request = MutationRequest(MutationKind.Publish);
+
+        using var response = await host.Client.SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location.Should().NotBeNull();
+        response.Headers.Location!.OriginalString.Should().Be(ManagementRoute());
+        using var json = await ReadJsonAsync(response);
+        json.RootElement.EnumerateObject().Select(static property => property.Name).Should().BeEquivalentTo(
+            "accepted",
+            "ackStage",
+            "operationId",
+            "commandId",
+            "correlationId",
+            "actorId",
+            "profileId",
+            "resourceUrl");
+        json.RootElement.GetProperty("resourceUrl").GetString().Should().Be(ManagementRoute());
+        json.RootElement.GetProperty("ackStage").GetString().Should().Be("accepted");
+    }
+
+    [Theory]
     [InlineData(FailureKind.Request, HttpStatusCode.BadRequest)]
     [InlineData(FailureKind.NotFound, HttpStatusCode.NotFound)]
     [InlineData(FailureKind.Stale, HttpStatusCode.PreconditionFailed)]
@@ -628,6 +807,41 @@ public sealed class AgentProfileEndpointsTests
         host.TotalServiceCalls.Should().Be(1);
     }
 
+    public static IEnumerable<object[]> ReviewInvalidStructureBodies()
+    {
+        foreach (var routeKind in Enum.GetValues<BodyRouteKind>())
+        {
+            yield return [routeKind, "body-null", "null"];
+            foreach (var path in RequiredBodyPaths(routeKind))
+            {
+                yield return [
+                    routeKind,
+                    $"{path}-missing",
+                    MutateBody(routeKind, path, remove: true),
+                ];
+                yield return [
+                    routeKind,
+                    $"{path}-null",
+                    MutateBody(routeKind, path, remove: false),
+                ];
+            }
+
+            if (routeKind is BodyRouteKind.Create or BodyRouteKind.Draft)
+            {
+                yield return [
+                    routeKind,
+                    "toolPolicy.toolNames-null-element",
+                    AddNullArrayElement(routeKind, "toolPolicy.toolNames"),
+                ];
+                yield return [
+                    routeKind,
+                    "toolPolicy.toolSetRefs-null-element",
+                    AddNullArrayElement(routeKind, "toolPolicy.toolSetRefs"),
+                ];
+            }
+        }
+    }
+
     private static HttpRequestMessage MutationRequest(MutationKind kind)
     {
         var request = kind switch
@@ -655,6 +869,158 @@ public sealed class AgentProfileEndpointsTests
 
         return request;
     }
+
+    private static HttpRequestMessage BodyRequest(
+        BodyRouteKind routeKind,
+        string json,
+        string? scopeClaims = ScopeId,
+        string? ifMatch = null)
+    {
+        var request = routeKind switch
+        {
+            BodyRouteKind.Create => CreateRequest(
+                HttpMethod.Post,
+                CollectionRoute(),
+                scopeClaims: scopeClaims),
+            BodyRouteKind.Draft => CreateRequest(
+                HttpMethod.Put,
+                DraftRoute(),
+                scopeClaims: scopeClaims),
+            BodyRouteKind.Skill => CreateRequest(
+                HttpMethod.Put,
+                SkillRoute(),
+                scopeClaims: scopeClaims),
+            _ => throw new ArgumentOutOfRangeException(nameof(routeKind), routeKind, null),
+        };
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        if (routeKind == BodyRouteKind.Create)
+            request.Headers.Add("Idempotency-Key", "create-alpha");
+        else if (ifMatch is not null)
+            request.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        return request;
+    }
+
+    private static string InvalidJson(InvalidJsonKind kind) => kind switch
+    {
+        InvalidJsonKind.Malformed => "{\"unexpected\":",
+        InvalidJsonKind.Unmapped => "{\"unexpected\":true}",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+    };
+
+    private static IReadOnlyList<string> RequiredBodyPaths(BodyRouteKind routeKind) => routeKind switch
+    {
+        BodyRouteKind.Create =>
+        [
+            "profileSlug",
+            "displayName",
+            "purpose",
+            "instructions",
+            "toolPolicy",
+            "toolPolicy.mode",
+            "toolPolicy.toolNames",
+            "toolPolicy.toolSetRefs",
+        ],
+        BodyRouteKind.Draft =>
+        [
+            "displayName",
+            "purpose",
+            "instructions",
+            "toolPolicy",
+            "toolPolicy.mode",
+            "toolPolicy.toolNames",
+            "toolPolicy.toolSetRefs",
+        ],
+        BodyRouteKind.Skill =>
+        [
+            "activationMode",
+            "skill",
+            "skill.skillGuid",
+            "skill.literalVersion",
+            "skill.expectedName",
+            "skill.expectedPublisherId",
+        ],
+        _ => throw new ArgumentOutOfRangeException(nameof(routeKind), routeKind, null),
+    };
+
+    private static string MutateBody(BodyRouteKind routeKind, string path, bool remove)
+    {
+        var root = BodyNode(routeKind);
+        var (container, propertyName) = ResolveJsonProperty(root, path);
+        if (remove)
+            container.Remove(propertyName);
+        else
+            container[propertyName] = null;
+        return root.ToJsonString();
+    }
+
+    private static string AddNullArrayElement(BodyRouteKind routeKind, string path)
+    {
+        var root = BodyNode(routeKind);
+        var (container, propertyName) = ResolveJsonProperty(root, path);
+        var array = container[propertyName] as JsonArray
+            ?? throw new InvalidOperationException($"'{path}' is not a JSON array.");
+        array.Add((JsonNode?)null);
+        return root.ToJsonString();
+    }
+
+    private static JsonObject BodyNode(BodyRouteKind routeKind)
+    {
+        object body = routeKind switch
+        {
+            BodyRouteKind.Create => CreateBody(),
+            BodyRouteKind.Draft => DraftBody(),
+            BodyRouteKind.Skill => SkillBody(),
+            _ => throw new ArgumentOutOfRangeException(nameof(routeKind), routeKind, null),
+        };
+        return JsonSerializer.SerializeToNode(body)?.AsObject()
+            ?? throw new InvalidOperationException("The test body could not be serialized.");
+    }
+
+    private static (JsonObject Container, string PropertyName) ResolveJsonProperty(
+        JsonObject root,
+        string path)
+    {
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var container = root;
+        foreach (var segment in segments[..^1])
+        {
+            container = container[segment] as JsonObject
+                ?? throw new InvalidOperationException($"'{path}' has no object container.");
+        }
+
+        return (container, segments[^1]);
+    }
+
+    private static AgentProfileAcceptedReceipt InvalidReceipt(
+        AgentProfileAcceptedReceipt valid,
+        string caseName) => caseName switch
+    {
+        "accepted-false" => valid with { Accepted = false },
+        "ack-stage" => valid with { AckStage = "committed" },
+        "operation-empty" => valid with { OperationId = string.Empty },
+        "operation-whitespace" => valid with { OperationId = " " },
+        "command-empty" => valid with { CommandId = string.Empty },
+        "command-whitespace" => valid with { CommandId = " " },
+        "correlation-empty" => valid with { CorrelationId = string.Empty },
+        "correlation-whitespace" => valid with { CorrelationId = " " },
+        "actor-empty" => valid with { ActorId = string.Empty },
+        "actor-whitespace" => valid with { ActorId = " " },
+        "profile-empty" => valid with { ProfileId = string.Empty },
+        "profile-whitespace" => valid with { ProfileId = " " },
+        "resource-empty" => valid with { ResourceUrl = string.Empty },
+        "resource-whitespace" => valid with { ResourceUrl = " " },
+        "resource-absolute" => valid with { ResourceUrl = "https://evil.example/api/scopes/scope-alpha/agent-profiles/profile-alpha" },
+        "resource-wrong-scope" => valid with { ResourceUrl = "/api/scopes/scope-other/agent-profiles/profile-alpha" },
+        "resource-wrong-slug" => valid with { ResourceUrl = "/api/scopes/scope-alpha/agent-profiles/profile-other" },
+        "resource-query" => valid with { ResourceUrl = $"{ManagementRoute()}?secret=value" },
+        "resource-fragment" => valid with { ResourceUrl = $"{ManagementRoute()}#fragment" },
+        "resource-traversal" => valid with { ResourceUrl = "/api/scopes/scope-alpha/agent-profiles/../profile-alpha" },
+        "resource-encoded-slash" => valid with { ResourceUrl = "/api/scopes/scope-alpha/agent-profiles/profile%2Falpha" },
+        "resource-encoded-backslash" => valid with { ResourceUrl = "/api/scopes/scope-alpha/agent-profiles/profile%5Calpha" },
+        "resource-trailing-slash" => valid with { ResourceUrl = $"{ManagementRoute()}/" },
+        "resource-double-slash" => valid with { ResourceUrl = "/api/scopes//scope-alpha/agent-profiles/profile-alpha" },
+        _ => throw new ArgumentOutOfRangeException(nameof(caseName), caseName, null),
+    };
 
     private static HttpRequestMessage CreateRequest(
         HttpMethod method,
@@ -777,6 +1143,19 @@ public sealed class AgentProfileEndpointsTests
         UpsertSkill,
         RemoveSkill,
         Publish,
+    }
+
+    public enum BodyRouteKind
+    {
+        Create,
+        Draft,
+        Skill,
+    }
+
+    public enum InvalidJsonKind
+    {
+        Malformed,
+        Unmapped,
     }
 
     public enum FailureKind

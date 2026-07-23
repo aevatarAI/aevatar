@@ -6,39 +6,155 @@ namespace Aevatar.GAgentService.Hosting.AgentProfiles;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreateAgentProfileHttpRequest(
+    [property: JsonRequired]
     string ProfileSlug,
     string? OwnerHandle,
+    [property: JsonRequired]
     string DisplayName,
+    [property: JsonRequired]
     string Purpose,
+    [property: JsonRequired]
     string Instructions,
+    [property: JsonRequired]
     AgentProfileToolPolicyHttpRequest ToolPolicy);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateAgentProfileDraftHttpRequest(
+    [property: JsonRequired]
     string DisplayName,
+    [property: JsonRequired]
     string Purpose,
+    [property: JsonRequired]
     string Instructions,
+    [property: JsonRequired]
     AgentProfileToolPolicyHttpRequest ToolPolicy);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AgentProfileSkillBindingHttpRequest(
+    [property: JsonRequired]
     [property: JsonConverter(typeof(AgentProfileSkillActivationModeJsonConverter))]
     AgentProfileSkillActivationMode ActivationMode,
+    [property: JsonRequired]
     ExactOrnnSkillReferenceHttpRequest Skill);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ExactOrnnSkillReferenceHttpRequest(
+    [property: JsonRequired]
     string SkillGuid,
+    [property: JsonRequired]
     string LiteralVersion,
+    [property: JsonRequired]
     string ExpectedName,
+    [property: JsonRequired]
     string ExpectedPublisherId);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AgentProfileToolPolicyHttpRequest(
+    [property: JsonRequired]
     [property: JsonConverter(typeof(AgentProfileToolPolicyModeJsonConverter))]
     AgentProfileToolPolicyMode Mode,
-    IReadOnlyList<string>? ToolNames,
-    IReadOnlyList<string>? ToolSetRefs);
+    [property: JsonRequired]
+    IReadOnlyList<string> ToolNames,
+    [property: JsonRequired]
+    IReadOnlyList<string> ToolSetRefs);
+
+internal static class AgentProfileHttpRequestMapper
+{
+    public static bool TryMap(
+        CreateAgentProfileHttpRequest? request,
+        out CreateAgentProfileRequest mapped)
+    {
+        mapped = null!;
+        if (request is null ||
+            request.ProfileSlug is null ||
+            request.DisplayName is null ||
+            request.Purpose is null ||
+            request.Instructions is null ||
+            !TryMap(request.ToolPolicy, out var toolPolicy))
+        {
+            return false;
+        }
+
+        mapped = new CreateAgentProfileRequest(
+            request.ProfileSlug,
+            request.OwnerHandle,
+            request.DisplayName,
+            request.Purpose,
+            request.Instructions,
+            toolPolicy);
+        return true;
+    }
+
+    public static bool TryMap(
+        UpdateAgentProfileDraftHttpRequest? request,
+        out UpdateAgentProfileDraftRequest mapped)
+    {
+        mapped = null!;
+        if (request is null ||
+            request.DisplayName is null ||
+            request.Purpose is null ||
+            request.Instructions is null ||
+            !TryMap(request.ToolPolicy, out var toolPolicy))
+        {
+            return false;
+        }
+
+        mapped = new UpdateAgentProfileDraftRequest(
+            request.DisplayName,
+            request.Purpose,
+            request.Instructions,
+            toolPolicy);
+        return true;
+    }
+
+    public static bool TryMap(
+        AgentProfileSkillBindingHttpRequest? request,
+        out UpsertAgentProfileSkillBindingRequest mapped)
+    {
+        mapped = null!;
+        if (request?.Skill is null ||
+            request.Skill.SkillGuid is null ||
+            request.Skill.LiteralVersion is null ||
+            request.Skill.ExpectedName is null ||
+            request.Skill.ExpectedPublisherId is null)
+        {
+            return false;
+        }
+
+        mapped = new UpsertAgentProfileSkillBindingRequest(
+            request.ActivationMode,
+            new ExactOrnnSkillReference
+            {
+                SkillGuid = request.Skill.SkillGuid,
+                LiteralVersion = request.Skill.LiteralVersion,
+                ExpectedName = request.Skill.ExpectedName,
+                ExpectedPublisherId = request.Skill.ExpectedPublisherId,
+            });
+        return true;
+    }
+
+    private static bool TryMap(
+        AgentProfileToolPolicyHttpRequest? request,
+        out AgentProfileToolPolicy mapped)
+    {
+        mapped = null!;
+        if (request?.ToolNames is null ||
+            request.ToolSetRefs is null ||
+            request.ToolNames.Any(static value => value is null) ||
+            request.ToolSetRefs.Any(static value => value is null))
+        {
+            return false;
+        }
+
+        mapped = new AgentProfileToolPolicy
+        {
+            Mode = request.Mode,
+        };
+        mapped.ToolNames.Add(request.ToolNames);
+        mapped.ToolSetRefs.Add(request.ToolSetRefs);
+        return true;
+    }
+}
 
 internal sealed record AgentProfileAcceptedHttpResponse(
     bool Accepted,
