@@ -8,7 +8,7 @@ using Aevatar.Studio.Application.Provisioning;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
-internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolCapabilityDescriptor
+internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool
 {
     private const string CredentialProvisioningKind = "dedicated_scheduled_invocation_agent_key";
 
@@ -66,9 +66,6 @@ internal sealed class ScheduleStudioMemberWorkflowTool : IAgentTool, IAgentToolC
         """;
 
     public ToolApprovalMode ApprovalMode => ToolApprovalPolicies.CreateScopedResource;
-
-    public IReadOnlyCollection<string> Capabilities { get; } =
-        [AgentToolCapabilities.ExcludeFromDirectChannelChat];
 
     public bool IsReadOnly => false;
     public bool IsDestructive => false;
