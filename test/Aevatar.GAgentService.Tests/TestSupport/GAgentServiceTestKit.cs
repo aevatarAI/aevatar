@@ -94,6 +94,16 @@ internal static class GAgentServiceTestKit
             InputSha256 = inputSha256,
         };
 
+    public static void SetAgentProfileDispatchAttempt(
+        AgentProfileOperationFact operation,
+        string attemptId)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(attemptId);
+        operation.CommandId = $"cmd-{attemptId}";
+        operation.CorrelationId = $"corr-{attemptId}";
+    }
+
     public static ServiceEndpointSpec CreateEndpointSpec(
         string endpointId = "run",
         ServiceEndpointKind kind = ServiceEndpointKind.Command,

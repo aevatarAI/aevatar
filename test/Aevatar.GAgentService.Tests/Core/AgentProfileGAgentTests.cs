@@ -56,6 +56,50 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
+    public async Task Initialize_ShouldRejectSelfConsistentUnauthorizedNamespaceAuthority()
+    {
+        const string unauthorizedNamespaceActorId = "namespace-unauthorized";
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand(operationId: "op-initialize-unauthorized-authority");
+        command.NamespaceActorId = unauthorizedNamespaceActorId;
+
+        var act = () => DispatchInitializeAsync(agent, command, unauthorizedNamespaceActorId);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PROTOCOL_PUBLISHER_MISMATCH");
+        agent.State.Identity.Should().BeNull();
+        (await store.GetEventsAsync(agent.Id)).Should().BeEmpty();
+        publisher.Sends.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InitializeAlreadyInitialized_UnauthorizedAuthorityExactRetryShouldFailClosedConsistently()
+    {
+        const string unauthorizedNamespaceActorId = "namespace-unauthorized";
+        var (agent, store, publisher) = await CreateInitializedActorAsync();
+        var eventCount = (await store.GetEventsAsync(agent.Id)).Count;
+        var sendCount = publisher.Sends.Count;
+        var command = InitializeCommand(operationId: "op-initialize-unauthorized-retry");
+        command.NamespaceActorId = unauthorizedNamespaceActorId;
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(command.Operation, "unauthorized-first");
+
+        var firstException = await Record.ExceptionAsync(
+            () => DispatchInitializeAsync(agent, command, unauthorizedNamespaceActorId));
+        var replay = command.Clone();
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(replay.Operation, "unauthorized-retry");
+        var retryException = await Record.ExceptionAsync(
+            () => DispatchInitializeAsync(agent, replay, unauthorizedNamespaceActorId));
+
+        firstException.Should().BeOfType<AgentProfileActorInvariantException>()
+            .Which.Code.Should().Be("PROFILE_PROTOCOL_PUBLISHER_MISMATCH");
+        retryException.Should().BeOfType<AgentProfileActorInvariantException>()
+            .Which.Code.Should().Be("PROFILE_PROTOCOL_PUBLISHER_MISMATCH");
+        agent.EventSourcing!.CurrentVersion.Should().Be(eventCount);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCount);
+        publisher.Sends.Should().HaveCount(sendCount);
+    }
+
+    [Fact]
     public async Task Initialize_IdenticalOperationReplayShouldResendContinuationWithoutNewEvent()
     {
         var (agent, store, publisher) = await CreateActorAsync();
@@ -1038,8 +1082,9 @@ public sealed class AgentProfileGAgentTests
         var rejectedVersion = agent.EventSourcing!.CurrentVersion;
         var replay = CloneMutation(command);
         MutationOperation(replay).InputSha256 = Digest(0x82);
-        MutationOperation(replay).CommandId = $"cmd-bad-digest-{mutation}-retry";
-        MutationOperation(replay).CorrelationId = $"corr-bad-digest-{mutation}-retry";
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            MutationOperation(replay),
+            $"bad-digest-{mutation}-retry");
 
         await DispatchMutationAsync(agent, replay);
 
@@ -1060,6 +1105,9 @@ public sealed class AgentProfileGAgentTests
         var operationId = $"op-digest-alias-{mutation}";
         var first = CanonicalMutationCommand(agent, mutation, "alpha", operationId);
         var second = CanonicalMutationCommand(agent, mutation, "beta", operationId);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            MutationOperation(second),
+            $"digest-alias-{mutation}-second");
         var secondDigest = CanonicalMutationInputSha256(second);
         CanonicalMutationInputSha256(first).Should().NotEqual(secondDigest);
         MutationOperation(first).InputSha256 = secondDigest;
@@ -1087,6 +1135,9 @@ public sealed class AgentProfileGAgentTests
         var operationId = $"op-cross-family-{firstMutation}-{secondMutation}";
         var first = CanonicalMutationCommand(agent, firstMutation, "alpha", operationId);
         var second = CanonicalMutationCommand(agent, secondMutation, "beta", operationId);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            MutationOperation(second),
+            $"cross-family-{secondMutation}-second");
         MutationOperation(first).InputSha256 = CanonicalMutationInputSha256(second);
         await DispatchMutationAsync(agent, first);
         var rejectedVersion = agent.EventSourcing!.CurrentVersion;
@@ -1113,12 +1164,18 @@ public sealed class AgentProfileGAgentTests
         var rejectedVersion = agent.EventSourcing!.CurrentVersion;
         var replay = command.Clone();
         replay.Operation.InputSha256 = Digest(0x83);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            replay.Operation,
+            "initialize-bad-digest-retry");
 
         await DispatchInitializeAsync(agent, replay);
 
         agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
         publisher.Sends.Should().HaveCount(2);
         var drifted = InitializeCommand(identity, secondContent, command.Operation.OperationId);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            drifted.Operation,
+            "initialize-bad-digest-drift");
         var act = () => DispatchInitializeAsync(agent, drifted);
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
@@ -1138,6 +1195,12 @@ public sealed class AgentProfileGAgentTests
             agent.State.Identity,
             agent.State.Draft,
             update.Operation.OperationId);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            initialize.Operation,
+            "initialize-cross-family-first");
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            update.Operation,
+            "initialize-cross-family-second");
         initialize.Operation.InputSha256 = update.Operation.InputSha256;
         await DispatchInitializeAsync(agent, initialize);
         var rejectedVersion = agent.EventSourcing.CurrentVersion;
@@ -1165,11 +1228,17 @@ public sealed class AgentProfileGAgentTests
             .Should().Be("MISSING_PROFILE_CONTENT");
         var replay = command.Clone();
         replay.Operation.InputSha256 = Digest(0x85);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            replay.Operation,
+            "missing-initialize-retry");
         await DispatchInitializeAsync(agent, replay);
         agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
         publisher.Sends.Should().HaveCount(2);
         var drifted = command.Clone();
         drifted.InitialContent = new AgentProfileContent();
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            drifted.Operation,
+            "missing-initialize-drift");
         var act = () => DispatchInitializeAsync(agent, drifted);
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
@@ -1199,10 +1268,16 @@ public sealed class AgentProfileGAgentTests
         agent.State.LastMutation.Diagnostic.Code.Should().Be(expectedCode);
         var replay = CloneMutation(command);
         MutationOperation(replay).InputSha256 = Digest(0x87);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            MutationOperation(replay),
+            $"missing-{mutation}-retry");
         await DispatchMutationAsync(agent, replay);
         agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
         var drifted = CloneMutation(command);
         SetPresentEmptyNestedMutationPayload(drifted);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            MutationOperation(drifted),
+            $"missing-{mutation}-drift");
         var act = () => DispatchMutationAsync(agent, drifted);
         var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
         exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");

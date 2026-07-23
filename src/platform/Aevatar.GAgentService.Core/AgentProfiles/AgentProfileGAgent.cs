@@ -17,9 +17,21 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     {
         ArgumentNullException.ThrowIfNull(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var namespaceActorId = AgentProfileActorInvariants.RequireActorId(
+        var claimedNamespaceActorId = AgentProfileActorInvariants.RequireActorId(
             command.NamespaceActorId,
             "namespace_actor_id");
+        var namespaceActorId = State.Identity is null
+            ? AgentProfileActorIds.Namespace
+            : AgentProfileActorInvariants.RequireActorId(
+                State.NamespaceActorId,
+                "state.namespace_actor_id");
+        if (!string.Equals(namespaceActorId, AgentProfileActorIds.Namespace, StringComparison.Ordinal) ||
+            !string.Equals(claimedNamespaceActorId, namespaceActorId, StringComparison.Ordinal))
+        {
+            throw AgentProfileActorInvariants.Error(
+                "PROFILE_PROTOCOL_PUBLISHER_MISMATCH",
+                "Profile initialization must originate from the committed Phase-1 Namespace Actor.");
+        }
         AgentProfileActorInvariants.RequireProtocolPublisher(
             ActiveInboundEnvelope?.Route?.PublisherActorId,
             namespaceActorId);
@@ -27,7 +39,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             AgentProfileOperationKind.Initialize,
             Id,
             namespaceActorId,
-            ComputeInitializeSemanticInputSha256(command));
+            ComputeInitializeSemanticInputSha256(command, namespaceActorId));
 
         AgentProfileIdentity identity;
         try
@@ -114,7 +126,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         if (State.Identity is not null)
         {
             await PersistInitializationRejectionAsync(
-                State.NamespaceActorId,
+                namespaceActorId,
                 operation,
                 identity,
                 AgentProfileActorInvariants.IdentityConflict(),
@@ -786,11 +798,13 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         return material;
     }
 
-    private ByteString ComputeInitializeSemanticInputSha256(InitializeAgentProfileCommand command)
+    private ByteString ComputeInitializeSemanticInputSha256(
+        InitializeAgentProfileCommand command,
+        string namespaceActorId)
     {
         var material = new AgentProfileInitializeSemanticInputFingerprintMaterial
         {
-            NamespaceActorId = command.NamespaceActorId,
+            NamespaceActorId = namespaceActorId,
             ProfileActorId = Id,
         };
         if (command.Identity is not null)

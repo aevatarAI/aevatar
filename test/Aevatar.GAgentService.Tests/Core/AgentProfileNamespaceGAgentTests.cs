@@ -474,7 +474,11 @@ public sealed class AgentProfileNamespaceGAgentTests
 
         await DispatchPublishedSummaryAsync(agent, first);
         var versionAfterFirst = agent.EventSourcing!.CurrentVersion;
-        await DispatchPublishedSummaryAsync(agent, first.Clone());
+        var replay = first.Clone();
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            replay.Operation,
+            "published-summary-retry");
+        await DispatchPublishedSummaryAsync(agent, replay);
         await DispatchPublishedSummaryAsync(agent,
             Summary(command, "op-publish-stale", revision: 0, digestByte: 0x30));
 
@@ -613,6 +617,9 @@ public sealed class AgentProfileNamespaceGAgentTests
         var rejectedVersion = agent.EventSourcing!.CurrentVersion;
         var replay = command.Clone();
         replay.Operation.InputSha256 = Digest(0x82);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            replay.Operation,
+            "create-bad-digest-retry");
 
         await agent.HandleCreateAsync(replay);
 
@@ -633,6 +640,9 @@ public sealed class AgentProfileNamespaceGAgentTests
                 profileId: "prof-beta",
                 profileSlug: "researcher"),
             operationId: operationId);
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            second.Operation,
+            "create-digest-alias-second");
         first.Operation.InputSha256 = second.Operation.InputSha256;
         await agent.HandleCreateAsync(first);
         var rejectedVersion = agent.EventSourcing!.CurrentVersion;
@@ -656,6 +666,9 @@ public sealed class AgentProfileNamespaceGAgentTests
         malformed.Operation.InputSha256 = valid.Operation.InputSha256;
         await agent.HandleCreateAsync(malformed);
         var rejectedVersion = agent.EventSourcing!.CurrentVersion;
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            valid.Operation,
+            "canonical-create-second");
 
         var act = () => agent.HandleCreateAsync(valid);
 
@@ -675,6 +688,9 @@ public sealed class AgentProfileNamespaceGAgentTests
         await DispatchInitializedAsync(agent, Initialized(command));
         var summary = Summary(command, command.Operation.OperationId, revision: 1, digestByte: 0x61);
         summary.Operation.InputSha256 = command.Operation.InputSha256;
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            summary.Operation,
+            "create-summary-cross-family-second");
         var version = agent.EventSourcing!.CurrentVersion;
 
         var act = () => DispatchPublishedSummaryAsync(agent, summary);
