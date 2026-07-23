@@ -57,6 +57,21 @@ public sealed class StudioUserConfigOwnerLlmConfigSourceTests
     }
 
     [Fact]
+    public async Task GetForScopeAsync_ShouldReturnNoExplicitRoute_WhenSavedSelectionIsMissing()
+    {
+        var config = new UserConfig(
+            DefaultModel: "gpt-5.5",
+            PreferredLlmRoute: string.Empty,
+            MaxToolRounds: 9,
+            LlmSelection: null);
+        var source = new StudioUserConfigOwnerLlmConfigSource(new StubQueryPort(config));
+
+        var result = await source.GetForScopeAsync("scope-1");
+
+        result.PreferredLlmRoute.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetForScopeAsync_ShouldReturnCanonicalRouteForTypedGateway()
     {
         var config = new UserConfig(

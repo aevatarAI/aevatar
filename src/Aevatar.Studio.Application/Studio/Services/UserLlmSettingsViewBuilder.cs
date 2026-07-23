@@ -64,28 +64,37 @@ internal sealed class UserLlmSettingsViewBuilder
         string defaultModel)
     {
         var saved = ResolveSavedSelection(savedSelection, savedRoute);
-        var label = saved.Kind == UserLlmSelectionKind.Gateway
+        var savedRouteLabel = saved.Kind switch
+        {
+            UserLlmSelectionKind.Gateway => _gatewayRouteLabel,
+            UserLlmSelectionKind.Unspecified => string.Empty,
+            _ => saved.ServiceSlug ?? saved.Route,
+        };
+        var effectiveRoute = saved.Kind == UserLlmSelectionKind.Unspecified
+            ? UserConfigLlmRouteDefaults.Gateway
+            : saved.Route;
+        var effectiveRouteLabel = saved.Kind == UserLlmSelectionKind.Unspecified
             ? _gatewayRouteLabel
-            : saved.ServiceSlug ?? saved.Route;
+            : savedRouteLabel;
 
         return new UserLlmSettingsView(
             SavedRoute: saved.Route,
-            SavedRouteLabel: label,
+            SavedRouteLabel: savedRouteLabel,
             SavedRouteKind: UserLlmSelectionKindWire.From(saved.Kind),
             SavedUserServiceId: saved.UserServiceId,
             SavedServiceSlug: saved.ServiceSlug,
-            EffectiveRoute: saved.Route,
-            EffectiveRouteLabel: label,
+            EffectiveRoute: effectiveRoute,
+            EffectiveRouteLabel: effectiveRouteLabel,
             RouteFallbackActive: false,
             FallbackReason: UserLlmFallbackReasonValue.CatalogUnavailable.ToWireValue(),
             RouteOptions:
             [
                 new UserLlmRouteOption(
-                    RouteValue: saved.Route,
-                    Label: label,
-                    Source: saved.Kind == UserLlmSelectionKind.Gateway
-                        ? UserLlmRouteSourceValue.GatewayProvider.ToWireValue()
-                        : UserLlmRouteSourceValue.UserService.ToWireValue(),
+                    RouteValue: effectiveRoute,
+                    Label: effectiveRouteLabel,
+                    Source: saved.Kind == UserLlmSelectionKind.NyxIdUserService
+                        ? UserLlmRouteSourceValue.UserService.ToWireValue()
+                        : UserLlmRouteSourceValue.GatewayProvider.ToWireValue(),
                     Status: UserLlmRouteStatusValue.Unavailable.ToWireValue(),
                     Allowed: false,
                     Ready: false,
@@ -196,6 +205,9 @@ internal sealed class UserLlmSettingsViewBuilder
         string effectiveRoute,
         IReadOnlyList<UserLlmRouteOption> routeOptions)
     {
+        if (saved.Kind == UserLlmSelectionKind.Unspecified)
+            return false;
+
         var savedOption = FindSavedOption(saved, routeOptions);
         if (saved.Kind == UserLlmSelectionKind.NyxIdUserService)
             return savedOption is not { Ready: true, Allowed: true };
@@ -305,6 +317,15 @@ internal sealed class UserLlmSettingsViewBuilder
         UserLlmSelectionValue? selection,
         string savedRoute)
     {
+        if (selection is null or { Kind: UserLlmSelectionKind.Unspecified })
+        {
+            return new SavedSelection(
+                UserLlmSelectionKind.Unspecified,
+                string.Empty,
+                null,
+                null);
+        }
+
         if (selection is { Kind: UserLlmSelectionKind.Gateway })
         {
             return new SavedSelection(
@@ -323,12 +344,9 @@ internal sealed class UserLlmSettingsViewBuilder
                 UserLlmPreferenceWriteCore.NormalizeOptional(selection.ServiceSlugSnapshot));
         }
 
-        var normalizedRoute = UserConfigLlmRoute.Normalize(savedRoute);
         return new SavedSelection(
-            string.Equals(normalizedRoute, UserConfigLlmRouteDefaults.Gateway, StringComparison.OrdinalIgnoreCase)
-                ? UserLlmSelectionKind.Gateway
-                : UserLlmSelectionKind.Unspecified,
-            normalizedRoute,
+            UserLlmSelectionKind.Unspecified,
+            string.Empty,
             null,
             null);
     }

@@ -10,6 +10,14 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class ProjectionUserConfigQueryPortTests
 {
+    [Fact]
+    public void UserConfig_ShouldDefaultCompatibilityRouteToEmpty()
+    {
+        var config = new UserConfig(DefaultModel: string.Empty);
+
+        config.PreferredLlmRoute.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(UserConfigResourceKind.OwnerScope, "scope-alpha", "user-config-scope-alpha")]
     [InlineData(UserConfigResourceKind.ChannelBinding, "binding-alpha", "channel-user-config-binding-alpha")]
@@ -63,7 +71,21 @@ public sealed class ProjectionUserConfigQueryPortTests
         var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
 
         config.LlmSelection.Should().BeNull();
-        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        config.PreferredLlmRoute.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldKeepCompatibilityRouteEmpty_WhenProjectedSelectionIsMissing()
+    {
+        var port = CreatePort(new RecordingDocumentReader
+        {
+            Document = new UserConfigCurrentStateDocument(),
+        });
+
+        var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
+
+        config.LlmSelection.Should().BeNull();
+        config.PreferredLlmRoute.Should().BeEmpty();
     }
 
     private static ProjectionUserConfigQueryPort CreatePort(RecordingDocumentReader reader) =>

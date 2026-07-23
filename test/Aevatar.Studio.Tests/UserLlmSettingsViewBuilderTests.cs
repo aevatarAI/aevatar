@@ -9,6 +9,67 @@ public sealed class UserLlmSettingsViewBuilderTests
     private const string SharedRoute = "/api/v1/proxy/s/shared-llm";
     private readonly UserLlmSettingsViewBuilder _builder = new("NyxID Gateway");
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BuildAvailable_WithoutCommittedSelection_ShouldKeepSavedRouteUnspecified(
+        bool useUnspecifiedSelection)
+    {
+        var selection = useUnspecifiedSelection
+            ? new UserLlmSelectionValue(
+                UserLlmSelectionKind.Unspecified,
+                UserConfigLlmRouteDefaults.Gateway,
+                "us-legacy",
+                "legacy")
+            : null;
+
+        var view = _builder.BuildAvailable(
+            new NyxIdLlmServicesResult([], null),
+            selection,
+            string.Empty,
+            string.Empty);
+
+        view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
+        view.SavedRoute.Should().BeEmpty();
+        view.SavedUserServiceId.Should().BeNull();
+        view.SavedServiceSlug.Should().BeNull();
+        view.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        view.RouteFallbackActive.Should().BeFalse();
+        view.FallbackReason.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BuildUnavailable_WithoutCommittedSelection_ShouldExposeOnlyEffectiveGatewayFallback(
+        bool useUnspecifiedSelection)
+    {
+        var selection = useUnspecifiedSelection
+            ? new UserLlmSelectionValue(
+                UserLlmSelectionKind.Unspecified,
+                "/api/v1/proxy/s/legacy",
+                "us-legacy",
+                "legacy")
+            : null;
+
+        var view = _builder.BuildUnavailable(
+            selection,
+            "/api/v1/proxy/s/legacy",
+            string.Empty);
+
+        view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
+        view.SavedRoute.Should().BeEmpty();
+        view.SavedRouteLabel.Should().BeEmpty();
+        view.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        view.EffectiveRouteLabel.Should().Be("NyxID Gateway");
+        view.FallbackReason.Should().Be(UserLlmFallbackReason.CatalogUnavailable);
+        view.RouteOptions.Should().ContainSingle().Which.Should().Match<UserLlmRouteOption>(option =>
+            option.RouteValue == UserConfigLlmRouteDefaults.Gateway &&
+            option.Source == UserLlmRouteSource.GatewayProvider &&
+            !option.Allowed &&
+            !option.Ready);
+    }
+
     [Fact]
     public void BuildAvailable_WithTypedServiceMissingIdAndGatewayRoute_ShouldMarkSelectionUnavailable()
     {

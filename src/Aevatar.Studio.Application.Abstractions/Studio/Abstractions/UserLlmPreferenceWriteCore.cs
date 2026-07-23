@@ -111,13 +111,6 @@ public static class UserLlmPreferenceWriteCore
         return prefixed.Model;
     }
 
-    // Legacy read compatibility only. Authoritative writes use RequireInventoryOption.
-    public static bool IsSameOption(UserLlmOption option, string requested) =>
-        string.Equals(option.Identity?.NyxIdUserServiceId, requested, StringComparison.Ordinal) ||
-        string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(option.RouteValue, UserConfigLlmRoute.Normalize(requested), StringComparison.OrdinalIgnoreCase);
-
     private static int OptionSelectabilityRank(UserLlmOption option)
     {
         var ready = string.Equals(option.Status, UserLlmRouteStatus.Ready, StringComparison.OrdinalIgnoreCase);

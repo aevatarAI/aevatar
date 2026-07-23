@@ -448,19 +448,33 @@ public sealed class UserConfigServiceTests
         result.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
     }
 
-    [Fact]
-    public async Task GetSettingsAsync_WithLegacyPrefixedModel_ShouldPreserveReplayTransition()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetSettingsAsync_WithoutCommittedSelection_ShouldKeepSavedRouteUnspecified(
+        bool useUnspecifiedSelection)
     {
         var service = new UserLlmPreferenceService(
-            new StubUserConfigQueryPort(new UserConfig(DefaultModel: "shared/gpt-5.5")),
+            new StubUserConfigQueryPort(new UserConfig(
+                DefaultModel: "shared/gpt-5.5",
+                PreferredLlmRoute: string.Empty,
+                LlmSelection: useUnspecifiedSelection
+                    ? new UserLlmSelectionValue(
+                        UserLlmSelectionKind.Unspecified,
+                        UserConfigLlmRouteDefaults.Gateway,
+                        "us-legacy",
+                        "shared")
+                    : null)),
             new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
                 [InventoryService("us-alpha", "shared")],
                 null)));
 
         var result = await service.GetSettingsAsync("bearer", CancellationToken.None);
 
-        result.SavedRoute.Should().Be("/api/v1/proxy/s/shared");
-        result.DefaultModel.Should().Be("gpt-5.5");
+        result.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
+        result.SavedRoute.Should().BeEmpty();
+        result.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+        result.DefaultModel.Should().Be("shared/gpt-5.5");
     }
 
     private static UserLlmPreferenceWriter CreateWriter(

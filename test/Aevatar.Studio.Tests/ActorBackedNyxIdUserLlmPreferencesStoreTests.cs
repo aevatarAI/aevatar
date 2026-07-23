@@ -6,13 +6,62 @@ namespace Aevatar.Studio.Tests;
 
 public sealed class ActorBackedNyxIdUserLlmPreferencesStoreTests
 {
-    [Fact]
-    public async Task GetForBindingAsync_ShouldReadTypedChannelBindingResource()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetForBindingAsync_WithoutCommittedSelection_ShouldIgnoreCompatibilityRoute(
+        bool useUnspecifiedSelection)
     {
         var queryPort = new RecordingUserConfigQueryPort(new UserConfig(
             DefaultModel: "gpt-5.5",
-            PreferredLlmRoute: "/api/v1/proxy/s/chrono-llm-public",
-            MaxToolRounds: 8));
+            PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+            MaxToolRounds: 8,
+            LlmSelection: useUnspecifiedSelection
+                ? new UserLlmSelectionValue(
+                    UserLlmSelectionKind.Unspecified,
+                    "/api/v1/proxy/s/legacy",
+                    "us-legacy",
+                    "legacy")
+                : null));
+        var store = new ActorBackedNyxIdUserLlmPreferencesStore(queryPort);
+
+        var preferences = await store.GetForBindingAsync("binding-alpha");
+
+        preferences.PreferredRoute.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetForBindingAsync_WithTypedGateway_ShouldReturnCanonicalGateway()
+    {
+        var queryPort = new RecordingUserConfigQueryPort(new UserConfig(
+            DefaultModel: "gpt-5.5",
+            PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+            MaxToolRounds: 8,
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.Gateway,
+                "/api/v1/proxy/s/legacy",
+                "us-legacy",
+                "legacy")));
+        var store = new ActorBackedNyxIdUserLlmPreferencesStore(queryPort);
+
+        var preferences = await store.GetForBindingAsync("binding-alpha");
+
+        preferences.PreferredRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+    }
+
+    [Fact]
+    public async Task GetForBindingAsync_ShouldReadTypedChannelBindingResource()
+    {
+        const string typedRoute = "/api/v1/proxy/s/chrono-llm-public";
+        var queryPort = new RecordingUserConfigQueryPort(new UserConfig(
+            DefaultModel: "gpt-5.5",
+            PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+            MaxToolRounds: 8,
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.NyxIdUserService,
+                typedRoute,
+                "us-chrono",
+                "chrono-llm-public")));
         var store = new ActorBackedNyxIdUserLlmPreferencesStore(queryPort);
 
         var preferences = await store.GetForBindingAsync("binding-alpha");
@@ -20,7 +69,7 @@ public sealed class ActorBackedNyxIdUserLlmPreferencesStoreTests
         queryPort.Resources.Should().ContainSingle().Which.Should()
             .Be(UserConfigResourceKey.ForChannelBinding("binding-alpha"));
         preferences.DefaultModel.Should().Be("gpt-5.5");
-        preferences.PreferredRoute.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+        preferences.PreferredRoute.Should().Be(typedRoute);
         preferences.MaxToolRounds.Should().Be(8);
     }
 

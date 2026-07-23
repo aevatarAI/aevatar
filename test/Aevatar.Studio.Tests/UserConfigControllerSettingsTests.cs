@@ -39,7 +39,7 @@ public sealed class UserConfigControllerSettingsTests
             (HttpStatusCode.OK, """{"services":[]}"""))
             .RespondToUserServicesWith(PersonalUserServicesJson("us-openai", "openai-work", "OpenAI Work"));
         var controller = CreateController(
-            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            current: UserServiceConfig("gpt-5.4", "openai-work", "us-openai"),
             httpHandler: httpHandler,
             bearerToken: "user-token-1");
 
@@ -170,7 +170,7 @@ public sealed class UserConfigControllerSettingsTests
     public async Task GetLlmSettings_ShouldUseConfiguredGatewayRouteLabel()
     {
         var controller = CreateController(
-            current: new UserConfig(string.Empty),
+            current: new UserConfig(string.Empty, string.Empty),
             httpHandler: new RecordingHttpHandler("""{"services":[]}"""),
             bearerToken: "user-token-1",
             llmSettingsOptions: new UserLlmSettingsOptions
@@ -182,7 +182,10 @@ public sealed class UserConfigControllerSettingsTests
 
         var ok = response.Result.Should().BeOfType<OkObjectResult>().Subject;
         var payload = ok.Value.Should().BeOfType<UserLlmSettingsResponse>().Subject;
-        payload.SavedRouteLabel.Should().Be("Aevatar Gateway");
+        payload.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
+        payload.SavedRoute.Should().BeEmpty();
+        payload.SavedRouteLabel.Should().BeEmpty();
+        payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         payload.EffectiveRouteLabel.Should().Be("Aevatar Gateway");
         payload.RouteOptions.Should()
             .ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway)
@@ -193,7 +196,7 @@ public sealed class UserConfigControllerSettingsTests
     public async Task GetLlmSettings_WhenCatalogFails_ShouldReturnDegradedView()
     {
         var controller = CreateController(
-            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            current: UserServiceConfig("gpt-5.4", "openai-work", "us-openai"),
             httpHandler: new RecordingHttpHandler((HttpStatusCode.BadGateway, """{"error":"offline"}""")),
             bearerToken: "user-token-1");
 
@@ -213,7 +216,7 @@ public sealed class UserConfigControllerSettingsTests
     public async Task GetLlmSettings_WhenSavedRouteUnavailable_ShouldFallbackToGateway()
     {
         var controller = CreateController(
-            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/missing"),
+            current: UserServiceConfig("gpt-5.4", "missing", "us-missing"),
             httpHandler: new RecordingHttpHandler(SingleReadyServiceJson()),
             bearerToken: "user-token-1");
 
@@ -252,7 +255,7 @@ public sealed class UserConfigControllerSettingsTests
     public async Task GetLlmSettings_EligibleInventory_ShouldIgnoreDiagnosticAllowedFlag()
     {
         var controller = CreateController(
-            current: new UserConfig("gpt-5.4", "/api/v1/proxy/s/openai-work"),
+            current: UserServiceConfig("gpt-5.4", "openai-work", "us-openai"),
             httpHandler: new RecordingHttpHandler("""
             {
               "services": [
@@ -426,7 +429,7 @@ public sealed class UserConfigControllerSettingsTests
             """))
             .RespondToUserServicesWith(PersonalUserServicesJson("us-chrono", "chrono-llm", "Chrono LLM"));
         var controller = CreateController(
-            current: new UserConfig("gpt-5.5", "/api/v1/proxy/s/chrono-llm"),
+            current: UserServiceConfig("gpt-5.5", "chrono-llm", "us-chrono"),
             httpHandler: httpHandler,
             bearerToken: "user-token-1");
 
@@ -577,7 +580,8 @@ public sealed class UserConfigControllerSettingsTests
         payload.RouteOptions.Should().NotContain(option =>
             option.RouteValue == "/api/v1/proxy/s/openai-work");
         payload.EffectiveRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        payload.RouteFallbackActive.Should().BeTrue();
+        payload.RouteFallbackActive.Should().BeFalse();
+        payload.FallbackReason.Should().BeNull();
     }
 
     [Theory]
@@ -832,6 +836,19 @@ public sealed class UserConfigControllerSettingsTests
           ]
         }
         """;
+
+    private static UserConfig UserServiceConfig(string defaultModel, string serviceSlug, string userServiceId)
+    {
+        var route = $"/api/v1/proxy/s/{serviceSlug}";
+        return new UserConfig(
+            DefaultModel: defaultModel,
+            PreferredLlmRoute: route,
+            LlmSelection: new UserLlmSelectionValue(
+                UserLlmSelectionKind.NyxIdUserService,
+                route,
+                userServiceId,
+                serviceSlug));
+    }
 
     private sealed class StubUserConfigQueryPort(UserConfig config) : IUserConfigQueryPort
     {

@@ -49,9 +49,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
 
         return new UserConfig(
             DefaultModel: document.DefaultModel,
-            PreferredLlmRoute: string.IsNullOrEmpty(document.PreferredLlmRoute)
-                ? UserConfigLlmRouteDefaults.Gateway
-                : document.PreferredLlmRoute,
+            PreferredLlmRoute: document.PreferredLlmRoute ?? string.Empty,
             RuntimeMode: string.IsNullOrEmpty(document.RuntimeMode)
                 ? UserConfigRuntimeDefaults.LocalMode
                 : document.RuntimeMode,
@@ -69,7 +67,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
     private UserConfig CreateDefaultConfig() =>
         new(
             DefaultModel: string.Empty,
-            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
+            PreferredLlmRoute: string.Empty,
             RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
             LocalRuntimeBaseUrl: _defaultLocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl,

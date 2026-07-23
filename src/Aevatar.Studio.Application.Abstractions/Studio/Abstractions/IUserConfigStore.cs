@@ -211,7 +211,7 @@ public sealed record UserConfigRuntimeView(
 
 public sealed record UserConfig(
     string DefaultModel,
-    string PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
+    string PreferredLlmRoute = "",
     string RuntimeMode = UserConfigRuntimeDefaults.LocalMode,
     string LocalRuntimeBaseUrl = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
     string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
