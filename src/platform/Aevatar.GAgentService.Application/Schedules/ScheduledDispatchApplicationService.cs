@@ -179,6 +179,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 Take = Math.Clamp(query.Take, 1, 200),
                 TeamAutomationOwner = null,
                 TeamAutomationScopeId = teamAutomationScopeId,
+                TeamAutomationTeamId = NormalizeNullable(query.TeamAutomationTeamId),
                 TeamAutomationMemberId = NormalizeNullable(query.TeamAutomationMemberId),
                 IncludeDeleted = false,
             }, ct);
@@ -576,15 +577,18 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     public async Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
         string scheduleId,
         string scopeId,
+        string? teamId = null,
         string? memberId = null,
         CancellationToken ct = default)
     {
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedTeamId = NormalizeNullable(teamId);
         var normalizedMemberId = NormalizeNullable(memberId);
         var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
         return detail?.Schedule is { Deleted: false } &&
                TeamScopeEquals(detail.Schedule, normalizedScopeId) &&
+               (normalizedTeamId is null || TeamEquals(detail.Schedule, normalizedTeamId)) &&
                (normalizedMemberId is null || TeamMemberEquals(detail.Schedule, normalizedMemberId))
             ? detail
             : null;
@@ -796,7 +800,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ArgumentNullException.ThrowIfNull(owner);
         return new TeamMemberAutomationOwner(
             NormalizeRequired(owner.ScopeId, nameof(owner.ScopeId)),
-            NormalizeRequired(owner.MemberId, nameof(owner.MemberId)));
+            NormalizeRequired(owner.MemberId, nameof(owner.MemberId)),
+            NormalizeOptional(owner.TeamId));
     }
 
     private static ScheduledInvocationAuthorizationOwner NormalizeAuthorizationOwner(
@@ -850,6 +855,9 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
     private static bool TeamScopeEquals(ScheduledDispatchSummary schedule, string scopeId) =>
         string.Equals(schedule.TeamOwnerScopeId, scopeId, StringComparison.Ordinal);
+
+    private static bool TeamEquals(ScheduledDispatchSummary schedule, string teamId) =>
+        string.Equals(schedule.TeamId, teamId, StringComparison.Ordinal);
 
     private static bool TeamMemberEquals(ScheduledDispatchSummary schedule, string memberId) =>
         string.Equals(schedule.TeamOwnerMemberId, memberId, StringComparison.Ordinal);

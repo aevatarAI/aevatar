@@ -193,6 +193,7 @@ public static class ScheduledDispatchEndpoints
     internal static async Task<IResult> List(
         [FromServices] IScheduledDispatchApplicationService schedules,
         string? scopeId = null,
+        string? teamId = null,
         string? memberId = null,
         int take = 50,
         string? cursor = null,
@@ -209,6 +210,7 @@ public static class ScheduledDispatchEndpoints
                 Cursor: cursor,
                 IncludeTotalCount: includeTotalCount,
                 TeamAutomationScopeId: scopeId,
+                TeamAutomationTeamId: teamId,
                 TeamAutomationMemberId: memberId);
 
         return Results.Ok(await schedules.ListAsync(query, ct));
@@ -218,6 +220,7 @@ public static class ScheduledDispatchEndpoints
         string scheduleId,
         [FromServices] IScheduledDispatchApplicationService schedules,
         string? scopeId = null,
+        string? teamId = null,
         string? memberId = null,
         CancellationToken ct = default)
     {
@@ -225,7 +228,7 @@ public static class ScheduledDispatchEndpoints
         {
             var schedule = string.IsNullOrWhiteSpace(scopeId)
                 ? await schedules.GetAsync(scheduleId, ct)
-                : await schedules.GetTeamScheduleAsync(scheduleId, scopeId, memberId, ct);
+                : await schedules.GetTeamScheduleAsync(scheduleId, scopeId, teamId, memberId, ct);
             return schedule == null ? Results.NotFound() : Results.Ok(schedule);
         }
         catch (ArgumentException ex)

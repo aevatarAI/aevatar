@@ -681,6 +681,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             {
                 ScopeId = owner.ScopeId,
                 MemberId = owner.MemberId,
+                TeamId = owner.TeamId,
             };
 
     private static TeamAutomationOperationKindState ToStateOperationKind(TeamAutomationOperationKind kind) =>

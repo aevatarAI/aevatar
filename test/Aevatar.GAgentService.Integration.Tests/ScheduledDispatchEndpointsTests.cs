@@ -692,6 +692,7 @@ public sealed class ScheduledDispatchEndpointsTests
         var result = await ScheduledDispatchEndpoints.List(
             service,
             scopeId: "scope-alpha",
+            teamId: "team-alpha",
             memberId: "member-alpha",
             take: 25,
             cursor: "cursor-1",
@@ -706,6 +707,7 @@ public sealed class ScheduledDispatchEndpointsTests
             Cursor: "cursor-1",
             IncludeTotalCount: true,
             TeamAutomationScopeId: "scope-alpha",
+            TeamAutomationTeamId: "team-alpha",
             TeamAutomationMemberId: "member-alpha"));
     }
 
@@ -744,6 +746,7 @@ public sealed class ScheduledDispatchEndpointsTests
             "schedule-1",
             service,
             scopeId: "scope-alpha",
+            teamId: "team-alpha",
             memberId: "member-alpha");
         var notFound = await ScheduledDispatchEndpoints.Get(
             "missing",
@@ -757,7 +760,7 @@ public sealed class ScheduledDispatchEndpointsTests
 
         okHttp.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        service.LastTeamScheduleGet.Should().Be(("schedule-1", "scope-alpha", "member-alpha"));
+        service.LastTeamScheduleGet.Should().Be(("schedule-1", "scope-alpha", "team-alpha", "member-alpha"));
         notFoundService.LastTeamScheduleGet.Should().NotBeNull();
         notFoundService.LastTeamScheduleGet!.Value.ScheduleId.Should().Be("missing");
         notFoundService.LastTeamScheduleGet.Value.ScopeId.Should().Be("scope-alpha");
@@ -1884,7 +1887,7 @@ public sealed class ScheduledDispatchEndpointsTests
         public bool? LastListIncludeTotalCount { get; private set; }
         public ScheduledDispatchListQuery? LastListQuery { get; private set; }
         public string? LastScheduleGet { get; private set; }
-        public (string ScheduleId, string ScopeId, string? MemberId)? LastTeamScheduleGet { get; private set; }
+        public (string ScheduleId, string ScopeId, string? TeamId, string? MemberId)? LastTeamScheduleGet { get; private set; }
         public int? LastPreviewCount { get; private set; }
         public DateTimeOffset? LastPreviewFromUtc { get; private set; }
         public ScheduledDispatchDetail? Detail { get; set; }
@@ -2027,10 +2030,11 @@ public sealed class ScheduledDispatchEndpointsTests
         public Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
             string scheduleId,
             string scopeId,
+            string? teamId = null,
             string? memberId = null,
             CancellationToken ct = default)
         {
-            LastTeamScheduleGet = (scheduleId, scopeId, memberId);
+            LastTeamScheduleGet = (scheduleId, scopeId, teamId, memberId);
             if (GetException != null)
                 throw GetException;
 

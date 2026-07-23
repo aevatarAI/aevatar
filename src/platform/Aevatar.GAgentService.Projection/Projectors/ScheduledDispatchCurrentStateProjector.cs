@@ -89,6 +89,7 @@ public sealed class ScheduledDispatchCurrentStateProjector
             Deleted = state.Deleted,
             Completed = state.Completed,
             TeamOwned = state.TeamAutomationOwner != null,
+            TeamId = state.TeamAutomationOwner?.TeamId ?? string.Empty,
             TeamAutomationOwner = state.TeamAutomationOwner == null
                 ? null
                 : new TeamMemberAutomationOwnerDocument

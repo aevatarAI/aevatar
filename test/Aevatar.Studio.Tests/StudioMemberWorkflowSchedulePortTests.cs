@@ -103,7 +103,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.Durable.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
         scheduleService.Configuration.TeamAutomationOwner.Should()
-            .Be(new TeamMemberAutomationOwner("scope-1", "member-1"));
+            .Be(new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"));
     }
 
     [Fact]

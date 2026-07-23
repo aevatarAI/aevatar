@@ -2069,6 +2069,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             ScopeId = NormalizeRequired(owner.ScopeId, nameof(owner.ScopeId)),
             MemberId = NormalizeRequired(owner.MemberId, nameof(owner.MemberId)),
+            TeamId = NormalizeOptional(owner.TeamId),
         };
     }
 
