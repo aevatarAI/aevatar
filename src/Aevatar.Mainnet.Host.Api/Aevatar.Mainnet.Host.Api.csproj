@@ -66,4 +66,10 @@
     <EmbeddedResource Include="Voice\voice-console.html" />
     <EmbeddedResource Include="Skills\workflow-skills.html" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../skills/aevatar-agent-profile-management/SKILL.md"
+             Link="skills/aevatar-agent-profile-management/SKILL.md"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

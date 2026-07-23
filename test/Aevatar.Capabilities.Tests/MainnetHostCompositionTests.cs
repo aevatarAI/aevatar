@@ -8,6 +8,7 @@ using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
+using Aevatar.AI.ToolProviders.AgentCatalog.AgentProfiles;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
@@ -476,6 +477,7 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
         workspace.Sources.Should().Contain(source => source is AgentDeliveryTargetToolSource);
+        workspace.Sources.Should().Contain(source => source is AgentProfilesToolSource);
         workspace.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
         workspace.Sources.Should().Contain(source => source is LarkAgentToolSource);
         workspace.Sources.Should().Contain(source => source is TelegramAgentToolSource);

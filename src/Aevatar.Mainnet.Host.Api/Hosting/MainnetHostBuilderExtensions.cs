@@ -5,6 +5,7 @@ using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
+using Aevatar.AI.ToolProviders.AgentCatalog.AgentProfiles;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
@@ -376,6 +377,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,
                     CreateToolSource<AgentDeliveryTargetToolSource>,
+                    CreateAgentProfilesToolSource,
                     CreateToolSource<NyxIdAgentToolSource>,
                     CreateToolSource<LarkAgentToolSource>,
                     CreateToolSource<TelegramAgentToolSource>,
@@ -405,6 +407,13 @@ public static class MainnetHostBuilderExtensions
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
         where TSource : class, IAgentToolSource
         => ActivatorUtilities.CreateInstance<TSource>(serviceProvider);
+
+    private static IAgentToolSource CreateAgentProfilesToolSource(IServiceProvider serviceProvider) =>
+        new AgentProfilesToolSource(
+            () => serviceProvider.GetRequiredService<
+                Aevatar.GAgentService.Abstractions.AgentProfiles.IAgentProfileCommandService>(),
+            () => serviceProvider.GetRequiredService<
+                Aevatar.GAgentService.Abstractions.AgentProfiles.IAgentProfileQueryService>());
 
     public static WebApplication MapAevatarMainnetHost(this WebApplication app)
     {

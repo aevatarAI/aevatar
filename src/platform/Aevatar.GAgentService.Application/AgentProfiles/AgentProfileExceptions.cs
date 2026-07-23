@@ -2,27 +2,14 @@ using Aevatar.GAgentService.Abstractions.AgentProfiles;
 
 namespace Aevatar.GAgentService.Application.AgentProfiles;
 
-public abstract class AgentProfileApplicationException : InvalidOperationException
+public abstract class AgentProfileApplicationException : AgentProfileBoundaryException
 {
-    private readonly IReadOnlyList<AgentProfileSafeDiagnostic> _diagnostics;
-
     protected AgentProfileApplicationException(
         string code,
         IReadOnlyList<AgentProfileSafeDiagnostic>? diagnostics = null)
-        : base(code)
+        : base(code, diagnostics)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(code);
-        Code = code;
-        _diagnostics = (diagnostics ?? [])
-            .Take(AgentProfileValidationLimits.DiagnosticMaxCount)
-            .Select(AgentProfilePolicies.NormalizeDiagnostic)
-            .ToArray();
     }
-
-    public string Code { get; }
-
-    public IReadOnlyList<AgentProfileSafeDiagnostic> Diagnostics =>
-        _diagnostics.Select(static diagnostic => diagnostic.Clone()).ToArray();
 }
 
 public sealed class AgentProfileRequestException : AgentProfileApplicationException

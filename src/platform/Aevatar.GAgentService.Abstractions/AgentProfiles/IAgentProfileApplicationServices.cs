@@ -25,6 +25,29 @@ public sealed record AgentProfileAcceptedReceipt(
     string ProfileId,
     string ResourceUrl);
 
+public abstract class AgentProfileBoundaryException : InvalidOperationException
+{
+    private readonly IReadOnlyList<AgentProfileSafeDiagnostic> _diagnostics;
+
+    protected AgentProfileBoundaryException(
+        string code,
+        IReadOnlyList<AgentProfileSafeDiagnostic>? diagnostics = null)
+        : base(code)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(code);
+        Code = code;
+        _diagnostics = (diagnostics ?? [])
+            .Take(AgentProfileValidationLimits.DiagnosticMaxCount)
+            .Select(AgentProfilePolicies.NormalizeDiagnostic)
+            .ToArray();
+    }
+
+    public string Code { get; }
+
+    public IReadOnlyList<AgentProfileSafeDiagnostic> Diagnostics =>
+        _diagnostics.Select(static diagnostic => diagnostic.Clone()).ToArray();
+}
+
 public interface IAgentProfileCommandService
 {
     Task<AgentProfileAcceptedReceipt> CreateAsync(
