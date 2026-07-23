@@ -809,7 +809,19 @@ const enUSMessages = {
   'teams.automations.error.title': 'Automations could not load',
   'teams.automations.form.cadence': 'Cadence',
   'teams.automations.form.cadenceAria': 'Automation cadence',
+  'teams.automations.form.agentKeyConsent':
+    'I consent to Aevatar creating an automation-dedicated Agent Key for this schedule.',
+  'teams.automations.form.agentKeyExpiry': 'Expires {time}',
+  'teams.automations.form.agentKeyManaged': 'Aevatar managed',
+  'teams.automations.form.agentKeyMode': 'Credential mode · {mode}',
+  'teams.automations.form.agentKeyNoRawKey':
+    'Browser never receives the raw Agent Key',
+  'teams.automations.form.agentKeyPlan':
+    'Automation dedicated Agent Key',
+  'teams.automations.form.close': 'Close',
   'teams.automations.form.create': 'Create automation',
+  'teams.automations.form.createWithConsent':
+    'Create with Agent Key consent',
   'teams.automations.form.cron': 'Cron expression',
   'teams.automations.form.cronAria': 'Cron expression',
   'teams.automations.form.cronFiveFieldHint':
@@ -828,11 +840,19 @@ const enUSMessages = {
     "Targets the member's published service.",
   'teams.automations.form.member': 'Member',
   'teams.automations.form.memberAria': 'Automation member',
+  'teams.automations.form.nodeGrants': 'Node grants',
+  'teams.automations.form.permissionDigest':
+    'Permission digest · {permissionDigest}',
+  'teams.automations.form.planChanged':
+    'The authorization plan changed. Refresh the review before creating.',
+  'teams.automations.form.policyVersion':
+    'Policy version · {policyVersion}',
   'teams.automations.form.preset.custom': 'Custom cron',
   'teams.automations.form.preset.dailyMorning': 'Daily · 09:00',
   'teams.automations.form.preset.hourly': 'Hourly',
   'teams.automations.form.preset.weekdaysMorning': 'Weekdays · 09:00',
   'teams.automations.form.preset.weeklyMonday': 'Monday · 09:00',
+  'teams.automations.form.preparingReview': 'Preparing review',
   'teams.automations.form.preview': 'Preview next runs',
   'teams.automations.form.previewEmpty':
     'Preview the cadence to confirm the next scheduled runs.',
@@ -844,8 +864,20 @@ const enUSMessages = {
     'Optional. Up to {maxLength} characters.',
   'teams.automations.form.promptPlaceholder':
     'Summarize escalations, blocked accounts, and follow-up owners.',
+  'teams.automations.form.refreshReview': 'Refresh review',
+  'teams.automations.form.reviewErrorBody':
+    'The mock contract could not prepare the review. Keep the draft and try again.',
+  'teams.automations.form.reviewErrorTitle':
+    'Permission review needs attention',
+  'teams.automations.form.reviewPermissions': 'Review permissions',
+  'teams.automations.form.reviewPlaceholder':
+    'Review is prepared after the draft cadence and target are ready.',
   'teams.automations.form.save': 'Save changes',
   'teams.automations.form.scheduleReadsAs': 'Schedule reads as',
+  'teams.automations.form.section.permissionReview':
+    '4. Review Agent Key consent',
+  'teams.automations.form.section.permissionReviewHint':
+    'Browser login authorization only confirms this consent. Automation uses a dedicated Agent Key managed by Aevatar.',
   'teams.automations.form.section.schedule': '3. Schedule',
   'teams.automations.form.section.scheduleHint':
     'Choose a common cadence or switch to custom cron for advanced schedules.',
@@ -855,6 +887,7 @@ const enUSMessages = {
   'teams.automations.form.section.work': '2. Work to run',
   'teams.automations.form.section.workHint':
     'Name the automation and optionally add a prompt for each run.',
+  'teams.automations.form.serviceGrants': 'Service grants',
   'teams.automations.form.timezone': 'Timezone',
   'teams.automations.form.timezoneAria': 'Timezone',
   'teams.automations.form.title': 'New member automation',
@@ -867,7 +900,11 @@ const enUSMessages = {
     'Only workflow members can have recurring work.',
   'teams.automations.messages.createFailed':
     'Automation was not created: {message}',
+  'teams.automations.messages.createAccepted':
+    'Automation creation request accepted.',
   'teams.automations.messages.createSuccess': 'Automation created.',
+  'teams.automations.messages.consentRequired':
+    'Review and consent to the automation-dedicated Agent Key before creating.',
   'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
   'teams.automations.messages.deleteSuccess': 'Automation deleted.',
   'teams.automations.messages.disableSuccess': 'Automation paused.',
@@ -881,6 +918,8 @@ const enUSMessages = {
     'Service identity is still loading.',
   'teams.automations.messages.serviceIdentityMissing':
     'The selected member does not have a service identity yet.',
+  'teams.automations.messages.reviewFailed':
+    'Permission review could not be prepared: {message}',
   'teams.automations.messages.updateFailed':
     'Automation was not updated: {message}',
   'teams.automations.messages.updateSuccess': 'Automation updated.',

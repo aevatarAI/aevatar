@@ -13,6 +13,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Button,
+  Checkbox,
   Input,
   Modal,
   Segmented,
@@ -37,6 +38,11 @@ import {
   type ScheduledDispatchRunNowReceipt,
   type ScheduledDispatchSummary,
 } from "@/shared/api/scheduledDispatchApi";
+import {
+  teamAutomationApi,
+  type TeamAutomationCreateDraft,
+  type TeamAutomationPermissionReview,
+} from "@/shared/api/teamAutomationApi";
 import { formatCompactDateTime } from "@/shared/datetime/dateTime";
 import type { ServiceIdentity } from "@/shared/models/services";
 import { history } from "@/shared/navigation/history";
@@ -86,6 +92,15 @@ type AutomationFormState = {
   readonly timezone: string;
 };
 
+type TeamAutomationCreateStage =
+  | "draft"
+  | "preflight"
+  | "permissionReview"
+  | "consent"
+  | "pending"
+  | "planChanged"
+  | "error";
+
 type ManualRunFeedback = Pick<
   ScheduledDispatchRunNowReceipt,
   "ackedAt" | "commandId" | "correlationId" | "scheduledFireAt"
@@ -100,6 +115,30 @@ const createdScheduleHighlightMs = 4_000;
 const customPreset = "custom";
 const defaultPreset = "weekdays-0900";
 const defaultCronExpression = "0 9 * * 1-5";
+
+function buildDefaultAutomationFormState(memberId = ""): AutomationFormState {
+  return {
+    cronExpression: defaultCronExpression,
+    displayName: "",
+    enabled: true,
+    memberId,
+    preset: defaultPreset,
+    prompt: "",
+    timezone: resolveDefaultTimezone(),
+  };
+}
+
+function hasAutomationDraft(formState: AutomationFormState): boolean {
+  return Boolean(
+    formState.displayName.trim() ||
+      formState.prompt.trim() ||
+      formState.memberId.trim() ||
+      formState.cronExpression.trim() !== defaultCronExpression ||
+      formState.preset !== defaultPreset ||
+      formState.timezone.trim() !== resolveDefaultTimezone() ||
+      !formState.enabled,
+  );
+}
 
 const pageGridStyle: React.CSSProperties = {
   alignItems: "start",
@@ -716,15 +755,18 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const highlightScheduleRef = React.useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  const [formState, setFormState] = React.useState<AutomationFormState>(() => ({
-    cronExpression: defaultCronExpression,
-    displayName: "",
-    enabled: true,
-    memberId: "",
-    preset: defaultPreset,
-    prompt: "",
-    timezone: resolveDefaultTimezone(),
-  }));
+  const [formState, setFormState] = React.useState<AutomationFormState>(() =>
+    buildDefaultAutomationFormState(),
+  );
+  const [createStage, setCreateStage] =
+    React.useState<TeamAutomationCreateStage>("draft");
+  const [permissionReview, setPermissionReview] =
+    React.useState<TeamAutomationPermissionReview | null>(null);
+  const [agentKeyConsentChecked, setAgentKeyConsentChecked] =
+    React.useState(false);
+  const [createReviewError, setCreateReviewError] = React.useState("");
+  const [hasPreservedCreateDraft, setHasPreservedCreateDraft] =
+    React.useState(false);
   const scheduleQueryKey = React.useMemo(
     () => ["scheduled-dispatches", "team", scopeId, teamId] as const,
     [scopeId, teamId],
@@ -1044,11 +1086,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   );
   const showCreatedScheduleFeedback = React.useCallback(
     ({
-      input,
+      draft,
       member,
       receipt,
     }: {
-      readonly input: ScheduledDispatchConfigurationInput;
+      readonly draft: TeamAutomationCreateDraft;
       readonly member: TeamAutomationMemberRow;
       readonly receipt: ScheduledDispatchMutationReceipt;
     }) => {
@@ -1061,14 +1103,14 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       const now = new Date().toISOString();
       const pendingSchedule: ScheduledDispatchSummary = {
         scheduleId,
-        displayName: trimText(input.displayName),
+        displayName: trimText(draft.displayName),
         targetKind: "service_invocation",
         targetActorId: "",
         payloadTypeUrl: "",
         serviceKey: [
-          input.workflowChatTarget.identity.tenantId,
-          input.workflowChatTarget.identity.appId,
-          input.workflowChatTarget.identity.namespace,
+          member.serviceIdentity?.tenantId ?? draft.scopeId,
+          member.serviceIdentity?.appId ?? "default",
+          member.serviceIdentity?.namespace ?? "default",
           serviceId,
         ]
           .map(trimText)
@@ -1076,10 +1118,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
           .join(":"),
         serviceId,
         serviceEndpointId: "chat",
-        prompt: trimText(input.workflowChatTarget.prompt),
-        cronExpression: input.cronExpression,
-        timezone: trimText(input.timezone) || resolveDefaultTimezone(),
-        enabled: input.enabled ?? true,
+        prompt: trimText(draft.prompt),
+        cronExpression: draft.cronExpression,
+        timezone: trimText(draft.timezone) || resolveDefaultTimezone(),
+        enabled: draft.enabled,
         createdAt: now,
         updatedAt: now,
         nextFireAt: null,
@@ -1090,7 +1132,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         lastError: "",
         fireCount: 0,
         failureCount: 0,
-        headers: { ...(input.headers ?? {}) },
+        headers: { source: "team-automations" },
         scheduleActorId: receipt.scheduleActorId,
         scheduleKind: "workflow",
         deleted: false,
@@ -1142,20 +1184,65 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       setPreview(result);
     },
   });
+  const permissionReviewMutation = useMutation({
+    mutationFn: ({
+      draft,
+    }: {
+      readonly draft: TeamAutomationCreateDraft;
+      readonly member: TeamAutomationMemberRow;
+    }) => teamAutomationApi.preflightCreate(draft),
+    onError: (error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      setCreateStage("error");
+      setCreateReviewError(detail);
+      void message.error(
+        intl.formatMessage(
+          {
+            id: "teams.automations.messages.reviewFailed",
+            defaultMessage: "Permission review could not be prepared: {message}",
+          },
+          { message: detail },
+        ),
+      );
+    },
+    onMutate: () => {
+      setAgentKeyConsentChecked(false);
+      setCreateReviewError("");
+      setCreateStage("preflight");
+    },
+    onSuccess: (review) => {
+      setPermissionReview(review);
+      setCreateStage(review.status === "plan-changed" ? "planChanged" : "permissionReview");
+    },
+  });
   const createMutation = useMutation({
     mutationFn: ({
-      input,
+      draft,
       member,
+      review,
     }: {
-      readonly input: ScheduledDispatchConfigurationInput;
+      readonly draft: TeamAutomationCreateDraft;
       readonly member: TeamAutomationMemberRow;
+      readonly review: TeamAutomationPermissionReview;
     }) =>
-      scheduledDispatchApi.create(input).then((receipt) => ({
-        input,
+      teamAutomationApi.create({
+        draft,
+        permissionDigest: review.permissionDigest,
+        policyVersion: review.policyVersion,
+        consent: {
+          accepted: true,
+          acceptedAt: new Date().toISOString(),
+          browserLoginConsent: true,
+          automationAgentKeyConsent: true,
+        },
+      }).then((receipt) => ({
+        draft,
         member,
         receipt,
       })),
     onError: (error) => {
+      setCreateStage("error");
+      setCreateReviewError(error instanceof Error ? error.message : String(error));
       void message.error(
         intl.formatMessage(
           {
@@ -1166,16 +1253,25 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ),
       );
     },
-    onSuccess: ({ input, member, receipt }) => {
+    onMutate: () => {
+      setCreateStage("pending");
+      setCreateReviewError("");
+    },
+    onSuccess: ({ draft, member, receipt }) => {
       void message.success(
         intl.formatMessage({
-          id: "teams.automations.messages.createSuccess",
-          defaultMessage: "Automation created.",
+          id: "teams.automations.messages.createAccepted",
+          defaultMessage: "Automation creation request accepted.",
         }),
       );
-      showCreatedScheduleFeedback({ input, member, receipt });
+      showCreatedScheduleFeedback({ draft, member, receipt });
       setCreateOpen(false);
       setPreview(null);
+      setPermissionReview(null);
+      setAgentKeyConsentChecked(false);
+      setCreateStage("draft");
+      setHasPreservedCreateDraft(false);
+      setFormState(buildDefaultAutomationFormState(selectedMember?.memberId ?? ""));
       scheduleDelayedRefresh();
     },
   });
@@ -1290,18 +1386,18 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const openCreate = React.useCallback(() => {
     const member = selectedMember;
     setEditingSchedule(null);
-    setFormState({
-      cronExpression: defaultCronExpression,
-      displayName: "",
-      enabled: true,
-      memberId: member?.memberId ?? "",
-      preset: defaultPreset,
-      prompt: "",
-      timezone: resolveDefaultTimezone(),
-    });
+    setFormState((current) =>
+      hasPreservedCreateDraft
+        ? current
+        : buildDefaultAutomationFormState(member?.memberId ?? ""),
+    );
     setPreview(null);
+    setPermissionReview(null);
+    setAgentKeyConsentChecked(false);
+    setCreateReviewError("");
+    setCreateStage("draft");
     setCreateOpen(true);
-  }, [selectedMember]);
+  }, [hasPreservedCreateDraft, selectedMember]);
 
   const openEdit = React.useCallback(
     (schedule: ScheduledDispatchSummary) => {
@@ -1312,6 +1408,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         cronPresets.find((item) => item.cronExpression === cronExpression)?.value ??
         customPreset;
       setEditingSchedule(schedule);
+      setHasPreservedCreateDraft(false);
       setFormState({
         cronExpression,
         displayName: trimText(schedule.displayName),
@@ -1322,6 +1419,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         timezone: trimText(schedule.timezone) || resolveDefaultTimezone(),
       });
       setPreview(null);
+      setPermissionReview(null);
+      setAgentKeyConsentChecked(false);
+      setCreateReviewError("");
+      setCreateStage("draft");
       setCreateOpen(true);
     },
     [cronPresets, findMemberForSchedule, selectedMember],
@@ -1354,8 +1455,15 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         ...patch,
       }));
       setPreview(null);
+      setPermissionReview(null);
+      setAgentKeyConsentChecked(false);
+      setCreateReviewError("");
+      setCreateStage("draft");
+      if (!isEditingAutomation) {
+        setHasPreservedCreateDraft(true);
+      }
     },
-    [],
+    [isEditingAutomation],
   );
 
   const previewNextRuns = React.useCallback(async () => {
@@ -1389,6 +1497,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   }, [previewNextRuns]);
 
   const saveAutomation = React.useCallback(async () => {
+    if (permissionReviewMutation.isPending || createMutation.isPending) {
+      return;
+    }
+
     const member = activeFormMember;
     const serviceIdentity = member?.serviceIdentity;
     const serviceRevisionId = trimText(member?.serviceRevisionId);
@@ -1431,18 +1543,20 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       );
       return;
     }
+    const displayName =
+      formState.displayName.trim() ||
+      intl.formatMessage(
+        {
+          id: "teams.automations.form.defaultTitle",
+          defaultMessage: "{memberName} recurring work",
+        },
+        { memberName: member.name },
+      );
+    const timezone = trimText(formState.timezone) || undefined;
     const input: ScheduledDispatchConfigurationInput = {
-      displayName:
-        formState.displayName.trim() ||
-        intl.formatMessage(
-          {
-            id: "teams.automations.form.defaultTitle",
-            defaultMessage: "{memberName} recurring work",
-          },
-          { memberName: member.name },
-        ),
+      displayName,
       cronExpression,
-      timezone: trimText(formState.timezone) || undefined,
+      timezone,
       enabled: formState.enabled,
       headers: {
         source: "team-automations",
@@ -1462,9 +1576,46 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       return;
     }
 
-    await createMutation.mutateAsync({ input, member });
+    const draft: TeamAutomationCreateDraft = {
+      scopeId,
+      teamId,
+      memberId: member.memberId,
+      publishedServiceId:
+        trimText(member.serviceIdentity?.serviceId) || trimText(member.serviceId),
+      serviceRevisionId: serviceRevisionId || undefined,
+      displayName,
+      prompt,
+      cronExpression,
+      timezone,
+      enabled: formState.enabled,
+    };
+
+    if (
+      !permissionReview ||
+      createStage === "draft" ||
+      createStage === "error" ||
+      createStage === "planChanged"
+    ) {
+      await permissionReviewMutation.mutateAsync({ draft, member });
+      return;
+    }
+
+    if (!agentKeyConsentChecked || createStage !== "consent") {
+      void message.error(
+        intl.formatMessage({
+          id: "teams.automations.messages.consentRequired",
+          defaultMessage:
+            "Review and consent to the automation-dedicated Agent Key before creating.",
+        }),
+      );
+      return;
+    }
+
+    await createMutation.mutateAsync({ draft, member, review: permissionReview });
   }, [
     activeFormMember,
+    agentKeyConsentChecked,
+    createStage,
     createMutation,
     editingScheduleId,
     formState.cronExpression,
@@ -1474,8 +1625,11 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     formState.timezone,
     intl,
     isEditingAutomation,
+    permissionReview,
+    permissionReviewMutation,
+    scopeId,
     serviceIdentitiesLoading,
-    showCreatedScheduleFeedback,
+    teamId,
     updateMutation,
   ]);
 
@@ -1915,7 +2069,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               : schedule.displayName;
 
           return (
-            <div
+            <article
               aria-label={rowAriaLabel}
               className="team-automation-row"
               key={scheduleId}
@@ -2075,7 +2229,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   onClick: () => deleteMutation.mutate(scheduleId),
                 })}
               </div>
-            </div>
+            </article>
           );
         })}
       </div>
@@ -2095,7 +2249,12 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     intl,
   );
   const canCreateAutomation = Boolean(activeFormMember?.serviceIdentity);
-  const formSubmitting = createMutation.isPending || updateMutation.isPending;
+  const formSubmitting =
+    createMutation.isPending ||
+    updateMutation.isPending ||
+    permissionReviewMutation.isPending;
+  const waitingForAgentKeyConsent =
+    !isEditingAutomation && createStage === "permissionReview";
   const formTitle = isEditingAutomation
     ? intl.formatMessage({
         id: "teams.automations.form.editTitle",
@@ -2110,10 +2269,27 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
         id: "teams.automations.form.save",
         defaultMessage: "Save changes",
       })
-    : intl.formatMessage({
-        id: "teams.automations.form.create",
-        defaultMessage: "Create automation",
-      });
+    : createStage === "preflight"
+      ? intl.formatMessage({
+          id: "teams.automations.form.preparingReview",
+          defaultMessage: "Preparing review",
+        })
+      : createStage === "permissionReview" ||
+          createStage === "consent" ||
+          createStage === "pending"
+        ? intl.formatMessage({
+            id: "teams.automations.form.createWithConsent",
+            defaultMessage: "Create with Agent Key consent",
+          })
+        : createStage === "planChanged"
+          ? intl.formatMessage({
+              id: "teams.automations.form.refreshReview",
+              defaultMessage: "Refresh review",
+            })
+          : intl.formatMessage({
+              id: "teams.automations.form.reviewPermissions",
+              defaultMessage: "Review permissions",
+            });
 
   return (
     <div className="team-automations-layout" style={pageGridStyle}>
@@ -2312,20 +2488,38 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
       </div>
 
       <Modal
+        cancelText={intl.formatMessage({
+          id: "teams.automations.form.close",
+          defaultMessage: "Close",
+        })}
         confirmLoading={formSubmitting}
         okButtonProps={{
           disabled:
+            formSubmitting ||
             !activeFormMember ||
             promptTooLong ||
             Boolean(formCronValidationMessage) ||
-            !canCreateAutomation,
+            !canCreateAutomation ||
+            (waitingForAgentKeyConsent && !agentKeyConsentChecked),
         }}
         okText={formOkText}
         onCancel={() => {
           if (!formSubmitting) {
+            if (isEditingAutomation) {
+              setHasPreservedCreateDraft(false);
+              setFormState(
+                buildDefaultAutomationFormState(selectedMember?.memberId ?? ""),
+              );
+            } else {
+              setHasPreservedCreateDraft(hasAutomationDraft(formState));
+            }
             setCreateOpen(false);
             setEditingSchedule(null);
             setPreview(null);
+            setPermissionReview(null);
+            setAgentKeyConsentChecked(false);
+            setCreateReviewError("");
+            setCreateStage("draft");
           }
         }}
         onOk={handleSaveAutomation}
@@ -2682,6 +2876,241 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               )}
             </div>
           </div>
+
+          {!isEditingAutomation ? (
+            <div
+              style={{
+                ...modalSectionStyle,
+                background: token.colorBgContainer,
+                border: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <div style={{ display: "grid", gap: 2 }}>
+                <Typography.Text strong>
+                  {intl.formatMessage({
+                    id: "teams.automations.form.section.permissionReview",
+                    defaultMessage: "4. Review Agent Key consent",
+                  })}
+                </Typography.Text>
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  {intl.formatMessage({
+                    id: "teams.automations.form.section.permissionReviewHint",
+                    defaultMessage:
+                      "Browser login authorization only confirms this consent. Automation uses a dedicated Agent Key managed by Aevatar.",
+                  })}
+                </Typography.Text>
+              </div>
+
+              {createStage === "preflight" ? (
+                <div
+                  style={{
+                    background: token.colorFillQuaternary,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderRadius: 10,
+                    padding: 12,
+                  }}
+                >
+                  <Skeleton active paragraph={{ rows: 2 }} title={false} />
+                </div>
+              ) : null}
+
+              {createStage === "error" ? (
+                <div
+                  role="alert"
+                  style={{
+                    background: token.colorErrorBg,
+                    border: `1px solid ${token.colorErrorBorder}`,
+                    borderRadius: 10,
+                    color: token.colorErrorText,
+                    display: "grid",
+                    gap: 4,
+                    padding: 12,
+                  }}
+                >
+                  <Typography.Text strong>
+                    {intl.formatMessage({
+                      id: "teams.automations.form.reviewErrorTitle",
+                      defaultMessage: "Permission review needs attention",
+                    })}
+                  </Typography.Text>
+                  <Typography.Text style={{ color: token.colorErrorText }}>
+                    {createReviewError ||
+                      intl.formatMessage({
+                        id: "teams.automations.form.reviewErrorBody",
+                        defaultMessage:
+                          "The mock contract could not prepare the review. Keep the draft and try again.",
+                      })}
+                  </Typography.Text>
+                </div>
+              ) : null}
+
+              {permissionReview ? (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {createStage === "planChanged" ? (
+                    <div
+                      role="status"
+                      style={{
+                        background: token.colorWarningBg,
+                        border: `1px solid ${token.colorWarningBorder}`,
+                        borderRadius: 10,
+                        color: token.colorWarningText,
+                        padding: 12,
+                      }}
+                    >
+                      <Typography.Text style={{ color: token.colorWarningText }}>
+                        {permissionReview.warning ||
+                          intl.formatMessage({
+                            id: "teams.automations.form.planChanged",
+                            defaultMessage:
+                              "The authorization plan changed. Refresh the review before creating.",
+                          })}
+                      </Typography.Text>
+                    </div>
+                  ) : null}
+
+                  <div
+                    style={{
+                      background: token.colorFillQuaternary,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: 10,
+                      display: "grid",
+                      gap: 10,
+                      padding: 12,
+                    }}
+                  >
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <Typography.Text strong>
+                        {intl.formatMessage({
+                          id: "teams.automations.form.agentKeyPlan",
+                          defaultMessage: "Automation dedicated Agent Key",
+                        })}
+                      </Typography.Text>
+                      <FactLine
+                        text={intl.formatMessage(
+                          {
+                            id: "teams.automations.form.agentKeyMode",
+                            defaultMessage: "Credential mode · {mode}",
+                          },
+                          { mode: permissionReview.credentialPlan.mode },
+                        )}
+                      />
+                      <FactLine
+                        text={intl.formatMessage({
+                          id: "teams.automations.form.agentKeyManaged",
+                          defaultMessage: "Aevatar managed",
+                        })}
+                      />
+                      <FactLine
+                        text={intl.formatMessage({
+                          id: "teams.automations.form.agentKeyNoRawKey",
+                          defaultMessage:
+                            "Browser never receives the raw Agent Key",
+                        })}
+                      />
+                      <FactLine
+                        text={intl.formatMessage(
+                          {
+                            id: "teams.automations.form.agentKeyExpiry",
+                            defaultMessage: "Expires {time}",
+                          },
+                          {
+                            time: formatScheduleTime(
+                              permissionReview.credentialPlan.expiresAt,
+                              "--",
+                            ),
+                          },
+                        )}
+                      />
+                      <FactLine
+                        text={intl.formatMessage(
+                          {
+                            id: "teams.automations.form.permissionDigest",
+                            defaultMessage:
+                              "Permission digest · {permissionDigest}",
+                          },
+                          {
+                            permissionDigest: permissionReview.permissionDigest,
+                          },
+                        )}
+                      />
+                      <FactLine
+                        text={intl.formatMessage(
+                          {
+                            id: "teams.automations.form.policyVersion",
+                            defaultMessage: "Policy version · {policyVersion}",
+                          },
+                          { policyVersion: permissionReview.policyVersion },
+                        )}
+                      />
+                    </div>
+
+                    <div
+                      className="team-automation-form-schedule-grid"
+                      style={{
+                        display: "grid",
+                        gap: 12,
+                        gridTemplateColumns:
+                          "minmax(0, 1fr) minmax(0, 1fr)",
+                      }}
+                    >
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <Typography.Text strong>
+                          {intl.formatMessage({
+                            id: "teams.automations.form.serviceGrants",
+                            defaultMessage: "Service grants",
+                          })}
+                        </Typography.Text>
+                        {permissionReview.serviceGrants.map((grant) => (
+                          <Typography.Text key={grant.grantId} style={{ fontSize: 12 }}>
+                            {grant.displayName} · {grant.permission}
+                          </Typography.Text>
+                        ))}
+                      </div>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <Typography.Text strong>
+                          {intl.formatMessage({
+                            id: "teams.automations.form.nodeGrants",
+                            defaultMessage: "Node grants",
+                          })}
+                        </Typography.Text>
+                        {permissionReview.nodeGrants.map((grant) => (
+                          <Typography.Text key={grant.grantId} style={{ fontSize: 12 }}>
+                            {grant.displayName} · {grant.permission}
+                          </Typography.Text>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {createStage !== "planChanged" ? (
+                    <Checkbox
+                      checked={agentKeyConsentChecked}
+                      disabled={createMutation.isPending}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setAgentKeyConsentChecked(checked);
+                        setCreateStage(checked ? "consent" : "permissionReview");
+                      }}
+                    >
+                      {intl.formatMessage({
+                        id: "teams.automations.form.agentKeyConsent",
+                        defaultMessage:
+                          "I consent to Aevatar creating an automation-dedicated Agent Key for this schedule.",
+                      })}
+                    </Checkbox>
+                  ) : null}
+                </div>
+              ) : createStage !== "preflight" && createStage !== "error" ? (
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  {intl.formatMessage({
+                    id: "teams.automations.form.reviewPlaceholder",
+                    defaultMessage:
+                      "Review is prepared after the draft cadence and target are ready.",
+                  })}
+                </Typography.Text>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </Modal>
     </div>
