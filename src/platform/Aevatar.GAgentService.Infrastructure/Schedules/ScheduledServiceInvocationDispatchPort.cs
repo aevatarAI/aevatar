@@ -848,6 +848,12 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationAuth? auth,
         out ScheduledCallerNyxIdAuthority authority)
     {
+        if (auth?.Source is not ScheduledServiceInvocationNyxIdCredentialSource)
+        {
+            authority = new ScheduledCallerNyxIdAuthority();
+            return false;
+        }
+
         authority = NormalizeScheduledCallerNyxIdAuthority(auth?.CallerAuthority) ??
                     new ScheduledCallerNyxIdAuthority();
         return auth?.CallerAuthority != null;

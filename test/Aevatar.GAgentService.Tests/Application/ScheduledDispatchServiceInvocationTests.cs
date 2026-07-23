@@ -1027,7 +1027,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 LlmControl = new LLMControlContextPayload { ModelOverride = "opus" },
             }),
         };
-        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference());
+        var auth = new ScheduledServiceInvocationAuth(CreateDurableCredentialReference())
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
@@ -1056,6 +1066,15 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be("schedule:schedule-durable");
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("credential-1");
         invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().BeEquivalentTo(
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
         invokedChat.LlmControl.ModelOverride.Should().Be("opus");
     }
 
