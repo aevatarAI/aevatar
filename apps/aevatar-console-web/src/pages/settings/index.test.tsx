@@ -153,7 +153,11 @@ function createLlmSettings(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createExactServiceSettings(savedUserServiceId: string) {
+function createExactServiceSettings(
+  savedUserServiceId: string,
+  defaultModel = "gpt-shared",
+  overrides: Record<string, unknown> = {},
+) {
   const labels: Record<string, string> = {
     "us-alpha": "Shared OpenAI alpha",
     "us-beta": "Shared OpenAI beta",
@@ -167,7 +171,7 @@ function createExactServiceSettings(savedUserServiceId: string) {
     savedServiceSlug: "shared-openai",
     effectiveRoute: sharedExactServiceRoute,
     effectiveRouteLabel: labels[savedUserServiceId],
-    defaultModel: "gpt-shared",
+    defaultModel,
     routeOptions: [
       {
         routeValue: gatewayRoute,
@@ -197,9 +201,10 @@ function createExactServiceSettings(savedUserServiceId: string) {
         routeValue: sharedExactServiceRoute,
         groupId: "shared-openai",
         label: "Shared OpenAI",
-        models: ["gpt-shared"],
+        models: ["gpt-alpha", "gpt-beta", "gpt-gamma", "gpt-shared"],
       },
     ],
+    ...overrides,
   });
 }
 
@@ -214,6 +219,30 @@ async function selectLlmService(label: string): Promise<void> {
     screen.getByRole("combobox", { name: "Preferred LLM service" }),
   );
   fireEvent.click(await screen.findByRole("option", { name: label }));
+}
+
+async function selectDefaultModel(label: string): Promise<void> {
+  const control = screen.getByLabelText("Default model");
+  if (!control.closest(".ant-select")) {
+    fireEvent.change(control, { target: { value: label } });
+    return;
+  }
+
+  fireEvent.mouseDown(control);
+  fireEvent.click(await screen.findByRole("option", { name: label }));
+}
+
+function selectedDefaultModelElement(): Element {
+  const control = screen.getByLabelText("Default model");
+  return control.closest(".ant-select") ?? control;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
 }
 
 describe("SettingsPage", () => {
@@ -669,10 +698,9 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
   });
 
-  it("reconciles touched state after save before hydrating a later refresh", async () => {
+  it("becomes pristine again when an edit returns from B to the observed A", async () => {
     mockStudioApi.getUserLlmSettings
       .mockResolvedValueOnce(createExactServiceSettings("us-alpha"))
-      .mockResolvedValueOnce(createExactServiceSettings("us-beta"))
       .mockResolvedValue(createExactServiceSettings("us-gamma"));
     const view = renderWithQueryClient(React.createElement(SettingsPage));
 
@@ -682,11 +710,9 @@ describe("SettingsPage", () => {
       ),
     );
     await selectLlmService("Shared OpenAI beta");
-    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+    await selectLlmService("Shared OpenAI alpha");
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled(),
-    );
+    expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
     await act(async () => {
       await view.queryClient.invalidateQueries({
         queryKey: ["settings", "user-llm-settings"],
@@ -698,6 +724,172 @@ describe("SettingsPage", () => {
         "Shared OpenAI gamma",
       ),
     );
+  });
+
+  it("keeps an accepted exact target pending until identity and model are observed", async () => {
+    mockStudioApi.getUserLlmSettings
+      .mockResolvedValueOnce(
+        createExactServiceSettings("us-alpha", "gpt-alpha", {
+          modelGroupsByRoute: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        createExactServiceSettings("us-beta", "gpt-alpha", {
+          modelGroupsByRoute: [],
+        }),
+      )
+      .mockResolvedValue(
+        createExactServiceSettings("us-beta", "gpt-beta", {
+          modelGroupsByRoute: [],
+        }),
+      );
+    const view = renderWithQueryClient(React.createElement(SettingsPage));
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI alpha",
+      ),
+    );
+    await selectLlmService("Shared OpenAI beta");
+    await selectDefaultModel("gpt-beta");
+    expect(selectedDefaultModelElement()).toHaveValue("gpt-beta");
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+
+    expect(
+      await screen.findByText(
+        "Save accepted. Waiting for the exact service and model to be observed.",
+      ),
+    ).toBeTruthy();
+    expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI beta");
+    expect(selectedDefaultModelElement()).toHaveValue("gpt-beta");
+    expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
+
+    await act(async () => {
+      await view.queryClient.invalidateQueries({
+        queryKey: ["settings", "user-llm-settings"],
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(
+          "Save accepted. Waiting for the exact service and model to be observed.",
+        ),
+      ).toBeNull(),
+    );
+    expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI beta");
+    expect(screen.getByRole("button", { name: "Save config" })).toBeDisabled();
+  });
+
+  it("does not let an observed B save clear a newer in-flight edit to C", async () => {
+    const saveReceipt = createDeferred<{
+      accepted: boolean;
+      commandId: string;
+      ackStage: string;
+      actorId: string;
+      correlationId: string;
+      ackedAtUtc: string;
+    }>();
+    mockStudioApi.saveUserLlmSettings.mockReturnValueOnce(saveReceipt.promise);
+    mockStudioApi.getUserLlmSettings
+      .mockResolvedValueOnce(createExactServiceSettings("us-alpha"))
+      .mockResolvedValue(createExactServiceSettings("us-beta"));
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI alpha",
+      ),
+    );
+    await selectLlmService("Shared OpenAI beta");
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+    await waitFor(() =>
+      expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledTimes(1),
+    );
+    await selectLlmService("Shared OpenAI gamma");
+
+    await act(async () => {
+      saveReceipt.resolve({
+        accepted: true,
+        commandId: "cmd-settings-b",
+        ackStage: "accepted_for_dispatch",
+        actorId: "user-1",
+        correlationId: "corr-settings-b",
+        ackedAtUtc: "2026-07-23T09:00:00Z",
+      });
+      await saveReceipt.promise;
+    });
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI gamma",
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
+  });
+
+  it("uses the current inventory route for an exact saved ID and its model group", async () => {
+    const oldRoute = "/api/v1/proxy/s/shared-openai-old";
+    const currentRoute = "/api/v1/proxy/s/shared-openai-current";
+    mockStudioApi.getUserLlmSettings.mockResolvedValueOnce(
+      createLlmSettings({
+        savedRoute: oldRoute,
+        savedRouteLabel: "Shared OpenAI alpha",
+        savedRouteKind: "nyx_id_user_service",
+        savedUserServiceId: "us-alpha",
+        savedServiceSlug: "shared-openai",
+        effectiveRoute: currentRoute,
+        effectiveRouteLabel: "Shared OpenAI alpha",
+        defaultModel: "current-model",
+        routeOptions: [
+          {
+            routeValue: gatewayRoute,
+            label: "Gateway route option",
+            source: "gateway_provider",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            userServiceId: null,
+            serviceSlug: null,
+            description: null,
+          },
+          {
+            routeValue: currentRoute,
+            label: "Shared OpenAI alpha",
+            source: "user_service",
+            status: "ready",
+            allowed: true,
+            ready: true,
+            userServiceId: "us-alpha",
+            serviceSlug: "shared-openai",
+            description: null,
+          },
+        ],
+        modelGroupsByRoute: [
+          {
+            routeValue: oldRoute,
+            groupId: "shared-openai-old",
+            label: "Old route models",
+            models: ["old-model"],
+          },
+          {
+            routeValue: currentRoute,
+            groupId: "us-alpha",
+            label: "Current route models",
+            models: ["current-model"],
+          },
+        ],
+      }),
+    );
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    fireEvent.mouseDown(
+      await screen.findByRole("combobox", { name: "Default model" }),
+    );
+    expect(
+      await screen.findByRole("option", { name: "current-model" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "old-model" })).toBeNull();
   });
 
   it("treats a saved service without an exact ID as unavailable", async () => {

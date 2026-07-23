@@ -103,10 +103,11 @@ export function decodeUserLlmSelectionValue(
 
 export function resolveSavedUserLlmSelection(
   settings:
-    | Pick<
+    | (Pick<
         StudioUserLlmSettings,
         "savedRoute" | "savedRouteKind" | "savedUserServiceId"
-      >
+      > &
+        Partial<Pick<StudioUserLlmSettings, "routeOptions">>)
     | undefined,
 ): UserLlmSelectionDraft | undefined {
   if (!settings) {
@@ -129,10 +130,17 @@ export function resolveSavedUserLlmSelection(
     return undefined;
   }
 
+  const currentOption = settings.routeOptions?.find(
+    (option) =>
+      option.source === "user_service" &&
+      trimOptional(option.userServiceId) === userServiceId,
+  );
+
   return {
     kind: "nyx_id_user_service",
     userServiceId,
-    routeValue: settings.savedRoute.trim(),
+    routeValue:
+      trimOptional(currentOption?.routeValue) ?? settings.savedRoute.trim(),
   };
 }
 
