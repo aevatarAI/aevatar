@@ -479,7 +479,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
         var auth = new ScheduledServiceInvocationAuth(
             ScopeOwnerNyxId: new ScheduledServiceInvocationScopeOwnerNyxIdCredentialSource(
                 "proxy",
-                new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "owner-1")));
+                new ScheduledServiceInvocationNyxIdSubjectRef("nyxid", "tenant-1", "owner-1")))
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "nyxid",
+                Tenant = "tenant-1",
+                ExternalUserId = "owner-1",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
         var original = new ServiceInvocationRequest
         {
             CommandId = "cmd-invoke",
@@ -499,6 +509,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
         chat.CallerDurableCredential.Ref.Should().BeEmpty();
         chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.ExternalUserId.Should().Be("owner-1");
         chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Scope.Should().Be("proxy");
+        chat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.BindingId.Should().Be("bnd-owner-alpha");
     }
 
     [Fact]
@@ -528,7 +539,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
         };
         var auth = new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             new ScheduledServiceInvocationNyxIdSubjectRef("lark", "tenant-1", "ou-user-1"),
-            "proxy"));
+            "proxy"))
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-1",
+                ExternalUserId = "ou-user-1",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             original,
@@ -557,6 +578,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 Tenant = "tenant-1",
                 ExternalUserId = "ou-user-1",
                 Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
             });
         invokedChat.Metadata.Should().Contain("trace", "kept");
         invokedChat.Metadata.Should().NotContainKey("connector.http.authorization");
@@ -650,7 +672,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
             ScheduledInvocationAgentKey: new ScheduledInvocationAgentKeyCredentialReference(
                 reference,
                 "key-schedule",
-                expiresAt.ToUnixTimeMilliseconds()));
+                expiresAt.ToUnixTimeMilliseconds()))
+        {
+            CallerAuthority = new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            },
+        };
 
         await port.DispatchAsync(new ScheduledServiceInvocationDispatchRequest(
             new ServiceInvocationRequest
@@ -672,6 +704,15 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.CallerDurableCredential.OwnerScopeKey.Should().Be(reference.OwnerScopeKey);
         invokedChat.CallerDurableCredential.SubjectId.Should().Be("key-schedule");
         invokedChat.CallerDurableCredential.SourceKind.Should().Be(DurableCallerCredentialSourceKind.ScheduledDispatch);
+        invokedChat.CallerDurableCredential.ScheduledCallerNyxIdAuthority.Should().BeEquivalentTo(
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
         invokedChat.LlmControl.NyxIdAccessToken.Should().BeEmpty();
         invokedChat.LlmControl.NyxIdOrgToken.Should().BeEmpty();
         invokedChat.LlmControl.SenderNyxIdAccessToken.Should().BeEmpty();

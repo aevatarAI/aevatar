@@ -625,7 +625,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         if (auth?.Source == null)
             return null;
 
-        return auth.Source switch
+        var state = auth.Source switch
         {
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => new ScheduledServiceInvocationAuthState
             {
@@ -645,6 +645,8 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             },
             _ => throw new ArgumentException("Unsupported scheduled service invocation credential source.", nameof(auth)),
         };
+        state.CallerAuthority = auth.CallerAuthority?.Clone();
+        return state;
     }
 
     private static ScheduledServiceInvocationNyxIdCredentialSourceState CreateNyxIdCredentialSourceState(

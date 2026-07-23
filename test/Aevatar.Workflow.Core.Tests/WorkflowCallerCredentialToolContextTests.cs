@@ -32,11 +32,11 @@ public sealed class WorkflowCallerCredentialToolContextTests
                     Tenant = " tenant-alpha ",
                     ExternalUserId = " sender-alpha ",
                     Scope = "proxy",
-                    BindingId = " binding-alpha ",
+                    BindingId = " bnd-owner-alpha ",
                 },
             }));
 
-        tool.BindingId.Should().Be("binding-alpha");
+        tool.BindingId.Should().Be("bnd-owner-alpha");
         tool.NyxUserId.Should().Be("sender-alpha");
         tool.SenderTenant.Should().Be("tenant-alpha");
     }

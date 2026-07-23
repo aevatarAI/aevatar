@@ -158,7 +158,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                     new ExchangedCredential(
                         CredentialRole.ScheduledInvocationAgentKey,
                         string.Empty,
-                        CreateBorrowedDurableCallerCredential(agentKey)),
+                        CreateBorrowedDurableCallerCredential(agentKey, dispatch.Auth.CallerAuthority)),
                     projectNyxIdAccessTokenToWorkflowCallerCredential: true),
                 DurableCallerCredential: null);
         }
@@ -253,7 +253,8 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
     }
 
     private static DurableCallerCredentialRef CreateBorrowedDurableCallerCredential(
-        ScheduledInvocationAgentKeyCredentialReference source)
+        ScheduledInvocationAgentKeyCredentialReference source,
+        ScheduledCallerNyxIdAuthority? callerAuthority)
     {
         var reference = source.SecretReference;
         if (string.IsNullOrWhiteSpace(reference.Ref))
@@ -280,6 +281,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             OwnerScopeKey = reference.OwnerScopeKey,
             SubjectId = source.ApiKeyId,
             SourceKind = DurableCallerCredentialSourceKind.ScheduledDispatch,
+            ScheduledCallerNyxIdAuthority = NormalizeScheduledCallerNyxIdAuthority(callerAuthority),
         };
     }
 
@@ -297,7 +299,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 
         var ownerScopeKey = ResolveOwnerScopeKey(dispatch);
         var subjectId = ResolveSubjectId(dispatch.Auth, role);
-        var callerAuthority = ResolveScheduledCallerNyxIdAuthority(dispatch.Auth, role);
+        var callerAuthority = NormalizeScheduledCallerNyxIdAuthority(dispatch.Auth?.CallerAuthority);
         var stored = await _secretVault.PutAsync(new StoreSecretRequest(
             CredentialSecretPurposes.WorkflowCallerDurableBearerToken,
             ownerScopeKey,
@@ -813,21 +815,20 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             (subject.ExternalUserId ?? string.Empty).Trim());
     }
 
-    private static ScheduledCallerNyxIdAuthority? ResolveScheduledCallerNyxIdAuthority(
-        ScheduledServiceInvocationAuth? auth,
-        CredentialRole role)
+    private static ScheduledCallerNyxIdAuthority? NormalizeScheduledCallerNyxIdAuthority(
+        ScheduledCallerNyxIdAuthority? source)
     {
-        if (role is not (CredentialRole.Sender or CredentialRole.ScopeOwner))
+        if (source == null)
             return null;
 
-        var source = auth?.NyxId;
-        var subject = source?.Subject;
-        var platform = subject?.Platform?.Trim() ?? string.Empty;
-        var externalUserId = subject?.ExternalUserId?.Trim() ?? string.Empty;
-        var scope = source?.Scope?.Trim() ?? string.Empty;
+        var platform = source.Platform?.Trim() ?? string.Empty;
+        var externalUserId = source.ExternalUserId?.Trim() ?? string.Empty;
+        var scope = source.Scope?.Trim() ?? string.Empty;
+        var bindingId = source.BindingId?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(platform) ||
             string.IsNullOrWhiteSpace(externalUserId) ||
-            string.IsNullOrWhiteSpace(scope))
+            string.IsNullOrWhiteSpace(scope) ||
+            string.IsNullOrWhiteSpace(bindingId))
         {
             throw new InvalidOperationException(
                 "Scheduled workflow NyxID caller authority is incomplete.");
@@ -836,9 +837,10 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         return new ScheduledCallerNyxIdAuthority
         {
             Platform = platform,
-            Tenant = subject?.Tenant?.Trim() ?? string.Empty,
+            Tenant = source.Tenant?.Trim() ?? string.Empty,
             ExternalUserId = externalUserId,
             Scope = scope,
+            BindingId = bindingId,
         };
     }
 
@@ -846,9 +848,9 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledServiceInvocationAuth? auth,
         out ScheduledCallerNyxIdAuthority authority)
     {
-        var role = ResolveCredentialRole(auth);
-        authority = ResolveScheduledCallerNyxIdAuthority(auth, role) ?? new ScheduledCallerNyxIdAuthority();
-        return role is CredentialRole.Sender or CredentialRole.ScopeOwner;
+        authority = NormalizeScheduledCallerNyxIdAuthority(auth?.CallerAuthority) ??
+                    new ScheduledCallerNyxIdAuthority();
+        return auth?.CallerAuthority != null;
     }
 
     private static CredentialRole ResolveCredentialRole(ScheduledServiceInvocationAuth? auth) =>

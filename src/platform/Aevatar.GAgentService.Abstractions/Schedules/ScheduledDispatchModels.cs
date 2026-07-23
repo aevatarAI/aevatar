@@ -190,6 +190,8 @@ public sealed record ScheduledServiceInvocationAuth
 
     public ScheduledServiceInvocationCredentialSource? Source { get; init; }
 
+    public ScheduledCallerNyxIdAuthority? CallerAuthority { get; init; }
+
     public ScheduledServiceInvocationNyxIdCredentialSource? NyxId =>
         Source as ScheduledServiceInvocationNyxIdCredentialSource;
 

@@ -1103,6 +1103,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 ? new ScheduledServiceInvocationAuthState
                 {
                     ScheduledInvocationAgentKey = State.ActiveTeamCredential.Clone(),
+                    CallerAuthority = State.Target?.ServiceInvocation?.Auth?.CallerAuthority?.Clone(),
                 }
                 : State.Target?.ServiceInvocation?.Auth;
             var effectiveAuthorizationFact = replacementPending
@@ -1253,7 +1254,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         {
             return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationDurableCredentialReference(
                 auth.Durable.CredentialId ?? string.Empty,
-                auth.Durable.SecretReference?.Clone() ?? new SecretReference()));
+                auth.Durable.SecretReference?.Clone() ?? new SecretReference()))
+            {
+                CallerAuthority = auth.CallerAuthority?.Clone(),
+            };
         }
 
         if (auth.SourceCase == ScheduledServiceInvocationAuthState.SourceOneofCase.ScheduledInvocationAgentKey)
@@ -1261,7 +1265,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return new ScheduledServiceInvocationAuth(new ScheduledInvocationAgentKeyCredentialReference(
                 auth.ScheduledInvocationAgentKey.SecretReference?.Clone() ?? new SecretReference(),
                 auth.ScheduledInvocationAgentKey.ApiKeyId ?? string.Empty,
-                auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs));
+                auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs))
+            {
+                CallerAuthority = auth.CallerAuthority?.Clone(),
+            };
         }
 
         var nyxId = ResolveNyxIdSource(auth);
@@ -1274,7 +1281,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 string.Empty,
                 string.Empty),
             nyxId.Scope ?? string.Empty,
-            ToRuntimeRole(nyxId.Role)));
+            ToRuntimeRole(nyxId.Role)))
+        {
+            CallerAuthority = auth.CallerAuthority?.Clone(),
+        };
     }
 
     private static ScheduledServiceInvocationNyxIdCredentialSourceState? ResolveNyxIdSource(
@@ -2568,11 +2578,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         var hasLegacyDurableToken = !string.IsNullOrWhiteSpace(auth.DurableSenderBearerToken) ||
                                     auth.LegacyDurableSenderBearerBlocked;
+        var callerAuthority = NormalizeCallerAuthority(auth.CallerAuthority);
         if (hasLegacyDurableToken)
         {
             return new ScheduledServiceInvocationAuthState
             {
                 LegacyDurableSenderBearerBlocked = true,
+                CallerAuthority = callerAuthority,
             };
         }
 
@@ -2584,6 +2596,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 : new ScheduledServiceInvocationAuthState
                 {
                     Durable = durable,
+                    CallerAuthority = callerAuthority,
                 };
         }
 
@@ -2594,6 +2607,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 : new ScheduledServiceInvocationAuthState
                 {
                     ScheduledInvocationAgentKey = NormalizeScheduledInvocationAgentKey(auth.ScheduledInvocationAgentKey),
+                    CallerAuthority = callerAuthority,
                 };
         }
 
@@ -2604,10 +2618,24 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var normalized = new ScheduledServiceInvocationAuthState
         {
             NyxId = NormalizeNyxIdSource(nyxId),
+            CallerAuthority = callerAuthority,
         };
 
         return normalized;
     }
+
+    private static ScheduledCallerNyxIdAuthority? NormalizeCallerAuthority(
+        ScheduledCallerNyxIdAuthority? source) =>
+        source == null
+            ? null
+            : new ScheduledCallerNyxIdAuthority
+            {
+                Platform = NormalizeOptional(source.Platform),
+                Tenant = NormalizeOptional(source.Tenant),
+                ExternalUserId = NormalizeOptional(source.ExternalUserId),
+                Scope = NormalizeOptional(source.Scope),
+                BindingId = NormalizeOptional(source.BindingId),
+            };
 
     private static ScheduledServiceInvocationDurableCredentialReferenceState? NormalizeDurableCredentialReference(
         ScheduledServiceInvocationDurableCredentialReferenceState? source) =>

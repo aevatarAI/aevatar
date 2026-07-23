@@ -259,6 +259,7 @@ message ScheduledServiceInvocationAuthState
     ScheduledServiceInvocationDurableCredentialReferenceState durable = 6;
     ScheduledInvocationAgentKeyCredentialReferenceState scheduled_invocation_agent_key = 7;
   }
+  aevatar.credentials.ScheduledCallerNyxIdAuthority caller_authority = 8;
 }
 
 message ScheduledInvocationAgentKeyCredentialReferenceState
