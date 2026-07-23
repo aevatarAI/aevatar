@@ -171,6 +171,20 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        var teamAutomationScopeId = NormalizeNullable(query.TeamAutomationScopeId);
+        if (teamAutomationScopeId is not null)
+        {
+            return _queryPort.ListAsync(query with
+            {
+                Take = Math.Clamp(query.Take, 1, 200),
+                TeamAutomationOwner = null,
+                TeamAutomationScopeId = teamAutomationScopeId,
+                TeamAutomationTeamId = NormalizeNullable(query.TeamAutomationTeamId),
+                TeamAutomationMemberId = NormalizeNullable(query.TeamAutomationMemberId),
+                IncludeDeleted = false,
+            }, ct);
+        }
+
         return _queryPort.ListAsync(query with
         {
             Take = Math.Clamp(query.Take, 1, 200),
@@ -560,6 +574,26 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             "accepted");
     }
 
+    public async Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+        string scheduleId,
+        string scopeId,
+        string? teamId = null,
+        string? memberId = null,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedTeamId = NormalizeNullable(teamId);
+        var normalizedMemberId = NormalizeNullable(memberId);
+        var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
+        return detail?.Schedule is { Deleted: false } &&
+               TeamScopeEquals(detail.Schedule, normalizedScopeId) &&
+               (normalizedTeamId is null || TeamIdEquals(detail.Schedule, normalizedTeamId)) &&
+               (normalizedMemberId is null || TeamMemberEquals(detail.Schedule, normalizedMemberId))
+            ? detail
+            : null;
+    }
+
     public async Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
@@ -817,6 +851,15 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private static bool TeamOwnerEquals(ScheduledDispatchSummary schedule, TeamMemberAutomationOwner owner) =>
         string.Equals(schedule.TeamOwnerScopeId, owner.ScopeId, StringComparison.Ordinal) &&
         string.Equals(schedule.TeamOwnerMemberId, owner.MemberId, StringComparison.Ordinal);
+
+    private static bool TeamScopeEquals(ScheduledDispatchSummary schedule, string scopeId) =>
+        string.Equals(schedule.TeamOwnerScopeId, scopeId, StringComparison.Ordinal);
+
+    private static bool TeamIdEquals(ScheduledDispatchSummary schedule, string teamId) =>
+        string.Equals(schedule.TeamId, teamId, StringComparison.Ordinal);
+
+    private static bool TeamMemberEquals(ScheduledDispatchSummary schedule, string memberId) =>
+        string.Equals(schedule.TeamOwnerMemberId, memberId, StringComparison.Ordinal);
 
     private async Task<TeamAutomationCommittedMutationReceipt> DispatchObservedTeamOperationAsync(
         string scheduleId,

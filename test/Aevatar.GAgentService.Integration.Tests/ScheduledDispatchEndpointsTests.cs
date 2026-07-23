@@ -685,12 +685,15 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task List_ShouldForwardQueryParameters()
+    public async Task List_ShouldForwardScopeAndPageQueryParameters()
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
             service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "member-alpha",
             take: 25,
             cursor: "cursor-1",
             includeTotalCount: true);
@@ -699,9 +702,27 @@ public sealed class ScheduledDispatchEndpointsTests
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        service.LastListTake.Should().Be(25);
-        service.LastListCursor.Should().Be("cursor-1");
-        service.LastListIncludeTotalCount.Should().BeTrue();
+        service.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-1",
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "scope-alpha",
+            TeamAutomationTeamId: "team-alpha",
+            TeamAutomationMemberId: "member-alpha"));
+    }
+
+    [Fact]
+    public async Task List_WhenScopeIdMissing_ShouldReturnBadRequest()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(service, scopeId: null);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.LastListQuery.Should().BeNull();
     }
 
     [Fact]
@@ -712,8 +733,17 @@ public sealed class ScheduledDispatchEndpointsTests
             Detail = CreateDetail("schedule-1"),
         };
 
-        var ok = await ScheduledDispatchEndpoints.Get("schedule-1", service);
-        var notFound = await ScheduledDispatchEndpoints.Get("missing", new RecordingScheduledDispatchApplicationService());
+        var notFoundService = new RecordingScheduledDispatchApplicationService();
+        var ok = await ScheduledDispatchEndpoints.Get(
+            "schedule-1",
+            service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "member-alpha");
+        var notFound = await ScheduledDispatchEndpoints.Get(
+            "missing",
+            notFoundService,
+            scopeId: "scope-alpha");
 
         var okHttp = CreateHttpContext();
         await ok.ExecuteAsync(okHttp);
@@ -722,6 +752,26 @@ public sealed class ScheduledDispatchEndpointsTests
 
         okHttp.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        service.LastTeamScheduleGet.Should().Be(("schedule-1", "scope-alpha", "team-alpha", "member-alpha"));
+        notFoundService.LastTeamScheduleGet.Should().NotBeNull();
+        notFoundService.LastTeamScheduleGet!.Value.ScheduleId.Should().Be("missing");
+        notFoundService.LastTeamScheduleGet.Value.ScopeId.Should().Be("scope-alpha");
+        notFoundService.LastTeamScheduleGet.Value.TeamId.Should().BeNull();
+        notFoundService.LastTeamScheduleGet.Value.MemberId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Get_WhenScopeIdMissing_ShouldReturnBadRequest()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.Get("schedule-1", service, scopeId: null);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.LastTeamScheduleGet.Should().BeNull();
     }
 
     [Fact]
@@ -732,7 +782,7 @@ public sealed class ScheduledDispatchEndpointsTests
             GetException = new ArgumentException("invalid id"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Get("invalid/id", service);
+        var result = await ScheduledDispatchEndpoints.Get("invalid/id", service, scopeId: "scope-alpha");
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1824,6 +1874,8 @@ public sealed class ScheduledDispatchEndpointsTests
         public int? LastListTake { get; private set; }
         public string? LastListCursor { get; private set; }
         public bool? LastListIncludeTotalCount { get; private set; }
+        public ScheduledDispatchListQuery? LastListQuery { get; private set; }
+        public (string ScheduleId, string ScopeId, string? TeamId, string? MemberId)? LastTeamScheduleGet { get; private set; }
         public int? LastPreviewCount { get; private set; }
         public DateTimeOffset? LastPreviewFromUtc { get; private set; }
         public ScheduledDispatchDetail? Detail { get; set; }
@@ -1962,6 +2014,20 @@ public sealed class ScheduledDispatchEndpointsTests
             return Task.FromResult(Detail?.Schedule.ScheduleId == scheduleId ? Detail : null);
         }
 
+        public Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+            string scheduleId,
+            string scopeId,
+            string? teamId = null,
+            string? memberId = null,
+            CancellationToken ct = default)
+        {
+            LastTeamScheduleGet = (scheduleId, scopeId, teamId, memberId);
+            if (GetException != null)
+                throw GetException;
+
+            return Task.FromResult(Detail?.Schedule.ScheduleId == scheduleId ? Detail : null);
+        }
+
         public Task<ScheduledDispatchListResult> ListAsync(
             int take = 50,
             string? cursor = null,
@@ -1981,6 +2047,7 @@ public sealed class ScheduledDispatchEndpointsTests
             LastListTake = query.Take;
             LastListCursor = query.Cursor;
             LastListIncludeTotalCount = query.IncludeTotalCount;
+            LastListQuery = query;
             return Task.FromResult(new ScheduledDispatchListResult([], null, query.IncludeTotalCount ? 0 : null));
         }
 

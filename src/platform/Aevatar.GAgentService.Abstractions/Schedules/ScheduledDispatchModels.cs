@@ -346,6 +346,7 @@ public sealed record ScheduledDispatchSummary(
     bool TeamOwned = false,
     string TeamOwnerScopeId = "",
     string TeamOwnerMemberId = "",
+    string TeamId = "",
     TeamAutomationLifecycleStatus TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.Unspecified,
     DateTimeOffset? CredentialExpiresAt = null,
     string TeamAutomationOperationId = "",
@@ -416,6 +417,9 @@ public sealed record ScheduledDispatchListQuery(
     string? ServiceEndpointId = null,
     ScheduledDispatchScheduleKind? ScheduleKind = null,
     TeamMemberAutomationOwner? TeamAutomationOwner = null,
+    string? TeamAutomationScopeId = null,
+    string? TeamAutomationTeamId = null,
+    string? TeamAutomationMemberId = null,
     bool ExcludeTeamOwned = false,
     bool IncludeDeleted = false,
     bool ExcludeCompletedTeamAutomationDeletions = false);
@@ -762,6 +766,14 @@ public interface IScheduledDispatchApplicationService
         TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+        string scheduleId,
+        string scopeId,
+        string? teamId = null,
+        string? memberId = null,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 
