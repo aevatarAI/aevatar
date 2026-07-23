@@ -596,13 +596,21 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 "The Profile authority has not been initialized.");
         }
 
+        if (candidate is null)
+        {
+            await PersistUncanonicalizedRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.IdentityConflict(),
+                precanonicalReplayAuthority);
+            return null;
+        }
+
         AgentProfileIdentity identity;
         try
         {
-            identity = AgentProfileDeterminism.NormalizeIdentity(candidate!);
+            identity = AgentProfileDeterminism.NormalizeIdentity(candidate);
         }
-        catch (Exception exception) when (
-            exception is AgentProfileContractValidationException or ArgumentNullException)
+        catch (AgentProfileContractValidationException)
         {
             await PersistUncanonicalizedRejectionAsync(
                 operation,
