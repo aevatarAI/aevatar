@@ -279,11 +279,19 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title",
             "No workflow draft is linked to this member yet.",
           )}
-          description={t(
-            "teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description",
-            "You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.",
-          )}
+          description={studio.linkedWorkflowMissingDescription}
           type="warning"
+        />
+      ) : null}
+      {studio.linkedWorkflowLoadFailed ? (
+        <Alert
+          banner
+          message={t(
+            "teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title",
+            "Workflow draft could not be loaded.",
+          )}
+          description={studio.linkedWorkflowLoadFailureDescription}
+          type="error"
         />
       ) : null}
       <section
