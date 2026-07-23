@@ -119,13 +119,14 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 11,
+            DefaultModel = "gpt-5.5",
             PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
             LlmSelection = new UserLlmSelection
             {
                 RouteKind = UserLlmRouteKind.NyxIdUserService,
-                RouteValue = "/api/v1/proxy/s/provider-alpha",
-                NyxIdUserServiceId = "us-provider-alpha",
-                ServiceSlugSnapshot = "provider-alpha",
+                RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                NyxIdUserServiceId = "us-chrono",
+                ServiceSlugSnapshot = "chrono-llm-public",
             },
         });
 
@@ -134,17 +135,20 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         reader.Key.Should().Be("user-config-scope-alpha");
         ownerLlm!.StateVersion.Should().Be(11);
-        ownerLlm.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
-        ownerLlm.NyxIdServiceId.Should().Be("us-provider-alpha");
-        ownerLlm.NyxIdServiceSlug.Should().Be("provider-alpha");
+        ownerLlm.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService);
+        ownerLlm.Selection.RouteValue.Should().Be("/api/v1/proxy/s/chrono-llm-public");
+        ownerLlm.Selection.NyxIdUserServiceId.Should().Be("us-chrono");
+        ownerLlm.Selection.ServiceSlugSnapshot.Should().Be("chrono-llm-public");
+        ownerLlm.Selection.Model.Should().Be("gpt-5.5");
     }
 
     [Fact]
-    public async Task OwnerLlmPort_WithTypedGateway_ShouldRequireNoServiceGrant()
+    public async Task OwnerLlmPort_WithTypedGateway_ShouldMapExactRouteAndModel()
     {
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 12,
+            DefaultModel = "gpt-5.5",
             PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
             LlmSelection = new UserLlmSelection
             {
@@ -158,17 +162,20 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(12);
-        result.NyxIdServiceId.Should().BeEmpty();
-        result.NyxIdServiceSlug.Should().BeEmpty();
-        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.NotRequired);
+        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Gateway);
+        result.Selection.RouteValue.Should().Be(ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute);
+        result.Selection.NyxIdUserServiceId.Should().BeEmpty();
+        result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
+        result.Selection.Model.Should().Be("gpt-5.5");
     }
 
     [Fact]
-    public async Task OwnerLlmPort_WithLegacyProxyRoute_ShouldRequireUnavailableExactIdentity()
+    public async Task OwnerLlmPort_WithLegacyProxyRoute_ShouldNotInferServiceIdentity()
     {
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 13,
+            DefaultModel = "gpt-5.5",
             PreferredLlmRoute = "/api/v1/proxy/s/provider-alpha",
         });
 
@@ -177,9 +184,11 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(13);
-        result.NyxIdServiceId.Should().BeEmpty();
-        result.NyxIdServiceSlug.Should().Be("provider-alpha");
-        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Required);
+        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteValue.Should().BeEmpty();
+        result.Selection.NyxIdUserServiceId.Should().BeEmpty();
+        result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
+        result.Selection.Model.Should().BeEmpty();
     }
 
     [Theory]
@@ -191,6 +200,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 14,
+            DefaultModel = "gpt-5.5",
             PreferredLlmRoute = legacyRoute,
         });
 
@@ -199,9 +209,11 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(14);
-        result.NyxIdServiceId.Should().BeEmpty();
-        result.NyxIdServiceSlug.Should().BeEmpty();
-        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Unspecified);
+        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteValue.Should().BeEmpty();
+        result.Selection.NyxIdUserServiceId.Should().BeEmpty();
+        result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
+        result.Selection.Model.Should().BeEmpty();
     }
 
     [Theory]
@@ -239,6 +251,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
             StateVersion = 15,
+            DefaultModel = "gpt-5.5",
             PreferredLlmRoute = "/api/v1/proxy/s/legacy-provider",
             LlmSelection = new UserLlmSelection
             {
@@ -254,9 +267,41 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
 
         result.Should().NotBeNull();
         result!.StateVersion.Should().Be(15);
-        result.NyxIdServiceId.Should().BeEmpty();
-        result.NyxIdServiceSlug.Should().BeEmpty();
-        result.ServiceGrantRequirement.Should().Be(AuthorizationGrantRequirement.Unspecified);
+        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteValue.Should().BeEmpty();
+        result.Selection.NyxIdUserServiceId.Should().BeEmpty();
+        result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
+        result.Selection.Model.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(" gpt-5.5")]
+    [InlineData("gpt-5.5 ")]
+    public async Task OwnerLlmPort_WithInvalidModel_ShouldFailClosed(string model)
+    {
+        var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
+        {
+            StateVersion = 16,
+            DefaultModel = model,
+            LlmSelection = new UserLlmSelection
+            {
+                RouteKind = UserLlmRouteKind.Gateway,
+                RouteValue = "/api/v1/llm/gateway/v1",
+            },
+        });
+
+        var result = await new ProjectionScheduledInvocationOwnerLLMQueryPort(reader)
+            .GetAsync("scope-alpha");
+
+        result.Should().NotBeNull();
+        result!.StateVersion.Should().Be(16);
+        result.Selection.RouteKind.Should().Be(ScheduledInvocationOwnerLLMRouteKind.Unspecified);
+        result.Selection.RouteValue.Should().BeEmpty();
+        result.Selection.NyxIdUserServiceId.Should().BeEmpty();
+        result.Selection.ServiceSlugSnapshot.Should().BeEmpty();
+        result.Selection.Model.Should().BeEmpty();
     }
 
     [Fact]
@@ -264,7 +309,8 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
     {
         var reader = new RecordingReader<UserConfigCurrentStateDocument>(new UserConfigCurrentStateDocument
         {
-            StateVersion = 16,
+            StateVersion = 17,
+            DefaultModel = "gpt-5.5",
             LlmSelection = new UserLlmSelection
             {
                 RouteKind = UserLlmRouteKind.NyxIdUserService,
@@ -278,7 +324,7 @@ public sealed class ProjectionScheduledInvocationAuthorityQueryPortTests
             .GetAsync(" scope-binding-alpha ");
 
         reader.Key.Should().Be("user-config-scope-binding-alpha");
-        result!.NyxIdServiceId.Should().Be("us-alpha");
+        result!.Selection.NyxIdUserServiceId.Should().Be("us-alpha");
     }
 
     [Fact]
