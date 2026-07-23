@@ -483,6 +483,56 @@ public sealed class ScopeWorkflowEndpointsTests
         scopedControlInput.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildScopedLlmControlInputAsync_WithoutTypedSelection_ShouldIgnoreCompatibilityRoute(
+        bool useUnspecifiedSelection)
+    {
+        const string prefixedModel = "chrono-llm/gpt-5.5";
+        var selection = useUnspecifiedSelection
+            ? new UserLlmSelectionValue(
+                UserLlmSelectionKind.Unspecified,
+                "/api/v1/proxy/s/typed-but-ignored",
+                "us-ignored",
+                "ignored")
+            : null;
+        var http = CreateHttpContext(
+            userConfigQueryPort: new StubUserConfigStore(new UserConfig(
+                DefaultModel: prefixedModel,
+                PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                LlmSelection: selection)));
+
+        var control = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+
+        control.Should().NotBeNull();
+        control!.ModelOverride.Should().Be(prefixedModel);
+        control.NyxIdRoutePreference.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BuildScopedLlmControlInputAsync_WithTypedGateway_ShouldUseCanonicalGateway()
+    {
+        var http = CreateHttpContext(
+            userConfigQueryPort: new StubUserConfigStore(new UserConfig(
+                DefaultModel: "gpt-5.5",
+                PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                LlmSelection: new UserLlmSelectionValue(
+                    UserLlmSelectionKind.Gateway,
+                    "/api/v1/proxy/s/typed-but-ignored",
+                    "us-ignored",
+                    "ignored"))));
+
+        var control = await ScopeWorkflowEndpoints.BuildScopedLlmControlInputAsync(
+            http,
+            CancellationToken.None);
+
+        control.Should().NotBeNull();
+        control!.NyxIdRoutePreference.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+    }
+
     [Fact]
     public async Task HandleRunWorkflowByIdStreamAsync_ShouldReturnNotReady_WhenRunnableReadmodelIsMissing()
     {
@@ -565,7 +615,14 @@ public sealed class ScopeWorkflowEndpointsTests
         };
         var http = CreateHttpContext(
             userConfigQueryPort: new StubUserConfigStore(
-                new UserConfig(DefaultModel: string.Empty, PreferredLlmRoute: "/preferred-route")));
+                new UserConfig(
+                    DefaultModel: string.Empty,
+                    PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                    LlmSelection: new UserLlmSelectionValue(
+                        UserLlmSelectionKind.NyxIdUserService,
+                        " /preferred-route ",
+                        "us-preferred",
+                        "preferred"))));
 
         await ScopeWorkflowEndpoints.HandleRunWorkflowByIdStreamAsync(
             http,

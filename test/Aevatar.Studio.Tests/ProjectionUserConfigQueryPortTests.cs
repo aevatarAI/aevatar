@@ -35,20 +35,90 @@ public sealed class ProjectionUserConfigQueryPortTests
     }
 
     [Fact]
-    public async Task GetAsync_ShouldMapCompleteTypedSelection()
+    public async Task GetAsync_WithoutTypedSelection_ShouldIgnoreConflictingCompatibilityRoute()
+    {
+        var reader = new RecordingDocumentReader
+        {
+            Document = new UserConfigCurrentStateDocument
+            {
+                PreferredLlmRoute = "/api/v1/proxy/s/legacy",
+            },
+        };
+        var port = CreatePort(reader);
+
+        var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
+
+        config.LlmSelection.Should().BeNull();
+        config.PreferredLlmRoute.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_WithTypedUnspecified_ShouldIgnoreConflictingCompatibilityRoute()
+    {
+        var reader = new RecordingDocumentReader
+        {
+            Document = new UserConfigCurrentStateDocument
+            {
+                PreferredLlmRoute = "/api/v1/proxy/s/legacy",
+                LlmSelection = new UserLlmSelection
+                {
+                    RouteKind = UserLlmRouteKind.Unspecified,
+                    RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                    NyxIdUserServiceId = "us-ignored",
+                    ServiceSlugSnapshot = "ignored",
+                },
+            },
+        };
+        var port = CreatePort(reader);
+
+        var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
+
+        config.LlmSelection.Should().NotBeNull();
+        config.LlmSelection!.Kind.Should().Be(UserLlmSelectionKind.Unspecified);
+        config.PreferredLlmRoute.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_WithTypedGateway_ShouldUseCanonicalGatewayDespiteConflictingCompatibilityRoute()
+    {
+        var reader = new RecordingDocumentReader
+        {
+            Document = new UserConfigCurrentStateDocument
+            {
+                PreferredLlmRoute = "/api/v1/proxy/s/legacy",
+                LlmSelection = new UserLlmSelection
+                {
+                    RouteKind = UserLlmRouteKind.Gateway,
+                    RouteValue = "/api/v1/proxy/s/typed-but-ignored",
+                    NyxIdUserServiceId = "us-ignored",
+                    ServiceSlugSnapshot = "ignored",
+                },
+            },
+        };
+        var port = CreatePort(reader);
+
+        var config = await port.GetAsync(UserConfigResourceKey.ForOwnerScope("scope-alpha"));
+
+        config.LlmSelection.Should().NotBeNull();
+        config.LlmSelection!.Kind.Should().Be(UserLlmSelectionKind.Gateway);
+        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
+    }
+
+    [Fact]
+    public async Task GetAsync_WithTypedService_ShouldUseTrimmedTypedRouteDespiteConflictingCompatibilityRoute()
     {
         var reader = new RecordingDocumentReader
         {
             Document = new UserConfigCurrentStateDocument
             {
                 DefaultModel = "gpt-5.5",
-                PreferredLlmRoute = "/api/v1/proxy/s/chrono-llm-public",
+                PreferredLlmRoute = "/api/v1/proxy/s/legacy",
                 LlmSelection = new UserLlmSelection
                 {
                     RouteKind = UserLlmRouteKind.NyxIdUserService,
-                    RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                    RouteValue = " route-alpha ",
                     NyxIdUserServiceId = "us-alpha",
-                    ServiceSlugSnapshot = "chrono-llm-public",
+                    ServiceSlugSnapshot = "service-alpha",
                 },
             },
         };
@@ -58,9 +128,10 @@ public sealed class ProjectionUserConfigQueryPortTests
 
         config.LlmSelection.Should().Be(new UserLlmSelectionValue(
             UserLlmSelectionKind.NyxIdUserService,
-            "/api/v1/proxy/s/chrono-llm-public",
+            " route-alpha ",
             "us-alpha",
-            "chrono-llm-public"));
+            "service-alpha"));
+        config.PreferredLlmRoute.Should().Be("route-alpha");
     }
 
     [Fact]

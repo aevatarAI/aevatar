@@ -38,13 +38,6 @@ internal sealed class ActorBackedNyxIdUserLlmPreferencesStore : INyxIdUserLlmPre
     private static NyxIdUserLlmPreferences Project(UserConfig config)
         => new(
             config.DefaultModel,
-            ResolvePreferredRoute(config.LlmSelection),
+            UserLlmSelectionRoute.Resolve(config.LlmSelection) ?? string.Empty,
             config.MaxToolRounds);
-
-    private static string ResolvePreferredRoute(UserLlmSelectionValue? selection) => selection?.Kind switch
-    {
-        UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
-        UserLlmSelectionKind.NyxIdUserService => selection.RouteValue?.Trim() ?? string.Empty,
-        _ => string.Empty,
-    };
 }

@@ -26,7 +26,6 @@ public sealed class UserLlmSettingsViewBuilderTests
         var view = _builder.BuildAvailable(
             new NyxIdLlmServicesResult([], null),
             selection,
-            string.Empty,
             string.Empty);
 
         view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
@@ -54,7 +53,6 @@ public sealed class UserLlmSettingsViewBuilderTests
 
         var view = _builder.BuildUnavailable(
             selection,
-            "/api/v1/proxy/s/legacy",
             string.Empty);
 
         view.SavedRouteKind.Should().Be(UserLlmSelectionKindWire.Unspecified);
@@ -118,6 +116,26 @@ public sealed class UserLlmSettingsViewBuilderTests
     }
 
     [Fact]
+    public void BuildAvailable_WithTypedServiceRoute_ShouldTrimWithoutGenericRewriting()
+    {
+        var selection = new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            " route-alpha ",
+            "us-alpha",
+            "service-alpha");
+
+        var view = _builder.BuildAvailable(
+            new NyxIdLlmServicesResult(
+                [InventoryService("us-alpha", "Alpha service", " route-alpha ")],
+                null),
+            selection,
+            "gpt-5.5");
+
+        view.SavedRoute.Should().Be("route-alpha");
+        view.EffectiveRoute.Should().Be("route-alpha");
+    }
+
+    [Fact]
     public void BuildAvailable_WithValidTypedServiceAndDuplicateRoute_ShouldResolveExactInventoryId()
     {
         var view = Build(new UserLlmSelectionValue(
@@ -141,14 +159,16 @@ public sealed class UserLlmSettingsViewBuilderTests
                 ],
                 null),
             selection,
-            selection.RouteValue,
             "gpt-5.5");
 
-    private static NyxIdLlmService InventoryService(string id, string displayName) => new(
+    private static NyxIdLlmService InventoryService(
+        string id,
+        string displayName,
+        string route = SharedRoute) => new(
         CatalogEntryId: null,
         ServiceSlug: "shared-llm",
         DisplayName: displayName,
-        RouteValue: SharedRoute,
+        RouteValue: route,
         DefaultModel: "gpt-5.5",
         Models: ["gpt-5.5"],
         Status: UserLlmRouteStatus.Ready,

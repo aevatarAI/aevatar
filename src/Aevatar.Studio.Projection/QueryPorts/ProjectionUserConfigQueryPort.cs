@@ -47,9 +47,10 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
         if (document is null)
             return CreateDefaultConfig();
 
+        var llmSelection = MapSelection(document.LlmSelection);
         return new UserConfig(
             DefaultModel: document.DefaultModel,
-            PreferredLlmRoute: document.PreferredLlmRoute ?? string.Empty,
+            PreferredLlmRoute: UserLlmSelectionRoute.Resolve(llmSelection) ?? string.Empty,
             RuntimeMode: string.IsNullOrEmpty(document.RuntimeMode)
                 ? UserConfigRuntimeDefaults.LocalMode
                 : document.RuntimeMode,
@@ -61,7 +62,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
                 : document.RemoteRuntimeBaseUrl,
             GithubUsername: NormalizeOptional(document.GithubUsername),
             MaxToolRounds: document.MaxToolRounds,
-            LlmSelection: MapSelection(document.LlmSelection));
+            LlmSelection: llmSelection);
     }
 
     private UserConfig CreateDefaultConfig() =>

@@ -14,10 +14,9 @@ internal sealed class UserLlmSettingsViewBuilder
     public UserLlmSettingsView BuildAvailable(
         NyxIdLlmServicesResult result,
         UserLlmSelectionValue? savedSelection,
-        string savedRoute,
         string defaultModel)
     {
-        var saved = ResolveSavedSelection(savedSelection, savedRoute);
+        var saved = ResolveSavedSelection(savedSelection);
         var options = BuildRouteOptions(result.Services);
         var readyRoutes = options
             .Where(option => option.Ready && option.Allowed)
@@ -60,10 +59,9 @@ internal sealed class UserLlmSettingsViewBuilder
 
     public UserLlmSettingsView BuildUnavailable(
         UserLlmSelectionValue? savedSelection,
-        string savedRoute,
         string defaultModel)
     {
-        var saved = ResolveSavedSelection(savedSelection, savedRoute);
+        var saved = ResolveSavedSelection(savedSelection);
         var savedRouteLabel = saved.Kind switch
         {
             UserLlmSelectionKind.Gateway => _gatewayRouteLabel,
@@ -128,7 +126,7 @@ internal sealed class UserLlmSettingsViewBuilder
             if (!IsUserServiceRoute(service))
                 continue;
 
-            var route = UserConfigLlmRoute.Normalize(service.RouteValue);
+            var route = UserLlmPreferenceWriteCore.NormalizeOptional(service.RouteValue) ?? string.Empty;
             var userServiceId = InventoryUserServiceId(service);
             if (userServiceId is not null)
             {
@@ -235,13 +233,13 @@ internal sealed class UserLlmSettingsViewBuilder
     private static IReadOnlyList<UserLlmModelGroup> BuildModelGroups(
         IReadOnlyList<NyxIdLlmService> services,
         IReadOnlyList<UserLlmRouteOption> routeOptions,
-        string savedRoute,
+        string selectedRoute,
         string effectiveRoute)
     {
         var groups = new List<UserLlmModelGroup>();
         var routesToInclude = routeOptions
             .Select(option => option.RouteValue)
-            .Append(savedRoute)
+            .Append(selectedRoute)
             .Append(effectiveRoute)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -251,7 +249,10 @@ internal sealed class UserLlmSettingsViewBuilder
                 ? services.Where(IsGatewayRouteService)
                 : services.Where(service =>
                     IsUserServiceRoute(service) &&
-                    string.Equals(UserConfigLlmRoute.Normalize(service.RouteValue), route, StringComparison.OrdinalIgnoreCase));
+                    string.Equals(
+                        UserLlmPreferenceWriteCore.NormalizeOptional(service.RouteValue),
+                        route,
+                        StringComparison.OrdinalIgnoreCase));
             foreach (var service in routeServices)
             {
                 var models = service.Models
@@ -313,9 +314,7 @@ internal sealed class UserLlmSettingsViewBuilder
             string.Equals(option.RouteValue, route, StringComparison.OrdinalIgnoreCase))?.Label ?? route;
     }
 
-    private static SavedSelection ResolveSavedSelection(
-        UserLlmSelectionValue? selection,
-        string savedRoute)
+    private static SavedSelection ResolveSavedSelection(UserLlmSelectionValue? selection)
     {
         if (selection is null or { Kind: UserLlmSelectionKind.Unspecified })
         {
@@ -339,7 +338,7 @@ internal sealed class UserLlmSettingsViewBuilder
         {
             return new SavedSelection(
                 UserLlmSelectionKind.NyxIdUserService,
-                UserConfigLlmRoute.Normalize(selection.RouteValue),
+                UserLlmSelectionRoute.Resolve(selection) ?? string.Empty,
                 UserLlmPreferenceWriteCore.NormalizeOptional(selection.NyxIdUserServiceId),
                 UserLlmPreferenceWriteCore.NormalizeOptional(selection.ServiceSlugSnapshot));
         }
