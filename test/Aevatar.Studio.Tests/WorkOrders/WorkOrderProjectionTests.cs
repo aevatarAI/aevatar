@@ -76,6 +76,72 @@ public sealed class WorkOrderProjectionTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldNotInventRunOrDeadlineForPreDispatchWorkOrder()
+    {
+        var projectionObservedAt = DateTimeOffset.Parse("2026-07-17T10:00:00Z");
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new WorkOrderCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(projectionObservedAt));
+        var state = BuildState(projectionObservedAt);
+        state.LifecycleStatus = WorkOrderLifecycleStatus.Ready;
+        state.Run = null;
+        state.RunOutcome = null;
+        state.LateRunOutcome = null;
+        state.TimeoutAtUtc = null;
+
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = ActorId,
+                ProjectionKind = WorkOrderGAgent.ProjectionKind,
+            },
+            WrapCommitted(state, projectionObservedAt));
+
+        var document = dispatcher.Upserts.Should().ContainSingle().Subject;
+        document.LifecycleStatus.Should().Be(WorkOrderLifecycleStatusNames.Ready);
+        document.RunId.Should().BeEmpty();
+        document.RunActorId.Should().BeEmpty();
+        document.RunCommandId.Should().BeEmpty();
+        document.RunCorrelationId.Should().BeEmpty();
+        document.RunRevisionId.Should().BeEmpty();
+        document.RunDeploymentId.Should().BeEmpty();
+        document.RunAcceptedAtUnixMs.Should().Be(0);
+        document.RunOutcome.Should().BeNull();
+        document.LateRunOutcome.Should().BeNull();
+        document.TimeoutAtUnixMs.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(WorkOrderTerminalOutcome.Succeeded, "succeeded")]
+    [InlineData(WorkOrderTerminalOutcome.Failed, "failed")]
+    [InlineData(WorkOrderTerminalOutcome.Stopped, "stopped")]
+    [InlineData(WorkOrderTerminalOutcome.Unspecified, "")]
+    public async Task ProjectAsync_ShouldMapRunOutcomeToWireName(
+        WorkOrderTerminalOutcome outcome,
+        string expectedWireName)
+    {
+        var projectionObservedAt = DateTimeOffset.Parse("2026-07-17T10:00:00Z");
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new WorkOrderCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(projectionObservedAt));
+        var state = BuildState(projectionObservedAt);
+        state.RunOutcome!.Outcome = outcome;
+
+        await projector.ProjectAsync(
+            new StudioMaterializationContext
+            {
+                RootActorId = ActorId,
+                ProjectionKind = WorkOrderGAgent.ProjectionKind,
+            },
+            WrapCommitted(state, projectionObservedAt));
+
+        dispatcher.Upserts.Should().ContainSingle().Subject.RunOutcome!.Outcome
+            .Should().Be(expectedWireName);
+    }
+
+    [Fact]
     public async Task ListAsync_ShouldFilterCurrentStateAndReturnAuthoritativeUpdatedAt()
     {
         var workOrderUpdatedAt = DateTimeOffset.Parse("2026-07-17T09:00:00Z");
