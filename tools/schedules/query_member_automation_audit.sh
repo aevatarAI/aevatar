@@ -109,7 +109,10 @@ read_logs | jq -Rsc \
     "member (?<memberId>[^,[:space:]]+), schedule (?<scheduleId>[^,[:space:]]+), " +
     "operation (?<operationId>[^,[:space:]]+), NyxID status Completed, " +
     "Vault status Completed, state version (?<stateVersion>[1-9][0-9]*), " +
-    "observed at (?<observedAtUtc>[^[:space:]]+)\\.[[:space:]]*$") as $revocationPattern
+    "observed at (?<observedAtUtc>[0-9]{4}-(0[1-9]|1[0-2])-" +
+    "(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:" +
+    "[0-5][0-9]\\.[0-9]{7}(Z|[+-]((0[0-9]|1[0-3]):" +
+    "[0-5][0-9]|14:00)))\\.[[:space:]]*$") as $revocationPattern
   | reduce range(0; ($lines | length)) as $index (
       {matches: [], malformed: false};
       captured($lines[$index]; $headerPattern) as $header

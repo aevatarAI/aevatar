@@ -69,6 +69,22 @@ jq -e '
   and .[0].observedAtUtc == "2026-07-24T02:00:00.0000000+00:00"
 ' "$TMP_DIR/revocation.json" >/dev/null
 
+cat > "$TMP_DIR/invalid-observed-at.log" <<'LOG'
+2026-07-24T02:00:00.000000000Z info: Aevatar.Studio.MemberAutomation[6202]
+2026-07-24T02:00:00.000100000Z       Completed Studio member automation revocation for scope scope-alpha, team team-alpha, member m-alpha, schedule sch-alpha, operation op-delete-alpha, NyxID status Completed, Vault status Completed, state version 42, observed at bearer-sensitive.
+LOG
+if AEVATAR_AUDIT_LOG_INPUT="$TMP_DIR/invalid-observed-at.log" \
+    "$TOOL" revocation \
+    > "$TMP_DIR/invalid-observed-at.out" \
+    2> "$TMP_DIR/invalid-observed-at.err"; then
+  fail "invalid observedAtUtc unexpectedly succeeded"
+fi
+test ! -s "$TMP_DIR/invalid-observed-at.out" \
+  || fail "invalid observedAtUtc failure emitted output"
+if rg -F 'bearer-sensitive' "$TMP_DIR/invalid-observed-at.err"; then
+  fail "invalid observedAtUtc leaked to stderr"
+fi
+
 cat > "$TMP_DIR/filter.log" <<'LOG'
 2026-07-24T00:59:00.000000000Z info: Aevatar.Studio.MemberAutomation[6201]
 2026-07-24T00:59:00.000100000Z       Accepted Studio member automation create for scope scope-other, team team-other, member m-other, schedule sch-other, operation op-other, and verified binding binding-other.
@@ -203,12 +219,104 @@ bash -c '
   test -z "$FAILURE_OPERATION_ID"
 ' _ "$FAILURE_CONTEXT_FILE"
 
+rg -F "trap 'handle_canary_exit \"\$?\"' EXIT" "$CANARY_DOC" >/dev/null \
+  || fail "runbook does not install the status-preserving EXIT trap"
+if rg -F 'trap - ERR' "$CANARY_DOC" >/dev/null; then
+  fail "runbook still disables the obsolete ERR trap"
+fi
+
+FAILURE_HELPERS_FILE="$TMP_DIR/failure-helpers.sh"
+awk '
+  /^set_failure_context\(\) \{/ {copy = 1}
+  copy {print}
+  copy && /^trap .*handle_canary_exit.* EXIT$/ {found = 1; exit}
+  END {if (!found) exit 1}
+' "$CANARY_DOC" > "$FAILURE_HELPERS_FILE"
+test -s "$FAILURE_HELPERS_FILE" || fail "missing documented failure helpers"
+
+mkdir -p "$TMP_DIR/failure-exit" "$TMP_DIR/failure-success"
+set +e
+bash -c '
+  set -euo pipefail
+  CANARY_STATE_DIR="$1"
+  SCOPE_ID="scope-exit"
+  TEAM_ID="team-exit"
+  MEMBER_ID="m-exit"
+  SCHEDULE_ID="sch-exit"
+  RUN_ID="run-exit"
+  source "$2"
+  set_failure_context \
+    "cleanup_member" "" "http_500" "member_delete_failed" "42"
+  exit 7
+' _ "$TMP_DIR/failure-exit" "$FAILURE_HELPERS_FILE"
+FAILURE_EXIT_STATUS=$?
+set -e
+test "$FAILURE_EXIT_STATUS" = "7" \
+  || fail "EXIT trap did not preserve explicit status 7"
+jq -e '
+  (keys | sort) == ([
+    "failureCode", "memberId", "observedAtUtc", "operationId", "runId",
+    "scheduleId", "scopeId", "stateVersion", "status", "teamId"
+  ] | sort)
+  and .scopeId == "scope-exit"
+  and .teamId == "team-exit"
+  and .memberId == "m-exit"
+  and .scheduleId == "sch-exit"
+  and .runId == "run-exit"
+  and .operationId == ""
+  and .status == "http_500"
+  and .failureCode == "member_delete_failed"
+  and .stateVersion == "42"
+  and (.observedAtUtc | test(
+    "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+  ))
+' "$TMP_DIR/failure-exit/failure-allowlist.json" >/dev/null
+
+bash -c '
+  set -euo pipefail
+  CANARY_STATE_DIR="$1"
+  SCOPE_ID="scope-success"
+  TEAM_ID="team-success"
+  MEMBER_ID="m-success"
+  SCHEDULE_ID="sch-success"
+  RUN_ID="run-success"
+  source "$2"
+  set_failure_context "final_readiness" "" "http_200" "final_readiness_failed" "0"
+  exit 0
+' _ "$TMP_DIR/failure-success" "$FAILURE_HELPERS_FILE"
+test ! -e "$TMP_DIR/failure-success/failure-allowlist.json" \
+  || fail "successful EXIT unexpectedly emitted failure evidence"
+
+FAILURE_COUNT_FILE="$TMP_DIR/failure-writer-count"
+set +e
+bash -c '
+  set -euo pipefail
+  CANARY_STATE_DIR="$1"
+  SCOPE_ID="scope-writer"
+  TEAM_ID="team-writer"
+  MEMBER_ID="m-writer"
+  SCHEDULE_ID="sch-writer"
+  RUN_ID="run-writer"
+  source "$2"
+  FAILURE_COUNT_FILE="$3"
+  record_failure() {
+    printf x >> "$FAILURE_COUNT_FILE"
+    exit 9
+  }
+  exit 7
+' _ "$TMP_DIR/failure-exit" "$FAILURE_HELPERS_FILE" "$FAILURE_COUNT_FILE"
+FAILURE_WRITER_STATUS=$?
+set -e
+test "$FAILURE_WRITER_STATUS" = "7" \
+  || fail "failure-writer error replaced the original exit status"
+test "$(wc -c < "$FAILURE_COUNT_FILE" | tr -d ' ')" = "1" \
+  || fail "EXIT trap invoked failure evidence more than once"
+
 for expected_call in \
   'set_failure_context "create" "$CREATE_OPERATION_ID"' \
   'set_failure_context "run" "$RUN_OPERATION_ID"' \
   'set_failure_context "delete" "$DELETE_OPERATION_ID"' \
-  'set_failure_context "revocation" "$DELETE_OPERATION_ID"' \
-  'set_failure_context "cleanup" ""'
+  'set_failure_context "revocation" "$DELETE_OPERATION_ID"'
 do
   rg -F "$expected_call" "$CANARY_DOC" >/dev/null \
     || fail "missing failure context call: $expected_call"
@@ -216,6 +324,88 @@ done
 if rg -q 'RUN_OPERATION_ID:-\$\{CREATE_OPERATION_ID' "$CANARY_DOC"; then
   fail "failure evidence still falls back across operation identities"
 fi
+if rg -F 'set_failure_context "cleanup" ""' "$CANARY_DOC"; then
+  fail "runbook still uses one generic cleanup failure context"
+fi
+
+line_of_unique() {
+  local needle="$1" matches count
+  matches="$(rg -n -F -- "$needle" "$CANARY_DOC" || true)"
+  count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"
+  test "$count" = "1" || fail "expected one runbook line: $needle"
+  printf '%s\n' "${matches%%:*}"
+}
+
+assert_context_order() {
+  local label="$1" pre="$2" response="$3" post="$4" response_gap="${5:-1}"
+  local pre_line response_line post_line
+  pre_line="$(line_of_unique "$pre")"
+  response_line="$(line_of_unique "$response")"
+  post_line="$(line_of_unique "$post")"
+  if ! test "$pre_line" -lt "$response_line" \
+      || ! test "$post_line" -eq "$((response_line + response_gap))"; then
+    fail "$label failure context is not ordered around its response"
+  fi
+}
+
+assert_context_order \
+  "revision retire" \
+  'set_failure_context "cleanup_revision" "" "not_observed" "revision_retire_failed" "0"' \
+  '"$CANARY_STATE_DIR/retire-revision.json")"' \
+  'set_failure_context "cleanup_revision" "" "http_$STATUS" "revision_retire_failed" "0"'
+assert_context_order \
+  "member delete" \
+  'set_failure_context "cleanup_member" "" "not_observed" "member_delete_failed" "0"' \
+  '"$CANARY_STATE_DIR/delete-member.json")"' \
+  'set_failure_context "cleanup_member" "" "http_$STATUS" "member_delete_failed" "0"'
+assert_context_order \
+  "member delete observation" \
+  'set_failure_context "cleanup_member_observe" "" "not_observed" "member_delete_observe_failed" "0"' \
+  '"$CANARY_STATE_DIR/member-after-delete.json")"' \
+  'set_failure_context "cleanup_member_observe" "" "http_$STATUS" "member_delete_observe_failed" "0"'
+assert_context_order \
+  "draft delete" \
+  'set_failure_context "cleanup_draft" "" "not_observed" "draft_delete_failed" "0"' \
+  '"$CANARY_STATE_DIR/delete-draft.json")"' \
+  'set_failure_context "cleanup_draft" "" "http_$STATUS" "draft_delete_failed" "0"'
+assert_context_order \
+  "draft delete observation" \
+  'set_failure_context "cleanup_draft_observe" "" "not_observed" "draft_delete_observe_failed" "0"' \
+  '"$CANARY_STATE_DIR/draft-after-delete.json")"' \
+  'set_failure_context "cleanup_draft_observe" "" "http_$STATUS" "draft_delete_observe_failed" "0"'
+assert_context_order \
+  "Team archive" \
+  'set_failure_context "cleanup_team" "" "not_observed" "team_archive_failed" "0"' \
+  '"$CANARY_STATE_DIR/archive-team.json")"' \
+  'set_failure_context "cleanup_team" "" "http_$STATUS" "team_archive_failed" "0"'
+assert_context_order \
+  "Team archive observation" \
+  'set_failure_context "cleanup_team_observe" "" "not_observed" "team_archive_observe_failed" "0"' \
+  '"$CANARY_STATE_DIR/team-after-archive.json")"' \
+  'set_failure_context "cleanup_team_observe" "" "http_$STATUS" "team_archive_observe_failed" "0"'
+assert_context_order \
+  "final UserConfig observation" \
+  'set_failure_context "final_user_config" "" "not_observed" "final_user_config_failed" "0"' \
+  '"$CANARY_STATE_DIR/user-config-after.json")"' \
+  'set_failure_context "final_user_config" "" "http_$STATUS" "final_user_config_failed" "0"'
+assert_context_order \
+  "final readiness observation" \
+  'set_failure_context "final_readiness" "" "not_observed" "final_readiness_failed" "0"' \
+  '--output "$CANARY_STATE_DIR/final-ready.json" --write-out' \
+  'set_failure_context "final_readiness" "" "http_$HTTP_STATUS" "final_readiness_failed" "0"' \
+  2
+
+FINAL_KEY_CONTEXT='set_failure_context "final_key" "" "not_observed" "final_key_observe_failed" "0"'
+FINAL_KEY_POST='set_failure_context "final_key" "" "observed" "final_key_observe_failed" "0"'
+FINAL_KEY_LINES="$(rg -n -F '"$CANARY_STATE_DIR/api-key-final.json"' "$CANARY_DOC")"
+test "$(printf '%s\n' "$FINAL_KEY_LINES" | wc -l | tr -d ' ')" = "2" \
+  || fail "final key observation does not have exactly one capture and assertion"
+FINAL_KEY_CAPTURE_LINE="$(printf '%s\n' "$FINAL_KEY_LINES" | head -1 | cut -d: -f1)"
+FINAL_KEY_ASSERT_LINE="$(printf '%s\n' "$FINAL_KEY_LINES" | tail -1 | cut -d: -f1)"
+test "$(line_of_unique "$FINAL_KEY_CONTEXT")" -lt "$FINAL_KEY_CAPTURE_LINE" \
+  && test "$FINAL_KEY_CAPTURE_LINE" -lt "$(line_of_unique "$FINAL_KEY_POST")" \
+  && test "$(line_of_unique "$FINAL_KEY_POST")" -lt "$FINAL_KEY_ASSERT_LINE" \
+  || fail "final key observation lacks ordered pre/post context"
 
 rg -F 'test "$USER_CONFIG_DISPOSITION" = "leave_selected"' "$CANARY_DOC" >/dev/null \
   || fail "runbook does not require leave_selected disposition"

@@ -791,7 +791,15 @@ record_failure() {
       observedAtUtc: $observedAtUtc
     }' > "$CANARY_STATE_DIR/failure-allowlist.json"
 }
-trap 'record_failure' ERR
+handle_canary_exit() {
+  local exit_status="$1"
+  trap - EXIT
+  if test "$exit_status" -ne 0; then
+    (record_failure) >/dev/null 2>&1 || true
+  fi
+  exit "$exit_status"
+}
+trap 'handle_canary_exit "$?"' EXIT
 ```
 
 Inspect only the ledger keys, never the bearer:
@@ -802,7 +810,8 @@ jq -e 'has("teamId") and has("memberId") and has("createOperationId")' \
 ```
 
 Before each bounded operation, call `set_failure_context` and update it from
-the latest typed response. The ERR trap records only the
+the latest typed response. The `EXIT` handler records a nonzero exit exactly
+once while preserving its original status. It records only the
 allowlisted IDs, lifecycle/completion status, stable code, authoritative
 version, and UTC timestamp. Do not add exception text, request/response bodies,
 headers, caller subjects, or log messages to failure evidence.
@@ -1760,10 +1769,11 @@ archiving the Team.
 Keep this order: retire revision, delete member, delete draft, archive Team.
 
 ```bash
-set_failure_context "cleanup" ""
+set_failure_context "cleanup_revision" "" "not_observed" "revision_retire_failed" "0"
 STATUS="$(api_request POST \
   "/api/scopes/$SCOPE_ID/members/$MEMBER_ID/binding/revisions/$REVISION_ID:retire" \
   "$CANARY_STATE_DIR/retire-revision.json")"
+set_failure_context "cleanup_revision" "" "http_$STATUS" "revision_retire_failed" "0"
 expect_status 200 "$STATUS" retire-revision
 jq -e \
   --arg member "$MEMBER_ID" \
@@ -1775,14 +1785,18 @@ jq -e \
   and .status == "retired"
 ' "$CANARY_STATE_DIR/retire-revision.json" >/dev/null
 
+set_failure_context "cleanup_member" "" "not_observed" "member_delete_failed" "0"
 STATUS="$(api_request DELETE "/api/scopes/$SCOPE_ID/members/$MEMBER_ID" \
   "$CANARY_STATE_DIR/delete-member.json")"
+set_failure_context "cleanup_member" "" "http_$STATUS" "member_delete_failed" "0"
 expect_status 202 "$STATUS" delete-member
 
 MEMBER_DELETED=false
 for _ in $(seq 1 60); do
+  set_failure_context "cleanup_member_observe" "" "not_observed" "member_delete_observe_failed" "0"
   STATUS="$(api_request GET "/api/scopes/$SCOPE_ID/members/$MEMBER_ID" \
     "$CANARY_STATE_DIR/member-after-delete.json")"
+  set_failure_context "cleanup_member_observe" "" "http_$STATUS" "member_delete_observe_failed" "0"
   if test "$STATUS" = "404"; then
     MEMBER_DELETED=true
     break
@@ -1792,16 +1806,20 @@ for _ in $(seq 1 60); do
 done
 test "$MEMBER_DELETED" = "true"
 
+set_failure_context "cleanup_draft" "" "not_observed" "draft_delete_failed" "0"
 STATUS="$(api_request DELETE \
   "/api/workspace/workflow-drafts/$DRAFT_WORKFLOW_ID?scopeId=$SCOPE_ID" \
   "$CANARY_STATE_DIR/delete-draft.json")"
+set_failure_context "cleanup_draft" "" "http_$STATUS" "draft_delete_failed" "0"
 expect_status 204 "$STATUS" delete-workflow-draft
 
 DRAFT_DELETED=false
 for _ in $(seq 1 60); do
+  set_failure_context "cleanup_draft_observe" "" "not_observed" "draft_delete_observe_failed" "0"
   STATUS="$(api_request GET \
     "/api/workspace/workflow-drafts/$DRAFT_WORKFLOW_ID?scopeId=$SCOPE_ID" \
     "$CANARY_STATE_DIR/draft-after-delete.json")"
+  set_failure_context "cleanup_draft_observe" "" "http_$STATUS" "draft_delete_observe_failed" "0"
   if test "$STATUS" = "404"; then
     DRAFT_DELETED=true
     break
@@ -1811,14 +1829,18 @@ for _ in $(seq 1 60); do
 done
 test "$DRAFT_DELETED" = "true"
 
+set_failure_context "cleanup_team" "" "not_observed" "team_archive_failed" "0"
 STATUS="$(api_request POST "/api/scopes/$SCOPE_ID/teams/$TEAM_ID/archive" \
   "$CANARY_STATE_DIR/archive-team.json")"
+set_failure_context "cleanup_team" "" "http_$STATUS" "team_archive_failed" "0"
 expect_status 202 "$STATUS" archive-team
 
 TEAM_ARCHIVED=false
 for _ in $(seq 1 60); do
+  set_failure_context "cleanup_team_observe" "" "not_observed" "team_archive_observe_failed" "0"
   STATUS="$(api_request GET "/api/scopes/$SCOPE_ID/teams/$TEAM_ID" \
     "$CANARY_STATE_DIR/team-after-archive.json")"
+  set_failure_context "cleanup_team_observe" "" "http_$STATUS" "team_archive_observe_failed" "0"
   expect_status 200 "$STATUS" observe-team-archive
   if jq -e --arg team "$TEAM_ID" '
       .teamId == $team and .lifecycleStage == "archived"
@@ -1834,8 +1856,10 @@ test "$TEAM_ARCHIVED" = "true"
 ### 18. Final Read-Only Assertions
 
 ```bash
+set_failure_context "final_user_config" "" "not_observed" "final_user_config_failed" "0"
 STATUS="$(api_request GET /api/user-config/llm \
   "$CANARY_STATE_DIR/user-config-after.json")"
+set_failure_context "final_user_config" "" "http_$STATUS" "final_user_config_failed" "0"
 expect_status 200 "$STATUS" final-user-config
 jq -e \
   --arg id "$NYXID_USER_SERVICE_ID" \
@@ -1849,17 +1873,21 @@ jq -e \
   and .defaultModel == $model
 ' "$CANARY_STATE_DIR/user-config-after.json" >/dev/null
 
+set_failure_context "final_readiness" "" "not_observed" "final_readiness_failed" "0"
 HTTP_STATUS="$(curl --disable --silent --show-error \
   --proto '=https' --connect-timeout 10 --max-time 60 \
   --output "$CANARY_STATE_DIR/final-ready.json" --write-out '%{http_code}' \
   "$AEVATAR_BASE_URL/health/ready")"
+set_failure_context "final_readiness" "" "http_$HTTP_STATUS" "final_readiness_failed" "0"
 test "$HTTP_STATUS" = "200"
 jq -e '.ok == true and .status == "ready"' \
   "$CANARY_STATE_DIR/final-ready.json" >/dev/null
 
+set_failure_context "final_key" "" "not_observed" "final_key_observe_failed" "0"
 capture_exact_nyxid_key \
   "$EXPECTED_KEY_NAME" "$NYXID_KEY_ID" \
   "$CANARY_STATE_DIR/api-key-final.json"
+set_failure_context "final_key" "" "observed" "final_key_observe_failed" "0"
 jq -e \
   --arg name "$EXPECTED_KEY_NAME" \
   --arg keyId "$NYXID_KEY_ID" '
@@ -2117,7 +2145,6 @@ jq -e \
   and .cleanup.automationTotalCount == 0
 ' "$CANARY_EVIDENCE_FILE" >/dev/null
 
-trap - ERR
 unset STUDIO_BEARER
 rm -rf -- "$CANARY_STATE_DIR"
 test ! -e "$CANARY_STATE_DIR"
