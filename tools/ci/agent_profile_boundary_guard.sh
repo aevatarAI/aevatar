@@ -45,6 +45,7 @@ scan_prepared_code() {
     [[ -n "${file}" ]] || continue
     hits="$(
       strip_csharp_comments_and_inactive_code < "${file}" \
+        | strip_csharp_strings \
         | rg -n -P "${pattern}" \
         || true
     )"
@@ -77,7 +78,7 @@ scan_application_latest_contracts() {
     hits="$(
       printf '%s\n' "${prepared}" \
         | strip_csharp_strings \
-        | rg -n -i -P '\b[A-Za-z0-9_]*latest[A-Za-z0-9_]*\b' \
+        | rg -n -i -P '\blatest(?:_?version)?\b' \
         || true
     )"
     while IFS= read -r line; do
@@ -91,10 +92,21 @@ extract_csharp_method_body() {
   local method_name="$1"
   METHOD_NAME="${method_name}" perl -0777 -ne '
     my $method = $ENV{"METHOD_NAME"};
-    if ($_ !~ /\b\Q$method\E\s*\([^)]*\)\s*\{/sg) {
+    if ($_ !~ /\b\Q$method\E\s*\([^)]*\)\s*(=>|\{)/sg) {
       exit 1;
     }
-    my $open = pos($_) - 1;
+    my $delimiter = $1;
+    my $body_start = pos($_);
+    if ($delimiter eq "=>") {
+      my $remainder = substr($_, $body_start);
+      if ($remainder =~ /\A(.*?);/s) {
+        print $1;
+        exit 0;
+      }
+      exit 1;
+    }
+
+    my $open = $body_start - 1;
     my $depth = 0;
     for (my $index = $open; $index < length($_); $index++) {
       my $character = substr($_, $index, 1);
@@ -110,6 +122,37 @@ extract_csharp_method_body() {
     }
     exit 1;
   '
+}
+
+extract_csharp_top_level_code() {
+  perl -0777 -ne '
+    my $depth = 0;
+    for (my $index = 0; $index < length($_); $index++) {
+      my $character = substr($_, $index, 1);
+      if ($character eq "{") {
+        $depth++;
+        print "\n" if $depth == 1;
+      } elsif ($character eq "}") {
+        exit 1 if $depth == 0;
+        $depth--;
+        print "\n" if $depth == 0;
+      } elsif ($depth == 0 || $character eq "\n") {
+        print $character;
+      }
+    }
+    exit($depth == 0 ? 0 : 1);
+  '
+}
+
+count_pattern_matches() {
+  local pattern="$1"
+  local matches=""
+  matches="$(rg -o -P "${pattern}" || true)"
+  if [[ -z "${matches}" ]]; then
+    echo 0
+    return 0
+  fi
+  printf '%s\n' "${matches}" | wc -l | tr -d '[:space:]'
 }
 
 extract_tool_schema() {
@@ -128,7 +171,7 @@ report_violation() {
   local evidence="$1"
   local message="$2"
   [[ -n "${evidence}" ]] || return 0
-  printf '%s\\n%s\\n' "${evidence}" "${message}"
+  printf '%s\n%s\n' "${evidence}" "${message}"
   violations=$((violations + 1))
 }
 
@@ -201,7 +244,15 @@ run_guard() (
 
   hits="$(
     scan_prepared_code \
-      '(?i)private\s+(?:static\s+)?(?:readonly\s+)?(?:(?:Dictionary|ConcurrentDictionary|HashSet|Queue)<[^>\n]*(?:AgentProfile|Profile|Binding)[^>\n]*>\s+[A-Za-z_][A-Za-z0-9_]*|(?:Dictionary|ConcurrentDictionary|HashSet|Queue)<[^>\n]+>\s+[A-Za-z_][A-Za-z0-9_]*(?:profile|binding)[A-Za-z0-9_]*)\s*(?:=|;)' \
+      '(?i)\b(?:private|protected|internal|public)\s+static\s+(?:readonly\s+)?(?=[^();\n]*(?:AgentProfile|Profile(?:Identity|Context|State|Binding)))[^();\n]+\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=|;)' \
+      "${profile_semantic_roots[@]}"
+  )"
+  report_violation "${hits}" \
+    "Static typed Agent Profile state is forbidden. Profile authority must remain actor/read-model owned."
+
+  hits="$(
+    scan_prepared_code \
+      '(?i)private\s+(?:static\s+)?(?:readonly\s+)?(?:(?:(?:Concurrent|Immutable|Sorted|Frozen)?Dictionary|I(?:ReadOnly)?Dictionary|HashSet|Queue)<[^>\n]*(?:AgentProfile|Profile|Binding)[^>\n]*>\s+[A-Za-z_][A-Za-z0-9_]*|(?:(?:Concurrent|Immutable|Sorted|Frozen)?Dictionary|I(?:ReadOnly)?Dictionary|HashSet|Queue)<[^>\n]+>\s+[A-Za-z_][A-Za-z0-9_]*(?:profile|binding)[A-Za-z0-9_]*)\s*(?:=|;)' \
       "${profile_surface_roots[@]}"
   )"
   report_violation "${hits}" \
@@ -224,42 +275,70 @@ run_guard() (
   report_violation "${hits}" \
     "Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden."
 
-  local client_code=""
-  local detail_pattern='(?s)\binternal\s+Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>>\s+GetExactSkillDetailAsync\s*\([^)]*\)\s*=>\s*GetExactAsync<OrnnExactSkillDetail>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"'
-  local json_pattern='(?s)\binternal\s+Task<OrnnExactSkillReadResult<OrnnSkillJson>>\s+GetExactSkillJsonAsync\s*\([^)]*\)\s*=>\s*GetExactAsync<OrnnSkillJson>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}/json\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"'
+  local client_code="" detail_body="" json_body=""
+  local detail_signature='(?s)\binternal\s+Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>>\s+GetExactSkillDetailAsync\s*\([^)]*\)\s*(?:=>|\{)'
+  local json_signature='(?s)\binternal\s+Task<OrnnExactSkillReadResult<OrnnSkillJson>>\s+GetExactSkillJsonAsync\s*\([^)]*\)\s*(?:=>|\{)'
+  local detail_pattern='(?s)\bGetExactAsync<OrnnExactSkillDetail>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"'
+  local json_pattern='(?s)\bGetExactAsync<OrnnSkillJson>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}/json\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"'
   client_code="$(strip_csharp_comments_and_inactive_code < "${ornn_client_file}")"
-  if ! printf '%s\n' "${client_code}" | rg -q -U -P "${detail_pattern}"; then
+  if ! printf '%s\n' "${client_code}" | rg -q -U -P "${detail_signature}" ||
+     ! detail_body="$(printf '%s\n' "${client_code}" | extract_csharp_method_body GetExactSkillDetailAsync)" ||
+     ! printf '%s\n' "${detail_body}" | rg -q -U -P "${detail_pattern}"; then
     echo "${ornn_client_file}"
     echo "The executable exact Ornn Profile detail read must use the literal ?version= endpoint form."
     violations=$((violations + 1))
   fi
-  if ! printf '%s\n' "${client_code}" | rg -q -U -P "${json_pattern}"; then
+  if ! printf '%s\n' "${client_code}" | rg -q -U -P "${json_signature}" ||
+     ! json_body="$(printf '%s\n' "${client_code}" | extract_csharp_method_body GetExactSkillJsonAsync)" ||
+     ! printf '%s\n' "${json_body}" | rg -q -U -P "${json_pattern}"; then
     echo "${ornn_client_file}"
     echo "The executable exact Ornn Profile JSON read must use the literal ?version= endpoint form."
     violations=$((violations + 1))
   fi
 
   local adapter_code=""
-  local resolver_body=""
+  local resolver_body="" resolver_structure="" resolver_top_level=""
+  local detail_call_count=0 json_call_count=0
   adapter_code="$(strip_csharp_comments_and_inactive_code < "${exact_adapter_file}")"
   if ! resolver_body="$(printf '%s\n' "${adapter_code}" | extract_csharp_method_body ResolveAsync)"; then
     echo "${exact_adapter_file}"
     echo "The exact Ornn Profile adapter must declare an executable ResolveAsync body."
     violations=$((violations + 1))
+  elif ! resolver_structure="$(printf '%s\n' "${resolver_body}" | strip_csharp_strings)" ||
+       ! resolver_top_level="$(printf '%s\n' "${resolver_structure}" | extract_csharp_top_level_code)"; then
+    echo "${exact_adapter_file}"
+    echo "The exact Ornn Profile adapter must declare a structurally valid ResolveAsync body."
+    violations=$((violations + 1))
   else
-    if ! printf '%s\n' "${resolver_body}" \
-      | rg -q -P '^[[:space:]]*var[[:space:]]+detailRead[[:space:]]*=[[:space:]]*await[[:space:]]+_client\.GetExactSkillDetailAsync\('; then
+    detail_call_count="$(
+      printf '%s\n' "${resolver_top_level}" \
+        | count_pattern_matches '\b_client\.GetExactSkillDetailAsync\s*\('
+    )"
+    json_call_count="$(
+      printf '%s\n' "${resolver_top_level}" \
+        | count_pattern_matches '\b_client\.GetExactSkillJsonAsync\s*\('
+    )"
+    if (( detail_call_count != 1 )); then
+      echo "${exact_adapter_file}"
+      echo "ResolveAsync must execute the exact-version detail read exactly once as a direct top-level call."
+      violations=$((violations + 1))
+    elif ! printf '%s\n' "${resolver_top_level}" \
+      | rg -q -P '\bvar[[:space:]]+detailRead[[:space:]]*=[[:space:]]*await[[:space:]]+_client\.GetExactSkillDetailAsync\('; then
       echo "${exact_adapter_file}"
       echo "ResolveAsync must execute the exact-version detail read."
       violations=$((violations + 1))
     fi
-    if ! printf '%s\n' "${resolver_body}" \
-      | rg -q -P '^[[:space:]]*var[[:space:]]+jsonRead[[:space:]]*=[[:space:]]*await[[:space:]]+_client\.GetExactSkillJsonAsync\('; then
+    if (( json_call_count != 1 )); then
+      echo "${exact_adapter_file}"
+      echo "ResolveAsync must execute the exact-version JSON read exactly once as a direct top-level call."
+      violations=$((violations + 1))
+    elif ! printf '%s\n' "${resolver_top_level}" \
+      | rg -q -P '\bvar[[:space:]]+jsonRead[[:space:]]*=[[:space:]]*await[[:space:]]+_client\.GetExactSkillJsonAsync\('; then
       echo "${exact_adapter_file}"
       echo "ResolveAsync must execute the exact-version JSON read."
       violations=$((violations + 1))
     fi
-    if printf '%s\n' "${resolver_body}" | rg -q -P '\bif\s*\(\s*false\s*\)'; then
+    if printf '%s\n' "${resolver_structure}" | rg -q -P '\bif\s*\(\s*false\s*\)'; then
       echo "${exact_adapter_file}"
       echo "ResolveAsync exact reads must not be hidden in dead conditional code."
       violations=$((violations + 1))
@@ -277,7 +356,7 @@ run_guard() (
 
   hits="$(
     scan_prepared_code \
-      'ProjectionActivation|IProjectionPortActivationService|IProjectionPortReleaseService|IActorRuntime|\bIEventStore\b|event[[:space:]_-]*replay|RebuildAsync|PrimeAsync|Priming|Ensure[A-Za-z0-9_]*Projection|Attach[A-Za-z0-9_]*Projection|ActivateAsync' \
+      'ProjectionActivation|IProjectionPortActivationService|IProjectionPortReleaseService|\b(?:I?ActorRuntime|I?EventStore|FileEventStore|ReplayAsync|EventReplay)\b|event[[:space:]_-]*replay|RebuildAsync|PrimeAsync|Priming|Ensure[A-Za-z0-9_]*Projection|Attach[A-Za-z0-9_]*Projection|ActivateAsync' \
       "${query_ingress_roots[@]}"
   )"
   report_violation "${hits}" \
@@ -307,7 +386,7 @@ run_guard() (
           | tr -cd '[:alnum:]'
       )"
       case "${normalized_key}" in
-        ownerid|ownersubject|ownersubjectid|subjectid|scopeid|profileid|systemauthority|systemauthorityid|platformid|*sealed*|*credential*|*token*|*bearer*)
+        ownerid|ownersubject|ownersubjectid|subjectid|scopeid|profileid|systemauthority|systemauthorityid|platformid|apikey|cookie|password|authorization|secret|clientsecret|oauthcode|*sealed*|*credential*|*token*|*bearer*)
           forbidden_schema_keys+="${schema_key}"$'\n'
           ;;
       esac
@@ -377,6 +456,10 @@ write_valid_fixture() {
     'public sealed class AgentProfileService {' \
     '  // The latest wording in a comment is harmless.' \
     '  private readonly Dictionary<string, string> _cache = new();' \
+    '  private readonly IReadOnlyDictionary<string, string> _timestamps = new Dictionary<string, string>();' \
+    '  private readonly ImmutableDictionary<string, string> _lookup = ImmutableDictionary<string, string>.Empty;' \
+    '  private string latestReadModelTimestamp = "";' \
+    '  public string DescribeForbiddenInfrastructure() => "IActorRuntime FileEventStore ReplayAsync EventReplay";' \
     '  public string Describe() => "The latest committed Profile is shown to the caller."; }'
   write_lines "${projection}/AgentProfileDocumentMetadataProviders.cs" \
     'public sealed class AgentProfileOwnerDocumentMetadataProvider {' \
@@ -445,12 +528,30 @@ run_self_tests() {
     cp -R "${base}" "${case_root}"
   }
 
-  expect_pass "legal document metadata, unrelated collection, and harmless latest wording" "${base}"
+  expect_pass "legal metadata, unrelated collections, and harmless semantic strings" "${base}"
+
+  fresh_case "typed-static-profile-state"
+  printf '%s\n' 'private static AgentProfileIdentity? _current;' \
+    >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
+  expect_fail "typed static Profile state" "${case_root}" "Static typed Agent Profile state"
 
   fresh_case "profile-fact-collection"
   printf '%s\n' 'private readonly Dictionary<string, string> _profileBindings = new();' \
     >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
   expect_fail "Profile fact collection" "${case_root}" "Private service-level collections"
+
+  local collection_label="" collection_probe=""
+  while IFS='|' read -r collection_label collection_probe; do
+    fresh_case "profile-fact-collection-${collection_label}"
+    printf '%s\n' "${collection_probe}" \
+      >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
+    expect_fail "Profile fact collection ${collection_label}" "${case_root}" \
+      "Private service-level collections"
+  done <<'CASES'
+idictionary|private readonly IDictionary<string, string> _profileBindings;
+readonly-dictionary|private readonly IReadOnlyDictionary<string, AgentProfileIdentity> _index;
+immutable-dictionary|private readonly ImmutableDictionary<string, string> _profileFacts;
+CASES
 
   local provider_file="src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileDocumentMetadataProviders.cs"
   local provider_probe="" provider_label=""
@@ -485,11 +586,24 @@ CASES
     expect_fail "Application exact-reference ${application_label}" "${case_root}" "Application accepts exact skill references only"
   done <<'CASES'
 name-or-id|private string nameOrId = "skill";
-latest-identifier|private string latestVersion = "1.0";
+latest-identifier-bare|private string latest = "1.0";
+latest-identifier-camel|private string latestVersion = "1.0";
+latest-identifier-snake|private string latest_version = "1.0";
 latest-contract|private string Version = "latest";
 inline-skill|private string inlineSkill = "content";
 name-fetch|private Task GetSkillJsonAsync();
 CASES
+
+  fresh_case "client-block-bodied"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs" \
+    'public sealed class OrnnSkillClient {' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) {' \
+    '    return GetExactAsync<OrnnExactSkillDetail>(accessToken,' \
+    '      $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}", guid, ct); }' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) {' \
+    '    return GetExactAsync<OrnnSkillJson>(accessToken,' \
+    '      $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}", guid, ct); } }'
+  expect_pass "block-bodied exact client methods" "${case_root}"
 
   fresh_case "client-comment-decoy"
   write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs" \
@@ -526,6 +640,26 @@ CASES
     '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct); } }'
   expect_fail "exact adapter dead helper decoys" "${case_root}" "ResolveAsync must execute"
 
+  fresh_case "adapter-dead-local-function-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    async Task DeadDecoy(CancellationToken localCt) {' \
+    '      var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, localCt);' \
+    '      var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, localCt); }' \
+    '    return default!; } }'
+  expect_fail "exact adapter dead local-function decoys" "${case_root}" "ResolveAsync must execute"
+
+  fresh_case "adapter-duplicate-top-level-calls"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '    var duplicateDetailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
+    '    return Combine(detailRead, jsonRead); } }'
+  expect_fail "exact adapter duplicate top-level calls" "${case_root}" "exactly once"
+
   fresh_case "adapter-name-capable"
   printf '%s\n' 'private Task GetSkillJsonAsync() => _client.GetSkillJsonAsync("name");' \
     >> "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs"
@@ -538,14 +672,20 @@ CASES
     expect_fail "query ingress ${ingress_label}" "${case_root}" "query and ingress surfaces"
   done <<'CASES'
 lookup-service|src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileLookupService.cs|public sealed class AgentProfileLookupService { private readonly IActorRuntime _runtime; }
+actor-runtime|src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileLookupService.cs|public sealed class AgentProfileLookupService { private readonly ActorRuntime _runtime; }
 projection|src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileProjector.cs|private Task ProjectionActivation();
 host-endpoint|src/platform/Aevatar.GAgentService.Hosting/AgentProfiles/AgentProfileEndpoints.cs|private Task PrimeAsync();
 tool|src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesToolSource.cs|private readonly IEventStore _eventStore;
+file-event-store|src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesToolSource.cs|private readonly FileEventStore _eventStore;
+event-store|src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesToolSource.cs|private readonly EventStore _eventStore;
+replay-async|src/platform/Aevatar.GAgentService.Hosting/AgentProfiles/AgentProfileEndpoints.cs|private Task ReplayAsync();
+event-replay|src/platform/Aevatar.GAgentService.Hosting/AgentProfiles/AgentProfileEndpoints.cs|private readonly EventReplay _eventReplay;
 CASES
 
   local schema_alias=""
   for schema_alias in scopeId subjectId systemAuthority owner_id ownerSubject \
-    profileId platformId sealed_content sealedContent credential accessToken; do
+    profileId platformId sealed_content sealedContent credential accessToken \
+    api_key apiKey cookie password authorization secret clientSecret oauth_code oauthCode; do
     fresh_case "schema-${schema_alias}"
     write_tool_schema \
       "${case_root}/src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesTool.cs" \

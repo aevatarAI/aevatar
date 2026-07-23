@@ -6,6 +6,7 @@ public static class AuditContractSemantics
 {
     public const string CurrentSchemaVersion = "1.0";
     public const string LegacySchemaVersion = "legacy-v0";
+    public const string PlatformAuditScopeId = "platform:aevatar";
 
     public static AuditLifecyclePhase ResolveLifecyclePhase(AuditRecord record)
     {

@@ -263,7 +263,7 @@ readers, actor state, or event stores directly. Audit artifacts are queried thro
 
 | Route | Method | Authorization | Semantics |
 |---|---|---|---|
-| `/api/audit/trail` | `GET` | Authenticated caller; platform admin only when `scope` targets another scope | Query materialized audit artifacts. Missing `scope` means caller scope. |
+| `/api/audit/trail` | `GET` | Authenticated caller; platform admin for cross-scope, all-scope, or reserved `platform:aevatar` reads | Query materialized audit artifacts. Missing `scope` means caller scope. |
 | `/api/audit/trail/cloudevents` | `GET` | Same as `/api/audit/trail` | Export the selected page as a CloudEvents 1.0 JSON batch. |
 | `/api/audit/actor-resolutions` | `POST` | Platform admin | Resolve an external actor identity to `auditActorId`. |
 
@@ -272,9 +272,18 @@ put that identity in path or query parameters, must not log it, and must not ret
 The only returned identity is the server-computed `auditActorId` plus
 `identityKeyId` from `IAuditActorIdentityHasher`.
 
-Default audit queries resolve to the caller's `scope_id` claim and do not call the
-platform-admin authorizer. Any cross-scope query must resolve the caller through
-`IPlatformAdminAuthorizer` before `IAuditTrailQueryPort` is invoked. Resolver calls are
+`AuditTrailQuery.ScopeId` is an artifact visibility partition, not proof that the
+caller owns a domain scope. A nonempty value selects one literal audit scope; `null`
+is the admin-only all-scope wildcard. Ordinary default queries resolve to the caller's
+`scope_id` claim without calling the platform-admin authorizer. Cross-scope and
+all-scope queries must resolve the caller through `IPlatformAdminAuthorizer` before
+`IAuditTrailQueryPort` is invoked.
+
+`platform:aevatar` is the reserved platform audit scope used for platform-owned facts
+and quarantined committed facts whose ordinary scope identity is missing or invalid.
+Reading or exporting that literal always requires `IPlatformAdminAuthorizer`, including
+when the caller's `scope_id` claim is also `platform:aevatar`. A matching claim does not
+turn the reserved partition into an ordinary caller-owned scope. Resolver calls are
 always platform-admin reads.
 
 If `IAuditTrailQueryPort` is not configured, `/api/audit/trail` returns

@@ -1,6 +1,7 @@
 using System.Globalization;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Core.CommittedFacts;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Google.Protobuf;
@@ -288,8 +289,6 @@ public sealed class AgentProfileMutationRejectedAuditTranslator
 public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorBase<TEvent>
     where TEvent : class, IMessage<TEvent>, new()
 {
-    private const string AevatarPlatformAuditPartition = "platform:aevatar";
-
     protected static CommittedAuditSeed ProfileSeed(
         string operationName,
         AgentProfileIdentity? identity,
@@ -314,7 +313,7 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
             operationName,
             "agent_profile",
             identity?.ProfileId ?? string.Empty,
-            AuditPartition(identity),
+            AuditScope(identity),
             AuditSensitivityLevel.Restricted,
             isDestructive,
             operation?.CommandId ?? string.Empty,
@@ -458,10 +457,10 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         _ => "unspecified",
     };
 
-    private static string AuditPartition(AgentProfileIdentity? identity)
+    private static string AuditScope(AgentProfileIdentity? identity)
     {
         if (identity is null || AgentProfilePolicies.ValidateIdentity(identity).Count > 0)
-            return string.Empty;
+            return AuditContractSemantics.PlatformAuditScopeId;
 
         return identity.Owner?.OwnerCase switch
         {
@@ -475,8 +474,9 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
                     identity.Reference?.OwnerHandle,
                     AgentProfilePolicies.SystemOwnerHandle,
                     StringComparison.Ordinal) &&
-                string.IsNullOrEmpty(identity.OwningScopeId) => AevatarPlatformAuditPartition,
-            _ => string.Empty,
+                string.IsNullOrEmpty(identity.OwningScopeId) =>
+                AuditContractSemantics.PlatformAuditScopeId,
+            _ => AuditContractSemantics.PlatformAuditScopeId,
         };
     }
 

@@ -168,11 +168,14 @@ records. Draft instructions, sealed instructions/assets, owner subject ids,
 credentials, and raw dependency errors are structurally omitted.
 
 Audit partitioning does not rewrite domain identity. A valid user Profile keeps
-its `owningScopeId` as the audit partition. Only the fully valid canonical
-`system/aevatar` identity uses the audit-only `platform:aevatar` partition;
-missing or invalid identities receive no audit partition. `platform:aevatar` is
-an audit-store routing key, not a scope id, Profile owner, or authorization
-claim.
+its `owningScopeId` as the audit scope. The fully valid canonical
+`system/aevatar` identity uses the reserved `platform:aevatar` audit scope.
+Committed Profile failures whose identity is missing or invalid are quarantined
+in that same reserved audit scope so the governance fact is retained; quarantine
+does not grant system authority or repair the invalid domain identity.
+`platform:aevatar` is never an ordinary Profile `owningScopeId`. Query and export
+access to it always requires platform-admin authorization, even when a caller's
+`scope_id` claim has the same literal value.
 
 ## 8. System Profile Bootstrap And Health
 

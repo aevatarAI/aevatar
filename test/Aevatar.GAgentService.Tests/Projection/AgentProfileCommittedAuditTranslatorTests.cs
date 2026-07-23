@@ -1,5 +1,6 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.CommittedFacts;
+using Aevatar.Audit.Abstractions.Models;
 using Aevatar.Audit.Core.CommittedFacts;
 using Aevatar.Audit.Core.Projection;
 using Aevatar.Audit.Core.Stores;
@@ -348,43 +349,44 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         identity.OwningScopeId.Should().BeEmpty();
         evt.Identity.OwningScopeId.Should().BeEmpty();
         document.Should().NotBeNull();
-        document!.ScopeId.Should().Be("platform:aevatar");
-        document.Record.ScopeId.Should().Be("platform:aevatar");
-        document.Record.Provenance.ScopeId.Should().Be("platform:aevatar");
+        document!.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
+        document.Record.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
+        document.Record.Provenance.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
     }
 
     [Fact]
-    public void MissingOrInvalidSystemIdentity_ShouldNotAcquirePlatformAuditPartition()
+    public async Task InvalidProfileIdentityCommittedFailure_ShouldAppendToPlatformAuditQuarantine()
     {
-        var missingIdentity = new AgentProfileInitializedEvent
+        var evt = new AgentProfileProvisioningFailedEvent
         {
-            Operation = Operation("missing-system"),
-        };
-        var wrongPlatformIdentity = SystemIdentity();
-        wrongPlatformIdentity.Owner.System.PlatformId = "other-platform";
-        var wrongReferenceIdentity = SystemIdentity();
-        wrongReferenceIdentity.Reference.OwnerHandle = "not-system";
-
-        var records = new[]
-        {
-            Translate(new AgentProfileInitializedAuditTranslator(), missingIdentity),
-            Translate(
-                new AgentProfileInitializedAuditTranslator(),
-                new AgentProfileInitializedEvent
-                {
-                    Operation = Operation("wrong-platform"),
-                    Identity = wrongPlatformIdentity,
-                }),
-            Translate(
-                new AgentProfileInitializedAuditTranslator(),
-                new AgentProfileInitializedEvent
-                {
-                    Operation = Operation("wrong-reference"),
-                    Identity = wrongReferenceIdentity,
-                }),
+            Operation = Operation("invalid-create"),
+            Identity = new AgentProfileIdentity(),
+            ProfileActorId = AgentProfileActorIds.Profile("invalid-create"),
+            Diagnostic = new AgentProfileSafeDiagnostic
+            {
+                Code = "MISSING_PROFILE_IDENTITY",
+                Message = "A canonical Profile identity is required.",
+                Path = "identity",
+            },
+            FailureKind = AgentProfileProvisioningFailureKind.CreateValidation,
         };
 
-        records.Should().OnlyContain(record => string.IsNullOrEmpty(record.ScopeId));
+        var document = await MaterializeAsync(
+            new AgentProfileNamespaceCurrentStateProjectionContext
+            {
+                RootActorId = AgentProfileActorIds.Namespace,
+                ProjectionKind = "agent_profile_namespace",
+            },
+            new AgentProfileProvisioningFailedAuditTranslator(),
+            evt,
+            "invalid-profile-identity",
+            AgentProfileActorIds.Namespace);
+
+        document.Should().NotBeNull();
+        document!.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
+        document.Record.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
+        document.Record.Provenance.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
+        document.Record.Failure.Code.Should().Be("MISSING_PROFILE_IDENTITY");
     }
 
     [Fact]
@@ -718,12 +720,6 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         string eventId)
         where TEvent : class, IMessage<TEvent>
     {
-        var store = new InMemoryAuditTrailStore();
-        var appender = new ProjectionAuditTrailAppender([store]);
-        var materializer = new CommittedAuditArtifactMaterializer<AgentProfileOwnerCurrentStateProjectionContext>(
-            new AuditCommittedEventTranslatorRegistry([translator]),
-            appender,
-            new FixedProjectionClock(ObservedAt.AddMinutes(1)));
         var originActorId = evt switch
         {
             AgentProfileInitializedEvent initialized =>
@@ -732,6 +728,33 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
                 AgentProfileActorIds.Profile(rejected.Identity?.ProfileId ?? "missing"),
             _ => AgentProfileActorIds.Profile("unknown"),
         };
+        return await MaterializeAsync(
+            new AgentProfileOwnerCurrentStateProjectionContext
+            {
+                RootActorId = originActorId,
+                ProjectionKind = "agent_profile_owner",
+            },
+            translator,
+            evt,
+            eventId,
+            originActorId);
+    }
+
+    private static async Task<AuditTrailDocument?> MaterializeAsync<TContext, TEvent>(
+        TContext context,
+        IAuditCommittedEventTranslator translator,
+        TEvent evt,
+        string eventId,
+        string originActorId)
+        where TContext : class, IProjectionMaterializationContext
+        where TEvent : class, IMessage<TEvent>
+    {
+        var store = new InMemoryAuditTrailStore();
+        var appender = new ProjectionAuditTrailAppender([store]);
+        var materializer = new CommittedAuditArtifactMaterializer<TContext>(
+            new AuditCommittedEventTranslatorRegistry([translator]),
+            appender,
+            new FixedProjectionClock(ObservedAt.AddMinutes(1)));
         var envelope = new EventEnvelope
         {
             Id = $"envelope-{eventId}",
@@ -752,16 +775,11 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             }),
         };
 
-        await materializer.ProjectAsync(
-            new AgentProfileOwnerCurrentStateProjectionContext
-            {
-                RootActorId = originActorId,
-                ProjectionKind = "agent_profile_owner",
-            },
-            envelope);
+        await materializer.ProjectAsync(context, envelope);
 
         return await store.GetAsync($"committed:{eventId}:{translator switch
         {
+            AgentProfileProvisioningFailedAuditTranslator => "agent_profile.provisioning.failed",
             AgentProfileInitializedAuditTranslator => "agent_profile.created",
             AgentProfileMutationRejectedAuditTranslator => "agent_profile.mutation.rejected",
             _ => throw new InvalidOperationException("Unsupported materializer test translator."),

@@ -34,7 +34,7 @@ public static class AuditTrailEndpoints
 
         data.MapGet("/trail", QueryAuditTrail)
             .WithName("QueryAuditTrail")
-            .WithSummary("Query audit trail records. Default scope is the caller scope; cross-scope reads require aevatar admin access.")
+            .WithSummary("Query audit trail records. Cross-scope and reserved platform-scope reads require aevatar admin access.")
             .RequireAuthorization()
             .WithMetadata(new AuditTrailEndpointAuditMetadata("audit-trail", "query-cross-scope", AdminAccessLevel));
 
@@ -156,12 +156,16 @@ public static class AuditTrailEndpoints
         var normalizedScope = NormalizeOptional(scope);
         var isAllScopes = string.Equals(normalizedScope, AllScopesToken, StringComparison.Ordinal);
         var targetScope = isAllScopes ? AllScopesToken : (normalizedScope ?? callerScopeId);
-        // "__all__" and any literal scope id other than the caller's own are both cross-scope reads
-        // and require platform admin; the difference is only whether the store filters by one scope
-        // or matches ScopeId == null as a wildcard across every scope.
+        // "__all__", another caller's scope, and the reserved platform audit scope require platform
+        // admin. The store receives either one literal visibility partition or a null all-scope wildcard.
         var isCrossScope = !string.Equals(targetScope, callerScopeId, StringComparison.Ordinal);
+        var isPlatformAuditScope = string.Equals(
+            targetScope,
+            AuditContractSemantics.PlatformAuditScopeId,
+            StringComparison.Ordinal);
+        var requiresAdmin = isCrossScope || isPlatformAuditScope;
         var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
-        if (isCrossScope)
+        if (requiresAdmin)
         {
             if (dependencies.AdminAuthorizer is not { } authorizer)
                 return AdminAuthorizationUnavailable();

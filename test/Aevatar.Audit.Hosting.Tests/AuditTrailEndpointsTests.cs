@@ -266,6 +266,92 @@ public sealed class AuditTrailEndpointsTests
     }
 
     [Fact]
+    public async Task QueryAuditTrail_WhenPlatformAuditScopeMatchesCallerAndAuthorizerMissing_ReturnsUnavailable()
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var http = BuildHttpContext(
+            AuditContractSemantics.PlatformAuditScopeId,
+            bearer: "token",
+            queryPort);
+
+        var result = await AuditTrailEndpoints.QueryAuditTrail(
+            http,
+            BuildEndpointDependencies(queryPort),
+            NullLoggerFactory.Instance,
+            scope: AuditContractSemantics.PlatformAuditScopeId);
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("AUDIT_ADMIN_AUTH_UNAVAILABLE");
+        queryPort.Queries.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuditRead_WhenPlatformAuditScopeMatchesCallerAndElevationDenied_DeniesBeforeQuery(
+        bool exportCloudEvents)
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var authorizer = new FakeAuthorizer(elevated: false);
+        var http = BuildHttpContext(
+            AuditContractSemantics.PlatformAuditScopeId,
+            bearer: "token",
+            queryPort,
+            authorizer);
+
+        var result = exportCloudEvents
+            ? await AuditTrailEndpoints.ExportAuditTrailCloudEvents(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: AuditContractSemantics.PlatformAuditScopeId)
+            : await AuditTrailEndpoints.QueryAuditTrail(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: AuditContractSemantics.PlatformAuditScopeId);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status403Forbidden);
+        queryPort.Queries.Should().BeEmpty();
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuditRead_WhenPlatformAuditScopeMatchesCallerAndAdmin_ReadsReservedScope(
+        bool exportCloudEvents)
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var authorizer = new FakeAuthorizer(elevated: true);
+        var http = BuildHttpContext(
+            AuditContractSemantics.PlatformAuditScopeId,
+            bearer: "token",
+            queryPort,
+            authorizer);
+
+        var result = exportCloudEvents
+            ? await AuditTrailEndpoints.ExportAuditTrailCloudEvents(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: AuditContractSemantics.PlatformAuditScopeId)
+            : await AuditTrailEndpoints.QueryAuditTrail(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: AuditContractSemantics.PlatformAuditScopeId);
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        queryPort.Queries.Should().ContainSingle().Which.ScopeId.Should()
+            .Be(AuditContractSemantics.PlatformAuditScopeId);
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task QueryAuditTrail_WhenFiltersProvided_PreservesQueryFilters()
     {
         var queryPort = new RecordingAuditTrailQueryPort();
