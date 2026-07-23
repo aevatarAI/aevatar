@@ -2203,7 +2203,8 @@ const ChatPage: React.FC = () => {
                 direction="vertical"
                 size={14}
                 style={{
-                  maxWidth: "100%",
+                  marginInline: "auto",
+                  maxWidth: 1440,
                   width: "100%",
                 }}
               >
