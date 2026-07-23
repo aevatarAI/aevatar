@@ -415,4 +415,57 @@ if rg -q 'case "\$USER_CONFIG_DISPOSITION" in restore\|keep' "$CANARY_DOC"; then
   fail "runbook still accepts unsupported restore disposition"
 fi
 
+DRAIN_BEARER_READ_FILE="$TMP_DIR/drain-bearer-read.sh"
+awk '
+  /^IFS= read -r DRAIN_BEARER / {
+    print
+    if (getline <= 0) exit 2
+    print
+    found = 1
+    exit
+  }
+  END {if (!found) exit 1}
+' "$CANARY_DOC" > "$DRAIN_BEARER_READ_FILE"
+test -s "$DRAIN_BEARER_READ_FILE" || fail "missing Section 0 bearer read"
+
+printf '%s' 'fixture-bearer-no-newline' > "$TMP_DIR/bearer-no-newline"
+set +e
+bash -c '
+  set -euo pipefail
+  STUDIO_TOKEN_FILE="$1"
+  source "$2"
+  test "$DRAIN_BEARER" = "fixture-bearer-no-newline"
+  : > "$3"
+' _ \
+  "$TMP_DIR/bearer-no-newline" \
+  "$DRAIN_BEARER_READ_FILE" \
+  "$TMP_DIR/bearer-no-newline-confirmed"
+DRAIN_BEARER_STATUS=$?
+set -e
+if test "$DRAIN_BEARER_STATUS" -ne 0; then
+  test ! -e "$TMP_DIR/bearer-no-newline-confirmed" \
+    || fail "failed Section 0 read unexpectedly reached confirmation"
+  fail "Section 0 rejected a non-newline Studio bearer"
+fi
+test -e "$TMP_DIR/bearer-no-newline-confirmed" \
+  || fail "Section 0 did not confirm the captured non-newline bearer"
+
+: > "$TMP_DIR/bearer-empty"
+set +e
+bash -c '
+  set -euo pipefail
+  STUDIO_TOKEN_FILE="$1"
+  source "$2"
+  : > "$3"
+' _ \
+  "$TMP_DIR/bearer-empty" \
+  "$DRAIN_BEARER_READ_FILE" \
+  "$TMP_DIR/bearer-empty-confirmed"
+EMPTY_BEARER_STATUS=$?
+set -e
+test "$EMPTY_BEARER_STATUS" -ne 0 \
+  || fail "Section 0 accepted an empty Studio bearer"
+test ! -e "$TMP_DIR/bearer-empty-confirmed" \
+  || fail "empty Section 0 bearer unexpectedly reached confirmation"
+
 printf '%s\n' 'scheduled member automation audit query tests: PASS'

@@ -159,7 +159,8 @@ chmod 700 "$DRAIN_DIR"
 DRAIN_PAUSED_JSONL="$DRAIN_DIR/paused.jsonl"
 : > "$DRAIN_PAUSED_JSONL"
 
-IFS= read -r DRAIN_BEARER < "$STUDIO_TOKEN_FILE"
+DRAIN_BEARER=""
+IFS= read -r DRAIN_BEARER < "$STUDIO_TOKEN_FILE" || true
 test -n "$DRAIN_BEARER"
 
 drain_request() {
