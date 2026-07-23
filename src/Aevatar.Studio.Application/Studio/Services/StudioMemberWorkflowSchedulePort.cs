@@ -451,6 +451,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var callerAuthority = BuildScheduleCallerAuthority(request.AuthenticatedOwner);
         var resolved = await ResolveAuthorizationRequestAsync(request, ct);
         var confirmation = BuildConfirmation(
             resolved.AuthorizationRequest,
@@ -516,7 +517,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             prompt,
             scheduleCron,
             scheduleTimezone,
-            request.Enabled);
+            request.Enabled,
+            callerAuthority);
         var ownerScope = BuildOwnerScope(request);
         var bearerToken = await ResolveProvisioningBearerTokenAsync(request, ct);
         var existingAutomation = await _scheduleService.GetTeamAutomationAsync(scheduleId, teamOwner, ct);
@@ -649,7 +651,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 memberId,
                 publishedServiceId,
                 prompt,
-                BuildScheduleAuth(credential),
+                BuildScheduleAuth(credential, callerAuthority),
                 ToScheduleAuthorizationFact(plan),
                 scheduleCron,
                 scheduleTimezone,
@@ -1135,8 +1137,34 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         AuthorizationSourceKind sourceKind) =>
         plan.SourceStamps.FirstOrDefault(stamp => stamp.SourceKind == sourceKind)?.StateVersion ?? 0;
 
-    private static ScheduledServiceInvocationAuth BuildScheduleAuth(StudioScheduledCredential credential) =>
-        new(BuildScheduleCredential(credential));
+    private static ScheduledServiceInvocationAuth BuildScheduleAuth(
+        StudioScheduledCredential credential,
+        ScheduledCallerNyxIdAuthority callerAuthority)
+    {
+        ArgumentNullException.ThrowIfNull(callerAuthority);
+        return new ScheduledServiceInvocationAuth(BuildScheduleCredential(credential))
+        {
+            CallerAuthority = callerAuthority.Clone(),
+        };
+    }
+
+    private static ScheduledCallerNyxIdAuthority BuildScheduleCallerAuthority(
+        AuthenticatedAuthorizationOwnerContext owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        var bindingId = NormalizeOptional(owner.VerifiedBindingId) ??
+            throw new UnauthorizedAccessException("authenticated_authorization_owner_binding_missing");
+        return new ScheduledCallerNyxIdAuthority
+        {
+            Platform = NormalizeRequired(owner.SubjectPlatform, nameof(owner.SubjectPlatform)),
+            Tenant = NormalizeOptional(owner.SubjectTenant) ?? string.Empty,
+            ExternalUserId = NormalizeRequired(
+                owner.SubjectExternalUserId,
+                nameof(owner.SubjectExternalUserId)),
+            Scope = ProvisioningBearerCapabilityScope,
+            BindingId = bindingId,
+        };
+    }
 
     private static ScheduledInvocationAgentKeyCredentialReference BuildScheduleCredential(
         StudioScheduledCredential credential) =>
@@ -1286,10 +1314,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string prompt,
         string cronExpression,
         string timezone,
-        bool enabled)
+        bool enabled,
+        ScheduledCallerNyxIdAuthority callerAuthority)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AppendDigestValue(hash, "aevatar.team-automation-mutation.v1");
+        AppendDigestValue(hash, "aevatar.team-automation-mutation.v2");
         AppendDigestValue(hash, scheduleId);
         AppendDigestValue(hash, displayName);
         AppendDigestValue(hash, scopeId);
@@ -1303,6 +1332,11 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         AppendDigestValue(hash, cronExpression);
         AppendDigestValue(hash, timezone);
         hash.AppendData(enabled ? [1] : [0]);
+        AppendDigestValue(hash, callerAuthority.Platform);
+        AppendDigestValue(hash, callerAuthority.Tenant);
+        AppendDigestValue(hash, callerAuthority.ExternalUserId);
+        AppendDigestValue(hash, callerAuthority.Scope);
+        AppendDigestValue(hash, callerAuthority.BindingId);
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 

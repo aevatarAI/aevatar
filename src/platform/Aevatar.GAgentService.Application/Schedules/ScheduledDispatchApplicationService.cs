@@ -1164,12 +1164,31 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
             ScheduledServiceInvocationDurableCredentialReference durable =>
-                new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable)),
+                new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable))
+                {
+                    CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+                },
             ScheduledInvocationAgentKeyCredentialReference agentKey =>
-                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey)),
+                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey))
+                {
+                    CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+                },
             _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
         };
     }
+
+    private static ScheduledCallerNyxIdAuthority? NormalizeCallerAuthority(
+        ScheduledCallerNyxIdAuthority? authority) =>
+        authority == null
+            ? null
+            : new ScheduledCallerNyxIdAuthority
+            {
+                Platform = NormalizeRequired(authority.Platform, nameof(authority.Platform)),
+                Tenant = NormalizeNullable(authority.Tenant) ?? string.Empty,
+                ExternalUserId = NormalizeRequired(authority.ExternalUserId, nameof(authority.ExternalUserId)),
+                Scope = NormalizeRequired(authority.Scope, nameof(authority.Scope)),
+                BindingId = NormalizeRequired(authority.BindingId, nameof(authority.BindingId)),
+            };
 
     private static ScheduledServiceInvocationAuth NormalizeNyxIdAuth(
         ScheduledServiceInvocationNyxIdCredentialSource source,
@@ -1191,13 +1210,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 new ScheduledServiceInvocationNyxIdCredentialSource(
                     null!,
                     NormalizeRequired(source.Scope, nameof(source.Scope)),
-                    role));
+                    role))
+            {
+                CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+            };
         }
 
         return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope)),
-            role));
+            role))
+        {
+            CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+        };
     }
 
     private static ScheduledServiceInvocationDurableCredentialReference NormalizeDurableCredentialReference(

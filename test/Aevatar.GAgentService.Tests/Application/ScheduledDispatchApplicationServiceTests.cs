@@ -10,6 +10,7 @@ using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -300,6 +301,43 @@ public sealed class ScheduledDispatchApplicationServiceTests
         auth!.ScheduledInvocationAgentKey.Should().NotBeNull();
         auth.ScheduledInvocationAgentKey!.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
         auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
+    }
+
+    [Fact]
+    public async Task NormalizeConfiguration_AgentKey_ShouldPreserveCallerAuthority()
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var callerAuthority = new ScheduledCallerNyxIdAuthority
+        {
+            Platform = " lark ",
+            Tenant = " tenant-alpha ",
+            ExternalUserId = " sender-alpha ",
+            Scope = " proxy ",
+            BindingId = " bnd-owner-alpha ",
+        };
+        var auth = new ScheduledServiceInvocationAuth(CreateScheduledInvocationAgentKeyReference())
+        {
+            CallerAuthority = callerAuthority,
+        };
+
+        await service.CreateAsync(CreateServiceInvocationConfiguration("schedule-agent-key-authority", auth));
+
+        var normalized = actorPort.Created.Should().ContainSingle().Which.Configuration
+            .Target.ServiceInvocation!.Auth!;
+        normalized.CallerAuthority.Should().NotBeSameAs(callerAuthority);
+        normalized.CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+            Scope = "proxy",
+            BindingId = "bnd-owner-alpha",
+        });
     }
 
     [Fact]
@@ -1255,7 +1293,17 @@ public sealed class ScheduledDispatchApplicationServiceTests
                     new ServiceIdentity { TenantId = "tenant", AppId = "app", Namespace = "default", ServiceId = "svc" },
                     "run",
                     Any.Pack(new StringValue { Value = "invoke" }),
-                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference))),
+                    Auth: new ScheduledServiceInvocationAuth(ScheduledInvocationAgentKey: reference)
+                    {
+                        CallerAuthority = new ScheduledCallerNyxIdAuthority
+                        {
+                            Platform = "lark",
+                            Tenant = "tenant-alpha",
+                            ExternalUserId = "sender-alpha",
+                            Scope = "proxy",
+                            BindingId = "bnd-owner-alpha",
+                        },
+                    })),
             "0 9 * * *",
             "UTC",
             true,
@@ -1274,6 +1322,16 @@ public sealed class ScheduledDispatchApplicationServiceTests
         auth.ScheduledInvocationAgentKey.SecretReference.Purpose.Should().Be(CredentialSecretPurposes.ScheduledInvocationAgentKey);
         auth.ScheduledInvocationAgentKey.ApiKeyId.Should().Be("key-schedule");
         auth.ScheduledInvocationAgentKey.KeyExpiresAtUnixMs.Should().Be(reference.KeyExpiresAtUnixMs);
+        var roundTripped = ScheduledDispatchCreateCommand.Parser.ParseFrom(command.ToByteArray());
+        roundTripped.Target.ServiceInvocation.Auth.CallerAuthority.Should().BeEquivalentTo(
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
     }
 
     [Fact]

@@ -3389,6 +3389,15 @@ public sealed class ScheduledDispatchGAgentTests
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
         var effectAttemptId = await RecordTeamCredentialCandidateAsync(
             agent, owner, "operation-alpha", "idempotency-alpha", activeCredential);
+        var configured = ToConfiguredEvent(CreateTeamConfigureCommand(owner, activeCredential));
+        configured.Target.ServiceInvocation.Auth.CallerAuthority = new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+            Scope = "proxy",
+            BindingId = "bnd-owner-alpha",
+        };
         await agent.HandleCompleteTeamAutomationCredentialOperationAsync(
             new CompleteTeamAutomationCredentialOperationCommand
             {
@@ -3396,7 +3405,7 @@ public sealed class ScheduledDispatchGAgentTests
                 OperationId = "operation-alpha",
                 IdempotencyKey = "idempotency-alpha",
                 Credential = activeCredential.Clone(),
-                Configuration = ToConfiguredEvent(CreateTeamConfigureCommand(owner, activeCredential)),
+                Configuration = configured,
                 EffectAttemptId = effectAttemptId,
             });
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(
@@ -3422,6 +3431,15 @@ public sealed class ScheduledDispatchGAgentTests
 
         serviceDispatch.Auths.Should().ContainSingle().Which!
             .ScheduledInvocationAgentKey!.ApiKeyId.Should().Be("key-active");
+        serviceDispatch.Auths.Should().ContainSingle().Which!
+            .CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "lark",
+                Tenant = "tenant-alpha",
+                ExternalUserId = "sender-alpha",
+                Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
+            });
         serviceDispatch.AuthorizationFacts.Should().ContainSingle().Which!
             .PermissionDigest.Should().Be("digest-alpha");
         agent.State.TeamAutomationLifecycleStatus.Should()

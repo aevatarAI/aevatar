@@ -88,8 +88,19 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         await ScheduleAsync(sut, Request("scope-1", "member-1") with
         {
-            CallerSubjectPlatform = " Lark ",
-            CallerSubjectTenant = " tenant-1 ",
+            CallerSubjectPlatform = " unverified-platform ",
+            CallerSubjectTenant = " unverified-tenant ",
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                " lark ",
+                " tenant-alpha ",
+                " sender-alpha ",
+                " bnd-owner-alpha "),
         });
 
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
@@ -102,8 +113,48 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.SenderNyxId.Should().BeNull();
         auth.Durable.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+            Scope = "proxy",
+            BindingId = "bnd-owner-alpha",
+        });
         scheduleService.Configuration.TeamAutomationOwner.Should()
             .Be(new TeamMemberAutomationOwner("scope-1", "member-1"));
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenVerifiedOwnerBindingMissing_ShouldFailClosed()
+    {
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer();
+        var sut = NewPort(scheduleService, materializer: materializer);
+        var request = Request("scope-1", "member-1") with
+        {
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                "lark",
+                "tenant-alpha",
+                "sender-alpha",
+                " "),
+        };
+
+        var act = () => ScheduleAsync(sut, request);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("authenticated_authorization_owner_binding_missing");
+        materializer.MaterializeCallCount.Should().Be(0);
+        materializer.RevokeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.CandidateCallCount.Should().Be(0);
+        scheduleService.Configurations.Should().BeEmpty();
     }
 
     [Fact]
@@ -292,7 +343,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
-                BindingId = "binding-alpha",
+                BindingId = "bnd-owner-alpha",
             });
         materializer.BearerToken.Should().Be("issued-bearer-alpha");
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
@@ -1123,6 +1174,29 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "nyx-owner-alpha"));
     }
 
+    [Fact]
+    public async Task CreateAsync_WhenVerifiedBindingDriftsUnderSameMutationKey_ShouldRejectBeforeSecondCredentialEffect()
+    {
+        var scheduleService = new RecordingScheduleService { RejectMutationDigestDrift = true };
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(scheduleService, materializer: materializer);
+        var request = Request("scope-1", "member-1");
+        await ScheduleAsync(port, request);
+        var driftedOwner = request.AuthenticatedOwner with
+        {
+            VerifiedBindingId = "bnd-owner-beta",
+        };
+
+        var act = () => ScheduleAsync(port, request with { AuthenticatedOwner = driftedOwner });
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_mutation_conflict");
+        scheduleService.BeginCallCount.Should().Be(2);
+        materializer.MaterializeCallCount.Should().Be(1);
+        scheduleService.CandidateCallCount.Should().Be(1);
+        scheduleService.Configurations.Should().ContainSingle();
+    }
+
     private static StudioMemberWorkflowScheduleRequest Request(string scopeId, string memberId) => new(
             ScopeId: scopeId,
             MemberId: memberId,
@@ -1138,7 +1212,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 "lark",
                 "tenant-alpha",
                 "sender-alpha",
-                "binding-alpha"))
+                "bnd-owner-alpha"))
         {
             TeamId = "team-1",
             OperationId = "operation-alpha",
@@ -1640,6 +1714,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Exception? CandidateException { get; init; }
         public bool CommitCandidateBeforeException { get; init; }
         public bool ReturnPendingRevocationOnRetry { get; init; }
+        public bool RejectMutationDigestDrift { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
         public ScheduledDispatchDetail? TeamAutomationDetail { get; init; }
@@ -1651,6 +1726,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         private ScheduledInvocationAgentKeyCredentialReference? _candidateCredential;
         private ScheduledInvocationAuthorizationOwner? _candidateOwner;
         private bool _candidateExceptionThrown;
+        private string? _acceptedMutationDigest;
 
         public Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
             TeamAutomationCredentialOperation operation,
@@ -1659,6 +1735,15 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             BeginCallCount++;
             Calls?.Add("begin");
             BeginOperation = operation;
+            if (RejectMutationDigestDrift &&
+                _acceptedMutationDigest != null &&
+                !string.Equals(_acceptedMutationDigest, operation.MutationDigest, StringComparison.Ordinal))
+            {
+                throw new ScheduledDispatchConflictException(
+                    operation.ScheduleId,
+                    "team_automation_mutation_conflict");
+            }
+            _acceptedMutationDigest ??= operation.MutationDigest;
             return Task.FromResult(Committed(
                 operation.ScheduleId,
                 operation.OperationId,
