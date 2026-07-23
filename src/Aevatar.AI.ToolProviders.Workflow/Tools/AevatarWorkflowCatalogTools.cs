@@ -4,19 +4,20 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 
 namespace Aevatar.AI.ToolProviders.Workflow.Tools;
 
-internal sealed class ListAevatarWorkflowsTool : IAgentTool
+internal sealed class ListAevatarWorkflowTemplatesTool : IAgentTool
 {
     private readonly IWorkflowCatalogPort _catalog;
 
-    public ListAevatarWorkflowsTool(IWorkflowCatalogPort catalog)
+    public ListAevatarWorkflowTemplatesTool(IWorkflowCatalogPort catalog)
     {
         _catalog = catalog;
     }
 
-    public string Name => "aevatar_list_workflows";
+    public string Name => "aevatar_list_workflow_templates";
 
     public string Description =>
-        "List workflows in the global runnable workflow catalog. This does not list Studio member drafts.";
+        "List public workflow templates in the global Aevatar template library. " +
+        "This does not list workflows owned by Teams in the caller's workspace.";
 
     public string ParametersSchema => """
         {
@@ -44,10 +45,11 @@ internal sealed class ListAevatarWorkflowsTool : IAgentTool
             // catalogVisibility.ts filters showInLibrary). This keeps internal primitive/demo
             // examples out of the agent-facing listing. Scope-owned private definitions never reach
             // this readmodel — they are excluded at projection time — so what remains is the public
-            // template gallery, addressable in full detail only by exact name via aevatar_get_workflow.
+            // template gallery, addressable in full detail only by exact name via
+            // aevatar_get_workflow_template.
             var publicTemplates = workflows.Where(item => item.ShowInLibrary).ToArray();
             return WorkflowCatalogToolJson.Serialize(
-                new WorkflowCatalogListJson(
+                new WorkflowTemplateCatalogListJson(
                     publicTemplates.Select(WorkflowCatalogToolJson.ToJson).ToArray(),
                     publicTemplates.Length));
         }
@@ -57,36 +59,37 @@ internal sealed class ListAevatarWorkflowsTool : IAgentTool
         }
         catch (Exception ex)
         {
-            return WorkflowCatalogToolJson.Error("workflow_query_failed", ex.GetType().Name);
+            return WorkflowCatalogToolJson.Error("workflow_template_query_failed", ex.GetType().Name);
         }
     }
 }
 
-internal sealed class GetAevatarWorkflowTool : IAgentTool
+internal sealed class GetAevatarWorkflowTemplateTool : IAgentTool
 {
-    private static readonly string[] s_allowedProperties = ["workflow_name"];
+    private static readonly string[] s_allowedProperties = ["template_name"];
     private readonly IWorkflowCatalogPort _catalog;
 
-    public GetAevatarWorkflowTool(IWorkflowCatalogPort catalog)
+    public GetAevatarWorkflowTemplateTool(IWorkflowCatalogPort catalog)
     {
         _catalog = catalog;
     }
 
-    public string Name => "aevatar_get_workflow";
+    public string Name => "aevatar_get_workflow_template";
 
     public string Description =>
-        "Get a workflow by name from the global runnable workflow catalog. This does not read a Studio member draft.";
+        "Get a public workflow template by exact name from the global Aevatar template library. " +
+        "This does not read a workflow owned by a Team in the caller's workspace.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "properties": {
-            "workflow_name": {
+            "template_name": {
               "type": "string",
-              "description": "Global runnable workflow catalog name"
+              "description": "Public workflow template name"
             }
           },
-          "required": ["workflow_name"],
+          "required": ["template_name"],
           "additionalProperties": false
         }
         """;
@@ -111,18 +114,18 @@ internal sealed class GetAevatarWorkflowTool : IAgentTool
 
             if (!WorkflowCatalogToolJson.TryGetRequiredString(
                     arguments,
-                    "workflow_name",
-                    out var workflowName,
+                    "template_name",
+                    out var templateName,
                     out error))
             {
                 return WorkflowCatalogToolJson.Error("invalid_arguments", error);
             }
 
-            var detail = await _catalog.GetWorkflowDetailAsync(workflowName, ct);
+            var detail = await _catalog.GetWorkflowDetailAsync(templateName, ct);
             return detail is null
                 ? WorkflowCatalogToolJson.Error(
-                    "workflow_not_found",
-                    $"Workflow '{workflowName}' was not found in the global runnable workflow catalog.")
+                    "workflow_template_not_found",
+                    $"Workflow template '{templateName}' was not found in the global Aevatar template library.")
                 : WorkflowCatalogToolJson.Serialize(WorkflowCatalogToolJson.ToJson(detail));
         }
         catch (OperationCanceledException)
@@ -131,16 +134,16 @@ internal sealed class GetAevatarWorkflowTool : IAgentTool
         }
         catch (Exception ex)
         {
-            return WorkflowCatalogToolJson.Error("workflow_query_failed", ex.GetType().Name);
+            return WorkflowCatalogToolJson.Error("workflow_template_query_failed", ex.GetType().Name);
         }
     }
 }
 
-internal sealed record WorkflowCatalogListJson(
-    IReadOnlyList<WorkflowCatalogItemJson> Workflows,
+internal sealed record WorkflowTemplateCatalogListJson(
+    IReadOnlyList<WorkflowTemplateCatalogItemJson> Templates,
     int Count);
 
-internal sealed record WorkflowCatalogItemJson(
+internal sealed record WorkflowTemplateCatalogItemJson(
     string Name,
     string Description,
     string Category,
@@ -157,20 +160,20 @@ internal sealed record WorkflowCatalogItemJson(
     DateTimeOffset ProjectionWatermark,
     string LastEventId);
 
-internal sealed record WorkflowCatalogDetailJson(
-    WorkflowCatalogItemJson Catalog,
+internal sealed record WorkflowTemplateCatalogDetailJson(
+    WorkflowTemplateCatalogItemJson Template,
     string Yaml,
-    WorkflowCatalogDefinitionJson Definition,
-    IReadOnlyList<WorkflowCatalogEdgeJson> Edges);
+    WorkflowTemplateCatalogDefinitionJson Definition,
+    IReadOnlyList<WorkflowTemplateCatalogEdgeJson> Edges);
 
-internal sealed record WorkflowCatalogDefinitionJson(
+internal sealed record WorkflowTemplateCatalogDefinitionJson(
     string Name,
     string Description,
     bool ClosedWorldMode,
-    IReadOnlyList<WorkflowCatalogRoleJson> Roles,
-    IReadOnlyList<WorkflowCatalogStepJson> Steps);
+    IReadOnlyList<WorkflowTemplateCatalogRoleJson> Roles,
+    IReadOnlyList<WorkflowTemplateCatalogStepJson> Steps);
 
-internal sealed record WorkflowCatalogRoleJson(
+internal sealed record WorkflowTemplateCatalogRoleJson(
     string Id,
     string Name,
     string SystemPrompt,
@@ -184,21 +187,21 @@ internal sealed record WorkflowCatalogRoleJson(
     string EventRoutes,
     IReadOnlyList<string> Connectors);
 
-internal sealed record WorkflowCatalogStepJson(
+internal sealed record WorkflowTemplateCatalogStepJson(
     string Id,
     string Type,
     string TargetRole,
     IReadOnlyDictionary<string, string> Parameters,
     string Next,
     IReadOnlyDictionary<string, string> Branches,
-    IReadOnlyList<WorkflowCatalogChildStepJson> Children);
+    IReadOnlyList<WorkflowTemplateCatalogChildStepJson> Children);
 
-internal sealed record WorkflowCatalogChildStepJson(
+internal sealed record WorkflowTemplateCatalogChildStepJson(
     string Id,
     string Type,
     string TargetRole);
 
-internal sealed record WorkflowCatalogEdgeJson(
+internal sealed record WorkflowTemplateCatalogEdgeJson(
     string From,
     string To,
     string Label);
@@ -276,7 +279,7 @@ internal static class WorkflowCatalogToolJson
     public static string Error(string code, string message) =>
         Serialize(new WorkflowCatalogToolErrorJson(new WorkflowCatalogToolErrorBody(code, message)));
 
-    public static WorkflowCatalogItemJson ToJson(WorkflowCatalogItem item) =>
+    public static WorkflowTemplateCatalogItemJson ToJson(WorkflowCatalogItem item) =>
         new(
             item.Name,
             item.Description,
@@ -294,14 +297,14 @@ internal static class WorkflowCatalogToolJson
             item.ProjectionWatermark,
             item.LastEventId);
 
-    public static WorkflowCatalogDetailJson ToJson(WorkflowCatalogItemDetail detail) =>
+    public static WorkflowTemplateCatalogDetailJson ToJson(WorkflowCatalogItemDetail detail) =>
         new(
             ToJson(detail.Catalog),
             detail.Yaml,
             ToJson(detail.Definition),
             detail.Edges.Select(ToJson).ToArray());
 
-    private static WorkflowCatalogDefinitionJson ToJson(WorkflowCatalogDefinition definition) =>
+    private static WorkflowTemplateCatalogDefinitionJson ToJson(WorkflowCatalogDefinition definition) =>
         new(
             definition.Name,
             definition.Description,
@@ -309,7 +312,7 @@ internal static class WorkflowCatalogToolJson
             definition.Roles.Select(ToJson).ToArray(),
             definition.Steps.Select(ToJson).ToArray());
 
-    private static WorkflowCatalogRoleJson ToJson(WorkflowCatalogRole role) =>
+    private static WorkflowTemplateCatalogRoleJson ToJson(WorkflowCatalogRole role) =>
         new(
             role.Id,
             role.Name,
@@ -324,7 +327,7 @@ internal static class WorkflowCatalogToolJson
             role.EventRoutes,
             role.Connectors.ToArray());
 
-    private static WorkflowCatalogStepJson ToJson(WorkflowCatalogStep step) =>
+    private static WorkflowTemplateCatalogStepJson ToJson(WorkflowCatalogStep step) =>
         new(
             step.Id,
             step.Type,
@@ -334,10 +337,10 @@ internal static class WorkflowCatalogToolJson
             new Dictionary<string, string>(step.Branches, StringComparer.Ordinal),
             step.Children.Select(ToJson).ToArray());
 
-    private static WorkflowCatalogChildStepJson ToJson(WorkflowCatalogChildStep child) =>
+    private static WorkflowTemplateCatalogChildStepJson ToJson(WorkflowCatalogChildStep child) =>
         new(child.Id, child.Type, child.TargetRole);
 
-    private static WorkflowCatalogEdgeJson ToJson(WorkflowCatalogEdge edge) =>
+    private static WorkflowTemplateCatalogEdgeJson ToJson(WorkflowCatalogEdge edge) =>
         new(edge.From, edge.To, edge.Label);
 
     private sealed record WorkflowCatalogToolErrorJson(WorkflowCatalogToolErrorBody Error);

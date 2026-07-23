@@ -59,11 +59,11 @@ public sealed class WorkflowCatalogCurrentStateProjector
         }
 
         // Scope-owned definitions (bound during service invocation/activation) carry a non-empty
-        // ScopeId. This readmodel is the globally shared runnable catalog every caller reads via
-        // aevatar_list_workflows / aevatar_get_workflow; letting a scope-owned definition in would
-        // expose one tenant's workflow YAML and role system prompts to all callers, and same-named
-        // scoped definitions would clobber each other under the name-keyed document id. Scope-owned
-        // workflows are served by the scope-filtered service catalog, not this catalog.
+        // ScopeId. This readmodel is the globally shared public template library read via
+        // aevatar_list_workflow_templates / aevatar_get_workflow_template; letting a scope-owned
+        // definition in would expose one tenant's workflow YAML and role system prompts to all
+        // callers, and same-named scoped definitions would clobber each other under the name-keyed
+        // document id. Team-owned workflows are served by the scope-filtered Studio member readmodel.
         if (!string.IsNullOrWhiteSpace(state.ScopeId))
             return;
 
