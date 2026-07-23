@@ -9,6 +9,77 @@ namespace Aevatar.Workflow.Core.Tests;
 
 public sealed class WorkflowAuthorizationDependenciesTests
 {
+    [Fact]
+    public void BindWorkflowDefinitionScopeId_ShouldTrackPresence()
+    {
+        var scopeField = BindWorkflowDefinitionEvent.Descriptor.FindFieldByNumber(4);
+
+        scopeField.ContainingOneof.Should().NotBeNull();
+        scopeField.ContainingOneof!.IsSynthetic.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinitionAsync_WhenScopeIsNull_ShouldOmitScopeField()
+    {
+        var eventSourcing = new InMemoryWorkflowEventSourcingBehaviorFactory();
+        var agent = new WorkflowGAgent
+        {
+            EventSourcingBehaviorFactory = eventSourcing,
+        };
+
+        await agent.BindWorkflowDefinitionAsync(
+            "name: wf-alpha\nroles: []\nsteps: []\n",
+            "wf-alpha",
+            scopeId: null);
+
+        var bind = eventSourcing.CommittedEvents.Should().ContainSingle().Which
+            .Should().BeOfType<BindWorkflowDefinitionEvent>().Subject;
+        bind.HasScopeId.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenScopeFieldIsAbsent_ShouldPreserveExistingScope()
+    {
+        var agent = NewAgent();
+        const string yaml = "name: wf-alpha\nroles: []\nsteps: []\n";
+        await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "wf-alpha",
+            WorkflowYaml = yaml,
+            ScopeId = "scope-a",
+        });
+
+        await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "wf-alpha",
+            WorkflowYaml = yaml,
+        });
+
+        agent.State.ScopeId.Should().Be("scope-a");
+    }
+
+    [Fact]
+    public async Task BindWorkflowDefinition_WhenScopeFieldIsExplicitlyEmpty_ShouldClearExistingScope()
+    {
+        var agent = NewAgent();
+        const string yaml = "name: wf-alpha\nroles: []\nsteps: []\n";
+        await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "wf-alpha",
+            WorkflowYaml = yaml,
+            ScopeId = "scope-a",
+        });
+
+        await agent.HandleBindWorkflowDefinition(new BindWorkflowDefinitionEvent
+        {
+            WorkflowName = "wf-alpha",
+            WorkflowYaml = yaml,
+            ScopeId = string.Empty,
+        });
+
+        agent.State.ScopeId.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
@@ -319,19 +390,22 @@ public sealed class WorkflowAuthorizationDependenciesTests
     private sealed class InMemoryWorkflowEventSourcingBehaviorFactory
         : IEventSourcingBehaviorFactory<WorkflowState>
     {
+        public List<IMessage> CommittedEvents { get; } = [];
+
         public IEventSourcingBehavior<WorkflowState> Create(
             string agentId,
             Type actorType,
             Func<WorkflowState, IMessage, WorkflowState> transitionState)
         {
             _ = actorType;
-            return new InMemoryWorkflowEventSourcingBehavior(agentId, transitionState);
+            return new InMemoryWorkflowEventSourcingBehavior(agentId, transitionState, CommittedEvents);
         }
     }
 
     private sealed class InMemoryWorkflowEventSourcingBehavior(
         string agentId,
-        Func<WorkflowState, IMessage, WorkflowState> transitionState)
+        Func<WorkflowState, IMessage, WorkflowState> transitionState,
+        List<IMessage> committedEvents)
         : IEventSourcingBehavior<WorkflowState>
     {
         private readonly List<IMessage> _pending = [];
@@ -348,6 +422,7 @@ public sealed class WorkflowAuthorizationDependenciesTests
             foreach (var evt in _pending)
             {
                 _state = transitionState(_state, evt);
+                committedEvents.Add(evt);
                 CurrentVersion++;
             }
 

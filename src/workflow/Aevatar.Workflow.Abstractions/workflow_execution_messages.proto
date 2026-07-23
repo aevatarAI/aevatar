@@ -304,7 +304,7 @@ message BindWorkflowDefinitionEvent
   string workflow_name = 1;
   string workflow_yaml = 2;
   map<string, string> inline_workflow_yamls = 3;
-  string scope_id = 4;
+  optional string scope_id = 4;
   string source_kind = 5;
   WorkflowAuthorizationDependencies authorization_dependencies = 6;
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
