@@ -2199,10 +2199,12 @@ const ChatPage: React.FC = () => {
               </div>
             ) : (
               <Space
+                className="aevatar-chat-message-list"
                 direction="vertical"
                 size={14}
                 style={{
-                  maxWidth: 920,
+                  marginInline: "auto",
+                  maxWidth: 1440,
                   width: "100%",
                 }}
               >

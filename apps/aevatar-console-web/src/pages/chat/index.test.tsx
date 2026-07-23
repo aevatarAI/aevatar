@@ -293,6 +293,13 @@ describe("ChatPage server-backed history", () => {
     );
 
     expect(await screen.findByText("The support workflow is ready.")).toBeTruthy();
+    const messageList = document.querySelector<HTMLElement>(
+      ".aevatar-chat-message-list"
+    );
+    expect(messageList).not.toBeNull();
+    expect(messageList?.style.marginInline).toBe("auto");
+    expect(messageList?.style.maxWidth).toBe("1440px");
+    expect(messageList?.style.width).toBe("100%");
     expect(chatHistoryApi.loadConversation).toHaveBeenCalledWith(
       "scope-a",
       "conversation-a"
