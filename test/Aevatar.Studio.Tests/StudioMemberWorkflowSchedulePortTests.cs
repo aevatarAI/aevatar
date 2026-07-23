@@ -10,6 +10,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Tests;
 
@@ -1113,6 +1114,135 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task RetryRevocationAsync_WhenBothTracksCommit_ShouldEmitAllowlistedCompletionEvidenceOnce()
+    {
+        var scheduleService = new RecordingScheduleService { ReturnPendingRevocationOnRetry = true };
+        var materializer = new RecordingCredentialMaterializer();
+        var logs = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logs));
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
+            auditLoggerFactory: loggerFactory);
+        var request = Request("scope-1", "member-1");
+        var command = new StudioMemberAutomationActionCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
+        {
+            AuthenticatedOwner = request.AuthenticatedOwner,
+            ProvisioningBearerToken = "fresh-bearer-sensitive",
+        };
+
+        await port.RetryRevocationAsync(command);
+
+        var entry = logs.Entries
+            .Where(static candidate => candidate.EventId.Name ==
+                "StudioMemberAutomationRevocationCompleted")
+            .Should().ContainSingle().Subject;
+        entry.Category.Should().Be("Aevatar.Studio.MemberAutomation");
+        entry.LogLevel.Should().Be(LogLevel.Information);
+        entry.EventId.Id.Should().Be(6202);
+        entry.Exception.Should().BeNull();
+
+        var properties = entry.State
+            .Where(static item => item.Key != "{OriginalFormat}")
+            .ToDictionary(static item => item.Key, static item => item.Value);
+        properties.Should().HaveCount(9);
+        properties.Keys.Should().BeEquivalentTo(
+        [
+            "ScopeId",
+            "TeamId",
+            "MemberId",
+            "ScheduleId",
+            "OperationId",
+            "NyxIdRevocationStatus",
+            "VaultRevocationStatus",
+            "StateVersion",
+            "ObservedAtUtc",
+        ]);
+        properties["ScopeId"].Should().Be("scope-1");
+        properties["TeamId"].Should().Be("team-1");
+        properties["MemberId"].Should().Be("member-1");
+        properties["ScheduleId"].Should().Be("schedule-1");
+        properties["OperationId"].Should().Be("operation-delete");
+        properties["NyxIdRevocationStatus"].Should().Be("Completed");
+        properties["VaultRevocationStatus"].Should().Be("Completed");
+        properties["StateVersion"].Should().Be(1L);
+        properties["ObservedAtUtc"].Should().Be(TestNow);
+
+        var capturedContent = string.Join(
+            '\n',
+            entry.State.Select(static item => $"{item.Key}={item.Value}").Append(entry.Message));
+        foreach (var forbidden in new[]
+                 {
+                     "fresh-bearer-sensitive",
+                     "key-alpha",
+                     "secret-alpha",
+                     "idempotency-delete",
+                     "nyx-owner-alpha",
+                     "PermissionDigest",
+                     "ApiKey",
+                     "SecretReference",
+                     "VaultReference",
+                     "CallerAuthority",
+                 })
+        {
+            capturedContent.Should().NotContain(forbidden);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, true, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, true, false, true)]
+    public async Task RetryRevocationAsync_WhenCompletionIsNotOwnedAndSuccessful_ShouldNotEmitCompletionEvidence(
+        bool pending,
+        bool ownsEffectAttempt,
+        bool nyxIdRevoked,
+        bool vaultRevoked)
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            ReturnPendingRevocationOnRetry = pending,
+            RetryOwnsEffectAttempt = ownsEffectAttempt,
+        };
+        var materializer = new RecordingCredentialMaterializer
+        {
+            NyxIdRevoked = nyxIdRevoked,
+            VaultRevoked = vaultRevoked,
+        };
+        var logs = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logs));
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
+            auditLoggerFactory: loggerFactory);
+        var request = Request("scope-1", "member-1");
+
+        await port.RetryRevocationAsync(new StudioMemberAutomationActionCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
+        {
+            AuthenticatedOwner = request.AuthenticatedOwner,
+            ProvisioningBearerToken = "fresh-bearer-sensitive",
+        });
+
+        logs.Entries.Should().NotContain(static candidate =>
+            candidate.EventId.Name == "StudioMemberAutomationRevocationCompleted");
+    }
+
+    [Fact]
     public async Task ReauthorizeAsync_WhenPermissionDigestChanged_ShouldNotDispatch()
     {
         var scheduleService = new RecordingScheduleService();
@@ -1562,6 +1692,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         IStudioScheduledCredentialMaterializer? materializer = null,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null,
         TimeProvider? timeProvider = null,
+        ILogger<StudioMemberWorkflowSchedulePort>? logger = null,
+        ILoggerFactory? auditLoggerFactory = null,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         var resolvedPlanner = planner ?? new RecordingAuthorizationPlanner();
@@ -1573,6 +1705,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             materializer ?? new RecordingCredentialMaterializer(),
             timeProvider ?? new FixedTimeProvider(TestNow),
             catalogRefresh,
+            logger,
+            auditLoggerFactory,
             callerAccessTokenProvider: callerAccessTokenProvider);
     }
 
@@ -1975,6 +2109,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public ScheduledCredentialEffectLocator? EffectLocator { get; private set; }
         public StudioScheduledCredential? Credential { get; init; }
         public Exception? MaterializeException { get; init; }
+        public bool NyxIdRevoked { get; init; } = true;
+        public bool VaultRevoked { get; init; } = true;
 
         public ScheduledCredentialEffectLocator CreateEffectLocator(
             string scheduleId,
@@ -2019,9 +2155,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         {
             RevokeCallCount++;
             return Task.FromResult(new StudioScheduledCredentialRevocationResult(
-                NyxIdRevoked: true,
-                VaultRevoked: true,
-                ErrorCode: string.Empty));
+                NyxIdRevoked,
+                VaultRevoked,
+                ErrorCode: NyxIdRevoked && VaultRevoked ? string.Empty : "revocation_failed"));
         }
     }
 
@@ -2054,6 +2190,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Exception? CandidateException { get; init; }
         public bool CommitCandidateBeforeException { get; init; }
         public bool ReturnPendingRevocationOnRetry { get; init; }
+        public bool RetryOwnsEffectAttempt { get; init; } = true;
         public bool RejectMutationDigestDrift { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
@@ -2196,9 +2333,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 operationId,
                 idempotencyKey,
                 TeamAutomationOperationObservationStages.Delete,
-                ownsEffectAttempt: ReturnPendingRevocationOnRetry,
+                ownsEffectAttempt: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt,
                 "cmd-retry-revocation",
-                effectAttemptId: ReturnPendingRevocationOnRetry ? "attempt-revocation" : string.Empty,
+                effectAttemptId: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt
+                    ? "attempt-revocation"
+                    : string.Empty,
                 pendingRevocationCredential: ReturnPendingRevocationOnRetry
                     ? new ScheduledInvocationAgentKeyCredentialReference(
                         credential.SecretReference,
@@ -2228,7 +2367,10 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 "idempotency-delete",
                 TeamAutomationOperationObservationStages.Revocation,
                 ownsEffectAttempt: false,
-                "cmd-complete-revocation"));
+                "cmd-complete-revocation",
+                errorCode,
+                nyxIdRevocationPending: !nyxIdRevoked,
+                vaultRevocationPending: !vaultRevoked));
         }
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
@@ -2338,4 +2480,51 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     CandidateOwner: candidateOwner,
                     CredentialEffectLocator: credentialEffectLocator));
     }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        private readonly List<RecordedLogEntry> _entries = [];
+
+        public IReadOnlyList<RecordedLogEntry> Entries => _entries;
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(categoryName, _entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(
+            string category,
+            List<RecordedLogEntry> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                var structuredState = state as IEnumerable<KeyValuePair<string, object?>>;
+                entries.Add(new RecordedLogEntry(
+                    category,
+                    logLevel,
+                    eventId,
+                    structuredState?.ToArray() ?? [],
+                    formatter(state, exception),
+                    exception));
+            }
+        }
+    }
+
+    private sealed record RecordedLogEntry(
+        string Category,
+        LogLevel LogLevel,
+        EventId EventId,
+        IReadOnlyList<KeyValuePair<string, object?>> State,
+        string Message,
+        Exception? Exception);
 }

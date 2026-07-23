@@ -20,9 +20,9 @@ The canary is currently **blocked before the mutation boundary**:
 | Source provenance | The implementation commits reviewed before final rebase are not valid release identifiers. | The operator must supply the final pushed/release SHA and one immutable manifest proving plan, authorization fact, actor state, projector, and API ship as one release; prove deployed ancestry from that final SHA. |
 | Live HTTP contract | The prepared production OpenAPI did not expose the complete typed UserConfig and automation runtime-integrity fields. The reviewed source now exposes both revocation track statuses through the Studio automation API, but that is not deployment evidence. | Deploy and verify the complete contract. Missing UserConfig, five owner-LLM, or both per-track revocation fields is a hard pre-mutation stop; never invent an admin API. |
 | Workload evidence | `/health/ready` was healthy, including Studio and workflow components, but the scoped production kubeconfig returned upstream nginx `403`. The running Pod image digest and logs could not be inspected. | Obtain read-only workload visibility and prove the running digest; do not weaken the provenance gate. |
-| Acceptance log | The verified caller binding is intentionally absent from projection/read models. | Obtain approved filtered access to category `Aevatar.Studio.MemberAutomation`, EventId `6201/StudioMemberAutomationCreateAccepted`; stop without it. |
+| Automation audit | Caller binding and terminal revocation evidence are intentionally absent from projection/read models. | Use the repository audit query tool for EventIds `6201/StudioMemberAutomationCreateAccepted` and `6202/StudioMemberAutomationRevocationCompleted`; stop without both modes. |
 | NyxID service | `chrono-llm-public` was active and connected with UserService ID `4061b904-62de-4cee-9125-5e3ec8365afd`. | Recheck immediately before the canary. |
-| Owner selection | The prior runbook treated an exact UserConfig mismatch as out-of-scope repair. | Capture the original typed selection, perform the separately approved exact PUT after deployment, observe the typed GET, and record restore/keep disposition. |
+| Owner selection | The prior runbook treated an exact UserConfig mismatch as out-of-scope repair. | Capture the original typed selection, perform the separately approved exact PUT after deployment, observe the typed GET, and approve leaving that exact selection in place. |
 
 Do not run any section under **Mutation Boundary** while any deployment,
 contract, authentication, UserConfig, or service gate is unresolved.
@@ -69,9 +69,8 @@ from the projected automation/run state and the independent NyxID key state.
 - Never print refresh tokens, raw Agent Keys, Vault references or ciphertext,
   bearer headers, unfiltered API bodies, or unfiltered production logs.
 - The exact post-deploy UserConfig PUT is required and changes the owner-wide
-  selection. Obtain its explicit approval before the mutation boundary,
-  capture the original typed selection, and record a restore or keep
-  disposition before changing it.
+  selection. Obtain explicit approval before the mutation boundary to leave
+  that exact selection in place after the canary.
 - Do not delete the member, delete the draft, retire the revision, or archive
   the Team while credential revocation is pending.
 - `retry-revocation` must reuse the original delete `operationId` and
@@ -490,8 +489,8 @@ still pass before mutation. For this canary, only `Completed` on both tracks is
 terminal; `Failed`, an empty value, or a missing field fails closed. The public
 GET hides a deleted row once revocation is no longer pending, so it cannot be
 used to claim that a terminal `Completed/Completed` row was observed. The
-approved filtered projection query below proves those final values before its
-owner-correct `404` is accepted.
+repository audit query below proves those final values before its owner-correct
+`404` is accepted.
 
 ## Authentication, Owner, And UserConfig Gates
 
@@ -633,9 +632,11 @@ typed GET observes the committed exact selection.
 
 ```bash
 : "${USER_CONFIG_RESELECTION_APPROVED:?set only after owner-wide change approval}"
-: "${USER_CONFIG_DISPOSITION:?set to restore or keep}"
+: "${USER_CONFIG_DISPOSITION:?set to leave_selected}"
+: "${USER_CONFIG_LEAVE_SELECTED_APPROVED:?set only after leave-selected approval}"
 test "$USER_CONFIG_RESELECTION_APPROVED" = "yes"
-case "$USER_CONFIG_DISPOSITION" in restore|keep) ;; *) exit 1 ;; esac
+test "$USER_CONFIG_DISPOSITION" = "leave_selected"
+test "$USER_CONFIG_LEAVE_SELECTED_APPROVED" = "yes"
 
 STATUS="$(api_request GET /api/user-config/llm \
   "$CANARY_STATE_DIR/user-config-before.json")"
@@ -695,10 +696,8 @@ test "$USER_CONFIG_OBSERVED" = "true"
 ledger_set userConfigDisposition "$USER_CONFIG_DISPOSITION"
 ```
 
-If the original kind is `unspecified`, the current write contract cannot
-restore that state because reset is an explicit Gateway selection. In that
-case `USER_CONFIG_DISPOSITION=keep` requires approval before any production
-mutation. Never use only `savedRoute` to infer `savedUserServiceId`.
+The exact selected owner-wide UserConfig remains in place after the canary.
+Never use only `savedRoute` to infer `savedUserServiceId`.
 
 ## Mutation Boundary
 
@@ -707,29 +706,24 @@ revokes, retires, deletes, or archives temporary production resources.
 
 Before continuing, record a change ticket, the release provenance evidence,
 the canary owner, and explicit approval for temporary production mutations.
-Approved access to both sanitized operational evidence sources is also a hard
-gate. These executables are supplied and reviewed by the production logging
-owner; this runbook does not invent a logging/admin API. Each executable must
-filter at the source and write only its documented allowlist to stdout. Never
-replace either with a raw backend-log dump.
+The repository-owned sanitized operational audit query is also a hard gate. It
+filters at the source and writes only its documented allowlist to stdout. Never
+replace it with a raw backend-log dump.
 
-Both executables receive their exact filters through `AEVATAR_AUDIT_*`
-environment variables. The create query writes a JSON array containing only
+Both modes receive their exact filters through `AEVATAR_AUDIT_*` environment
+variables. The create query writes a JSON array containing only
 `scopeId`, `teamId`, `memberId`, `scheduleId`, `operationId`, and `bindingId`.
-The revocation query writes a JSON array containing only `scheduleId`,
-`operationId`, `authorizationStatus`, `revocationPending`,
-`nyxIdRevocationStatus`, `vaultRevocationStatus`, `stateVersion`, and
-`observedAtUtc`. Zero rows mean the projection or audit is not visible yet;
-more than one exact row is ambiguous and fails closed.
+The revocation query writes a JSON array containing only `scopeId`, `teamId`,
+`memberId`, `scheduleId`, `operationId`, `nyxIdRevocationStatus`,
+`vaultRevocationStatus`, `stateVersion`, and `observedAtUtc`. Missing,
+malformed, duplicate, or conflicting exact records fail closed.
 
 ```bash
 : "${CHANGE_TICKET:?set the approved production change ticket}"
 : "${PRODUCTION_CANARY_APPROVED:?set only after approval}"
-: "${APPROVED_CREATE_AUDIT_QUERY:?set to the reviewed create-event query executable}"
-: "${APPROVED_REVOCATION_AUDIT_QUERY:?set to the reviewed revocation-outcome query executable}"
 test "$PRODUCTION_CANARY_APPROVED" = "yes"
-test -x "$APPROVED_CREATE_AUDIT_QUERY"
-test -x "$APPROVED_REVOCATION_AUDIT_QUERY"
+AUDIT_QUERY_TOOL="$REPO_ROOT/tools/schedules/query_member_automation_audit.sh"
+test -x "$AUDIT_QUERY_TOOL"
 
 CANARY_SUFFIX="$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 4)"
 TEAM_ID="canary-team-$CANARY_SUFFIX"
@@ -757,23 +751,33 @@ ledger_set runIdempotencyKey "$RUN_IDEMPOTENCY_KEY"
 ledger_set deleteOperationId "$DELETE_OPERATION_ID"
 ledger_set deleteIdempotencyKey "$DELETE_IDEMPOTENCY_KEY"
 
-FAILURE_CODE="canary_gate_failed"
-FAILURE_STATUS="not_observed"
-FAILURE_STATE_VERSION="0"
-FAILURE_RUN_ID=""
+set_failure_context() {
+  FAILURE_PHASE="${1:?failure phase required}"
+  FAILURE_OPERATION_ID="${2:-}"
+  FAILURE_STATUS="${3:-not_observed}"
+  FAILURE_CODE="${4:-canary_failed}"
+  FAILURE_STATE_VERSION="${5:-0}"
+  FAILURE_SCOPE_ID="${SCOPE_ID:-}"
+  FAILURE_TEAM_ID="${TEAM_ID:-}"
+  FAILURE_MEMBER_ID="${MEMBER_ID:-}"
+  FAILURE_SCHEDULE_ID="${SCHEDULE_ID:-}"
+  FAILURE_RUN_ID="${RUN_ID:-}"
+}
+
+set_failure_context "scaffold" ""
 record_failure() {
   local observed_at
   observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   jq -n \
-    --arg scopeId "$SCOPE_ID" \
-    --arg teamId "${TEAM_ID:-}" \
-    --arg memberId "${MEMBER_ID:-}" \
-    --arg scheduleId "${SCHEDULE_ID:-}" \
-    --arg runId "${FAILURE_RUN_ID:-}" \
-    --arg operationId "${RUN_OPERATION_ID:-${CREATE_OPERATION_ID:-}}" \
-    --arg status "${FAILURE_STATUS:-not_observed}" \
-    --arg code "${FAILURE_CODE:-canary_failed}" \
-    --arg stateVersion "${FAILURE_STATE_VERSION:-0}" \
+    --arg scopeId "$FAILURE_SCOPE_ID" \
+    --arg teamId "$FAILURE_TEAM_ID" \
+    --arg memberId "$FAILURE_MEMBER_ID" \
+    --arg scheduleId "$FAILURE_SCHEDULE_ID" \
+    --arg runId "$FAILURE_RUN_ID" \
+    --arg operationId "$FAILURE_OPERATION_ID" \
+    --arg status "$FAILURE_STATUS" \
+    --arg code "$FAILURE_CODE" \
+    --arg stateVersion "$FAILURE_STATE_VERSION" \
     --arg observedAtUtc "$observed_at" '{
       scopeId: $scopeId,
       teamId: $teamId,
@@ -797,9 +801,8 @@ jq -e 'has("teamId") and has("memberId") and has("createOperationId")' \
   "$LEDGER" >/dev/null
 ```
 
-Before each bounded operation, set `FAILURE_CODE` to its stable gate or
-authorization code and update `FAILURE_STATUS`, `FAILURE_STATE_VERSION`, and
-`FAILURE_RUN_ID` from the latest typed response. The ERR trap records only the
+Before each bounded operation, call `set_failure_context` and update it from
+the latest typed response. The ERR trap records only the
 allowlisted IDs, lifecycle/completion status, stable code, authoritative
 version, and UTC timestamp. Do not add exception text, request/response bodies,
 headers, caller subjects, or log messages to failure evidence.
@@ -1173,6 +1176,7 @@ authorization plan.
 ### 14. Create And Observe The Dedicated Credential
 
 ```bash
+set_failure_context "create" "$CREATE_OPERATION_ID"
 jq -n \
   --arg cron "0 0 1 1 *" \
   --arg timezone "UTC" \
@@ -1200,6 +1204,7 @@ STATUS="$(api_request POST \
   "/api/scopes/$SCOPE_ID/teams/$TEAM_ID/members/$MEMBER_ID/automations" \
   "$CANARY_STATE_DIR/automation-create-response.json" \
   "$CANARY_STATE_DIR/automation-create.json")"
+set_failure_context "create" "$CREATE_OPERATION_ID" "http_$STATUS" "create_failed"
 expect_status 202 "$STATUS" create-automation
 jq -e --arg operation "$CREATE_OPERATION_ID" '
   .accepted == true
@@ -1209,6 +1214,7 @@ jq -e --arg operation "$CREATE_OPERATION_ID" '
 
 SCHEDULE_ID="$(jq -er '.scheduleId' \
   "$CANARY_STATE_DIR/automation-create-response.json")"
+set_failure_context "create" "$CREATE_OPERATION_ID" "accepted" "create_observation_failed"
 
 EXPECTED_SCHEDULE_ID="studio-member-workflow-$(
   printf '%s\n%s\n%s' "$SCOPE_ID" "$MEMBER_ID" "$CREATE_IDEMPOTENCY_KEY" \
@@ -1250,13 +1256,16 @@ public response.
 ```bash
 CREATE_AUDIT_OBSERVED=false
 for _ in $(seq 1 60); do
-  AEVATAR_AUDIT_SCOPE_ID="$SCOPE_ID" \
+  if ! AEVATAR_AUDIT_SCOPE_ID="$SCOPE_ID" \
   AEVATAR_AUDIT_TEAM_ID="$TEAM_ID" \
   AEVATAR_AUDIT_MEMBER_ID="$MEMBER_ID" \
   AEVATAR_AUDIT_SCHEDULE_ID="$SCHEDULE_ID" \
   AEVATAR_AUDIT_OPERATION_ID="$CREATE_OPERATION_ID" \
-    "$APPROVED_CREATE_AUDIT_QUERY" \
-      > "$CANARY_STATE_DIR/create-acceptance-audit.json"
+    "$AUDIT_QUERY_TOOL" create \
+      > "$CANARY_STATE_DIR/create-acceptance-audit.json"; then
+    sleep 2
+    continue
+  fi
 
   jq -e '
     type == "array"
@@ -1358,6 +1367,8 @@ jq -e \
 
 ACTIVE_STATE_VERSION="$(jq -er '.stateVersion' \
   "$CANARY_STATE_DIR/automation-detail.json")"
+set_failure_context "create" "$CREATE_OPERATION_ID" \
+  "active" "create_observation_failed" "$ACTIVE_STATE_VERSION"
 ledger_set activeStateVersion "$ACTIVE_STATE_VERSION"
 ```
 
@@ -1391,6 +1402,7 @@ ledger_set nyxIdApiKeyId "$NYXID_KEY_ID"
 ### 15. Run Now And Prove Agent Key Use
 
 ```bash
+set_failure_context "run" "$RUN_OPERATION_ID"
 jq -n \
   --arg operationId "$RUN_OPERATION_ID" \
   --arg idempotencyKey "$RUN_IDEMPOTENCY_KEY" '
@@ -1404,6 +1416,7 @@ STATUS="$(api_request POST \
   "/api/scopes/$SCOPE_ID/teams/$TEAM_ID/members/$MEMBER_ID/automations/$SCHEDULE_ID/run-now" \
   "$CANARY_STATE_DIR/run-now-response.json" \
   "$CANARY_STATE_DIR/run-now.json")"
+set_failure_context "run" "$RUN_OPERATION_ID" "http_$STATUS" "run_failed"
 expect_status 202 "$STATUS" automation-run-now
 jq -e \
   --arg schedule "$SCHEDULE_ID" \
@@ -1440,6 +1453,7 @@ test "$RUN_COMPLETED" = "true"
 RUN_ID="$(jq -er --arg schedule "$SCHEDULE_ID" '
   .runs[] | select(.scheduleId == $schedule) | .runId
 ' "$CANARY_STATE_DIR/member-runs.json")"
+set_failure_context "run" "$RUN_OPERATION_ID" "completed" "run_evidence_failed"
 ledger_set runId "$RUN_ID"
 
 capture_exact_nyxid_key \
@@ -1490,6 +1504,8 @@ jq -e \
 ' "$CANARY_STATE_DIR/automation-after-run.json" >/dev/null
 POST_RUN_STATE_VERSION="$(jq -er '.stateVersion' \
   "$CANARY_STATE_DIR/automation-after-run.json")"
+set_failure_context "run" "$RUN_OPERATION_ID" \
+  "completed" "run_evidence_failed" "$POST_RUN_STATE_VERSION"
 ledger_set postRunStateVersion "$POST_RUN_STATE_VERSION"
 ```
 
@@ -1503,6 +1519,7 @@ Create the delete body once. This exact file is also the only valid
 `retry-revocation` body.
 
 ```bash
+set_failure_context "delete" "$DELETE_OPERATION_ID"
 jq -n \
   --arg operationId "$DELETE_OPERATION_ID" \
   --arg idempotencyKey "$DELETE_IDEMPOTENCY_KEY" '
@@ -1513,6 +1530,7 @@ STATUS="$(api_request DELETE \
   "/api/scopes/$SCOPE_ID/teams/$TEAM_ID/members/$MEMBER_ID/automations/$SCHEDULE_ID" \
   "$CANARY_STATE_DIR/delete-response.json" \
   "$CANARY_STATE_DIR/delete.json")"
+set_failure_context "delete" "$DELETE_OPERATION_ID" "http_$STATUS" "delete_failed"
 expect_status 202 "$STATUS" delete-automation
 jq -e \
   --arg schedule "$SCHEDULE_ID" \
@@ -1527,32 +1545,34 @@ jq -e \
 Use one bounded observer. While the public row is visible, its two track values
 must be exact implemented values and an empty historical value fails closed.
 When detail first returns owner-correct `404`, the observer waits for the
-approved filtered projection query to prove the hidden terminal document is
-`deleting`, not revocation-pending, and exactly `Completed/Completed`. Only then
-does it accept the `404`.
+repository audit query to prove exactly `Completed/Completed`. Only then does
+it accept the `404`.
 
 ```bash
+set_failure_context "revocation" "$DELETE_OPERATION_ID"
 REVOCATION_TERMINAL_OBSERVED=false
 REVOCATION_TERMINAL_STATE_VERSION=""
 REVOCATION_TERMINAL_OBSERVED_AT=""
 LAST_DELETE_HTTP_STATUS=""
 
 capture_terminal_revocation_audit() {
-  AEVATAR_AUDIT_SCOPE_ID="$SCOPE_ID" \
+  if ! AEVATAR_AUDIT_SCOPE_ID="$SCOPE_ID" \
   AEVATAR_AUDIT_TEAM_ID="$TEAM_ID" \
   AEVATAR_AUDIT_MEMBER_ID="$MEMBER_ID" \
   AEVATAR_AUDIT_SCHEDULE_ID="$SCHEDULE_ID" \
   AEVATAR_AUDIT_OPERATION_ID="$DELETE_OPERATION_ID" \
-    "$APPROVED_REVOCATION_AUDIT_QUERY" \
-      > "$CANARY_STATE_DIR/revocation-terminal-audit.json"
+    "$AUDIT_QUERY_TOOL" revocation \
+      > "$CANARY_STATE_DIR/revocation-terminal-audit.json"; then
+    return 1
+  fi
 
   jq -e '
     type == "array"
     and length <= 1
     and all(.[];
       (keys | sort) == ([
-        "authorizationStatus", "nyxIdRevocationStatus", "observedAtUtc",
-        "operationId", "revocationPending", "scheduleId", "stateVersion",
+        "memberId", "nyxIdRevocationStatus", "observedAtUtc", "operationId",
+        "scheduleId", "scopeId", "stateVersion", "teamId",
         "vaultRevocationStatus"
       ] | sort)
       and (.stateVersion | type == "number" and . > 0)
@@ -1564,13 +1584,17 @@ capture_terminal_revocation_audit() {
   }
 
   if ! jq -e \
+      --arg scope "$SCOPE_ID" \
+      --arg team "$TEAM_ID" \
+      --arg member "$MEMBER_ID" \
       --arg schedule "$SCHEDULE_ID" \
       --arg operation "$DELETE_OPERATION_ID" '
       length == 1
+      and .[0].scopeId == $scope
+      and .[0].teamId == $team
+      and .[0].memberId == $member
       and .[0].scheduleId == $schedule
       and .[0].operationId == $operation
-      and .[0].authorizationStatus == "deleting"
-      and .[0].revocationPending == false
       and .[0].nyxIdRevocationStatus == "Completed"
       and .[0].vaultRevocationStatus == "Completed"
     ' "$CANARY_STATE_DIR/revocation-terminal-audit.json" >/dev/null; then
@@ -1581,6 +1605,8 @@ capture_terminal_revocation_audit() {
     "$CANARY_STATE_DIR/revocation-terminal-audit.json")"
   REVOCATION_TERMINAL_OBSERVED_AT="$(jq -er '.[0].observedAtUtc' \
     "$CANARY_STATE_DIR/revocation-terminal-audit.json")"
+  set_failure_context "revocation" "$DELETE_OPERATION_ID" \
+    "completed" "revocation_evidence_failed" "$REVOCATION_TERMINAL_STATE_VERSION"
   REVOCATION_TERMINAL_OBSERVED=true
   ledger_set revocationTerminalStateVersion "$REVOCATION_TERMINAL_STATE_VERSION"
   ledger_set revocationTerminalObservedAt "$REVOCATION_TERMINAL_OBSERVED_AT"
@@ -1593,6 +1619,8 @@ wait_for_automation_terminal() {
       "/api/scopes/$SCOPE_ID/teams/$TEAM_ID/members/$MEMBER_ID/automations/$SCHEDULE_ID" \
       "$CANARY_STATE_DIR/automation-delete-state.json")"
     LAST_DELETE_HTTP_STATUS="$status"
+    set_failure_context "revocation" "$DELETE_OPERATION_ID" \
+      "http_$status" "revocation_evidence_failed"
     if test "$status" = "404"; then
       if capture_terminal_revocation_audit; then
         return 0
@@ -1695,7 +1723,7 @@ test "$LAST_DELETE_HTTP_STATUS" = "404"
 If another retry is necessary, repeat only that block with a fresh bearer and
 the unchanged `delete.json`. Never replace either delete identity.
 
-The filtered projection evidence proves both tracks were terminal before the
+The filtered operational audit evidence proves both tracks were terminal before the
 detail `404` was accepted. Independently require the captured NyxID key ID and
 its exact deterministic name to be absent or inactive before owner-resource
 cleanup:
@@ -1732,6 +1760,7 @@ archiving the Team.
 Keep this order: retire revision, delete member, delete draft, archive Team.
 
 ```bash
+set_failure_context "cleanup" ""
 STATUS="$(api_request POST \
   "/api/scopes/$SCOPE_ID/members/$MEMBER_ID/binding/revisions/$REVISION_ID:retire" \
   "$CANARY_STATE_DIR/retire-revision.json")"
@@ -1948,7 +1977,7 @@ Record these non-secret facts in the approved change ticket:
   independently inactive/absent NyxID key, owner automation list with both zero
   items and `totalCount == 0`, retired revision, deleted member/draft, and
   archived Team;
-- final `/health/ready` and unchanged typed UserConfig assertions.
+- final `/health/ready` and retained exact typed UserConfig assertions.
 
 Do not attach the state directory, bearer file, raw API key, Vault data,
 refresh token, auth profile, complete NyxID inventory, or backend logs.

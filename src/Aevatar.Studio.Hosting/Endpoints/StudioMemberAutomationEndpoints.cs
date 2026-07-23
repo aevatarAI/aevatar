@@ -20,9 +20,10 @@ internal static class StudioMemberAutomationEndpoints
 {
     private const string BasePath =
         "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
-    private const string LoggerCategory = "Aevatar.Studio.MemberAutomation";
     private static readonly EventId CreateAcceptedEventId =
-        new(6201, "StudioMemberAutomationCreateAccepted");
+        new(
+            StudioMemberAutomationAuditContract.CreateAcceptedEventId,
+            StudioMemberAutomationAuditContract.CreateAcceptedEventName);
 
     public static void Map(IEndpointRouteBuilder app)
     {
@@ -96,7 +97,7 @@ internal static class StudioMemberAutomationEndpoints
             var result = await schedules.CreateAsync(request, body.ConfirmedPermissionDigest, ct);
             if (result.Success)
             {
-                loggerFactory.CreateLogger(LoggerCategory).LogInformation(
+                loggerFactory.CreateLogger(StudioMemberAutomationAuditContract.Category).LogInformation(
                     CreateAcceptedEventId,
                     "Accepted Studio member automation create for scope {ScopeId}, team {TeamId}, member {MemberId}, " +
                     "schedule {ScheduleId}, operation {OperationId}, and verified binding {BindingId}.",

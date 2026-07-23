@@ -150,6 +150,14 @@ fields `ScopeId`, `TeamId`, `MemberId`, `ScheduleId`, `OperationId`, and
 completion fact, and it must contain no permission digest or credential
 material.
 
+An accepted committed revocation outcome with both pending flags false emits
+`6202/StudioMemberAutomationRevocationCompleted` in the same category with
+exactly `ScopeId`, `TeamId`, `MemberId`, `ScheduleId`, `OperationId`,
+`NyxIdRevocationStatus`, `VaultRevocationStatus`, `StateVersion`, and
+`ObservedAtUtc`; both status values are exactly `Completed`. The repository
+tool `tools/schedules/query_member_automation_audit.sh` is the canonical
+allowlisted query for the `create` and `revocation` operational events.
+
 Workflow definition actors compile typed `ExternalWorkflowCapabilityRef` values and owner-LLM requirements during the bind turn. A Connector dependency is `connector_capability_ref + operation_id + contract_digest`; a NyxID dependency is `user_service_id + service_slug_snapshot + operation_id + method + path_template + contract_digest`. Slug-only, `service` alias, dynamic identity, incomplete operation tuple, contract drift, and sensitive headers fail before the definition is committed. Workflow service preparation copies the validated refs and admission digest into the immutable, artifact-hashed `WorkflowServiceDeploymentPlan`; mutable draft contents never substitute for an older prepared revision.
 
 Authorization planning consumes the Studio member, the exact prepared artifact selected by `scopeId + publishedServiceId + workflowRevisionId`, and the owner-scoped NyxID authorization catalog current-state replica. Connector and owner UserConfig evidence are read only when required by that revision. The planner accepts only exact `user_service_id` evidence from the typed refs; `service_slug_snapshot` is a route/display integrity check and is never resolved back into an id. Two equal slugs with different ids remain two grants. Scheduled workflow agents use their typed `ExecutionScopeId` to read the same committed typed UserConfig selection, so their Ornn, channel delivery, failure notification, declared proxy, and LLM surfaces are covered by one plan. An absent UserConfig document contributes state version `0` and an `Unspecified` selection; it never manufactures Gateway or the Host default. Explicit `Gateway` and `NyxIdUserService` selections must each carry a valid canonical model, and only the latter contributes its exact `UserService.id` grant.

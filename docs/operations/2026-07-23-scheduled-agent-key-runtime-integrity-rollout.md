@@ -114,13 +114,14 @@ Before creating a canary:
 
 1. Confirm the live OpenAPI exposes the typed UserConfig selection and all five
    automation route/model fields.
-2. Confirm an approved structured-log query can retrieve category
-   `Aevatar.Studio.MemberAutomation`, EventId `6201`
-   (`StudioMemberAutomationCreateAccepted`) without dumping raw logs.
+2. Confirm repository tool `tools/schedules/query_member_automation_audit.sh`
+   can retrieve category `Aevatar.Studio.MemberAutomation`, EventIds `6201`
+   (`StudioMemberAutomationCreateAccepted`) and `6202`
+   (`StudioMemberAutomationRevocationCompleted`) without dumping raw logs.
 3. Confirm the deployed public automation contract exposes both
    `nyxIdRevocationStatus` and `vaultRevocationStatus`. Their implemented wire
    values are `NotRequired`, `Pending`, `Completed`, and `Failed`; this canary
-   creates a credential, so an approved filtered operational query must prove
+   creates a credential, so the repository audit query must prove
    both tracks are `Completed` before detail `404` is accepted.
 4. Capture the original typed UserConfig selection without secrets, then
    explicitly save UserService ID
@@ -130,9 +131,8 @@ Before creating a canary:
    `nyx_id_user_service`, route
    `/api/v1/proxy/s/chrono-llm-public`, slug `chrono-llm-public`, the exact
    UserService ID, and model `gpt-5.5`.
-6. Record an explicit `restore` or `keep` disposition for the original
-   UserConfig. If the original selection cannot be restored through the
-   current typed contract, the canary requires `keep` approval before mutation.
+6. Record the `leave_selected` disposition and explicit approval to retain the
+   exact owner-wide selection after the canary.
 
 The public schema must exclude `callerAuthority`, `verifiedBindingId`,
 `secretReference`, `apiKeyId`, `fullKey`, and `ciphertext`. A similarly named

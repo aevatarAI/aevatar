@@ -37,6 +37,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private readonly StudioMemberWorkflowSchedulePolicy _schedulePolicy;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<StudioMemberWorkflowSchedulePort> _logger;
+    private readonly ILogger _auditLogger;
 
     public StudioMemberWorkflowSchedulePort(
         IStudioMemberService memberService,
@@ -47,6 +48,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         StudioMemberWorkflowSchedulePolicy schedulePolicy,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
         ILogger<StudioMemberWorkflowSchedulePort>? logger = null,
+        ILoggerFactory? auditLoggerFactory = null,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
         : this(
             memberService,
@@ -58,6 +60,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             TimeProvider.System,
             catalogRefreshPort,
             logger,
+            auditLoggerFactory,
             callerAccessTokenProvider)
     {
     }
@@ -71,6 +74,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         TimeProvider timeProvider,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
         ILogger<StudioMemberWorkflowSchedulePort>? logger = null,
+        ILoggerFactory? auditLoggerFactory = null,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
         : this(
             memberService,
@@ -82,6 +86,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             timeProvider,
             catalogRefreshPort,
             logger,
+            auditLoggerFactory,
             callerAccessTokenProvider)
     {
     }
@@ -96,6 +101,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         TimeProvider timeProvider,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefreshPort = null,
         ILogger<StudioMemberWorkflowSchedulePort>? logger = null,
+        ILoggerFactory? auditLoggerFactory = null,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         _memberService = memberService ?? throw new ArgumentNullException(nameof(memberService));
@@ -109,6 +115,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         _schedulePolicy = schedulePolicy ?? throw new ArgumentNullException(nameof(schedulePolicy));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? NullLogger<StudioMemberWorkflowSchedulePort>.Instance;
+        _auditLogger = (auditLoggerFactory ?? NullLoggerFactory.Instance)
+            .CreateLogger(StudioMemberAutomationAuditContract.Category);
     }
 
     public async Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
@@ -383,6 +391,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             bearerToken,
             authenticatedOwner,
             scheduleOwner,
+            resolved.TeamId,
             CancellationToken.None);
         return ToMutationReceipt(retry.Admission, operationId, "pending");
     }
@@ -434,6 +443,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 bearerToken,
                 authenticatedOwner,
                 owner,
+                resolved.TeamId,
                 CancellationToken.None);
             return ToMutationReceipt(committed.Admission, operationId, "pending");
         }
@@ -574,6 +584,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 bearerToken,
                 request.AuthenticatedOwner,
                 teamOwner,
+                resolved.TeamId,
                 CancellationToken.None);
             return new StudioMemberWorkflowScheduleResult(
                 Success: retry.Admission.Accepted,
@@ -680,6 +691,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 bearerToken,
                 request.AuthenticatedOwner,
                 teamOwner,
+                resolved.TeamId,
                 CancellationToken.None);
         }
         catch (Exception ex)
@@ -701,6 +713,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                         bearerToken,
                         request.AuthenticatedOwner,
                         teamOwner,
+                        resolved.TeamId,
                         CancellationToken.None);
                 }
             }
@@ -1300,6 +1313,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string bearerToken,
         AuthenticatedAuthorizationOwnerContext authenticatedOwner,
         TeamMemberAutomationOwner scheduleOwner,
+        string teamId,
         CancellationToken ct)
     {
         if (!outcome.NyxIdRevocationPending && !outcome.VaultRevocationPending)
@@ -1349,7 +1363,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             }
         }
 
-        _ = await _scheduleService.CompleteTeamAutomationRevocationAsync(
+        var completion = await _scheduleService.CompleteTeamAutomationRevocationAsync(
             outcome.ScheduleId,
             scheduleOwner,
             outcome.OperationId,
@@ -1359,6 +1373,42 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             result.VaultRevoked,
             result.ErrorCode,
             ct);
+        if (result.NyxIdRevoked && result.VaultRevoked)
+        {
+            var committed = completion.Outcome;
+            if (!completion.Admission.Accepted ||
+                committed.Status != TeamAutomationOperationObservationStatus.Committed ||
+                !string.Equals(
+                    committed.Stage,
+                    TeamAutomationOperationObservationStages.Revocation,
+                    StringComparison.Ordinal) ||
+                !string.Equals(committed.ScheduleId, outcome.ScheduleId, StringComparison.Ordinal) ||
+                !string.Equals(committed.OperationId, outcome.OperationId, StringComparison.Ordinal) ||
+                committed.NyxIdRevocationPending ||
+                committed.VaultRevocationPending ||
+                committed.StateVersion <= 0 ||
+                committed.ObservedAtUtc == default)
+            {
+                throw new InvalidOperationException("team_automation_revocation_completion_not_committed");
+            }
+
+            _auditLogger.LogInformation(
+                new EventId(
+                    StudioMemberAutomationAuditContract.RevocationCompletedEventId,
+                    StudioMemberAutomationAuditContract.RevocationCompletedEventName),
+                "Completed Studio member automation revocation for scope {ScopeId}, team {TeamId}, member {MemberId}, " +
+                "schedule {ScheduleId}, operation {OperationId}, NyxID status {NyxIdRevocationStatus}, " +
+                "Vault status {VaultRevocationStatus}, state version {StateVersion}, observed at {ObservedAtUtc:O}.",
+                scheduleOwner.ScopeId,
+                NormalizeRequired(teamId, nameof(teamId)),
+                scheduleOwner.MemberId,
+                committed.ScheduleId,
+                committed.OperationId,
+                StudioMemberAutomationAuditContract.CompletedRevocationStatus,
+                StudioMemberAutomationAuditContract.CompletedRevocationStatus,
+                committed.StateVersion,
+                committed.ObservedAtUtc);
+        }
         return result.NyxIdRevoked && result.VaultRevoked;
     }
 
