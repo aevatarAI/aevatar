@@ -1028,6 +1028,41 @@ public sealed class ProvisionWorkflowScheduleToolTests
     }
 
     [Fact]
+    public async Task ScheduleMemberWorkflow_WhenChannelSenderContextPresent_ShouldUseBindingBackedChannelSubject()
+    {
+        var schedulePort = new RecordingMemberWorkflowSchedulePort();
+        var tool = await DiscoverScheduleMemberWorkflowToolAsync(schedulePort);
+
+        using var _ = PushContext(
+            scopeId: "registration-scope",
+            ownerSubject: "fallback-owner",
+            accessToken: "access-token-1",
+            ownerScopeId: "owner-scope",
+            senderBindingId: "binding-lark",
+            senderNyxUserId: "nyx-lark-user",
+            senderTenant: "tenant-lark",
+            channelPlatform: "lark",
+            channelSenderId: "ou_sender");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "member-alpha",
+              "schedule_cron": "0 9 * * *",
+              "schedule_timezone": "Asia/Shanghai"
+            }
+            """);
+
+        ErrorCode(output).Should().BeNull();
+        schedulePort.LastRequest.Should().NotBeNull();
+        schedulePort.LastRequest!.ScopeId.Should().Be("owner-scope");
+        var owner = schedulePort.LastRequest.AuthenticatedOwner;
+        owner.Owner.OwnerSubject.Should().Be("nyx-lark-user");
+        owner.SubjectPlatform.Should().Be("lark");
+        owner.SubjectTenant.Should().Be("tenant-lark");
+        owner.SubjectExternalUserId.Should().Be("ou_sender");
+        owner.VerifiedBindingId.Should().Be("binding-lark");
+    }
+
+    [Fact]
     public async Task ScheduleMemberWorkflow_WhenBearerMissingAndTypedNyxIdAuthorityPresent_ShouldDeferTokenIssuanceToPort()
     {
         var schedulePort = new RecordingMemberWorkflowSchedulePort();
@@ -1674,14 +1709,19 @@ public sealed class ProvisionWorkflowScheduleToolTests
         string? idempotencyKey = null,
         string? ownerScopeId = null,
         AgentToolNyxIdAuthorityContext? nyxIdAuthority = null,
-        string? senderBindingId = "binding-alpha")
+        string? senderBindingId = "binding-alpha",
+        string? senderNyxUserId = null,
+        string? senderTenant = null,
+        string? channelPlatform = null,
+        string? channelSenderId = null,
+        string? channelRegistrationScopeId = null)
     {
         return AgentToolContextScope.Push(new AgentToolExecutionContext(
             new AgentToolRequestIdentity(requestId, callId, idempotencyKey),
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, ownerSubject, "response-1", ownerScopeId),
-            AgentToolChannelContext.Empty,
-            new AgentToolSenderBindingContext(senderBindingId),
+            new AgentToolChannelContext(channelPlatform, channelSenderId, channelRegistrationScopeId, null, null),
+            new AgentToolSenderBindingContext(senderBindingId, senderNyxUserId, senderTenant),
             LLMRequestRoutingContext.Empty,
             AgentToolConnectedServicesContext.Empty,
             AgentSkillRecoveryContext.Empty,
