@@ -121,8 +121,6 @@ export type ScheduledDispatchListResult = {
 export type ScheduledDispatchListQuery = {
   readonly cursor?: string;
   readonly includeTotalCount?: boolean;
-  readonly memberId?: string;
-  readonly scopeId?: string;
   readonly take?: number;
 };
 
@@ -509,8 +507,6 @@ function listScheduledDispatches(
     withQuery("/api/schedules", {
       cursor: query?.cursor,
       includeTotalCount: query?.includeTotalCount,
-      memberId: query?.memberId,
-      scopeId: query?.scopeId,
       take: query?.take,
     }),
     decodeScheduledDispatchListResult,

@@ -2507,7 +2507,6 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
         includeTotalCount: true,
-        scopeId: "scope-1",
         take: 200,
       });
       expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
@@ -2545,7 +2544,6 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("Other team first page task")).toBeNull();
     expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
       includeTotalCount: true,
-      scopeId: "scope-1",
       take: 200,
     });
   });
