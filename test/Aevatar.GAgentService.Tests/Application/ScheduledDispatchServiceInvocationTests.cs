@@ -1763,6 +1763,21 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 dispatch => ReplacePayload(dispatch, Any.Pack(new StringValue { Value = "not-chat" }))
             },
             {
+                "non-chat-payload-without-owner-llm-source-stamp",
+                dispatch => ReplacePayload(
+                    RemoveOwnerLLMSourceStamp(dispatch),
+                    Any.Pack(new StringValue { Value = "not-chat" }))
+            },
+            {
+                "malformed-chat-payload",
+                dispatch =>
+                {
+                    var payload = Any.Pack(new ChatRequestEvent());
+                    payload.Value = Google.Protobuf.ByteString.CopyFrom(0x0A, 0x05, 0x01);
+                    return ReplacePayload(dispatch, payload);
+                }
+            },
+            {
                 "route-mismatch",
                 dispatch => ReplaceOwnerLLMPayload(dispatch, "/api/v1/proxy/s/other-llm", OwnerLLMModel)
             },
@@ -1772,11 +1787,17 @@ public sealed class ScheduledDispatchServiceInvocationTests
             },
             {
                 "route-present-without-owner-llm-source-stamp",
-                dispatch => RemoveOwnerLLMSourceStamp(dispatch, OwnerLLMRoute, string.Empty)
+                dispatch => ReplaceOwnerLLMPayload(
+                    RemoveOwnerLLMSourceStamp(dispatch),
+                    OwnerLLMRoute,
+                    string.Empty)
             },
             {
                 "model-present-without-owner-llm-source-stamp",
-                dispatch => RemoveOwnerLLMSourceStamp(dispatch, string.Empty, OwnerLLMModel)
+                dispatch => ReplaceOwnerLLMPayload(
+                    RemoveOwnerLLMSourceStamp(dispatch),
+                    string.Empty,
+                    OwnerLLMModel)
             },
         };
 
@@ -1812,11 +1833,8 @@ public sealed class ScheduledDispatchServiceInvocationTests
     }
 
     private static ScheduledServiceInvocationDispatchRequest RemoveOwnerLLMSourceStamp(
-        ScheduledServiceInvocationDispatchRequest dispatch,
-        string route,
-        string model)
-    {
-        var withoutSourceStamp = dispatch with
+        ScheduledServiceInvocationDispatchRequest dispatch) =>
+        dispatch with
         {
             AuthorizationFact = dispatch.AuthorizationFact! with
             {
@@ -1824,8 +1842,6 @@ public sealed class ScheduledDispatchServiceInvocationTests
                 OwnerLLMSelection = null,
             },
         };
-        return ReplaceOwnerLLMPayload(withoutSourceStamp, route, model);
-    }
 
     private static ScheduledCallerNyxIdAuthority CreateCallerAuthority() => new()
     {

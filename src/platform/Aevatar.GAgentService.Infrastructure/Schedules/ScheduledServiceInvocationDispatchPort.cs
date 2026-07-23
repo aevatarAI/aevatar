@@ -6,6 +6,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.Workflow.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -178,8 +179,24 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         ScheduledInvocationAuthorizationFact fact)
     {
         var chatRequest = new ChatRequestEvent();
-        var hasChatPayload = request.Payload?.TryUnpack(out chatRequest) == true;
-        var control = hasChatPayload ? chatRequest?.LlmControl : null;
+        bool hasChatPayload;
+        try
+        {
+            hasChatPayload = request.Payload?.TryUnpack(out chatRequest) == true;
+        }
+        catch (InvalidProtocolBufferException)
+        {
+            ThrowOwnerLLMPayloadMismatch();
+            return;
+        }
+
+        if (!hasChatPayload)
+        {
+            ThrowOwnerLLMPayloadMismatch();
+            return;
+        }
+
+        var control = chatRequest?.LlmControl;
         var route = control?.NyxIdRoutePreference ?? string.Empty;
         var model = control?.ModelOverride ?? string.Empty;
 
@@ -203,8 +220,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
                 "Scheduled workflow owner LLM selection is missing or malformed.");
         }
 
-        if (!hasChatPayload ||
-            !string.Equals(route, selection.RouteValue, StringComparison.Ordinal) ||
+        if (!string.Equals(route, selection.RouteValue, StringComparison.Ordinal) ||
             !string.Equals(model, selection.Model, StringComparison.Ordinal))
         {
             ThrowOwnerLLMPayloadMismatch();
