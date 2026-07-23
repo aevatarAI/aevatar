@@ -65,7 +65,7 @@ public sealed class AgentProfileActorPortTests
     }
 
     [Fact]
-    public async Task DispatchCreateAsync_ShouldRejectMismatchedProfileActorTargetBeforeDispatch()
+    public async Task DispatchCreateAsync_ShouldRejectMismatchedProfileActorTargetBeforeLifecycle()
     {
         var command = CreateCommand();
         command.ProfileActorId = "caller-supplied-profile-actor";
@@ -76,9 +76,28 @@ public sealed class AgentProfileActorPortTests
         var act = () => port.DispatchCreateAsync(command);
 
         await act.Should().ThrowAsync<InvalidOperationException>();
-        runtime.CreateCalls.Should().Contain(
-            (typeof(AgentProfileGAgent), AgentProfileActorIds.Profile(ProfileId)));
-        dispatch.Calls.Should().BeEmpty();
+        AssertNoLifecycleOrDispatch(runtime, dispatch);
+    }
+
+    [Theory]
+    [InlineData(InvalidCommandPart.Identity)]
+    [InlineData(InvalidCommandPart.Operation)]
+    public async Task DispatchCreateAsync_ShouldRejectMissingRequiredDataBeforeLifecycle(
+        InvalidCommandPart invalidPart)
+    {
+        var command = CreateCommand();
+        if (invalidPart == InvalidCommandPart.Identity)
+            command.Identity = null!;
+        else
+            command.Operation = null!;
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new AgentProfileActorPort(runtime, dispatch);
+
+        var act = () => port.DispatchCreateAsync(command);
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
+        AssertNoLifecycleOrDispatch(runtime, dispatch);
     }
 
     [Fact]
@@ -139,6 +158,44 @@ public sealed class AgentProfileActorPortTests
             command,
             AgentProfileActorIds.Profile(ProfileId),
             (port, ct) => port.DispatchPublishAsync(command, ct));
+    }
+
+    public static TheoryData<MutationDispatchKind, InvalidCommandPart> InvalidMutationCommands =>
+        new()
+        {
+            { MutationDispatchKind.UpdateDraft, InvalidCommandPart.Command },
+            { MutationDispatchKind.UpdateDraft, InvalidCommandPart.Identity },
+            { MutationDispatchKind.UpdateDraft, InvalidCommandPart.Operation },
+            { MutationDispatchKind.UpsertSkillBinding, InvalidCommandPart.Command },
+            { MutationDispatchKind.UpsertSkillBinding, InvalidCommandPart.Identity },
+            { MutationDispatchKind.UpsertSkillBinding, InvalidCommandPart.Operation },
+            { MutationDispatchKind.RemoveSkillBinding, InvalidCommandPart.Command },
+            { MutationDispatchKind.RemoveSkillBinding, InvalidCommandPart.Identity },
+            { MutationDispatchKind.RemoveSkillBinding, InvalidCommandPart.Operation },
+            { MutationDispatchKind.Publish, InvalidCommandPart.Command },
+            { MutationDispatchKind.Publish, InvalidCommandPart.Identity },
+            { MutationDispatchKind.Publish, InvalidCommandPart.Operation },
+        };
+
+    [Theory]
+    [MemberData(nameof(InvalidMutationCommands))]
+    public async Task DispatchMutationAsync_ShouldRejectInvalidCommandBeforeLifecycle(
+        MutationDispatchKind dispatchKind,
+        InvalidCommandPart invalidPart)
+    {
+        IMessage? command = CreateMutationCommand(dispatchKind);
+        if (invalidPart == InvalidCommandPart.Command)
+            command = null;
+        else
+            ClearMutationPart(command, invalidPart);
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new AgentProfileActorPort(runtime, dispatch);
+
+        var act = () => DispatchMutationAsync(port, dispatchKind, command);
+
+        await act.Should().ThrowAsync<ArgumentNullException>();
+        AssertNoLifecycleOrDispatch(runtime, dispatch);
     }
 
     [Fact]
@@ -221,6 +278,92 @@ public sealed class AgentProfileActorPortTests
             Operation = Operation("create"),
             ProfileActorId = AgentProfileActorIds.Profile(ProfileId),
         };
+
+    private static IMessage CreateMutationCommand(MutationDispatchKind dispatchKind) =>
+        dispatchKind switch
+        {
+            MutationDispatchKind.UpdateDraft => new UpdateAgentProfileDraftCommand
+            {
+                Identity = Identity(),
+                Operation = Operation("invalid-update"),
+            },
+            MutationDispatchKind.UpsertSkillBinding => new UpsertAgentProfileSkillBindingCommand
+            {
+                Identity = Identity(),
+                Operation = Operation("invalid-upsert"),
+            },
+            MutationDispatchKind.RemoveSkillBinding => new RemoveAgentProfileSkillBindingCommand
+            {
+                Identity = Identity(),
+                Operation = Operation("invalid-remove"),
+            },
+            MutationDispatchKind.Publish => new PublishAgentProfileCommand
+            {
+                Identity = Identity(),
+                Operation = Operation("invalid-publish"),
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(dispatchKind)),
+        };
+
+    private static void ClearMutationPart(IMessage command, InvalidCommandPart invalidPart)
+    {
+        switch (command)
+        {
+            case UpdateAgentProfileDraftCommand value:
+                if (invalidPart == InvalidCommandPart.Identity)
+                    value.Identity = null!;
+                else
+                    value.Operation = null!;
+                break;
+            case UpsertAgentProfileSkillBindingCommand value:
+                if (invalidPart == InvalidCommandPart.Identity)
+                    value.Identity = null!;
+                else
+                    value.Operation = null!;
+                break;
+            case RemoveAgentProfileSkillBindingCommand value:
+                if (invalidPart == InvalidCommandPart.Identity)
+                    value.Identity = null!;
+                else
+                    value.Operation = null!;
+                break;
+            case PublishAgentProfileCommand value:
+                if (invalidPart == InvalidCommandPart.Identity)
+                    value.Identity = null!;
+                else
+                    value.Operation = null!;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(command));
+        }
+    }
+
+    private static Task<DispatchAdmission> DispatchMutationAsync(
+        AgentProfileActorPort port,
+        MutationDispatchKind dispatchKind,
+        IMessage? command) =>
+        dispatchKind switch
+        {
+            MutationDispatchKind.UpdateDraft =>
+                port.DispatchUpdateDraftAsync((UpdateAgentProfileDraftCommand)command!),
+            MutationDispatchKind.UpsertSkillBinding =>
+                port.DispatchUpsertSkillBindingAsync((UpsertAgentProfileSkillBindingCommand)command!),
+            MutationDispatchKind.RemoveSkillBinding =>
+                port.DispatchRemoveSkillBindingAsync((RemoveAgentProfileSkillBindingCommand)command!),
+            MutationDispatchKind.Publish =>
+                port.DispatchPublishAsync((PublishAgentProfileCommand)command!),
+            _ => throw new ArgumentOutOfRangeException(nameof(dispatchKind)),
+        };
+
+    private static void AssertNoLifecycleOrDispatch(
+        RecordingActorRuntime runtime,
+        RecordingActorDispatchPort dispatch)
+    {
+        runtime.GetCalls.Should().BeEmpty();
+        runtime.CreateCalls.Should().BeEmpty();
+        runtime.MaterializedCalls.Should().BeEmpty();
+        dispatch.Calls.Should().BeEmpty();
+    }
 
     private static AgentProfileIdentity Identity() =>
         GAgentServiceTestKit.CreateAgentProfileIdentity(ProfileId);
@@ -348,5 +491,20 @@ public sealed class AgentProfileActorPortTests
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() =>
             Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    public enum MutationDispatchKind
+    {
+        UpdateDraft,
+        UpsertSkillBinding,
+        RemoveSkillBinding,
+        Publish,
+    }
+
+    public enum InvalidCommandPart
+    {
+        Command,
+        Identity,
+        Operation,
     }
 }

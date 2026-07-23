@@ -35,37 +35,61 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var targets = await EnsureCreateTargetsAsync(command.Identity.ProfileId, ct);
+        ArgumentNullException.ThrowIfNull(command.Identity);
+        ArgumentNullException.ThrowIfNull(command.Operation);
+        var profileActorId = AgentProfileActorIds.Profile(command.Identity.ProfileId);
         if (!string.Equals(
                 command.ProfileActorId,
-                targets.ProfileActorId,
+                profileActorId,
                 StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
                 "Create Agent Profile command target must match the deterministic Profile Actor target.");
         }
+
+        var targets = await EnsureCreateTargetsAsync(command.Identity.ProfileId, ct);
         return await DispatchAsync(targets.NamespaceActorId, command.Operation, command, ct);
     }
 
     public Task<DispatchAdmission> DispatchUpdateDraftAsync(
         UpdateAgentProfileDraftCommand command,
-        CancellationToken ct = default) =>
-        DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Identity);
+        ArgumentNullException.ThrowIfNull(command.Operation);
+        return DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+    }
 
     public Task<DispatchAdmission> DispatchUpsertSkillBindingAsync(
         UpsertAgentProfileSkillBindingCommand command,
-        CancellationToken ct = default) =>
-        DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Identity);
+        ArgumentNullException.ThrowIfNull(command.Operation);
+        return DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+    }
 
     public Task<DispatchAdmission> DispatchRemoveSkillBindingAsync(
         RemoveAgentProfileSkillBindingCommand command,
-        CancellationToken ct = default) =>
-        DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Identity);
+        ArgumentNullException.ThrowIfNull(command.Operation);
+        return DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+    }
 
     public Task<DispatchAdmission> DispatchPublishAsync(
         PublishAgentProfileCommand command,
-        CancellationToken ct = default) =>
-        DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(command.Identity);
+        ArgumentNullException.ThrowIfNull(command.Operation);
+        return DispatchProfileAsync(command, command.Identity.ProfileId, command.Operation, ct);
+    }
 
     private async Task<DispatchAdmission> DispatchProfileAsync(
         IMessage command,
