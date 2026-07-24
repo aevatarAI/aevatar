@@ -14,11 +14,11 @@ import {
   buildExecutionTrace,
   type ExecutionLogItem,
   type ExecutionLogStatus,
+  type WorkflowExecutionNodeSnapshot,
   formatDurationBetween,
   formatExecutionLogsClipboard,
   normalizeExecutionLogStatus,
 } from "@/shared/studio/execution";
-import type { StudioGraphNodeData } from "@/shared/studio/graph";
 import type { StudioExecutionDetail } from "@/shared/studio/models";
 import {
   getUserFacingIdentifierLabel,
@@ -33,10 +33,7 @@ type WorkflowStudioExecutionPanelProps = {
   readonly height?: number;
   readonly onClear?: () => void;
   readonly onSelectLog?: (index: number | null) => void;
-  readonly workflowNodes?: readonly Pick<
-    StudioGraphNodeData,
-    "stepId" | "stepType" | "subtitle" | "targetRole" | "title"
-  >[];
+  readonly workflowNodes?: readonly WorkflowExecutionNodeSnapshot[];
 };
 
 type OverviewMode = "nodes" | "events";
