@@ -1,6 +1,7 @@
 using Aevatar.AgentProfileBoundaryGuard.Tool;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Aevatar.Architecture.Tests.Rules;
 
@@ -16,7 +17,6 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
 
     [Theory]
     [InlineData("raw-string-handler-decoy", "HandleInitializeAsync")]
-    [InlineData("other-class-nested-type-local-function-decoys", "HandleInitializeAsync")]
     [InlineData("wrong-first-authority", "HandleInitializeAsync")]
     [InlineData("executable-interpolation", "HandleInitializeAsync")]
     [InlineData("inline-replay", "HandleInitializeAsync")]
@@ -34,6 +34,21 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
 
         Assert.Contains(result.Violations, violation => violation.MethodName == expectedMethod);
     }
+
+    [Fact]
+    public void CanonicalHandlerInOtherTopLevelClassDoesNotHideCorruptedDirectHandler() =>
+        AssertCanonicalSelectorDecoyDoesNotHideCorruptedDirectHandler(
+            "other-top-level-class-canonical-decoy");
+
+    [Fact]
+    public void CanonicalHandlerInNestedClassDoesNotHideCorruptedDirectHandler() =>
+        AssertCanonicalSelectorDecoyDoesNotHideCorruptedDirectHandler(
+            "nested-class-canonical-decoy");
+
+    [Fact]
+    public void CanonicalLocalFunctionDoesNotHideCorruptedDirectHandler() =>
+        AssertCanonicalSelectorDecoyDoesNotHideCorruptedDirectHandler(
+            "local-function-canonical-decoy");
 
     [Theory]
     [InlineData("HandleInitializeAsync")]
@@ -120,6 +135,29 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
         Assert.Contains($"PASS|{valid.Root}", stdout.ToString());
     }
 
+    [Fact]
+    public void CliSanitizesTabEscapeAndSeparatorsInRecordFields()
+    {
+        var hostileRoot = Path.Combine(Path.GetTempPath(), "missing\t\u001b|root");
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        var exitCode = AgentProfileBoundaryGuardCli.Run(
+            ["check", "--scan-root", hostileRoot],
+            stdout,
+            stderr);
+
+        var expectedRoot = hostileRoot
+            .Replace('\t', '_')
+            .Replace('\u001b', '_')
+            .Replace('|', '_');
+        Assert.Equal(2, exitCode);
+        Assert.Equal(
+            $"ERROR|{expectedRoot}|Scan root or governed input is missing or unreadable.{Environment.NewLine}",
+            stderr.ToString());
+        Assert.Empty(stdout.ToString());
+    }
+
     [Theory]
     [InlineData()]
     [InlineData("check")]
@@ -147,6 +185,23 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
         }
 
         throw new InvalidOperationException("Could not locate repository root.");
+    }
+
+    private static void AssertCanonicalSelectorDecoyDoesNotHideCorruptedDirectHandler(
+        string corruption)
+    {
+        using var fixture = AuthoritySyntaxFixture.Create();
+        fixture.ApplyCorruption(corruption);
+        fixture.AssertGovernedSourcesParse();
+        fixture.AssertSelectorDecoyMatchesCanonicalHandler(corruption);
+
+        var result = new AgentProfileAuthoritySyntaxChecker().Check(fixture.Root);
+
+        var violation = Assert.Single(result.Violations);
+        Assert.Equal("HandleInitializeAsync", violation.MethodName);
+        Assert.Equal(
+            "src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order",
+            violation.Location);
     }
 
     private sealed class AuthoritySyntaxFixture : IDisposable
@@ -196,38 +251,17 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
                         "public sealed class AgentProfileGAgent\n{",
                         $"public sealed class AgentProfileGAgent{Environment.NewLine}{{{Environment.NewLine}    private const string HandlerDecoy = \"\"\"{Environment.NewLine}{CanonicalInitializeMethod}{Environment.NewLine}\"\"\";");
                     break;
-                case "other-class-nested-type-local-function-decoys":
-                    ReplaceOnce(ProfilePath, ProfileAuthority, $"State.Operations.Insert(0, new AgentProfileOperationFact());{Environment.NewLine}        {ProfileAuthority}");
-                    var source = File.ReadAllText(ProfilePath);
-                    source = $$"""
-                        public sealed class OtherAgent
-                        {
-                        {{CanonicalInitializeMethod}}
-                        }
-
-                        {{source}}
-                        """;
-                    source = source.Replace(
-                        "public sealed class AgentProfileGAgent\n{",
-                        $$"""
-                        public sealed class AgentProfileGAgent
-                        {
-                            private sealed class NestedAgent
-                            {
-                        {{CanonicalInitializeMethod}}
-                            }
-
-                            private void DeclareLocalHandler()
-                            {
-                                async Task HandleInitializeAsync(InitializeAgentProfileCommand command)
-                                {
-                                    ArgumentNullException.ThrowIfNull(command);
-                                    await PersistAsync(command);
-                                }
-                            }
-                        """,
-                        StringComparison.Ordinal);
-                    File.WriteAllText(ProfilePath, source);
+                case "other-top-level-class-canonical-decoy":
+                    CorruptDirectInitializeHandler();
+                    AddOtherTopLevelCanonicalHandler();
+                    break;
+                case "nested-class-canonical-decoy":
+                    CorruptDirectInitializeHandler();
+                    AddNestedCanonicalHandler();
+                    break;
+                case "local-function-canonical-decoy":
+                    CorruptDirectInitializeHandler();
+                    AddCanonicalLocalFunction();
                     break;
                 case "wrong-first-authority":
                     ReplaceOnce(
@@ -349,6 +383,113 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
                     diagnostics.Length == 0,
                     $"{string.Join(Environment.NewLine, diagnostics)}{Environment.NewLine}{File.ReadAllText(path)}");
             }
+        }
+
+        public void AssertSelectorDecoyMatchesCanonicalHandler(string corruption)
+        {
+            var parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
+            var compilationUnit = CSharpSyntaxTree
+                .ParseText(File.ReadAllText(ProfilePath), parseOptions, ProfilePath)
+                .GetCompilationUnitRoot();
+            var canonicalMethod = CSharpSyntaxTree
+                .ParseText(
+                    $"public sealed class CanonicalAgent\n{{\n{CanonicalInitializeMethod}\n}}",
+                    parseOptions)
+                .GetCompilationUnitRoot()
+                .DescendantNodes()
+                .OfType<MethodDeclarationSyntax>()
+                .Single();
+
+            switch (corruption)
+            {
+                case "other-top-level-class-canonical-decoy":
+                    var otherMethod = compilationUnit
+                        .DescendantNodes()
+                        .OfType<ClassDeclarationSyntax>()
+                        .Single(candidate => candidate.Identifier.ValueText == "OtherAgent")
+                        .Members
+                        .OfType<MethodDeclarationSyntax>()
+                        .Single(candidate => candidate.Identifier.ValueText == "HandleInitializeAsync");
+                    Assert.True(SyntaxFactory.AreEquivalent(canonicalMethod, otherMethod));
+                    break;
+                case "nested-class-canonical-decoy":
+                    var nestedMethod = compilationUnit
+                        .DescendantNodes()
+                        .OfType<ClassDeclarationSyntax>()
+                        .Single(candidate => candidate.Identifier.ValueText == "NestedAgent")
+                        .Members
+                        .OfType<MethodDeclarationSyntax>()
+                        .Single(candidate => candidate.Identifier.ValueText == "HandleInitializeAsync");
+                    Assert.True(SyntaxFactory.AreEquivalent(canonicalMethod, nestedMethod));
+                    break;
+                case "local-function-canonical-decoy":
+                    var localFunction = compilationUnit
+                        .DescendantNodes()
+                        .OfType<LocalFunctionStatementSyntax>()
+                        .Single(candidate => candidate.Identifier.ValueText == "HandleInitializeAsync");
+                    Assert.Single(localFunction.Modifiers);
+                    Assert.True(localFunction.Modifiers[0].IsKind(SyntaxKind.AsyncKeyword));
+                    Assert.True(SyntaxFactory.AreEquivalent(canonicalMethod.ReturnType, localFunction.ReturnType));
+                    Assert.True(SyntaxFactory.AreEquivalent(canonicalMethod.ParameterList, localFunction.ParameterList));
+                    Assert.True(SyntaxFactory.AreEquivalent(canonicalMethod.Body!, localFunction.Body!));
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(corruption), corruption, null);
+            }
+        }
+
+        private void CorruptDirectInitializeHandler() =>
+            ReplaceOnce(
+                ProfilePath,
+                ProfileAuthority,
+                $"State.Operations.Insert(0, new AgentProfileOperationFact());{Environment.NewLine}        {ProfileAuthority}");
+
+        private void AddOtherTopLevelCanonicalHandler() =>
+            ReplaceOnce(
+                ProfilePath,
+                "public sealed class AgentProfileGAgent\n{",
+                $$"""
+                public sealed class OtherAgent
+                {
+                {{CanonicalInitializeMethod}}
+                }
+
+                public sealed class AgentProfileGAgent
+                {
+                """);
+
+        private void AddNestedCanonicalHandler() =>
+            ReplaceOnce(
+                ProfilePath,
+                "public sealed class AgentProfileGAgent\n{",
+                $$"""
+                public sealed class AgentProfileGAgent
+                {
+                    private sealed class NestedAgent
+                    {
+                {{CanonicalInitializeMethod}}
+                    }
+
+                """);
+
+        private void AddCanonicalLocalFunction()
+        {
+            var canonicalLocalFunction = CanonicalInitializeMethod.Replace(
+                "public async Task",
+                "async Task",
+                StringComparison.Ordinal);
+            ReplaceOnce(
+                ProfilePath,
+                "public sealed class AgentProfileGAgent\n{",
+                $$"""
+                public sealed class AgentProfileGAgent
+                {
+                    private void DeclareLocalHandler()
+                    {
+                {{canonicalLocalFunction}}
+                    }
+
+                """);
         }
 
         private void ReplaceAuthorityInMethod(string methodName, string replacement)

@@ -1126,10 +1126,24 @@ run_self_tests() {
   ' "${case_root}/${structured_profile_file}"
   record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
 
-  fresh_case "structured-member-scope-decoys"
+  fresh_case "structured-other-top-level-class-decoy"
   perl -0777 -pi -e '
     s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
-    s~public sealed class AgentProfileGAgent \{\n~public sealed class OtherAgent {\n  public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n    await PersistAsync(command);\n  }\n}\npublic sealed class AgentProfileGAgent {\n  private sealed class NestedAgent {\n    public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n      await PersistAsync(command);\n    }\n  }\n  private void DeclareLocalHandler() {\n    async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n      await PersistAsync(command);\n    }\n  }\n~;
+    s~public sealed class AgentProfileGAgent \{\n~public sealed class OtherAgent {\n  public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n    ArgumentNullException.ThrowIfNull(command);\n    var namespaceActorId = State.Identity is null\n      ? AgentProfileActorIds.Namespace\n      : AgentProfileActorInvariants.RequireActorId(\n        State.NamespaceActorId,\n        "state.namespace_actor_id");\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);\n    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);\n    await PersistAsync(operation);\n  }\n}\npublic sealed class AgentProfileGAgent {\n~;
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-nested-class-decoy"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
+    s~(public sealed class AgentProfileGAgent \{\n)~$1  private sealed class NestedAgent {\n    public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n      ArgumentNullException.ThrowIfNull(command);\n      var namespaceActorId = State.Identity is null\n        ? AgentProfileActorIds.Namespace\n        : AgentProfileActorInvariants.RequireActorId(\n          State.NamespaceActorId,\n          "state.namespace_actor_id");\n      AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);\n      var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);\n      await PersistAsync(operation);\n    }\n  }\n~;
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-local-function-decoy"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
+    s~(public sealed class AgentProfileGAgent \{\n)~$1  private void DeclareLocalHandler() {\n    async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n      ArgumentNullException.ThrowIfNull(command);\n      var namespaceActorId = State.Identity is null\n        ? AgentProfileActorIds.Namespace\n        : AgentProfileActorInvariants.RequireActorId(\n          State.NamespaceActorId,\n          "state.namespace_actor_id");\n      AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);\n      var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);\n      await PersistAsync(operation);\n    }\n  }\n~;
   ' "${case_root}/${structured_profile_file}"
   record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
 
@@ -1233,7 +1247,7 @@ run_self_tests() {
   record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
 
   local expected_index=0 other_expected_index=0
-  local expected_hit="" other_expected_hit=""
+  local expected_hit="" other_expected_hit="" structured_root_output=""
   for ((expected_index = 0; expected_index < ${#structured_expected_hits[@]}; expected_index++)); do
     expected_hit="${structured_expected_hits[expected_index]}"
     for ((other_expected_index = expected_index + 1;
@@ -1262,9 +1276,14 @@ run_self_tests() {
       failures=$((failures + 1))
     fi
   fi
-  for expected_hit in "${structured_expected_hits[@]}"; do
-    if ! printf '%s\n' "${output}" | rg -q -F -x -- "${expected_hit}"; then
-      echo "agent_profile_boundary_guard self-test missed structured diagnostic: ${expected_hit}" >&2
+  for ((expected_index = 0; expected_index < ${#structured_expected_hits[@]}; expected_index++)); do
+    expected_hit="${structured_expected_hits[expected_index]}"
+    structured_root_output="$({
+      printf '%s\n' "${output}" |
+        rg -F -- "VIOLATION|${structured_roots[expected_index]}|"
+    } || true)"
+    if [[ "${structured_root_output}" != "${expected_hit}" ]]; then
+      echo "agent_profile_boundary_guard self-test expected one exact structured diagnostic: ${expected_hit}" >&2
       echo "${output}" >&2
       failures=$((failures + 1))
     fi

@@ -82,6 +82,14 @@ internal static class AgentProfileBoundaryGuardCli
         return parsed.Count > 0;
     }
 
-    private static string Safe(string value) =>
-        value.Replace('|', '_').Replace('\r', '_').Replace('\n', '_');
+    private static string Safe(string value)
+    {
+        var characters = value.ToCharArray();
+        for (var index = 0; index < characters.Length; index++)
+        {
+            if (characters[index] == '|' || char.IsControl(characters[index]))
+                characters[index] = '_';
+        }
+        return new string(characters);
+    }
 }
