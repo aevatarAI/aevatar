@@ -1012,18 +1012,53 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenBeginCommitsNewOperation_ShouldReportNewOperationCommitted()
+    {
+        var result = await ScheduleAsync(
+            NewPort(new RecordingScheduleService()),
+            Request("scope-1", "member-1"));
+
+        result.NewOperationCommitted.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenBeginReplayDoesNotOwnEffect_ShouldNotMaterializeCredential()
     {
-        var scheduleService = new RecordingScheduleService { BeginOwnsEffectAttempt = false };
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginOwnsEffectAttempt = false,
+            BeginNewOperationCommitted = false,
+        };
         var materializer = new RecordingCredentialMaterializer();
         var port = NewPort(scheduleService, materializer: materializer);
 
         var result = await ScheduleAsync(port, Request("scope-1", "member-1"));
 
         result.Status.Should().Be("pending");
+        result.NewOperationCommitted.Should().BeFalse();
         scheduleService.BeginCallCount.Should().Be(1);
         scheduleService.EnsureCallCount.Should().Be(0);
         materializer.MaterializeCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenExpiredBeginReplayOwnsEffect_ShouldNotReportNewOperationCommitted()
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginOwnsEffectAttempt = true,
+            BeginNewOperationCommitted = false,
+        };
+        var materializer = new RecordingCredentialMaterializer();
+
+        var result = await ScheduleAsync(
+            NewPort(scheduleService, materializer: materializer),
+            Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        result.NewOperationCommitted.Should().BeFalse();
+        scheduleService.BeginCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(1);
     }
 
     [Fact]
@@ -2215,6 +2250,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int TombstonedAttempts { get; init; }
         public Exception? EnsureException { get; init; }
         public bool BeginOwnsEffectAttempt { get; init; } = true;
+        public bool BeginNewOperationCommitted { get; init; } = true;
         public Exception? CandidateException { get; init; }
         public bool CommitCandidateBeforeException { get; init; }
         public bool ReturnPendingRevocationOnRetry { get; init; }
@@ -2259,7 +2295,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 effectAttemptId: BeginOwnsEffectAttempt ? "attempt-alpha" : string.Empty,
                 candidateCredential: _candidateCredential,
                 candidateOwner: _candidateOwner,
-                credentialEffectLocator: operation.CredentialEffectLocator));
+                credentialEffectLocator: operation.CredentialEffectLocator,
+                newOperationCommitted: BeginNewOperationCommitted));
         }
 
         public Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
@@ -2484,7 +2521,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             ScheduledInvocationAgentKeyCredentialReference? pendingRevocationCredential = null,
             ScheduledInvocationAuthorizationOwner? pendingRevocationOwner = null,
             bool nyxIdRevocationPending = false,
-            bool vaultRevocationPending = false) =>
+            bool vaultRevocationPending = false,
+            bool newOperationCommitted = false) =>
             new(
                 Accepted(scheduleId, commandId),
                 new TeamAutomationOperationCommittedOutcome(
@@ -2506,7 +2544,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     EffectAttemptExpiresAtUtc: ownsEffectAttempt ? TestNow.AddMinutes(5) : null,
                     CandidateCredential: candidateCredential,
                     CandidateOwner: candidateOwner,
-                    CredentialEffectLocator: credentialEffectLocator));
+                    CredentialEffectLocator: credentialEffectLocator,
+                    NewOperationCommitted: newOperationCommitted));
     }
 
     private sealed class RecordingLoggerProvider : ILoggerProvider

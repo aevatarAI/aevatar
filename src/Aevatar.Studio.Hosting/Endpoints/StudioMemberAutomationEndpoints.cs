@@ -95,7 +95,7 @@ internal static class StudioMemberAutomationEndpoints
                 ConfirmedPolicyVersion = body.ConfirmedPolicyVersion,
             };
             var result = await schedules.CreateAsync(request, body.ConfirmedPermissionDigest, ct);
-            if (result.Success)
+            if (result.Success && result.NewOperationCommitted)
             {
                 loggerFactory.CreateLogger(StudioMemberAutomationAuditContract.Category).LogInformation(
                     CreateAcceptedEventId,

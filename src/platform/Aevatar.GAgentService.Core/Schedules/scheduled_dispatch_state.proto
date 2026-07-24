@@ -674,6 +674,7 @@ message TeamAutomationOperationObservedEvent
   string mutation_digest = 20;
   string observation_request_id = 21;
   TeamAutomationOperationObservationStatusState observation_status = 22;
+  bool new_operation_committed = 23;
 }
 
 enum TeamAutomationOperationObservationStatusState

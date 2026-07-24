@@ -126,6 +126,10 @@ if AEVATAR_AUDIT_LOG_INPUT="$TMP_DIR/duplicate.log" "$TOOL" create \
   fail "duplicate event unexpectedly succeeded"
 fi
 test ! -s "$TMP_DIR/duplicate.out" || fail "duplicate failure emitted output"
+if rg -q 'scope-alpha|team-alpha|m-alpha|sch-alpha|op-create-alpha|binding-alpha' \
+    "$TMP_DIR/duplicate.out" "$TMP_DIR/duplicate.err"; then
+  fail "duplicate failure leaked an audit field value"
+fi
 
 cat > "$TMP_DIR/conflict.log" <<'LOG'
 2026-07-24T01:00:00.000000000Z info: Aevatar.Studio.MemberAutomation[6201]
@@ -138,6 +142,10 @@ if AEVATAR_AUDIT_LOG_INPUT="$TMP_DIR/conflict.log" "$TOOL" create \
   fail "conflicting event unexpectedly succeeded"
 fi
 test ! -s "$TMP_DIR/conflict.out" || fail "conflicting failure emitted output"
+if rg -q 'scope-alpha|team-alpha|m-alpha|sch-alpha|op-create-alpha|binding-alpha|binding-conflict' \
+    "$TMP_DIR/conflict.out" "$TMP_DIR/conflict.err"; then
+  fail "conflicting failure leaked an audit field value"
+fi
 
 cat > "$TMP_DIR/secret-unrelated.log" <<'LOG'
 2026-07-24T00:58:00.000000000Z warn: Unrelated.Category[9999]

@@ -528,7 +528,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             TeamAutomationOperationObservationStages.Begin,
             ownsEffectAttempt: true,
             CancellationToken.None,
-            observationRequestId: command.ObservationRequestId);
+            observationRequestId: command.ObservationRequestId,
+            newOperationCommitted: true);
     }
 
     [EventHandler]
@@ -2612,7 +2613,8 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         CancellationToken ct,
         string? errorCode = null,
         string? errorMessage = null,
-        string? observationRequestId = null)
+        string? observationRequestId = null,
+        bool newOperationCommitted = false)
     {
         var observedAt = _timeProvider.GetUtcNow();
         var effectAttemptId = ownsEffectAttempt ? Guid.NewGuid().ToString("N") : string.Empty;
@@ -2649,6 +2651,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             MutationDigest = State.TeamAutomationMutationDigest,
             ObservationRequestId = NormalizeOptional(observationRequestId),
             ObservationStatus = TeamAutomationOperationObservationStatusState.Committed,
+            NewOperationCommitted = newOperationCommitted,
         };
         await PersistDomainEventAsync(observed, ct);
     }

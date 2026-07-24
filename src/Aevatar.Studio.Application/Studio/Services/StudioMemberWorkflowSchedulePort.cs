@@ -602,6 +602,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             {
                 OperationId = operationId,
                 CommandId = retry.Admission.CommandId,
+                NewOperationCommitted = began.Outcome.NewOperationCommitted,
             };
         }
 
@@ -618,6 +619,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             {
                 OperationId = operationId,
                 CommandId = began.Admission.CommandId,
+                NewOperationCommitted = began.Outcome.NewOperationCommitted,
             };
         }
 
@@ -790,6 +792,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         {
             OperationId = operationId,
             CommandId = activation.Admission.CommandId,
+            NewOperationCommitted = began.Outcome.NewOperationCommitted,
         };
     }
 

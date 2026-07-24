@@ -70,6 +70,8 @@ public sealed record StudioMemberWorkflowScheduleResult(
     public string OperationId { get; init; } = string.Empty;
 
     public string CommandId { get; init; } = string.Empty;
+
+    public bool NewOperationCommitted { get; init; }
 }
 
 public sealed record StudioMemberAutomationUpdateCommand(

@@ -2525,7 +2525,9 @@ public sealed class ScheduledDispatchGAgentTests
             .Where(x => x.Stage == TeamAutomationOperationObservationStages.Begin)
             .ToArray();
         beginObservations.Should().HaveCount(2);
+        beginObservations[0].NewOperationCommitted.Should().BeTrue();
         beginObservations[0].OwnsEffectAttempt.Should().BeTrue();
+        beginObservations[1].NewOperationCommitted.Should().BeFalse();
         beginObservations[1].OwnsEffectAttempt.Should().BeFalse();
         beginObservations.Select(x => x.ObservationRequestId).Should().Equal(
             "observation-request-alpha",
@@ -2592,16 +2594,23 @@ public sealed class ScheduledDispatchGAgentTests
 
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(command);
         var firstEffectAttemptId = agent.State.TeamAutomationEffectAttemptId;
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(command.Clone());
+        agent.State.TeamAutomationEffectAttemptId.Should().Be(firstEffectAttemptId);
         timeProvider.Advance(TimeSpan.FromMinutes(5));
         await agent.HandleBeginTeamAutomationCredentialOperationAsync(command.Clone());
 
         agent.State.TeamAutomationEffectAttemptId.Should().NotBe(firstEffectAttemptId);
         agent.State.TeamAutomationEffectAttemptGeneration.Should().Be(2);
-        eventStore.GetEvents(ScheduleActorId)
+        var beginObservations = eventStore.GetEvents(ScheduleActorId)
             .Where(x => x.EventType == TeamAutomationOperationObservedEvent.Descriptor.FullName)
             .Select(x => x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
             .Where(x => x.Stage == TeamAutomationOperationObservationStages.Begin)
-            .Should().OnlyContain(x => x.OwnsEffectAttempt);
+            .ToArray();
+        beginObservations.Should().HaveCount(3);
+        beginObservations.Select(x => (x.NewOperationCommitted, x.OwnsEffectAttempt)).Should().Equal(
+            (true, true),
+            (false, false),
+            (false, true));
     }
 
     [Fact]

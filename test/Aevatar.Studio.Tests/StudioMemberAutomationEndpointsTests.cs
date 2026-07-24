@@ -199,6 +199,7 @@ public sealed class StudioMemberAutomationEndpointsTests
             {
                 OperationId = "op-accepted",
                 CommandId = "api-key-id-sensitive-alpha",
+                NewOperationCommitted = true,
             },
         };
         var logs = new RecordingLoggerProvider();
@@ -274,6 +275,72 @@ public sealed class StudioMemberAutomationEndpointsTests
         {
             capturedContent.Contains(forbiddenValue, StringComparison.Ordinal).Should().BeFalse();
         }
+    }
+
+    [Fact]
+    public async Task Create_ExactReplay_ShouldReturnAcceptedTwiceAndEmitAcceptanceEvidenceOnce()
+    {
+        var schedules = new StubSchedules();
+        schedules.CreateResults.Enqueue(new StudioMemberWorkflowScheduleResult(
+            true,
+            ScopeId,
+            MemberId,
+            "sch-accepted",
+            "svc-alpha",
+            "/workflow/observatory",
+            "pending")
+        {
+            OperationId = "op-accepted",
+            CommandId = "cmd-first",
+            NewOperationCommitted = true,
+        });
+        schedules.CreateResults.Enqueue(new StudioMemberWorkflowScheduleResult(
+            true,
+            ScopeId,
+            MemberId,
+            "sch-accepted",
+            "svc-alpha",
+            "/workflow/observatory",
+            "pending")
+        {
+            OperationId = "op-accepted",
+            CommandId = "cmd-replay",
+            NewOperationCommitted = false,
+        });
+        var logs = new RecordingLoggerProvider();
+        await using var app = await CreateAutomationAppAsync(schedules, new StubBindingQuery(), logs);
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", "bearer-sensitive-alpha");
+
+        var first = await client.PostAsJsonAsync(
+            $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations",
+            AuditMutationRequest());
+        var replay = await client.PostAsJsonAsync(
+            $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations",
+            AuditMutationRequest());
+
+        first.StatusCode.Should().Be(System.Net.HttpStatusCode.Accepted);
+        replay.StatusCode.Should().Be(System.Net.HttpStatusCode.Accepted);
+        (await first.Content.ReadFromJsonAsync<StudioMemberAutomationMutationReceipt>())!
+            .Accepted.Should().BeTrue();
+        (await replay.Content.ReadFromJsonAsync<StudioMemberAutomationMutationReceipt>())!
+            .Accepted.Should().BeTrue();
+        var entry = logs.Entries
+            .Where(static candidate => candidate.EventId.Id == 6201)
+            .Should().ContainSingle().Subject;
+        var properties = entry.State
+            .Where(static item => item.Key != "{OriginalFormat}")
+            .ToDictionary(static item => item.Key, static item => item.Value);
+        properties.Should().HaveCount(6);
+        properties.Keys.Should().BeEquivalentTo(
+            ["ScopeId", "TeamId", "MemberId", "ScheduleId", "OperationId", "BindingId"]);
+        properties.Should().Contain(new KeyValuePair<string, object?>("ScopeId", ScopeId));
+        properties.Should().Contain(new KeyValuePair<string, object?>("TeamId", TeamId));
+        properties.Should().Contain(new KeyValuePair<string, object?>("MemberId", MemberId));
+        properties.Should().Contain(new KeyValuePair<string, object?>("ScheduleId", "sch-accepted"));
+        properties.Should().Contain(new KeyValuePair<string, object?>("OperationId", "op-accepted"));
+        properties.Should().Contain(new KeyValuePair<string, object?>("BindingId", "binding-alpha"));
     }
 
     [Theory]
@@ -899,6 +966,7 @@ public sealed class StudioMemberAutomationEndpointsTests
         public StudioMemberWorkflowScheduleRequest? LastPreflight { get; private set; }
         public StudioMemberWorkflowScheduleRequest? LastCreate { get; private set; }
         public StudioMemberWorkflowScheduleResult? CreateResult { get; init; }
+        public Queue<StudioMemberWorkflowScheduleResult> CreateResults { get; } = [];
         public string? LastConfirmedPermissionDigest { get; private set; }
         public StudioMemberAutomationUpdateCommand? LastUpdate { get; private set; }
         public StudioMemberAutomationActionCommand? LastAction { get; private set; }
@@ -936,7 +1004,9 @@ public sealed class StudioMemberAutomationEndpointsTests
                 request.ScopeId,
                 request.TeamId,
                 request.MemberId,
-                CreateResult ?? new StudioMemberWorkflowScheduleResult(
+                CreateResults.Count > 0
+                    ? CreateResults.Dequeue()
+                    : CreateResult ?? new StudioMemberWorkflowScheduleResult(
                     true,
                     request.ScopeId,
                     request.MemberId,
@@ -947,6 +1017,7 @@ public sealed class StudioMemberAutomationEndpointsTests
                 {
                     OperationId = request.OperationId ?? "op-alpha",
                     CommandId = "cmd-alpha",
+                    NewOperationCommitted = true,
                 });
         }
 
