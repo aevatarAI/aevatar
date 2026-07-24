@@ -4,6 +4,34 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+AUTHORITY_CHECKER_PROJECT="${SCRIPT_DIR}/Aevatar.AgentProfileBoundaryGuard.Tool/Aevatar.AgentProfileBoundaryGuard.Tool.csproj"
+AUTHORITY_CHECKER_DLL="${SCRIPT_DIR}/Aevatar.AgentProfileBoundaryGuard.Tool/bin/Debug/net10.0/Aevatar.AgentProfileBoundaryGuard.Tool.dll"
+AUTHORITY_CHECKER_BUILT=false
+
+build_authority_syntax_checker() {
+  if [[ "${AUTHORITY_CHECKER_BUILT}" == "true" ]]; then
+    return 0
+  fi
+  if ! dotnet build "${AUTHORITY_CHECKER_PROJECT}" \
+       --nologo --no-restore --configuration Debug --verbosity quiet; then
+    echo "Agent Profile authority syntax checker build failed." >&2
+    return 2
+  fi
+  if [[ ! -f "${AUTHORITY_CHECKER_DLL}" ]]; then
+    echo "Agent Profile authority syntax checker output is missing." >&2
+    return 2
+  fi
+  AUTHORITY_CHECKER_BUILT=true
+}
+
+run_authority_syntax_checker() {
+  local -a arguments=(check)
+  local root=""
+  for root in "$@"; do
+    arguments+=(--scan-root "${root}")
+  done
+  dotnet "${AUTHORITY_CHECKER_DLL}" "${arguments[@]}"
+}
 
 strip_csharp_comments_and_inactive_code() {
   perl -0777 -pe '
@@ -183,18 +211,6 @@ extract_csharp_method_body() {
   '
 }
 
-extract_csharp_prefix_before_protocol_authority() {
-  local authority_argument="$1"
-  AUTHORITY_ARGUMENT="${authority_argument}" perl -0777 -ne '
-    my $authority_argument = $ENV{"AUTHORITY_ARGUMENT"};
-    if (/\bAgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,\s*\Q$authority_argument\E\s*\)\s*;/sg) {
-      print substr($_, 0, $-[0]);
-      exit 0;
-    }
-    exit 1;
-  '
-}
-
 extract_csharp_executable_code() {
   perl -0777 -ne '
     exit 1 if /(?m)^[ \t]*#/;
@@ -286,9 +302,7 @@ check_actor_delivery_provenance_contracts() {
   local local_dispatch_file="$4"
   local orleans_dispatch_file="$5"
   local actor_invariants_file="$6"
-  local profile_actor_file="$7"
-  local namespace_actor_file="$8"
-  local failures=0 code="" body="" stamp_body="" authority_prefix=""
+  local failures=0 code="" body="" stamp_body=""
 
   code="$(strip_csharp_comments_and_inactive_code < "${envelope_proto_file}")"
   if ! printf '%s\n' "${code}" | rg -q -U -P \
@@ -358,47 +372,6 @@ check_actor_delivery_provenance_contracts() {
     failures=$((failures + 1))
   fi
 
-  local profile_actor_code="" namespace_actor_code=""
-  local handler_file="" handler_method="" handler_code=""
-  local allowed_authority_prefix_pattern="" authority_argument="" authority_argument_pattern=""
-  profile_actor_code="$(strip_csharp_comments_and_inactive_code < "${profile_actor_file}")"
-  namespace_actor_code="$(strip_csharp_comments_and_inactive_code < "${namespace_actor_file}")"
-  while IFS='|' read -r handler_file handler_method; do
-    handler_code="${namespace_actor_code}"
-    if [[ "${handler_file}" == "${profile_actor_file}" ]]; then
-      handler_code="${profile_actor_code}"
-    fi
-    case "${handler_method}" in
-      HandleInitializeAsync)
-        allowed_authority_prefix_pattern='\A\s*ArgumentNullException\.ThrowIfNull\s*\(\s*command\s*\)\s*;\s*var\s+namespaceActorId\s*=\s*State\.Identity\s+is\s+null\s*\?\s*AgentProfileActorIds\.Namespace\s*:\s*AgentProfileActorInvariants\.RequireActorId\s*\(\s*State\.NamespaceActorId\s*,\s*"state\.namespace_actor_id"\s*\)\s*;\s*\z'
-        authority_argument='namespaceActorId'
-        ;;
-      HandleInitializedAsync|HandleInitializationRejectedAsync)
-        allowed_authority_prefix_pattern='\A\s*ArgumentNullException\.ThrowIfNull\s*\(\s*continuation\s*\)\s*;\s*var\s+profileActorId\s*=\s*AgentProfileActorInvariants\.RequireActorId\s*\(\s*continuation\.ProfileActorId\s*,\s*"profile_actor_id"\s*\)\s*;\s*\z'
-        authority_argument='profileActorId'
-        ;;
-      HandleObservePublishedSummaryAsync)
-        allowed_authority_prefix_pattern='\A\s*ArgumentNullException\.ThrowIfNull\s*\(\s*command\s*\)\s*;\s*AgentProfileIdentity\s+identity\s*;\s*AgentProfilePublishedSummary\s+summary\s*;\s*try\s*\{\s*identity\s*=\s*AgentProfileDeterminism\.NormalizeIdentity\s*\(\s*command\.Identity\s*\)\s*;\s*summary\s*=\s*AgentProfileDeterminism\.NormalizePublishedSummary\s*\(\s*command\.Summary\s*\)\s*;\s*\}\s*catch\s*\(\s*AgentProfileContractValidationException\s*\)\s*\{\s*throw\s+AgentProfileActorInvariants\.Error\s*\(\s*"PROFILE_PUBLISHED_SUMMARY_MISMATCH"\s*,\s*"The published summary identity is invalid\."\s*\)\s*;\s*\}\s*var\s+entry\s*=\s*FindProfile\s*\(\s*identity\.ProfileId\s*\)\s*;\s*if\s*\(\s*entry\s+is\s+null\s*\|\|\s*entry\.Status\s*!=\s*AgentProfileProvisioningStatus\.Active\s*\|\|\s*!AgentProfileActorInvariants\.SameIdentity\s*\(\s*entry\.Identity\s*,\s*identity\s*\)\s*\|\|\s*!AgentProfileActorInvariants\.SameReference\s*\(\s*summary\.Reference\s*,\s*entry\.Identity\.Reference\s*\)\s*\)\s*\{\s*throw\s+AgentProfileActorInvariants\.Error\s*\(\s*"PROFILE_PUBLISHED_SUMMARY_MISMATCH"\s*,\s*"The published summary does not belong to the mapped Profile\."\s*\)\s*;\s*\}\s*\z'
-        authority_argument='entry.ProfileActorId'
-        ;;
-    esac
-    authority_argument_pattern="${authority_argument//./\\.}"
-    if ! body="$(printf '%s\n' "${handler_code}" | extract_csharp_method_body "${handler_method}")" ||
-       ! authority_prefix="$(printf '%s\n' "${body}" | extract_csharp_prefix_before_protocol_authority "${authority_argument}")" ||
-       ! printf '%s\n' "${authority_prefix}" | rg -q -U -P "${allowed_authority_prefix_pattern}" ||
-       ! printf '%s\n' "${body}" | rg -q -U -P \
-         "\\bAgentProfileActorInvariants\\.RequireProtocolPublisher\\s*\\(\\s*ActiveInboundEnvelope\\s*,\\s*${authority_argument_pattern}\\s*\\)\\s*;[\\s\\S]*?\\bAgentProfileActorInvariants\\.RequireOperation\\s*\\("; then
-      echo "${handler_file}:${handler_method}.authority-order"
-      echo "Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
-      failures=$((failures + 1))
-    fi
-  done <<CASES
-${profile_actor_file}|HandleInitializeAsync
-${namespace_actor_file}|HandleInitializedAsync
-${namespace_actor_file}|HandleInitializationRejectedAsync
-${namespace_actor_file}|HandleObservePublishedSummaryAsync
-CASES
-
   (( failures == 0 ))
 }
 
@@ -463,9 +436,7 @@ run_guard() (
        "${publish_context_file}" \
        "${local_dispatch_file}" \
        "${orleans_dispatch_file}" \
-       "${actor_invariants_file}" \
-       "${profile_actor_file}" \
-       "${namespace_actor_file}")"; then
+       "${actor_invariants_file}")"; then
     printf '%s\n' "${provenance_output}"
     violations=$((violations + 1))
   fi
@@ -749,6 +720,21 @@ ${forbidden_schema_keys}" \
 
   echo "Agent Profile Phase 1 boundary guards passed."
 )
+
+run_guard_with_authority_syntax() {
+  local root="$1"
+  local shell_status=0 syntax_status=0
+
+  run_guard "${root}" || shell_status=$?
+  run_authority_syntax_checker "${root}" || syntax_status=$?
+
+  if (( syntax_status == 2 )); then
+    return 2
+  fi
+  if (( shell_status != 0 || syntax_status != 0 )); then
+    return 1
+  fi
+}
 
 write_lines() {
   local file="$1"
@@ -1101,6 +1087,189 @@ run_self_tests() {
     cp -R "${base}" "${case_root}"
   }
 
+  local structured_profile_file="src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
+  local structured_namespace_file="src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
+  local structured_message="Handler must match the canonical pre-authority statements, exact authority call, and immediate operation parse."
+  local -a structured_roots=() structured_expected_hits=()
+
+  record_structured_case() {
+    local relative_file="$1"
+    local method_name="$2"
+    structured_roots+=("${case_root}")
+    structured_expected_hits+=(
+      "VIOLATION|${case_root}|${relative_file}:${method_name}.authority-order|${structured_message}")
+  }
+
+  fresh_case "structured-valid-decoys"
+  perl -0777 -pi -e '
+    s{(public sealed class AgentProfileGAgent \{\n)}{$1  private const string HandlerText = "HandleInitializeAsync State.Operations.Insert";\n#if false\n  State.Operations.Insert(0, new AgentProfileOperationFact());\n#endif\n};
+    s{AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, namespaceActorId\);}{// State.Operations.Insert(0, new AgentProfileOperationFact());\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);};
+  ' "${case_root}/${structured_profile_file}"
+  local structured_valid_root="${case_root}"
+  if output="$(run_authority_syntax_checker "${structured_valid_root}" 2>&1)"; then
+    if ! printf '%s\n' "${output}" | rg -q -F -x -- "PASS|${structured_valid_root}"; then
+      echo "agent_profile_boundary_guard self-test missed structured PASS diagnostic." >&2
+      echo "${output}" >&2
+      failures=$((failures + 1))
+    fi
+  else
+    local structured_valid_status=$?
+    echo "agent_profile_boundary_guard self-test expected structured PASS, got exit ${structured_valid_status}." >&2
+    echo "${output}" >&2
+    failures=$((failures + 1))
+  fi
+
+  fresh_case "structured-raw-string-handler-decoy"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
+    s~(public sealed class AgentProfileGAgent \{\n)~$1  private const string AuthorityHandlerDecoy = """\npublic async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n    ArgumentNullException.ThrowIfNull(command);\n    var namespaceActorId = State.Identity is null\n        ? AgentProfileActorIds.Namespace\n        : AgentProfileActorInvariants.RequireActorId(\n            State.NamespaceActorId,\n            "state.namespace_actor_id");\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);\n    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);\n}\n""";\n~;
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-member-scope-decoys"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
+    s~public sealed class AgentProfileGAgent \{\n~public sealed class OtherAgent {\n  public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n    await PersistAsync(command);\n  }\n}\npublic sealed class AgentProfileGAgent {\n  private sealed class NestedAgent {\n    public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n      await PersistAsync(command);\n    }\n  }\n  private void DeclareLocalHandler() {\n    async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n      await PersistAsync(command);\n    }\n  }\n~;
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-wrong-first-authority"
+  perl -0777 -pi -e '
+    s{AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, namespaceActorId\);}{AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, command.NamespaceActorId);\n    State.Operations.Insert(0, new AgentProfileOperationFact());\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);};
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-executable-interpolation"
+  perl -0777 -pi -e '
+    s{"state\.namespace_actor_id"}{\$"{State.Operations.FirstOrDefault(candidate => candidate.Operation.OperationId == command.Operation.OperationId)}"};
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-inline-replay"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1var replay = State.Operations.FirstOrDefault(candidate => candidate.Operation.OperationId == command.Operation.OperationId);\n    $2};
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-state-insert"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
+  ' "${case_root}/${structured_namespace_file}"
+  record_structured_case "${structured_namespace_file}" "HandleInitializedAsync"
+
+  fresh_case "structured-direct-assignment"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializationRejectedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.LastPublishedRevision = continuation.DraftRevision;\n    $2};
+  ' "${case_root}/${structured_namespace_file}"
+  record_structured_case "${structured_namespace_file}" "HandleInitializationRejectedAsync"
+
+  fresh_case "structured-send-effect"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializationRejectedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1await SendToAsync(profileActorId, continuation);\n    $2};
+  ' "${case_root}/${structured_namespace_file}"
+  record_structured_case "${structured_namespace_file}" "HandleInitializationRejectedAsync"
+
+  fresh_case "structured-persist-effect"
+  perl -0777 -pi -e '
+    s{(\bHandleObservePublishedSummaryAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1await PersistAsync(command.Operation);\n    $2};
+  ' "${case_root}/${structured_namespace_file}"
+  record_structured_case "${structured_namespace_file}" "HandleObservePublishedSummaryAsync"
+
+  fresh_case "structured-missing-initialize"
+  perl -0777 -pi -e '
+    s{AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, namespaceActorId\);}{};
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-missing-initialized"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializedAsync\s*\([^)]*\)\s*\{[\s\S]*?)AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, profileActorId\);}{$1};
+  ' "${case_root}/${structured_namespace_file}"
+  record_structured_case "${structured_namespace_file}" "HandleInitializedAsync"
+
+  fresh_case "structured-missing-rejected"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializationRejectedAsync\s*\([^)]*\)\s*\{[\s\S]*?)AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, profileActorId\);}{$1};
+  ' "${case_root}/${structured_namespace_file}"
+  record_structured_case "${structured_namespace_file}" "HandleInitializationRejectedAsync"
+
+  fresh_case "structured-missing-summary"
+  perl -0777 -pi -e '
+    s{AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, entry\.ProfileActorId\);}{};
+  ' "${case_root}/${structured_namespace_file}"
+  record_structured_case "${structured_namespace_file}" "HandleObservePublishedSummaryAsync"
+
+  fresh_case "structured-duplicate-target-class"
+  printf '%s\n' \
+    'public sealed class AgentProfileGAgent {' \
+    '  public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {' \
+    '    await PersistAsync(command);' \
+    '  }' \
+    '}' >> "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-duplicate-target-method"
+  perl -0777 -pi -e '
+    s{(public sealed class AgentProfileGAgent \{\n)}{$1  public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n    await PersistAsync(command);\n  }\n};
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-wrong-signature"
+  perl -0777 -pi -e '
+    s{HandleInitializeAsync\(InitializeAgentProfileCommand command\)}{HandleInitializeAsync(OtherInitializeCommand command)};
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-expression-body"
+  write_lines "${case_root}/${structured_profile_file}" \
+    'public sealed class AgentProfileGAgent {' \
+    '  public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) =>' \
+    '    await PersistAsync(command);' \
+    '}'
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-parse-error"
+  perl -0777 -pi -e 's/\A/}/' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  local expected_index=0 other_expected_index=0
+  local expected_hit="" other_expected_hit=""
+  for ((expected_index = 0; expected_index < ${#structured_expected_hits[@]}; expected_index++)); do
+    expected_hit="${structured_expected_hits[expected_index]}"
+    for ((other_expected_index = expected_index + 1;
+          other_expected_index < ${#structured_expected_hits[@]};
+          other_expected_index++)); do
+      other_expected_hit="${structured_expected_hits[other_expected_index]}"
+      if [[ "${expected_hit}" == *"${other_expected_hit}"* ||
+            "${other_expected_hit}" == *"${expected_hit}"* ]]; then
+        echo "agent_profile_boundary_guard self-test overlapping structured expected hits." >&2
+        echo "Expected hits must not contain one another: ${expected_hit} / ${other_expected_hit}" >&2
+        failures=$((failures + 1))
+      fi
+    done
+  done
+
+  local structured_batch_status=0
+  if output="$(run_authority_syntax_checker "${structured_roots[@]}" 2>&1)"; then
+    echo "agent_profile_boundary_guard self-test expected structured batch exit 1." >&2
+    echo "${output}" >&2
+    failures=$((failures + 1))
+  else
+    structured_batch_status=$?
+    if (( structured_batch_status != 1 )); then
+      echo "agent_profile_boundary_guard self-test expected structured batch exit 1, got ${structured_batch_status}." >&2
+      echo "${output}" >&2
+      failures=$((failures + 1))
+    fi
+  fi
+  for expected_hit in "${structured_expected_hits[@]}"; do
+    if ! printf '%s\n' "${output}" | rg -q -F -x -- "${expected_hit}"; then
+      echo "agent_profile_boundary_guard self-test missed structured diagnostic: ${expected_hit}" >&2
+      echo "${output}" >&2
+      failures=$((failures + 1))
+    fi
+  done
+
   expect_pass "legal metadata, unrelated collections, and harmless semantic strings" "${base}" true
 
   fresh_case "semantic-identifier-strings"
@@ -1147,12 +1316,6 @@ CASES
   perl -0777 -pi -e \
     's/\.Runtime\?\.DeliveryProvenance\?\.AuthenticatedActorId/.Runtime?.SourceActorId/' \
     "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs"
-  perl -0777 -pi -e \
-    's/\s*AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, namespaceActorId\);//g' \
-    "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
-  perl -0777 -pi -e \
-    's/\s*AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, (?:profileActorId|entry\.ProfileActorId)\);//g' \
-    "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
   expect_fail_cases "runtime-authenticated Actor delivery provenance" "${case_root}" \
     --check-delivery-provenance \
     "typed delivery provenance contract|src/Aevatar.Foundation.Abstractions/agent_messages.proto:EnvelopeRuntime.delivery_provenance|EventEnvelope runtime must expose typed delivery provenance for the authenticated Actor origin." \
@@ -1161,11 +1324,7 @@ CASES
     "Local raw dispatch admission|src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must deliver the cleared clone instead of the caller envelope." \
     "Orleans raw dispatch admission|src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must deliver the cleared clone instead of the caller envelope." \
     "bound Actor publish context|src/Aevatar.Foundation.Runtime/Propagation/EnvelopePublishContextHelpers.cs:ApplyOutboundPublishContext|Actor-bound publishing must stamp runtime-authenticated origin after propagation." \
-    "protocol invariant comparison|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs:RequireProtocolPublisher.fail-closed|Agent Profile protocol authority must fail closed when either required Actor identity mismatches." \
-    "Profile initialization authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
-    "Namespace initialized authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
-    "Namespace rejected authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializationRejectedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
-    "Namespace summary authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleObservePublishedSummaryAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
+    "protocol invariant comparison|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs:RequireProtocolPublisher.fail-closed|Agent Profile protocol authority must fail closed when either required Actor identity mismatches."
 
   fresh_case "actor-delivery-clone-binding"
   perl -0777 -pi -e \
@@ -1208,54 +1367,6 @@ CASES
   expect_fail_cases "protocol publisher mismatch branch must throw" "${case_root}" \
     --check-delivery-provenance \
     "protocol publisher throwing mismatch branch|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs:RequireProtocolPublisher.fail-closed|Agent Profile protocol authority must fail closed when either required Actor identity mismatches."
-
-  fresh_case "actor-delivery-authority-order"
-  perl -0777 -pi -e '
-    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1FindOperation(command.Operation.OperationId);\n    $2};
-  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
-  perl -0777 -pi -e '
-    s{(\bHandleInitializedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.LastPublishedRevision = continuation.DraftRevision;\n    $2};
-    s{(\bHandleInitializationRejectedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1await SendToAsync(profileActorId, continuation);\n    $2};
-    s{(\bHandleObservePublishedSummaryAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1await PersistAsync(command.Operation);\n    $2};
-  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
-  expect_fail_cases "protocol authority before replay, state, and effects" "${case_root}" \
-    --check-delivery-provenance \
-    "Profile initialization authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
-    "Namespace initialized authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
-    "Namespace rejected authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializationRejectedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
-    "Namespace summary authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleObservePublishedSummaryAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
-
-  fresh_case "actor-delivery-inline-state-replay"
-  perl -0777 -pi -e '
-    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1var replay = State.Operations.FirstOrDefault(candidate => candidate.Operation.OperationId == command.Operation.OperationId);\n    $2};
-  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
-  expect_fail_cases "inline State replay lookup before protocol authority" "${case_root}" \
-    --check-delivery-provenance \
-    "Profile inline replay authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
-
-  fresh_case "actor-delivery-unlisted-state-insert"
-  perl -0777 -pi -e '
-    s{(\bHandleInitializedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
-  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
-  expect_fail_cases "unlisted State mutation before protocol authority" "${case_root}" \
-    --check-delivery-provenance \
-    "Namespace Insert mutation authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
-
-  fresh_case "actor-delivery-wrong-first-authority"
-  perl -0777 -pi -e '
-    s{AgentProfileActorInvariants\.RequireProtocolPublisher\(ActiveInboundEnvelope, namespaceActorId\);}{AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, command.NamespaceActorId);\n    State.Operations.Insert(0, new AgentProfileOperationFact());\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);};
-  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
-  expect_fail_cases "wrong first protocol authority with later exact authority" "${case_root}" \
-    --check-delivery-provenance \
-    "Profile exact authority boundary|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
-
-  fresh_case "actor-delivery-interpolated-state-replay"
-  perl -0777 -pi -e '
-    s{"state\.namespace_actor_id"}{\$"{State.Operations.FirstOrDefault(candidate => candidate.Operation.OperationId == command.Operation.OperationId)}"};
-  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
-  expect_fail_cases "interpolated State replay inside pre-authority argument" "${case_root}" \
-    --check-delivery-provenance \
-    "Profile interpolated replay authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
 
   fresh_case "actor-contract-violations"
   perl -0777 -pi -e '
@@ -1690,15 +1801,18 @@ CASES
 
 case "${1:-}" in
   "")
-    run_guard "${REPO_ROOT}"
+    build_authority_syntax_checker || exit $?
+    run_guard_with_authority_syntax "${REPO_ROOT}"
     ;;
   --self-test)
     (( $# == 1 )) || { echo "Usage: $0 --self-test" >&2; exit 2; }
+    build_authority_syntax_checker || exit $?
     run_self_tests
     ;;
   --scan-root)
     (( $# == 2 )) || { echo "Usage: $0 --scan-root <repository-root>" >&2; exit 2; }
-    run_guard "$2"
+    build_authority_syntax_checker || exit $?
+    run_guard_with_authority_syntax "$2"
     ;;
   *)
     echo "Usage: $0 [--self-test|--scan-root <repository-root>]" >&2

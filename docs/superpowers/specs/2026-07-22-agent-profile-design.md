@@ -433,6 +433,13 @@ semantics, and their accepted-only dispatch ACK contract is unchanged. This
 delivery provenance is transient and never enters Profile state, events,
 projections, audit, logs, metrics, or responses.
 
+The four-handler ordering invariant is governed through Roslyn structured
+syntax, not shell text extraction. The guard selects the unique top-level Actor
+class and direct handler member, then compares the allowed pre-authority
+statements, exact authority call, and immediate operation parse with
+trivia-insensitive syntax equivalence. Strings, inactive code, nested types,
+local functions, and other classes cannot serve as handler evidence.
+
 ## Authority Actors
 
 ### `AgentProfileNamespaceGAgent`
@@ -985,9 +992,9 @@ A focused `tools/ci/agent_profile_boundary_guard.sh` is added to prevent:
   binding fact registry in a process-local dictionary;
 - removal or reordering of the signed proof check in any of the five external
   Actor handlers;
-- removal of the typed runtime delivery provenance, raw-dispatch clearing,
-  Actor-bound stamping, or pre-operation dual authority check in any of the four
-  internal protocol handlers;
+- removal of the typed runtime delivery provenance, raw-dispatch clearing, or
+  Actor-bound stamping, plus structured-syntax reordering of the dual authority
+  check in any of the four direct internal protocol handler members;
 - bypassing either Actor's exact operation-retention policy;
 - an ingress reintroducing a private Profile composer or prompt order;
 - `default_skill_name` or `DefaultSkillName` returning after migration;

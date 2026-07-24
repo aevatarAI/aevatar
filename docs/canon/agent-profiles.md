@@ -95,6 +95,13 @@ before operation parsing, replay lookup, state mutation, or continuation
 effects. Local and Orleans implement the same admission and publishing
 semantics, and dispatch ACKs remain accepted-only.
 
+The authority-order governance fact is derived from Roslyn syntax rather than
+shell text matching. The guard requires one top-level target Actor class, one
+direct handler member with the fixed signature and block body, the canonical
+pre-authority statements, the exact authority call, and the immediate operation
+parse. Source-like text in strings, inactive code, nested types, local functions,
+or other classes is not valid evidence.
+
 ## 4. Phase 1 Management Contract
 
 ### HTTP API
