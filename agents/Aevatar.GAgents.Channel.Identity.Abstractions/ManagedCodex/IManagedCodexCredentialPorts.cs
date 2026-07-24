@@ -16,6 +16,29 @@ public interface IManagedCodexCredentialQueryPort
 }
 
 /// <summary>
+/// Binds an owner-scoped observation to committed managed Codex credential
+/// snapshots emitted by the unified Projection Pipeline.
+/// </summary>
+public interface IManagedCodexCredentialReadinessObservationPort
+{
+    /// <summary>Creates a fresh committed-readiness observation session for the complete owner.</summary>
+    Task<IManagedCodexCredentialReadinessObservationLease> BindAsync(
+        ExternalSubjectRef owner,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Reads committed managed Codex credential snapshots for one observation
+/// session.
+/// </summary>
+public interface IManagedCodexCredentialReadinessObservationLease : IAsyncDisposable
+{
+    /// <summary>Streams cloned authoritative snapshots until cancellation or lease disposal.</summary>
+    IAsyncEnumerable<ManagedCodexCredentialSnapshot> ReadAllAsync(
+        CancellationToken ct = default);
+}
+
+/// <summary>
 /// Accepted-only command boundary for the per-user managed Codex credential actor.
 /// </summary>
 public interface IManagedCodexCredentialCommandPort
