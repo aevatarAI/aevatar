@@ -690,15 +690,26 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const queryClient = useQueryClient();
   const { token } = theme.useToken();
   const routeMemberId = trimText(routeMemberIdInput);
+  const surfaceMembers = React.useMemo(
+    () =>
+      routeMemberId
+        ? members.filter(
+            (member) => trimText(member.memberId) === routeMemberId,
+          )
+        : members,
+    [members, routeMemberId],
+  );
   const automatableMembers = React.useMemo(
-    () => members.filter((member) => member.canAutomateMember),
-    [members],
+    () => surfaceMembers.filter((member) => member.canAutomateMember),
+    [surfaceMembers],
   );
   const selectedMember =
     automatableMembers.find((member) => member.isSelectedMember) ??
     automatableMembers[0] ??
     null;
-  const unavailableMembers = members.filter((member) => !member.canAutomateMember);
+  const unavailableMembers = surfaceMembers.filter(
+    (member) => !member.canAutomateMember,
+  );
   const [createOpen, setCreateOpen] = React.useState(false);
   const [editingSchedule, setEditingSchedule] =
     React.useState<ScheduledDispatchSummary | null>(null);
@@ -2375,7 +2386,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   id: "teams.automations.form.memberAria",
                   defaultMessage: "Automation member",
                 })}
-                disabled={formSubmitting || isEditingAutomation}
+                disabled={
+                  formSubmitting || isEditingAutomation || Boolean(routeMemberId)
+                }
                 onChange={(memberId) => updateForm({ memberId })}
                 options={automatableMembers.map((member) => ({
                   label: member.name,

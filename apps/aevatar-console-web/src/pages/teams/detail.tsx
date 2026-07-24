@@ -1977,6 +1977,11 @@ const TeamDetailPage: React.FC = () => {
   const renderAutomationsTab = () => {
     return (
       <TeamAutomationsTab
+        key={JSON.stringify([
+          scopeId,
+          selectedTeamId,
+          routeState.routeMemberId,
+        ])}
         members={teamRosterRows.map((row) => ({
           automationsHref: row.automationsHref,
           canAutomateMember: row.canAutomateMember,
@@ -1993,7 +1998,7 @@ const TeamDetailPage: React.FC = () => {
           serviceRevisionId: row.serviceRevisionId,
           workflowSupported: row.workflowSupported,
         }))}
-        routeMemberId={routeState.memberId}
+        routeMemberId={routeState.routeMemberId}
         scopeId={scopeId}
         serviceIdentitiesLoading={automationsServicesQuery.isLoading}
         teamId={selectedTeamId}
