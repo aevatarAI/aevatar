@@ -151,6 +151,35 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ObservatoryWorkspace_ShouldExposeScopeRailAndAdminTools()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("class=\"obs-scope-switch\" role=\"group\" aria-label=\"观测 scope\"");
+        html.Should().Contain("aria-pressed=\"'+(OBS_STATE.scope===");
+        html.Should().Contain("data-act=\"obsRailToggle\"");
+        html.Should().Contain("class=\"obs-admin-tools\"");
+        html.Should().Contain("data-act=\"obsLocalSearch\"");
+        html.Should().Contain("显示 '+visible+' / 已加载 '+loaded");
+        html.Should().NotContain("class=\"obs-adminbar\"");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryImmersiveMode_ShouldBeExplicitSessionState()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("data-act=\"obsImmersive\"");
+        html.Should().Contain("sessionStorage.setItem(OBS_SESSION_IMMERSIVE,enabled?'1':'0')");
+        html.Should().Contain("if(OBS_STATE.immersive){ obsSetImmersive(false); render(); }");
+        html.Should().Contain("body.obs-immersive .rail");
+        html.Should().Contain("body.obs-immersive .app-header");
+        html.Should().Contain("class=\"obs-immersive-bar\"");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();
