@@ -7,11 +7,15 @@ namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
 internal static class NyxIdServiceTools
 {
+    public static IAgentTool CreateInventory(
+        IReadOnlyList<NyxIdServiceInstanceBinding> bindings) =>
+        new InventoryTool(bindings);
+
     public static IReadOnlyList<IAgentTool> Create(
         NyxIdServiceInstanceClient client,
         IReadOnlyList<NyxIdServiceInstanceBinding> bindings) =>
     [
-        new InventoryTool(bindings),
+        CreateInventory(bindings),
         new UpdateTool(client, bindings),
         new RouteTool(client, bindings),
         new DeleteTool(client, bindings),
@@ -121,9 +125,21 @@ internal static class NyxIdServiceTools
     private sealed class InventoryTool(IReadOnlyList<NyxIdServiceInstanceBinding> bindings)
         : ServiceToolBase(bindings)
     {
+        private static readonly JsonFormatter ResultFormatter = new(
+            JsonFormatter.Settings.Default.WithFormatDefaultValues(true));
+        private static readonly string EmptyInventoryParametersSchema = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject(),
+            ["required"] = new JsonArray(),
+            ["additionalProperties"] = false,
+        }.ToJsonString();
+
         public override string Name => "nyxid_service_inventory";
         public override string Description => "List or inspect the caller's exact NyxID connected-service instances.";
-        public override string ParametersSchema => InstanceChoiceSchema(requireInstance: false);
+        public override string ParametersSchema => Bindings.Count == 0
+            ? EmptyInventoryParametersSchema
+            : InstanceChoiceSchema(requireInstance: false);
         public override bool IsReadOnly => true;
 
         public override Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
@@ -146,7 +162,7 @@ internal static class NyxIdServiceTools
                 {
                     return Task.FromResult(NyxIdServiceInstanceClient.Error("identity_not_authorized"));
                 }
-                return Task.FromResult(Format(result));
+                return Task.FromResult(ResultFormatter.Format(result));
             }
         }
     }

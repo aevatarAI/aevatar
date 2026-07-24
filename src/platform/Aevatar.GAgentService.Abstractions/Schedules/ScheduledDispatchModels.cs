@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 
 namespace Aevatar.GAgentService.Abstractions.Schedules;
 
@@ -26,6 +27,26 @@ public sealed record TeamMemberAutomationOwner(
     string ScopeId,
     string MemberId,
     string TeamId = "");
+
+public sealed record TeamAutomationActivationDecision(
+    string ScheduleId,
+    string DisplayName,
+    TeamMemberAutomationOwner Owner,
+    ServiceIdentity ServiceIdentity,
+    string EndpointId,
+    Google.Protobuf.WellKnownTypes.Any Payload,
+    ScheduledCallerNyxIdAuthority CallerAuthority,
+    ScheduledInvocationAuthorizationFact AuthorizationFact,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    ScheduledDispatchScheduleKind ScheduleKind,
+    IReadOnlyDictionary<string, string> Headers,
+    ScheduledDispatchScheduleMode ScheduleMode,
+    DateTimeOffset? OneShotFireAt,
+    ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind,
+    string RevisionId,
+    ServiceInvocationCaller? Caller);
 
 public enum TeamAutomationLifecycleStatus
 {
@@ -55,6 +76,7 @@ public sealed record TeamAutomationCredentialOperation(
     string PolicyVersion,
     TeamAutomationOperationKind Kind,
     ScheduledCredentialEffectLocator CredentialEffectLocator,
+    TeamAutomationActivationDecision ActivationDecision,
     string MutationDigest);
 
 public sealed record ScheduledCredentialEffectLocator(
@@ -88,7 +110,8 @@ public sealed record ScheduledInvocationAuthorizationFact(
     DateTimeOffset ExpiresAt,
     bool ServiceGrantsNotRequired,
     ScheduledInvocationAuthorizationDisclosure Disclosure,
-    ScheduledInvocationAuthorizationAuthority Authority);
+    ScheduledInvocationAuthorizationAuthority Authority,
+    ScheduledInvocationOwnerLLMSelection? OwnerLLMSelection = null);
 
 public sealed record ScheduledInvocationAuthorizationOwner(
     string Authority,
@@ -189,6 +212,8 @@ public sealed record ScheduledServiceInvocationAuth
     }
 
     public ScheduledServiceInvocationCredentialSource? Source { get; init; }
+
+    public ScheduledCallerNyxIdAuthority? CallerAuthority { get; init; }
 
     public ScheduledServiceInvocationNyxIdCredentialSource? NyxId =>
         Source as ScheduledServiceInvocationNyxIdCredentialSource;
@@ -360,7 +385,22 @@ public sealed record ScheduledDispatchSummary(
     string TeamAutomationIdempotencyKey = "",
     string CredentialOwnerAuthority = "",
     string CredentialOwnerKind = "",
-    string CredentialOwnerSubject = "");
+    string CredentialOwnerSubject = "")
+{
+    public string OwnerLLMRouteKind { get; init; } = "unspecified";
+
+    public string OwnerLLMRoute { get; init; } = string.Empty;
+
+    public string OwnerLLMUserServiceId { get; init; } = string.Empty;
+
+    public string OwnerLLMServiceSlug { get; init; } = string.Empty;
+
+    public string OwnerLLMModel { get; init; } = string.Empty;
+
+    public string NyxIdRevocationStatus { get; init; } = string.Empty;
+
+    public string VaultRevocationStatus { get; init; } = string.Empty;
+}
 
 public sealed record ScheduledDispatchFireRecord(
     DateTimeOffset ScheduledFireAt,

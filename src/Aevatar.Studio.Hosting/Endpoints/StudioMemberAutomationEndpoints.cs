@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -19,14 +20,22 @@ internal static class StudioMemberAutomationEndpoints
 {
     private const string BasePath =
         "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
+    private static readonly EventId CreateAcceptedEventId =
+        new(
+            StudioMemberAutomationAuditContract.CreateAcceptedEventId,
+            StudioMemberAutomationAuditContract.CreateAcceptedEventName);
 
     public static void Map(IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
         app.MapPost($"{BasePath}/preflight", HandlePreflightAsync).WithTags("StudioTeamAutomations");
-        app.MapGet(BasePath, HandleListAsync).WithTags("StudioTeamAutomations");
+        app.MapGet(BasePath, HandleListAsync)
+            .Produces<StudioMemberAutomationListResponse>(StatusCodes.Status200OK)
+            .WithTags("StudioTeamAutomations");
         app.MapPost(BasePath, HandleCreateAsync).WithTags("StudioTeamAutomations");
-        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync).WithTags("StudioTeamAutomations");
+        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync)
+            .Produces<StudioMemberAutomationView>(StatusCodes.Status200OK)
+            .WithTags("StudioTeamAutomations");
         app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
             .WithTags("StudioTeamAutomations");
@@ -72,6 +81,7 @@ internal static class StudioMemberAutomationEndpoints
         StudioMemberAutomationMutationRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -89,6 +99,20 @@ internal static class StudioMemberAutomationEndpoints
                 ConfirmedPolicyVersion = body.ConfirmedPolicyVersion,
             };
             var result = await schedules.CreateAsync(request, body.ConfirmedPermissionDigest, ct);
+            if (result.Success && result.NewOperationCommitted)
+            {
+                loggerFactory.CreateLogger(StudioMemberAutomationAuditContract.Category).LogInformation(
+                    CreateAcceptedEventId,
+                    "Accepted Studio member automation create for scope {ScopeId}, team {TeamId}, member {MemberId}, " +
+                    "schedule {ScheduleId}, operation {OperationId}, and verified binding {BindingId}.",
+                    scopeId,
+                    teamId,
+                    memberId,
+                    result.ScheduleId,
+                    result.OperationId,
+                    owner.Context.VerifiedBindingId);
+            }
+
             return Results.Accepted(value: new StudioMemberAutomationMutationReceipt(
                 result.Success,
                 result.Status,

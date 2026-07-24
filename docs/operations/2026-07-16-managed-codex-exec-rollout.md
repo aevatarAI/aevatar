@@ -19,7 +19,7 @@ Before enabling Aevatar, operations must confirm:
 - `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
 - each canary user directly owns an active `chrono-sandbox` UserService
 - each canary user has a usable `chrono-llm-public` route
-- chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
+- chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
 - chrono-sandbox can pull the approved `containers/codex-runner` image digest
 - runner pods are scheduled under the `gvisor` RuntimeClass with Codex's inner sandbox disabled per ADR-0044; there is no Landlock preflight, and the sandbox create call requests no `networkPolicy` and no `credentialProxy`
 - chrono-sandbox validates the injected token before sandbox creation and passes it only as request-local `NYXID_LLM_TOKEN` through execd's native environment map

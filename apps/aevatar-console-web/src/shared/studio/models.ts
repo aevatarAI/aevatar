@@ -1044,8 +1044,9 @@ export interface StudioUserLlmRouteOption {
   readonly status: string;
   readonly allowed: boolean;
   readonly ready: boolean;
-  readonly serviceId?: string | null;
+  readonly userServiceId?: string | null;
   readonly serviceSlug?: string | null;
+  readonly defaultModel: string | null;
   readonly description?: string | null;
 }
 
@@ -1063,9 +1064,17 @@ export interface StudioUserLlmSettingsCapabilities {
   readonly canRetryCatalog: boolean;
 }
 
+export type StudioUserLlmSavedRouteKind =
+  | 'gateway'
+  | 'nyx_id_user_service'
+  | 'unknown';
+
 export interface StudioUserLlmSettings {
   readonly savedRoute: string;
   readonly savedRouteLabel: string;
+  readonly savedRouteKind: StudioUserLlmSavedRouteKind;
+  readonly savedUserServiceId?: string | null;
+  readonly savedServiceSlug?: string | null;
   readonly effectiveRoute: string;
   readonly effectiveRouteLabel: string;
   readonly routeFallbackActive: boolean;

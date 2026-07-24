@@ -1,8 +1,6 @@
 using Aevatar.Capabilities;
-using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting.Endpoints;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -38,21 +36,6 @@ public static class StudioCapabilityExtensions
                         "/api/settings",
                         "/api/workspace",
                     ],
-                    ProbeAsync = static async (serviceProvider, cancellationToken) =>
-                    {
-                        var settingsService = serviceProvider.GetRequiredService<SettingsService>();
-                        _ = await settingsService.GetAsync(cancellationToken);
-
-                        var workspaceService = serviceProvider.GetRequiredService<WorkspaceService>();
-                        _ = await workspaceService.GetSettingsAsync(cancellationToken);
-
-                        return AevatarHealthContributorResult.Healthy(
-                            "Studio capability is ready.",
-                            new Dictionary<string, string>(StringComparer.Ordinal)
-                            {
-                                ["scopeBoundCatalogApis"] = "/api/connectors, /api/roles",
-                            });
-                    },
                 });
             },
             static app =>

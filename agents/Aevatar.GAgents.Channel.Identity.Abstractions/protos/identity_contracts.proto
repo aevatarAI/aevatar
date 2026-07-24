@@ -57,9 +57,9 @@ message BindingChallenge {
   string authorize_url = 1;
   // UNIX seconds-since-epoch when the challenge state_token expires.
   int64 expires_at_unix = 2;
-  // True when /init is reviewing the service grant of an existing binding
-  // rather than creating the first binding for this external subject.
-  bool reviews_existing_binding = 3;
+  // True when /init is renewing service authorization by issuing a new
+  // binding that may replace the current binding after callback validation.
+  bool renews_existing_binding = 3;
 }
 
 enum ManagedCodexCredentialStatus {

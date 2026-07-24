@@ -55,8 +55,8 @@ internal sealed class InMemoryCapabilityBroker : INyxIdCapabilityBroker, IExtern
     {
         ExternalSubjectRefExtensions.EnsureValid(externalSubject);
         var challenge = _challengeFactory(externalSubject);
-        challenge.ReviewsExistingBinding =
-            challenge.ReviewsExistingBinding || _bindings.ContainsKey(externalSubject.ToActorId());
+        challenge.RenewsExistingBinding =
+            challenge.RenewsExistingBinding || _bindings.ContainsKey(externalSubject.ToActorId());
         return Task.FromResult(challenge);
     }
 

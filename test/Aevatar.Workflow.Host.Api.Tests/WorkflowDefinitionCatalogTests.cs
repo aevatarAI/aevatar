@@ -287,6 +287,79 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void BuiltInStudioYaml_ShouldExposeNyxIdCapabilityToolsWithoutCollapsingServiceSemantics()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var role = workflow.Roles.Should().ContainSingle().Subject;
+
+        role.SystemPrompt.Should().Contain("NyxID is a separate caller-account capability domain");
+        role.SystemPrompt.Should().Contain("The word \"service\" is ambiguous");
+        role.SystemPrompt.Should().Contain("我的 nyxId service 有哪些");
+        role.SystemPrompt.Should().Contain("call `nyxid_services` with `action: \"list\"`");
+        role.SystemPrompt.Should().Contain("Do not treat unqualified \"services\" as NyxID services");
+        role.SystemPrompt.Should().Contain("Studio published workflow service");
+        role.SystemPrompt.Should().Contain("NyxID connected service");
+        role.SystemPrompt.Should().Contain("Do NOT use `aevatar_list_workflows`");
+        role.SystemPrompt.Should().Contain("The user does not need to say NyxID for an external capability request");
+        role.SystemPrompt.Should().Contain("first look for a matching NyxID connected service");
+        role.SystemPrompt.Should().Contain("prefer a workflow runtime call through `nyxid_proxy`");
+        role.SystemPrompt.Should().Contain("Do not call a provider-specific chat tool first");
+        role.SystemPrompt.Should().Contain("exact static `service_id`, `slug`, `operation_id`, `method`, `path`, and `contract_digest`");
+        role.SystemPrompt.Should().Contain("Specialized provider or skill-discovery tools are not the default path");
+        role.SystemPrompt.Should().Contain("Do not create a provider-specific prompt rule or runtime-tool mapping for one named service");
+        role.SystemPrompt.Should().Contain("service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas");
+        role.SystemPrompt.Should().NotContain("Use NyxID tools only when the user explicitly mentions");
+        role.SystemPrompt.Should().NotContain("You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely");
+        role.SystemPrompt.Should().NotContain("Use specialized provider tools only when the user explicitly asks for that provider capability");
+
+        role.AgentToolScope.Should().NotBeNull();
+        var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("nyxid_status");
+        allowed.Should().Contain("nyxid_account");
+        allowed.Should().Contain("nyxid_catalog");
+        allowed.Should().Contain("nyxid_llm_status");
+        allowed.Should().Contain("nyxid_services");
+        allowed.Should().Contain("nyxid_proxy");
+        allowed.Should().Contain("nyxid_require_service");
+
+        allowed.Should().NotContain("nyxid_api_keys");
+        allowed.Should().NotContain("nyxid_nodes");
+        allowed.Should().NotContain("nyxid_approvals");
+        allowed.Should().NotContain("nyxid_providers");
+        allowed.Should().NotContain("nyxid_notifications");
+        allowed.Should().NotContain("nyxid_mfa");
+        allowed.Should().NotContain("nyxid_profile");
+        allowed.Should().NotContain("nyxid_endpoints");
+        allowed.Should().NotContain("nyxid_external_keys");
+        allowed.Should().NotContain("nyxid_channel_bots");
+        allowed.Should().NotContain("nyxid_orgs");
+        allowed.Should().NotContain("nyxid_admin");
+        allowed.Should().NotContain("ssh_exec");
+        allowed.Should().NotContain("codex_exec");
+        allowed.Should().NotContain("code_execute");
+    }
+
+    [Fact]
+    public void BuiltInStudioYaml_ShouldTeachGenericRuntimeToolCallSchemaForWorkflowAuthoring()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var role = workflow.Roles.Should().ContainSingle().Subject;
+
+        role.SystemPrompt.Should().Contain("For workflow runtime tool steps, use `type: tool_call`");
+        role.SystemPrompt.Should().Contain("parameters.tool");
+        role.SystemPrompt.Should().Contain("parameters.arguments");
+        role.SystemPrompt.Should().Contain("Do not use `tool_name`");
+        role.SystemPrompt.Should().Contain("`${steps.<step_id>.output}`");
+        role.SystemPrompt.Should().Contain("When a workflow step needs an external service or available runtime tool");
+        role.SystemPrompt.Should().Contain("use the exact registered runtime tool name");
+        role.SystemPrompt.Should().Contain("build `parameters.arguments` from that tool's declared schema");
+        role.SystemPrompt.Should().Contain("Do not add a provider-specific prompt rule for a single service");
+        role.SystemPrompt.Should().NotContain("Ornn skill search example");
+        role.SystemPrompt.Should().NotContain("When the user explicitly asks a workflow to query or search Ornn skills");
+        role.SystemPrompt.Should().NotContain("tool: \"ornn_search_skills\"");
+    }
+
+    [Fact]
     public void Catalog_ShouldRegisterStudioWorkflowAlongsideDirect()
     {
         var registry = new WorkflowDefinitionCatalog();

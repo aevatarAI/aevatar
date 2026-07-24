@@ -153,14 +153,17 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         query["resource"].Should().Equal(RequiredResources);
         query["prompt"].Should().ContainSingle().Which.Should().Be("consent");
         query.ContainsKey("binding_grant_id").Should().BeFalse();
+        query["external_subject_platform"].Should().ContainSingle().Which.Should().Be("lark");
+        query["external_subject_tenant"].Should().ContainSingle().Which.Should().Be("ou_tenant_x");
+        query["external_subject_external_user_id"].Should().ContainSingle().Which.Should().Be("ou_user_y");
         query["state"].Should().ContainSingle();
         query["code_challenge"].Should().ContainSingle();
         query["code_challenge_method"].Should().ContainSingle().Which.Should().Be("S256");
-        challenge.ReviewsExistingBinding.Should().BeFalse();
+        challenge.RenewsExistingBinding.Should().BeFalse();
     }
 
     [Fact]
-    public async Task StartExternalBindingAsync_ReviewsExistingBindingGrantWithoutExposingRawId()
+    public async Task StartExternalBindingAsync_RenewsExistingBindingWithoutSendingLegacyGrantId()
     {
         var expectedRedirectUri = NyxIdRedirectUriResolver.Resolve();
         var bindingId = new BindingId { Value = "bnd-secret-value" };
@@ -171,10 +174,18 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
         var challenge = await broker.StartExternalBindingAsync(SampleSubject());
 
         var query = QueryHelpers.ParseQuery(new Uri(challenge.AuthorizeUrl).Query);
-        query["binding_grant_id"].Should().ContainSingle().Which.Should().Be(
-            NyxIdRemoteCapabilityBroker.HashBindingId(bindingId.Value));
+        query.ContainsKey("binding_grant_id").Should().BeFalse();
+        query["external_subject_platform"].Should().ContainSingle().Which.Should().Be("lark");
+        query["external_subject_tenant"].Should().ContainSingle().Which.Should().Be("ou_tenant_x");
+        query["external_subject_external_user_id"].Should().ContainSingle().Which.Should().Be("ou_user_y");
         challenge.AuthorizeUrl.Should().NotContain(bindingId.Value);
-        challenge.ReviewsExistingBinding.Should().BeTrue();
+        challenge.RenewsExistingBinding.Should().BeTrue();
+
+        var state = query["state"].Should().ContainSingle().Which;
+        var decoded = await broker.TryDecodeStateTokenAsync(state);
+        decoded.Succeeded.Should().BeTrue();
+        decoded.ExpectedBindingHash.Should().Be(
+            NyxIdRemoteCapabilityBroker.HashBindingId(bindingId.Value));
     }
 
     [Fact]
@@ -198,6 +209,33 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         result.BindingUpdated.Should().BeTrue();
         result.BindingId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveBindingOwnerScopeAsync_UsesOwningClientIntrospectionForLegacyBinding()
+    {
+        var handler = StubHandler.Text(HttpStatusCode.OK,
+            """
+            {
+              "binding_id": "bnd-legacy",
+              "client_id": "client-1",
+              "nyx_subject": "owner-user-1",
+              "scopes": ["openid", "proxy"],
+              "created_at": "2026-07-01T00:00:00Z",
+              "revoked": false
+            }
+            """);
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        var ownerScope = await broker.ResolveBindingOwnerScopeAsync("bnd-legacy");
+
+        ownerScope.Should().NotBeNull();
+        ownerScope!.Value.Should().Be("owner-user-1");
+        handler.LastMethod.Should().Be(HttpMethod.Get);
+        handler.LastRequestUri.Should().Be(
+            $"{OAuthAuthority}/oauth/bindings/bnd-legacy?client_id=client-1");
     }
 
     [Fact]
@@ -575,6 +613,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
 
         public string? LastRequestBody { get; private set; }
         public string? LastRequestUri { get; private set; }
+        public HttpMethod? LastMethod { get; private set; }
 
         private StubHandler(HttpStatusCode statusCode, string body)
         {
@@ -588,6 +627,7 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            LastMethod = request.Method;
             LastRequestUri = request.RequestUri?.ToString();
             LastRequestBody = request.Content is null
                 ? null

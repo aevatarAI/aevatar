@@ -17,7 +17,7 @@ public sealed class NyxIdResponsesModelsAggregatorTests
         // catalog-backed IResponsesRouteResolver, no source-dependent branching.
         var body = """{"data":[{"id":"claude-opus-4-7"},{"id":"claude-sonnet-4-6"}]}""";
         var anthropicGateway = new NyxIdLlmService(
-            UserServiceId: "anthropic",
+            CatalogEntryId: "anthropic",
             ServiceSlug: "anthropic",
             DisplayName: "Anthropic",
             RouteValue: "/api/v1/llm/anthropic/v1",
@@ -43,7 +43,7 @@ public sealed class NyxIdResponsesModelsAggregatorTests
     {
         var body = """{"data":[{"id":"gpt-4o"},{"id":"qwen-3"}]}""";
         var chronoLlm = new NyxIdLlmService(
-            UserServiceId: "chrono-llm-id",
+            CatalogEntryId: "chrono-llm-id",
             ServiceSlug: "chrono-llm",
             DisplayName: "Chrono LLM",
             RouteValue: "/api/v1/proxy/s/chrono-llm",
@@ -189,7 +189,7 @@ public sealed class NyxIdResponsesModelsAggregatorTests
 
     private static NyxIdLlmService MakeService(string slug, string routeValue, string source) =>
         new(
-            UserServiceId: slug,
+            CatalogEntryId: slug,
             ServiceSlug: slug,
             DisplayName: slug,
             RouteValue: routeValue,

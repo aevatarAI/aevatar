@@ -250,7 +250,11 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     {
         try
         {
-            await _selectionService!.SetByServiceAsync(context, option.ServiceId, modelOverride, ct).ConfigureAwait(false);
+            var userServiceId = InventoryUserServiceId(option) ??
+                                throw new InvalidOperationException(
+                                    "The selected LLM option does not have an inventory identity.");
+            await _selectionService!.SetByServiceAsync(context, userServiceId, modelOverride, ct)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
         {
@@ -430,7 +434,7 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
     {
         var matches = available
             .Where(option =>
-                string.Equals(option.ServiceId, requested, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(InventoryUserServiceId(option), requested, StringComparison.Ordinal) ||
                 string.Equals(option.ServiceSlug, requested, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(option.DisplayName, requested, StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -491,13 +495,21 @@ public sealed class ModelChannelSlashCommandHandler : IChannelSlashCommandHandle
 
     private static IEnumerable<string> ServiceTokens(UserLlmOption option)
     {
-        if (!string.IsNullOrWhiteSpace(option.ServiceId))
-            yield return option.ServiceId.Trim();
+        if (InventoryUserServiceId(option) is { } userServiceId)
+            yield return userServiceId;
         if (!string.IsNullOrWhiteSpace(option.ServiceSlug))
             yield return option.ServiceSlug.Trim();
         if (!string.IsNullOrWhiteSpace(option.DisplayName))
             yield return option.DisplayName.Trim();
     }
+
+    private static string? InventoryUserServiceId(UserLlmOption option) =>
+        option.Identity is
+        {
+            Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+        } identity
+            ? UserLlmPreferenceWriteCore.NormalizeOptional(identity.NyxIdUserServiceId)
+            : null;
 
     private static string BuildUserFacingFailureMessage(Exception ex) => ex switch
     {

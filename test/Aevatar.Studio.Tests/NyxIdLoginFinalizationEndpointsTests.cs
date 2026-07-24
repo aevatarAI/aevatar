@@ -1127,6 +1127,11 @@ public sealed class NyxIdLoginFinalizationEndpointsTests
             return Task.FromResult(result);
         }
 
+        public Task<OwnerScopeId?> ResolveBindingOwnerScopeAsync(
+            string bindingId,
+            CancellationToken ct = default) =>
+            Task.FromResult<OwnerScopeId?>(null);
+
         public Task RevokeBindingByIdAsync(string bindingId, CancellationToken ct = default)
         {
             RevokedBindingIds.Add(bindingId);

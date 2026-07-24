@@ -103,6 +103,12 @@ public sealed class MainnetHealthEndpointsTests
         readinessComponents.Should().Contain(["workflow-bundle", "gagent-service", "studio", "audit-trail"]);
         // Security lockdown: the scripting capability must never be composed into the mainnet host.
         readinessComponents.Should().NotContain("scripting-bundle");
+        var studioReadinessComponent = readinessPayload.RootElement
+            .GetProperty("components")
+            .EnumerateArray()
+            .Single(static component => component.GetProperty("name").GetString() == "studio");
+        studioReadinessComponent.GetProperty("status").GetString().Should().Be("healthy");
+        studioReadinessComponent.GetProperty("message").GetString().Should().Be("Required routes are mapped.");
 
         var apiHealthResponse = await client.GetAsync("/api/health");
         var apiHealthBody = await apiHealthResponse.Content.ReadAsStringAsync();
@@ -136,6 +142,37 @@ public sealed class MainnetHealthEndpointsTests
             .TryGetProperty("application/json", out _)
             .Should()
             .BeTrue();
+
+        var automationProperties = openApiDocument.RootElement
+            .GetProperty("components")
+            .GetProperty("schemas")
+            .GetProperty("StudioMemberAutomationView")
+            .GetProperty("properties");
+        foreach (var propertyName in new[]
+                 {
+                     "ownerLLMRouteKind",
+                     "ownerLLMRoute",
+                     "ownerLLMUserServiceId",
+                     "ownerLLMServiceSlug",
+                     "ownerLLMModel",
+                     "nyxIdRevocationStatus",
+                     "vaultRevocationStatus",
+                 })
+        {
+            automationProperties.TryGetProperty(propertyName, out _).Should().BeTrue(propertyName);
+        }
+        foreach (var propertyName in new[]
+                 {
+                     "callerAuthority",
+                     "verifiedBindingId",
+                     "secretReference",
+                     "apiKeyId",
+                     "fullKey",
+                     "ciphertext",
+                 })
+        {
+            automationProperties.TryGetProperty(propertyName, out _).Should().BeFalse(propertyName);
+        }
 
         await app.StopAsync();
     }

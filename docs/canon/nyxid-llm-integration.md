@@ -85,11 +85,30 @@ Workflow 层只承载 provider-neutral 调用者凭据与路由偏好。`Workflo
 
 Host/Infrastructure 在 HTTP 边界优先提取 NyxID proxy 注入的 `X-NyxID-Delegation-Token`，缺失时才回退到 `Authorization: Bearer`，然后把 raw token 交给 workflow-owned `WorkflowCallerCredentialTokens.ParseOptional` 做一次规范化与 fail-closed 校验。`X-NyxID-Identity-Token` 只用于 Host 认证和从 `sub` 派生 caller scope，绝不能作为 workflow caller credential 下传。进入 Workflow Application/Core 后，调用者凭据继续作为 typed workflow credential 在 command、actor state 与 LLM execution intent 中传递；不得在 workflow 中间层通过 headers、metadata 或 provider-specific 字段回填身份语义。浏览器代理配置必须保持 `inject_delegation_token: true`；CLI 和 server-to-server 调用仍可使用 Bearer fallback。
 
-定时 workflow 调度不把 fire-time 换出的短期 NyxID bearer 写入 `connector_http_authorization`、`llm_control` 或 run 级 runtime secret。Scheduled Dispatch 在可信 fire 链路中把短期 token 存入 durable vault，向 `ChatRequestEvent.caller_durable_credential` 只传 typed `DurableCallerCredentialRef`；NyxID source 的原始 subject + capability scope 作为独立 typed caller authority 随 handle 传入，禁止从 token、vault `subject_id` 或 Aevatar `scopeId` 解析。`WorkflowRunGAgent` 把 handle 与 authority 保存到 `WorkflowCallerCredentialState`，但 committed projection 会移除二者。LLM、tool 与 connector 外呼继续走统一 `TryGetCallerCredentialAsync` 漏斗，每次外呼前用 handle 现场解析 raw bearer。旧 run 若没有 handle，仍走原 runtime-secret / legacy bearer fallback，不做热替换。
+定时 workflow 调度不把 fire-time 换出的短期 NyxID bearer 写入 `connector_http_authorization`、`llm_control` 或 run 级 runtime secret。Scheduled Dispatch 在可信 fire 链路中把短期 token 存入 durable vault，向 `ChatRequestEvent.caller_durable_credential` 只传 typed `DurableCallerCredentialRef`；NyxID source 的原始 subject + capability scope 作为独立 typed caller authority 随 handle 传入，禁止从 token、vault `subject_id` 或 Aevatar `scopeId` 解析。`WorkflowRunGAgent` 把 handle 与 authority 保存到 `WorkflowCallerCredentialState`，但 committed projection 会移除二者。LLM、tool 与 connector 外呼继续走统一 `TryGetCallerCredentialAsync` 漏斗，每次外呼前用 handle 现场解析 raw bearer。只有不属于 `scheduled_invocation_agent_key` 完整性契约的历史 workflow run 才可按其原版本留在旧 runtime-secret 路径；新建、reauthorize 或再次 fire 的 Agent Key automation 不允许 missing handle、missing binding 或 legacy bearer fallback。
 
 外部 API 不接受 `caller_durable_credential`；该字段只能由 Scheduled Dispatch 内部生成。Projection、readmodel、日志与诊断只允许展示 caller credential 的 source kind，不回显 durable ref、vault ref、fingerprint 或 raw bearer。
 
 NyxID 专有映射只发生在 `Workflow.Integration.AI` 边界：workflow raw token 分别映射到 LLM provider auth 与 tool execution credentials，workflow `RoutePreference` 在这里映射为 provider-specific `NyxIdRoutePreference`。NyxID provider 本身继续读取 typed provider auth，不从 tool context 或 workflow headers 兜底推断身份。
+
+### Scheduled Agent Key LLM 完整性链
+
+依赖 owner LLM 的 Team member automation 只有一条权威链路：
+
+```text
+committed typed UserConfig selection
+  -> digest-covered ScheduledInvocationOwnerLLMSelection
+  -> constrained NyxID Agent Key + Vault reference
+  -> actor-owned authorization fact + persisted ChatRequestEvent.LlmControl
+  -> runtime caller/payload/fact cross-check
+  -> workflow inbox
+```
+
+UserConfig read model 中的 typed selection 是 planning-time authority。`NyxIdUserService` 必须同时包含 canonical route、精确 `UserService.id`、service slug snapshot 与 model；显式 Gateway selection 也必须是 typed `Gateway`，不能由空字段或 Host default 推断。缺失或 malformed selection 保持 `Unspecified`，对 owner-LLM-dependent schedule 直接 fail closed。
+
+计划把 selection 写入 Protobuf permission digest，并复制到 schedule actor 的 authorization fact。Studio adapter 只能从已验证的 plan/fact 生成持久化 `ChatRequestEvent.LlmControl`；schedule fire 时禁止再次查询 UserConfig、从 Host default 补 route/model、从 slug 或 model prefix 反推 service identity，或把 v1 digest 当作 v2 compatibility 输入。运行时必须在 workflow inbox 之前校验 verified caller binding、fact selection、payload route/model 与 exact service grant 全部一致；任何缺失或漂移都进入 typed `needs_authorization` 失败路径。
+
+Caller authority 与 `VerifiedBindingId` 是 write/runtime-side authority，不属于 projection 或 public API。成功 create 仅通过 Host category `Aevatar.Studio.MemberAutomation` 的 Information event `6201/StudioMemberAutomationCreateAccepted` 提供非投影 operational correlation；其 structured state 除日志框架的 `{OriginalFormat}` 外只有 `ScopeId`、`TeamId`、`MemberId`、`ScheduleId`、`OperationId` 与 `BindingId`。accepted committed revocation outcome 在两个 pending flag 都为 false 后，通过同一 category 的 `6202/StudioMemberAutomationRevocationCompleted` 记录精确的 `ScopeId`、`TeamId`、`MemberId`、`ScheduleId`、`OperationId`、两个值为 `Completed` 的 revocation status、`StateVersion` 与 `ObservedAtUtc`。仓库工具 `tools/schedules/query_member_automation_audit.sh` 是这两个事件的 canonical allowlisted query。两个事件都不得包含 permission digest、bearer、Agent Key/API-key identifier、Vault reference/ciphertext 或 refresh token。
 
 ---
 
@@ -127,6 +146,8 @@ Canonical endpoints：
 `GET /api/user-config/llm` 是 Settings 闭环的唯一 route truth。响应必须至少表达：
 
 - `savedRoute` / `savedRouteLabel`：用户保存的 route 及展示名。
+- `savedRouteKind`：`unspecified`、`gateway` 或 `nyx_id_user_service` 的 typed selection kind。
+- `savedUserServiceId` / `savedServiceSlug`：精确 UserService identity 与 slug snapshot；仅 `nyx_id_user_service` 有值。
 - `effectiveRoute` / `effectiveRouteLabel`：本次实际可用的 route 及展示名；当 saved route 不可用时由后端选择 fallback。
 - `routeFallbackActive` / `fallbackReason`：诚实暴露 saved route 与 effective route 是否分离。
 - `routeOptions`：可选 route 列表，包含 `routeValue`、`label`、`source`、`status`、`allowed`、`ready`、`serviceId`、`serviceSlug`。
@@ -136,7 +157,9 @@ Canonical endpoints：
 
 NyxID catalog 不可用时，后端返回 degraded view，而不是空列表：保留 `savedRoute`、`effectiveRoute`、`defaultModel`，设置 `catalogStatus = "unavailable"`，并通过 `capabilities` 禁止编辑和保存、允许 retry。前端只展示这个 degraded view，不做 query-time fallback 或本地补跑 catalog。
 
-Gateway route 的稳定值是空字符串 `""`。Gateway 的展示名由后端 settings view 返回；前端只消费 `savedRouteLabel`、`effectiveRouteLabel`、`routeOptions[].label`，不得把 `NyxID Gateway` 当作 route display source 硬编码。
+`effectiveRoute` 只描述交互式 Settings/运行时可用性，不会升级成 scheduled authorization authority。Scheduled planner 只读取 committed `savedRouteKind` 对应的 typed selection；`savedRouteKind == "unspecified"` 时，即使 GET 同时展示一个 Host-derived `effectiveRoute`，也不得据此授权或填充定时调用。
+
+Gateway 的强类型 canonical route 是 `/api/v1/llm/gateway/v1`。Console Settings 中的空字符串 `""` 只是在保存与选择 surface 上表示显式 Gateway option 的稳定 selector；后端在形成 scheduled authorization selection 时必须把 typed `Gateway` 映射到 canonical route，不能把空 selector 带入 permission digest 或 runtime payload。Gateway 的展示名由后端 settings view 返回；前端只消费 `savedRouteLabel`、`effectiveRouteLabel`、`routeOptions[].label`，不得把 `NyxID Gateway` 当作 route display source 硬编码。
 
 旧 Console surface 不再保留兼容入口：`/api/user-config/models`、`/api/user-config/llm/options`、`/api/user-config/llm/preference` 已被 canonical `/api/user-config/llm` 取代。
 

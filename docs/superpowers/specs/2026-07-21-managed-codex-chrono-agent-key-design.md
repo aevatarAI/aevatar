@@ -24,7 +24,7 @@ workflow codex_exec
   -> NyxID proxy /s/chrono-sandbox/codex/execute?_nyxid_via=<personal-service-id>
   -> NyxID injects a five-minute proxy:* delegation token for the internal canary
   -> chrono-sandbox owns OpenSandbox and the fixed codex-runner profile
-  -> codex-runner calls https://nyx.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public
+  -> codex-runner calls https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public
 ```
 
 The persistent agent key is intended to terminate at NyxID. It is only the

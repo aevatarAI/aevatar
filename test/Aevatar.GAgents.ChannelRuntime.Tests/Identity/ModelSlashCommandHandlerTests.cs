@@ -20,7 +20,7 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
 public sealed class ModelSlashCommandHandlerTests
 {
     private static readonly NyxIdLlmService ChronoLlm = new(
-        UserServiceId: "svc-chrono",
+        CatalogEntryId: null,
         ServiceSlug: "chrono-llm",
         DisplayName: "chrono-llm shared",
         RouteValue: "/api/v1/proxy/s/chrono-llm",
@@ -29,10 +29,13 @@ public sealed class ModelSlashCommandHandlerTests
         Status: "ready",
         Source: "shared",
         Allowed: true,
-        Description: "Shared service");
+        Description: "Shared service",
+        Identity: new UserLlmServiceIdentity(
+            UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            "us-chrono"));
 
     private static readonly NyxIdLlmService OpenAi = new(
-        UserServiceId: "svc-openai",
+        CatalogEntryId: null,
         ServiceSlug: "openai-work",
         DisplayName: "OpenAI (work)",
         RouteValue: "/api/v1/proxy/s/openai-work",
@@ -41,7 +44,10 @@ public sealed class ModelSlashCommandHandlerTests
         Status: "ready",
         Source: "user",
         Allowed: true,
-        Description: "Work key");
+        Description: "Work key",
+        Identity: new UserLlmServiceIdentity(
+            UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            "us-openai"));
 
     private static ChannelSlashCommandContext Context(
         string subAndArgs = "",
@@ -80,7 +86,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", service: ChronoLlm) },
         };
         var handler = CreateHandler(queryPort: queryPort);
 
@@ -93,6 +99,8 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Text.Should().Contain("`/model list`");
         reply.Text.Should().NotContain("OpenAI (work)");
         reply.Text.Should().NotContain("第 1/1 页");
+        queryPort.ReadResources.Should().ContainSingle()
+            .Which.Should().Be(UserConfigResourceKey.ForChannelBinding("bnd_sender"));
     }
 
     [Fact]
@@ -100,7 +108,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", service: ChronoLlm) },
         };
         var handler = CreateHandler(queryPort: queryPort);
 
@@ -121,7 +129,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.4", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.4", service: ChronoLlm) },
         };
         var handler = CreateHandler(queryPort: queryPort);
 
@@ -144,7 +152,9 @@ public sealed class ModelSlashCommandHandlerTests
         var services = Enumerable.Range(1, 7)
             .Select(i => ChronoLlm with
             {
-                UserServiceId = $"svc-{i}",
+                Identity = new UserLlmServiceIdentity(
+                    UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                    $"us-{i}"),
                 ServiceSlug = $"route-{i}",
                 DisplayName = $"Route {i}",
                 RouteValue = $"/api/v1/proxy/s/route-{i}",
@@ -334,7 +344,7 @@ public sealed class ModelSlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Text.Should().Contain("OpenAI (work)");
         var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
-        saved.ScopeId.Should().Be("bnd_sender");
+        saved.BindingId.Should().Be("bnd_sender");
         saved.Option.RouteValue.Should().Be(OpenAi.RouteValue);
         saved.Model.Should().Be("gpt-4o");
     }
@@ -357,7 +367,8 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var disabledGateway = ChronoLlm with
         {
-            UserServiceId = "chrono-llm",
+            CatalogEntryId = "chrono-llm",
+            Identity = null,
             DisplayName = "Chrono LLM",
             RouteValue = "/api/v1/llm/chrono-llm/v1",
             Status = "not_connected",
@@ -383,7 +394,8 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var legacyCatalog = ChronoLlm with
         {
-            UserServiceId = "svc-chrono",
+            CatalogEntryId = "svc-chrono",
+            Identity = null,
             DisplayName = "Chrono LLM",
             Status = "not_connected",
             Source = NyxIdLlmProviderSource.ProxyService,
@@ -391,7 +403,10 @@ public sealed class ModelSlashCommandHandlerTests
         };
         var userKey = ChronoLlm with
         {
-            UserServiceId = "key-chrono",
+            CatalogEntryId = "key-chrono",
+            Identity = new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-key-chrono"),
             DisplayName = "Chrono LLM",
             Source = NyxIdLlmProviderSource.UserService,
             Allowed = true,
@@ -412,19 +427,23 @@ public sealed class ModelSlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task Selection_SetByService_PrefersSelectableDuplicateForSubmittedServiceId()
+    public async Task Selection_SetByService_UsesExactInventoryIdentityForDuplicateRoute()
     {
-        var disabledGateway = ChronoLlm with
+        var alpha = OpenAi with
         {
-            UserServiceId = "chrono-llm",
-            DisplayName = "Chrono LLM",
-            RouteValue = "/api/v1/llm/chrono-llm/v1",
-            Status = "not_connected",
-            Source = NyxIdLlmProviderSource.GatewayProvider,
-            Allowed = false,
+            CatalogEntryId = "catalog-alpha",
+            Identity = new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-alpha"),
         };
-        var selectableProxy = ChronoLlm with { DisplayName = "Chrono LLM" };
-        var catalog = new StubCatalogClient { Services = [disabledGateway, selectableProxy] };
+        var beta = OpenAi with
+        {
+            CatalogEntryId = "catalog-beta",
+            Identity = new UserLlmServiceIdentity(
+                UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+                "us-beta"),
+        };
+        var catalog = new StubCatalogClient { Services = [alpha, beta] };
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var provider = new ServiceCollection()
             .AddSingleton<IUserConfigQueryPort>(new StubUserConfigQueryPort())
@@ -434,11 +453,11 @@ public sealed class ModelSlashCommandHandlerTests
         var options = new DefaultUserLlmOptionsService(catalog, scopeFactory);
         var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory);
 
-        await selection.SetByServiceAsync(BuildSelectionContext(), "chrono-llm", null, default);
+        await selection.SetByServiceAsync(BuildSelectionContext(), "us-beta", null, default);
 
         var saved = preferencePort.SelectedOptions.Should().ContainSingle().Subject;
-        saved.Option.RouteValue.Should().Be(selectableProxy.RouteValue);
-        saved.Model.Should().Be(selectableProxy.DefaultModel);
+        saved.BindingId.Should().Be("bnd_sender");
+        saved.Option.Identity!.NyxIdUserServiceId.Should().Be("us-beta");
     }
 
     [Fact]
@@ -472,7 +491,11 @@ public sealed class ModelSlashCommandHandlerTests
         var selection = new DefaultUserLlmSelectionService(options, catalog, scopeFactory, broker);
         var context = BuildSelectionContext();
 
-        await selection.SetByServiceAsync(context, "openai-work", null, default);
+        await selection.SetByServiceAsync(
+            context,
+            OpenAi.Identity!.NyxIdUserServiceId,
+            null,
+            default);
         await selection.ApplyPresetAsync(context, "chrono-provision", default);
         await selection.SetModelOverrideAsync(context, "chrono-llm/gpt-5.5", default);
 
@@ -488,13 +511,13 @@ public sealed class ModelSlashCommandHandlerTests
             AevatarOAuthClientScopes.Proxy,
             AevatarOAuthClientScopes.Proxy);
         preferencePort.SelectedOptions.Should().HaveCount(1);
-        preferencePort.SelectedOptions[0].ScopeId.Should().Be("bnd_sender");
+        preferencePort.SelectedOptions[0].BindingId.Should().Be("bnd_sender");
         preferencePort.SelectedOptions[0].Option.RouteValue.Should().Be(OpenAi.RouteValue);
         preferencePort.Commands.Should().HaveCount(2);
-        preferencePort.Commands[0].ScopeId.Should().Be("bnd_sender");
+        preferencePort.Commands[0].BindingId.Should().Be("bnd_sender");
         preferencePort.Commands[0].BearerToken.Should().Be("token-for-preset-write");
         preferencePort.Commands[0].Command.PresetId.Should().Be("chrono-provision");
-        preferencePort.Commands[1].ScopeId.Should().Be("bnd_sender");
+        preferencePort.Commands[1].BindingId.Should().Be("bnd_sender");
         preferencePort.Commands[1].BearerToken.Should().Be("token-for-prefixed-model-write");
         preferencePort.Commands[1].Command.Model.Should().Be("chrono-llm/gpt-5.5");
     }
@@ -551,7 +574,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", service: ChronoLlm) },
         };
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var handler = CreateHandler(queryPort: queryPort, preferencePort: preferencePort);
@@ -598,7 +621,7 @@ public sealed class ModelSlashCommandHandlerTests
         };
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "current-model", route: OpenAi.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "current-model", service: OpenAi) },
         };
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var handler = CreateHandler(catalog, queryPort, preferencePort);
@@ -615,7 +638,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", service: ChronoLlm) },
         };
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var handler = CreateHandler(queryPort: queryPort, preferencePort: preferencePort);
@@ -699,14 +722,19 @@ public sealed class ModelSlashCommandHandlerTests
 
     private static StudioConfig MakeConfig(
         string defaultModel,
-        string route = UserConfigLlmRouteDefaults.Gateway) => new(
+        NyxIdLlmService service) => new(
         DefaultModel: defaultModel,
-        PreferredLlmRoute: route,
+        PreferredLlmRoute: service.RouteValue,
         RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
         LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
         RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
         GithubUsername: null,
-        MaxToolRounds: 0);
+        MaxToolRounds: 0,
+        LlmSelection: new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            service.RouteValue,
+            service.Identity!.NyxIdUserServiceId,
+            service.ServiceSlug));
 
     private sealed class StubCatalogClient : INyxIdLlmServiceCatalogClient
     {
@@ -723,7 +751,10 @@ public sealed class ModelSlashCommandHandlerTests
                     "chrono-shared",
                     "使用 chrono-llm 共享额度",
                     "无需自带 key",
-                    new UseExistingService(ChronoLlm.UserServiceId, ChronoLlm.RouteValue, ChronoLlm.DefaultModel)),
+                    new UseExistingService(
+                        ChronoLlm.Identity!.NyxIdUserServiceId,
+                        ChronoLlm.RouteValue,
+                        ChronoLlm.DefaultModel)),
             ]);
 
         public Task<NyxIdLlmServicesResult> GetServicesAsync(
@@ -839,37 +870,43 @@ public sealed class ModelSlashCommandHandlerTests
     private sealed class StubUserConfigQueryPort : IUserConfigQueryPort
     {
         public Dictionary<string, StudioConfig> ByScope { get; } = new(StringComparer.Ordinal);
+        public List<UserConfigResourceKey> ReadResources { get; } = [];
 
         public Task<StudioConfig> GetAsync(CancellationToken ct = default) =>
             Task.FromResult(new StudioConfig(string.Empty));
 
-        public Task<StudioConfig> GetAsync(string scopeId, CancellationToken ct = default) =>
-            Task.FromResult(ByScope.TryGetValue(scopeId, out var cfg) ? cfg : new StudioConfig(string.Empty));
+        public Task<StudioConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default)
+        {
+            ReadResources.Add(resource);
+            return Task.FromResult(ByScope.TryGetValue(resource.Value, out var cfg)
+                ? cfg
+                : new StudioConfig(string.Empty));
+        }
     }
 
     private sealed class StubChannelUserLlmPreferencePort : IChannelUserLlmPreferencePort
     {
-        public List<(string ScopeId, string? BearerToken, SaveUserLlmPreferenceCommand Command)> Commands { get; } = [];
-        public List<(string ScopeId, UserLlmOption Option, string? Model, bool PreserveCurrentModelWhenMissing)> SelectedOptions { get; } = [];
+        public List<(string BindingId, string? BearerToken, SaveUserLlmPreferenceCommand Command)> Commands { get; } = [];
+        public List<(string BindingId, UserLlmOption Option, string? Model, bool PreserveCurrentModelWhenMissing)> SelectedOptions { get; } = [];
 
         public Task<UserConfigSaveReceipt> SaveAsync(
-            string scopeId,
+            string bindingId,
             string? bearerToken,
             SaveUserLlmPreferenceCommand command,
             CancellationToken ct)
         {
-            Commands.Add((scopeId, bearerToken, command));
+            Commands.Add((bindingId, bearerToken, command));
             return Task.FromResult(Receipt());
         }
 
         public Task<UserConfigSaveReceipt> SaveSelectedOptionAsync(
-            string scopeId,
+            string bindingId,
             UserLlmOption option,
             string? model,
             bool preserveCurrentModelWhenMissing,
             CancellationToken ct)
         {
-            SelectedOptions.Add((scopeId, option, model, preserveCurrentModelWhenMissing));
+            SelectedOptions.Add((bindingId, option, model, preserveCurrentModelWhenMissing));
             return Task.FromResult(Receipt());
         }
 
