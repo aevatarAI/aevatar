@@ -22,16 +22,24 @@ workflow codex_exec
   -> read per-user ManagedCodexCredential current-state projection
   -> resolve raw invocation key from ISecretVault just in time
   -> NyxID proxy /s/chrono-sandbox/codex/execute?_nyxid_via=<personal-service-id>
-  -> NyxID injects a five-minute llm:proxy delegation token
+  -> NyxID injects a five-minute proxy:* delegation token for the internal canary
   -> chrono-sandbox owns OpenSandbox and the fixed codex-runner profile
-  -> codex-runner calls the user's chrono-llm-public route through NyxID
+  -> codex-runner calls https://nyx.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public
 ```
 
 The persistent agent key is intended to terminate at NyxID. It is only the
 Authorization value on the Aevatar-to-NyxID request and is never serialized into
 the chrono request body by Aevatar. NyxID service configuration must keep
 `forward_access_token=false`, `inject_delegation_token=true`, and
-`delegation_token_scope=llm:proxy`.
+temporary `delegation_token_scope=proxy:*`.
+
+The widened delegation scope belongs only to the five-minute runner token; the
+persistent agent key remains restricted to the exact `chrono-sandbox`
+UserService. During that five-minute window, runner code can reach other NyxID
+REST proxy services available to the user. The feature must remain allowlisted
+and internal until NyxID can enforce a capability limited to
+`chrono-llm-public`, after which both Aevatar and chrono-sandbox reject
+`proxy:*`.
 
 For the internal P0, that mutable UserService policy is an explicit trust
 boundary rather than a guarantee Aevatar can enforce. A UserService owner can
