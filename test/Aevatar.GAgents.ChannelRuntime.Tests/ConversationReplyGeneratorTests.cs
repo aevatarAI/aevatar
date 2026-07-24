@@ -732,6 +732,41 @@ public sealed class ConversationReplyGeneratorTests
             "the durable typed channel context must keep the human-only gate on after the channel metadata is stripped");
     }
 
+    [Fact]
+    public async Task BuildStepPlanAsync_ForBoundLarkRelayTurn_DiscoversRequestToolsWithSenderCredentialContext()
+    {
+        var requestScopedSource = new RequestScopedToolSource(
+            new FixedResultTool("nyxid_service_inventory", """{"instances":[]}"""));
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            new RecordingProviderFactory(),
+            BuiltInPromptFloorProvider,
+            toolSources: [requestScopedSource]);
+
+        var plan = await generator.BuildStepPlanAsync(
+            CreateLarkActivity(
+                "msg-bound-step-inventory",
+                "我在 NyxID 上连接了哪些服务",
+                "om_bound_step_inventory",
+                token: "sender-token"),
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-bound-step-inventory",
+            },
+            Control("sender-model", "sender-route", 4, token: "owner-token", senderToken: "sender-token"),
+            RelayToolContext("bnd-user-1", "msg-bound-step-inventory"),
+            priorHistory: null,
+            attachmentContext: null,
+            forceDisableTools: false,
+            CancellationToken.None);
+
+        requestScopedSource.CapturedAccessTokens.Should().ContainSingle()
+            .Which.Should().Be("sender-token");
+        plan.ToolContext.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+        OfferedToolNames(plan).Should().ContainSingle(name => name == "nyxid_service_inventory");
+    }
+
     private static IReadOnlyList<string> OfferedToolNames(AgentRunReplyStepPlan plan)
     {
         var llmRequest = plan.StepExecutor.BuildLlmStepRequest(
@@ -2417,6 +2452,42 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_ForBoundLarkRelayTurn_DiscoversRequestToolsWithSenderCredentialContext()
+    {
+        var providerFactory = new RecordingProviderFactory();
+        var requestScopedSource = new RequestScopedToolSource(
+            new FixedResultTool("nyxid_service_inventory", """{"instances":[]}"""));
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            toolSources: [requestScopedSource]);
+
+        await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "msg-bound-channel-inventory",
+                Conversation = new ConversationReference { CanonicalKey = "lark:dm:user-1" },
+                Content = new MessageContent { Text = "我在 NyxID 上连接了哪些服务" },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou_user_1",
+                [ChannelMetadataKeys.MessageId] = "msg-bound-channel-inventory",
+            },
+            Control("sender-model", "sender-route", 4, token: "owner-token", senderToken: "sender-token"),
+            RelayToolContext("bnd-user-1", "msg-bound-channel-inventory"),
+            streamingSink: null,
+            CancellationToken.None);
+
+        requestScopedSource.CapturedAccessTokens.Should().ContainSingle()
+            .Which.Should().Be("sender-token");
+        var request = providerFactory.Requests.Should().ContainSingle().Subject;
+        request.Tools.Should().ContainSingle(tool => tool.Name == "nyxid_service_inventory");
+        request.ToolContext!.Credentials.NyxIdAccessToken.Should().Be("sender-token");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_FallsBackToOwnerPrefsWhenSenderStoreThrows()
     {
         // Pin graceful-degradation: a transient sender-config projection
@@ -3352,6 +3423,19 @@ public sealed class ConversationReplyGeneratorTests
     {
         public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<IAgentTool>>([tool]);
+    }
+
+    private sealed class RequestScopedToolSource(IAgentTool tool) : IAgentToolSource
+    {
+        public List<string?> CapturedAccessTokens { get; } = [];
+
+        public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+        {
+            var accessToken = AgentToolRequestContext.NyxIdAccessToken;
+            CapturedAccessTokens.Add(accessToken);
+            return Task.FromResult<IReadOnlyList<IAgentTool>>(
+                string.IsNullOrWhiteSpace(accessToken) ? [] : [tool]);
+        }
     }
 
     private sealed class FixedResultTool(string name, string result) : IAgentTool

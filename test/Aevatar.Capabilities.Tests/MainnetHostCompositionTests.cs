@@ -584,12 +584,29 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
         workspace.Sources.Should().Contain(source => source is AgentDeliveryTargetToolSource);
         workspace.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceInventoryToolSource);
         workspace.Sources.Should().Contain(source => source is LarkAgentToolSource);
         workspace.Sources.Should().Contain(source => source is TelegramAgentToolSource);
         workspace.Sources.Should().Contain(source => source is ChronoStorageAgentToolSource);
         workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
         workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        app.Services.GetServices<IAgentToolSource>()
+            .Select(static source => source.GetType())
+            .Should()
+            .NotContain(typeof(NyxIdConnectedServiceInventoryToolSource));
+        app.Services.GetRequiredService<NyxIdConnectedServiceInventoryToolSource>()
+            .Should()
+            .NotBeNull();
+        var replyGenerator = app.Services.GetRequiredService<IConversationReplyGenerator>();
+        var channelToolSources = replyGenerator.GetType()
+            .GetField("_toolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(replyGenerator)
+            .Should()
+            .BeAssignableTo<IReadOnlyList<IAgentToolSource>>()
+            .Subject;
+        channelToolSources.Should().ContainSingle(source =>
+            source is NyxIdConnectedServiceInventoryToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);

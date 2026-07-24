@@ -14,22 +14,19 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
     private readonly IScheduledInvocationWorkflowEvidenceQueryPort _workflowQueryPort;
     private readonly IScheduledInvocationConnectorEvidenceQueryPort _connectorQueryPort;
     private readonly IScheduledInvocationOwnerLLMEvidenceQueryPort _ownerLLMQueryPort;
-    private readonly IScheduledInvocationOwnerLLMServiceIdentityResolver _ownerLLMServiceIdentityResolver;
 
     public ScheduledInvocationAuthorizationPlanner(
         INyxIdAuthorizationCatalogQueryPort catalogQueryPort,
         IScheduledInvocationMemberEvidenceQueryPort? memberQueryPort = null,
         IScheduledInvocationWorkflowEvidenceQueryPort? workflowQueryPort = null,
         IScheduledInvocationConnectorEvidenceQueryPort? connectorQueryPort = null,
-        IScheduledInvocationOwnerLLMEvidenceQueryPort? ownerLLMQueryPort = null,
-        IScheduledInvocationOwnerLLMServiceIdentityResolver? ownerLLMServiceIdentityResolver = null)
+        IScheduledInvocationOwnerLLMEvidenceQueryPort? ownerLLMQueryPort = null)
     {
         _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
         _memberQueryPort = memberQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _workflowQueryPort = workflowQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _connectorQueryPort = connectorQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
         _ownerLLMQueryPort = ownerLLMQueryPort ?? UnavailableTargetEvidenceQueryPorts.Instance;
-        _ownerLLMServiceIdentityResolver = ownerLLMServiceIdentityResolver ?? UnavailableTargetEvidenceQueryPorts.Instance;
     }
 
     public async Task<ScheduledInvocationAuthorizationPlanResult> PlanAsync(
@@ -147,6 +144,8 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             ScheduledInvocationDisclosure.PauseResumePreservesCredential,
             ScheduledInvocationDisclosure.NodeIdsArePermissionSet,
         });
+        if (evidence.OwnerLLMSelection is not null)
+            plan.OwnerLlmSelection = evidence.OwnerLLMSelection.Clone();
         plan.PermissionDigest = ComputeDigest(plan);
         return ScheduledInvocationAuthorizationPlanResult.Succeeded(plan);
     }
@@ -166,6 +165,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             var directRequiredServices = directServices.Services.ToList();
             var directGrantRequirement = request.ServiceGrantRequirement;
             var directSourceStamps = (request.SourceStamps ?? []).Select(static stamp => stamp.Clone()).ToList();
+            ScheduledInvocationOwnerLLMSelection? directOwnerLLMSelection = null;
             var ownerLLMScopeId = request.InvocationTarget.TargetCase ==
                                   ScheduledInvocationTarget.TargetOneofCase.ScheduledAgent
                 ? request.InvocationTarget.ScheduledAgent.ExecutionScopeId.Trim()
@@ -174,7 +174,6 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             {
                 var ownerLLM = await ResolveOwnerLLMEvidenceAsync(
                     ownerLLMScopeId,
-                    request.OwnerContext,
                     directRequiredServices,
                     directGrantRequirement,
                     directSourceStamps,
@@ -182,6 +181,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 if (ownerLLM.Failure != null)
                     return TargetEvidenceResolution.Failed(ownerLLM.Failure);
                 directGrantRequirement = ownerLLM.ServiceGrantRequirement;
+                directOwnerLLMSelection = ownerLLM.Selection;
             }
 
             var stamps = CanonicalizeSourceStamps(directSourceStamps);
@@ -191,6 +191,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
                 directRequiredServices,
                 directGrantRequirement,
                 stamps.SourceStamps,
+                directOwnerLLMSelection,
                 null);
         }
 
@@ -231,6 +232,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             return TargetEvidenceResolution.Failed(capabilities.Failure);
         var requiredServices = capabilities.Services.ToList();
         var serviceGrantRequirement = workflow.ServiceGrantRequirement;
+        ScheduledInvocationOwnerLLMSelection? ownerLLMSelection = null;
         var sourceStamps = new List<AuthorizationSourceStamp>
         {
             new()
@@ -282,7 +284,6 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         {
             var ownerLLM = await ResolveOwnerLLMEvidenceAsync(
                 target.ScopeId,
-                request.OwnerContext,
                 requiredServices,
                 serviceGrantRequirement,
                 sourceStamps,
@@ -290,6 +291,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             if (ownerLLM.Failure != null)
                 return TargetEvidenceResolution.Failed(ownerLLM.Failure);
             serviceGrantRequirement = ownerLLM.ServiceGrantRequirement;
+            ownerLLMSelection = ownerLLM.Selection;
         }
 
         sourceStamps.AddRange(request.SourceStamps ?? []);
@@ -300,58 +302,40 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             requiredServices,
             serviceGrantRequirement,
             canonicalStamps.SourceStamps,
+            ownerLLMSelection,
             null);
     }
 
     private async Task<OwnerLLMEvidenceResolution> ResolveOwnerLLMEvidenceAsync(
         string scopeId,
-        AuthenticatedAuthorizationOwnerContext ownerContext,
         List<NyxIdUserServiceCapabilityRef> requiredServices,
         AuthorizationGrantRequirement serviceGrantRequirement,
         List<AuthorizationSourceStamp> sourceStamps,
         CancellationToken ct)
     {
-        var ownerLLM = await _ownerLLMQueryPort.GetAsync(scopeId, ownerContext, ct);
+        var ownerLLM = await _ownerLLMQueryPort.GetAsync(scopeId, ct);
         if (ownerLLM == null)
         {
             return OwnerLLMEvidenceResolution.Failed(Failed(
                 ScheduledInvocationAuthorizationFailureCode.SnapshotNotFound,
                 "owner_llm_authorization_evidence_not_found"));
         }
-        if (ownerLLM.ServiceGrantRequirement == AuthorizationGrantRequirement.Unspecified ||
-            !Enum.IsDefined(ownerLLM.ServiceGrantRequirement))
+        if (!ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(ownerLLM.Selection))
         {
             return OwnerLLMEvidenceResolution.Failed(Failed(
-                ScheduledInvocationAuthorizationFailureCode.UnknownEnum,
-                "owner_llm_service_grant_requirement_invalid"));
+                ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
+                "owner_llm_selection_invalid"));
         }
 
-        var ownerServiceId = ownerLLM.NyxIdServiceId?.Trim() ?? string.Empty;
-        var ownerServiceSlug = ownerLLM.NyxIdServiceSlug?.Trim() ?? string.Empty;
-        if (ownerLLM.ServiceGrantRequirement == AuthorizationGrantRequirement.Required)
+        var selection = ownerLLM.Selection;
+        if (selection.RouteKind == ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService)
         {
-            if (ownerServiceId.Length == 0)
-            {
-                ownerServiceId = (await _ownerLLMServiceIdentityResolver.ResolveAsync(ownerLLM, ownerContext, ct)).Trim();
-            }
-            if (ownerServiceId.Length == 0)
-            {
-                return OwnerLLMEvidenceResolution.Failed(Failed(
-                    ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable,
-                    "owner_llm_exact_service_identity_unavailable"));
-            }
             requiredServices.Add(new NyxIdUserServiceCapabilityRef
             {
-                UserServiceId = ownerServiceId,
-                ServiceSlugSnapshot = ownerServiceSlug,
+                UserServiceId = selection.NyxIdUserServiceId,
+                ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
             });
             serviceGrantRequirement = AuthorizationGrantRequirement.Required;
-        }
-        else if (ownerServiceId.Length > 0 || ownerServiceSlug.Length > 0)
-        {
-            return OwnerLLMEvidenceResolution.Failed(Failed(
-                ScheduledInvocationAuthorizationFailureCode.UnknownEnum,
-                "owner_llm_direct_route_has_service_identity"));
         }
 
         sourceStamps.Add(new AuthorizationSourceStamp
@@ -360,7 +344,7 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
             SourceId = scopeId,
             StateVersion = ownerLLM.StateVersion,
         });
-        return new OwnerLLMEvidenceResolution(serviceGrantRequirement, null);
+        return new OwnerLLMEvidenceResolution(serviceGrantRequirement, selection, null);
     }
 
     private static GrantResolution ResolveGrants(
@@ -738,10 +722,11 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
         IReadOnlyList<NyxIdUserServiceCapabilityRef> RequiredServices,
         AuthorizationGrantRequirement ServiceGrantRequirement,
         IReadOnlyList<AuthorizationSourceStamp> SourceStamps,
+        ScheduledInvocationOwnerLLMSelection? OwnerLLMSelection,
         ScheduledInvocationAuthorizationPlanResult? Failure)
     {
         public static TargetEvidenceResolution Failed(ScheduledInvocationAuthorizationPlanResult failure) =>
-            new([], AuthorizationGrantRequirement.Unspecified, [], failure);
+            new([], AuthorizationGrantRequirement.Unspecified, [], null, failure);
     }
 
     private sealed record RequiredServiceResolution(
@@ -779,18 +764,18 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
     private sealed record OwnerLLMEvidenceResolution(
         AuthorizationGrantRequirement ServiceGrantRequirement,
+        ScheduledInvocationOwnerLLMSelection? Selection,
         ScheduledInvocationAuthorizationPlanResult? Failure)
     {
         public static OwnerLLMEvidenceResolution Failed(ScheduledInvocationAuthorizationPlanResult failure) =>
-            new(AuthorizationGrantRequirement.Unspecified, failure);
+            new(AuthorizationGrantRequirement.Unspecified, null, failure);
     }
 
     private sealed class UnavailableTargetEvidenceQueryPorts :
         IScheduledInvocationMemberEvidenceQueryPort,
         IScheduledInvocationWorkflowEvidenceQueryPort,
         IScheduledInvocationConnectorEvidenceQueryPort,
-        IScheduledInvocationOwnerLLMEvidenceQueryPort,
-        IScheduledInvocationOwnerLLMServiceIdentityResolver
+        IScheduledInvocationOwnerLLMEvidenceQueryPort
     {
         public static readonly UnavailableTargetEvidenceQueryPorts Instance = new();
 
@@ -811,12 +796,6 @@ public sealed class ScheduledInvocationAuthorizationPlanner : IScheduledInvocati
 
         Task<ScheduledInvocationOwnerLLMEvidence?> IScheduledInvocationOwnerLLMEvidenceQueryPort.GetAsync(
             string scopeId,
-            AuthenticatedAuthorizationOwnerContext? ownerContext = null,
-            CancellationToken ct = default) => Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
-
-        Task<string> IScheduledInvocationOwnerLLMServiceIdentityResolver.ResolveAsync(
-            ScheduledInvocationOwnerLLMEvidence evidence,
-            AuthenticatedAuthorizationOwnerContext ownerContext,
-            CancellationToken ct = default) => Task.FromResult(string.Empty);
+            CancellationToken ct) => Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
     }
 }

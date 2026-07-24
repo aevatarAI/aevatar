@@ -667,6 +667,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
                         Tenant = "tenant-a",
                         ExternalUserId = "external-user-42",
                         Scope = "proxy",
+                        BindingId = "bnd-owner-alpha",
                     },
                 },
             }),
@@ -685,6 +686,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
                 Tenant = "tenant-a",
                 ExternalUserId = "external-user-42",
                 Scope = "proxy",
+                BindingId = "bnd-owner-alpha",
             });
     }
 

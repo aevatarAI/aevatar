@@ -428,6 +428,63 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_WithCallerAuthorityInHttpAuth_ShouldReturnBadRequestWithoutScheduleMutation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+                auth = new
+                {
+                    senderNyxId = new
+                    {
+                        subject = new
+                        {
+                            platform = "nyxid",
+                            externalUserId = "user-42",
+                        },
+                        scope = "proxy",
+                    },
+                    callerAuthority = new
+                    {
+                        platform = "nyxid",
+                        externalUserId = "user-42",
+                        scope = "proxy",
+                        bindingId = "bnd-forged",
+                    },
+                },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Create_ShouldDefaultMissingScheduleKindToGeneric()
     {
         var service = new RecordingScheduledDispatchApplicationService();
@@ -783,6 +840,51 @@ public sealed class ScheduledDispatchEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         service.LastScheduleGet.Should().Be("schedule-1");
         service.LastTeamScheduleGet.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Get_ShouldSerializeOwnerLLMRuntimeEvidenceWithoutSensitiveAuthorityMaterial()
+    {
+        var detail = CreateDetail("schedule-owner-llm");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMRouteKind", "nyx_id_user_service");
+        SetRequiredStringProperty(
+            detail.Schedule,
+            "OwnerLLMRoute",
+            "/api/v1/proxy/s/chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMUserServiceId", "us-chrono");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMServiceSlug", "chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMModel", "gpt-5.5");
+        SetRequiredStringProperty(detail.Schedule, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(detail.Schedule, "VaultRevocationStatus", "vault-track-terminal");
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = detail,
+        };
+
+        var result = await ScheduledDispatchEndpoints.Get("schedule-owner-llm", service);
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var document = await JsonDocument.ParseAsync(http.Response.Body);
+
+        var payload = document.RootElement.GetProperty("schedule");
+        payload.GetProperty("ownerLLMRouteKind").GetString().Should().Be("nyx_id_user_service");
+        payload.GetProperty("ownerLLMRoute").GetString().Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        payload.GetProperty("ownerLLMUserServiceId").GetString().Should().Be("us-chrono");
+        payload.GetProperty("ownerLLMServiceSlug").GetString().Should().Be("chrono-llm-public");
+        payload.GetProperty("ownerLLMModel").GetString().Should().Be("gpt-5.5");
+        payload.GetProperty("nyxIdRevocationStatus").GetString().Should().Be("nyx-track-terminal");
+        payload.GetProperty("vaultRevocationStatus").GetString().Should().Be("vault-track-terminal");
+        var json = document.RootElement.GetRawText();
+        json.Should().NotContain("callerAuthority")
+            .And.NotContain("bindingId")
+            .And.NotContain("bearerToken")
+            .And.NotContain("refreshToken")
+            .And.NotContain("secretReference")
+            .And.NotContain("vaultRef")
+            .And.NotContain("full_key")
+            .And.NotContain("ciphertext");
     }
 
     [Fact]
@@ -1654,6 +1756,13 @@ public sealed class ScheduledDispatchEndpointsTests
             CollectFileProto(dependency, fds, seen);
 
         fds.File.Add(FileDescriptorProto.Parser.ParseFrom(file.SerializedData));
+    }
+
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        property!.SetValue(target, value);
     }
 
     private static ScheduledDispatchDetail CreateDetail(string scheduleId) =>

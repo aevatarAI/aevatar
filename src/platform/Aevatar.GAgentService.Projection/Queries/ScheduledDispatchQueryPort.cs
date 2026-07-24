@@ -224,7 +224,18 @@ public sealed class ScheduledDispatchQueryPort : IScheduledDispatchQueryPort
             document.TeamAutomationIdempotencyKey ?? string.Empty,
             document.ActiveCredentialOwner?.Authority ?? string.Empty,
             document.ActiveCredentialOwner?.OwnerKind ?? string.Empty,
-            document.ActiveCredentialOwner?.OwnerSubject ?? string.Empty);
+            document.ActiveCredentialOwner?.OwnerSubject ?? string.Empty)
+        {
+            OwnerLLMRouteKind = string.IsNullOrEmpty(document.OwnerLlmRouteKind)
+                ? "unspecified"
+                : document.OwnerLlmRouteKind,
+            OwnerLLMRoute = document.OwnerLlmRoute ?? string.Empty,
+            OwnerLLMUserServiceId = document.OwnerLlmUserServiceId ?? string.Empty,
+            OwnerLLMServiceSlug = document.OwnerLlmServiceSlug ?? string.Empty,
+            OwnerLLMModel = document.OwnerLlmModel ?? string.Empty,
+            NyxIdRevocationStatus = document.NyxidRevocationStatus ?? string.Empty,
+            VaultRevocationStatus = document.VaultRevocationStatus ?? string.Empty,
+        };
     }
 
     private static ScheduledDispatchFireRecord MapFireRecord(ScheduledDispatchFireRecordDocument document) =>

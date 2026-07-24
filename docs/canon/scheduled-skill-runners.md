@@ -91,7 +91,7 @@ The typed `authorizationStatus` values are:
 | `revocation_pending` | At least one credential revocation track remains incomplete and retryable. The row must remain visible. |
 | `failed` | A credential lifecycle operation failed with a stable `lastAuthorizationErrorCode`. |
 
-The same view exposes `credentialSourceKind`, `credentialExpiresAtUtc`, `credentialGeneration`, `revocationPending`, `lastAuthorizationErrorCode`, and `stateVersion`. These are read-model facts, not browser inputs. A missing or unresolvable fire-time credential transitions the owner-scoped automation to `needs_authorization` with a stable error code instead of remaining a generic fire failure. Revocation is never hidden by a successful admission receipt: `revocationPending = true` and `revocation_pending` remain query-visible until all required tracks complete.
+The same view exposes `credentialSourceKind`, `credentialExpiresAtUtc`, `credentialGeneration`, `revocationPending`, `nyxIdRevocationStatus`, `vaultRevocationStatus`, `lastAuthorizationErrorCode`, and `stateVersion`. These are read-model facts, not browser inputs. The two track fields use the exact projected wire values `NotRequired`, `Pending`, `Completed`, and `Failed`; they are not lifecycle-status aliases. A missing or unresolvable fire-time credential transitions the owner-scoped automation to `needs_authorization` with a stable error code instead of remaining a generic fire failure. Revocation is never hidden by a successful admission receipt: `revocationPending = true` and `revocation_pending` remain query-visible until all required tracks complete. Deleting an automation with an existing Agent Key requires both track values to reach `Completed` before the deleted row may become not found.
 
 ## Run And Schedule Lifecycle
 
@@ -113,9 +113,54 @@ The migration is idempotent and every subsequent committed-state projection also
 
 ## Scheduled Invocation Authorization Facts
 
+An owner-LLM-dependent Team automation follows one integrity-bound chain:
+
+```text
+committed typed UserConfig selection
+  -> digest-covered authorization plan
+  -> constrained NyxID Agent Key + Vault reference
+  -> actor-owned authorization fact + persisted ChatRequestEvent.LlmControl
+  -> runtime caller/payload/fact cross-check
+  -> workflow inbox
+```
+
+The committed UserConfig selection, exact service grant, credential locator,
+caller authority, and runtime route/model are parts of one decision. The
+permission digest covers the typed owner LLM selection. Create, reauthorize,
+and update copy that validated selection into the actor-owned authorization
+fact and derive persisted `ChatRequestEvent.LlmControl` from the same plan or
+fact. They never accept an operator-supplied route, model, service grant,
+credential identifier, or caller binding.
+
+Before dispatch reaches the workflow inbox, an Agent Key workflow must have a
+complete verified caller binding, a valid fact selection, payload route/model
+equal to that selection, and the selected UserService in the fact's exact
+grants. Missing authority or any mismatch fails with a typed scheduled
+authorization code, moves the automation toward `needs_authorization`, and
+cancels future fire leases. The fire path must not query UserConfig, fill from
+a Host default, infer identity from a legacy slug/model prefix, accept a
+missing binding, or treat a v1 permission digest as v2-compatible.
+
+Caller authority is deliberately absent from projection and public API
+contracts. A successful create emits one non-projected operational event in
+category `Aevatar.Studio.MemberAutomation`, EventId
+`6201/StudioMemberAutomationCreateAccepted`, with exactly the six application
+fields `ScopeId`, `TeamId`, `MemberId`, `ScheduleId`, `OperationId`, and
+`BindingId`. This event is acceptance correlation, not a read model or
+completion fact, and it must contain no permission digest or credential
+material.
+
+An accepted committed revocation outcome with both pending flags false emits
+`6202/StudioMemberAutomationRevocationCompleted` in the same category with
+exactly `ScopeId`, `TeamId`, `MemberId`, `ScheduleId`, `OperationId`,
+`NyxIdRevocationStatus`, `VaultRevocationStatus`, `StateVersion`, and
+`ObservedAtUtc`; both status values are exactly `Completed`. The repository
+tool `tools/schedules/query_member_automation_audit.sh` is the canonical
+allowlisted query for the `create` and `revocation` operational events.
+
 Workflow definition actors compile typed `ExternalWorkflowCapabilityRef` values and owner-LLM requirements during the bind turn. A Connector dependency is `connector_capability_ref + operation_id + contract_digest`; a NyxID dependency is `user_service_id + service_slug_snapshot + operation_id + method + path_template + contract_digest`. Slug-only, `service` alias, dynamic identity, incomplete operation tuple, contract drift, and sensitive headers fail before the definition is committed. Workflow service preparation copies the validated refs and admission digest into the immutable, artifact-hashed `WorkflowServiceDeploymentPlan`; mutable draft contents never substitute for an older prepared revision.
 
-Authorization planning consumes the Studio member, the exact prepared artifact selected by `scopeId + publishedServiceId + workflowRevisionId`, and the owner-scoped NyxID authorization catalog current-state replica. Connector and owner UserConfig evidence are read only when required by that revision. The planner accepts only exact `user_service_id` evidence from the typed refs; `service_slug_snapshot` is a route/display integrity check and is never resolved back into an id. Two equal slugs with different ids remain two grants. Scheduled workflow agents use their typed `ExecutionScopeId` to read the same owner UserConfig evidence, so their Ornn, channel delivery, failure notification, declared proxy, and effective LLM surfaces are covered by one plan. An absent UserConfig document contributes state version `0` and the Host default rather than hiding that route. An empty, `auto`, or `gateway` user preference resolves through the same Host-composed `Aevatar:NyxId:DefaultRoute` used by `NyxIdLLMProvider`, so the normal `chrono-llm-public` default still requires its exact `UserService.id` grant. Only an effective bare `/api/v1/llm/gateway/v1` route contributes no user-service grant.
+Authorization planning consumes the Studio member, the exact prepared artifact selected by `scopeId + publishedServiceId + workflowRevisionId`, and the owner-scoped NyxID authorization catalog current-state replica. Connector and owner UserConfig evidence are read only when required by that revision. The planner accepts only exact `user_service_id` evidence from the typed refs; `service_slug_snapshot` is a route/display integrity check and is never resolved back into an id. Two equal slugs with different ids remain two grants. Scheduled workflow agents use their typed `ExecutionScopeId` to read the same committed typed UserConfig selection, so their Ornn, channel delivery, failure notification, declared proxy, and LLM surfaces are covered by one plan. An absent UserConfig document contributes state version `0` and an `Unspecified` selection; it never manufactures Gateway or the Host default. Explicit `Gateway` and `NyxIdUserService` selections must each carry a valid canonical model, and only the latter contributes its exact `UserService.id` grant.
 
 Durable external-capability readiness uses that catalog replica as evidence rather than treating NyxID durable mode as permanently unavailable. The readiness source performs one pure owner-scoped read-model query for the verified caller and never refreshes, activates, polls, replays, or primes projection. It accepts only an active, non-cleaned snapshot with a positive authoritative version, complete lifecycle facts, the exact ordinal `nyxid` resource-owner authority, and a content digest recomputed from the typed owner and services. A durable NyxID `READY` proof binds the exact capability identity to a `DURABLE_AUTHORIZATION_CATALOG` source stamp containing the actor id, authoritative version, freshness window, and content digest. Unified admission rejects a proof evaluated for another execution mode or capability and rejects both new and existing durable plans when this stamp is absent or invalid.
 

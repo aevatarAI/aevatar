@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules;
 using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.ReadModels;
@@ -55,6 +56,8 @@ public sealed class ScheduledDispatchCurrentStateProjector
     {
         var target = state.Target ?? new ScheduledDispatchTargetState();
         var serviceIdentity = target.ServiceInvocation?.Identity;
+        var authorizationFact = state.ActiveTeamAuthorizationFact ?? target.ServiceInvocation?.AuthorizationFact;
+        var ownerLLMSelection = authorizationFact?.OwnerLlmSelection;
         var scheduleId = string.IsNullOrWhiteSpace(state.ScheduleId) ? context.RootActorId : state.ScheduleId;
         var document = new ScheduledDispatchDocument
         {
@@ -118,6 +121,12 @@ public sealed class ScheduledDispatchCurrentStateProjector
             LastAuthorizationErrorCode = state.LastAuthorizationErrorCode ?? string.Empty,
             PermissionDigest = state.TeamAutomationPermissionDigest ?? string.Empty,
             PolicyVersion = state.TeamAutomationPolicyVersion ?? string.Empty,
+            OwnerLlmRouteKind = ToOwnerLLMRouteKindName(ownerLLMSelection?.RouteKind ??
+                ScheduledInvocationOwnerLLMRouteKind.Unspecified),
+            OwnerLlmRoute = ownerLLMSelection?.RouteValue ?? string.Empty,
+            OwnerLlmUserServiceId = ownerLLMSelection?.NyxIdUserServiceId ?? string.Empty,
+            OwnerLlmServiceSlug = ownerLLMSelection?.ServiceSlugSnapshot ?? string.Empty,
+            OwnerLlmModel = ownerLLMSelection?.Model ?? string.Empty,
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
         };
@@ -133,6 +142,8 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.CompletedAt = state.CompletedAt;
         document.CredentialExpiresAt = state.TeamCredentialExpiresAt?.ToDateTimeOffset();
         document.Headers = state.Headers
+            .Where(static item =>
+                !ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(item.Key))
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;
@@ -200,6 +211,14 @@ public sealed class ScheduledDispatchCurrentStateProjector
             ScheduledDispatchTargetKindState.ServiceInvocation => ScheduledDispatchTargetKind.ServiceInvocation,
             _ => ScheduledDispatchTargetKind.Envelope,
         };
+
+    private static string ToOwnerLLMRouteKindName(ScheduledInvocationOwnerLLMRouteKind routeKind) => routeKind switch
+    {
+        ScheduledInvocationOwnerLLMRouteKind.Unspecified => "unspecified",
+        ScheduledInvocationOwnerLLMRouteKind.Gateway => "gateway",
+        ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService => "nyx_id_user_service",
+        _ => throw new InvalidOperationException($"Unknown owner LLM route kind value '{(int)routeKind}'."),
+    };
 
     private static ScheduledDispatchScheduleKind ToApplicationScheduleKind(ScheduledDispatchScheduleKindState stateKind) =>
         stateKind switch

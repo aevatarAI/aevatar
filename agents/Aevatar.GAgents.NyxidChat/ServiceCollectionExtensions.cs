@@ -17,6 +17,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.AI.ToolProviders.Lark;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
@@ -130,7 +131,7 @@ public static class ServiceCollectionExtensions
             new NyxIdConversationReplyGenerator(
                 sp.GetRequiredService<ILLMProviderFactory>(),
                 sp.GetRequiredService<IBuiltInPromptFloorProvider>(),
-                sp.GetServices<IAgentToolSource>(),
+                ResolveChannelToolSources(sp),
                 sp.GetServices<IAgentRunMiddleware>(),
                 sp.GetServices<IToolCallMiddleware>(),
                 sp.GetServices<ILLMCallMiddleware>(),
@@ -204,6 +205,16 @@ public static class ServiceCollectionExtensions
         AddNyxIdStreamingInteractions(services);
 
         return services;
+    }
+
+    private static IEnumerable<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
+    {
+        foreach (var source in serviceProvider.GetServices<IAgentToolSource>())
+            yield return source;
+
+        var inventory = serviceProvider.GetService<NyxIdConnectedServiceInventoryToolSource>();
+        if (inventory is not null)
+            yield return inventory;
     }
 
     private static void AddNyxIdStreamingInteractions(IServiceCollection services)
