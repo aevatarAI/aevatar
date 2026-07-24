@@ -86,7 +86,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", service: ChronoLlm) },
         };
         var handler = CreateHandler(queryPort: queryPort);
 
@@ -108,7 +108,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.5", service: ChronoLlm) },
         };
         var handler = CreateHandler(queryPort: queryPort);
 
@@ -129,7 +129,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.4", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "gpt-5.4", service: ChronoLlm) },
         };
         var handler = CreateHandler(queryPort: queryPort);
 
@@ -574,7 +574,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", service: ChronoLlm) },
         };
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var handler = CreateHandler(queryPort: queryPort, preferencePort: preferencePort);
@@ -621,7 +621,7 @@ public sealed class ModelSlashCommandHandlerTests
         };
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "current-model", route: OpenAi.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "current-model", service: OpenAi) },
         };
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var handler = CreateHandler(catalog, queryPort, preferencePort);
@@ -638,7 +638,7 @@ public sealed class ModelSlashCommandHandlerTests
     {
         var queryPort = new StubUserConfigQueryPort
         {
-            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", route: ChronoLlm.RouteValue) },
+            ByScope = { ["bnd_sender"] = MakeConfig(defaultModel: "old-model", service: ChronoLlm) },
         };
         var preferencePort = new StubChannelUserLlmPreferencePort();
         var handler = CreateHandler(queryPort: queryPort, preferencePort: preferencePort);
@@ -722,14 +722,19 @@ public sealed class ModelSlashCommandHandlerTests
 
     private static StudioConfig MakeConfig(
         string defaultModel,
-        string route = UserConfigLlmRouteDefaults.Gateway) => new(
+        NyxIdLlmService service) => new(
         DefaultModel: defaultModel,
-        PreferredLlmRoute: route,
+        PreferredLlmRoute: service.RouteValue,
         RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
         LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
         RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
         GithubUsername: null,
-        MaxToolRounds: 0);
+        MaxToolRounds: 0,
+        LlmSelection: new UserLlmSelectionValue(
+            UserLlmSelectionKind.NyxIdUserService,
+            service.RouteValue,
+            service.Identity!.NyxIdUserServiceId,
+            service.ServiceSlug));
 
     private sealed class StubCatalogClient : INyxIdLlmServiceCatalogClient
     {

@@ -103,6 +103,12 @@ public sealed class MainnetHealthEndpointsTests
         readinessComponents.Should().Contain(["workflow-bundle", "gagent-service", "studio", "audit-trail"]);
         // Security lockdown: the scripting capability must never be composed into the mainnet host.
         readinessComponents.Should().NotContain("scripting-bundle");
+        var studioReadinessComponent = readinessPayload.RootElement
+            .GetProperty("components")
+            .EnumerateArray()
+            .Single(static component => component.GetProperty("name").GetString() == "studio");
+        studioReadinessComponent.GetProperty("status").GetString().Should().Be("healthy");
+        studioReadinessComponent.GetProperty("message").GetString().Should().Be("Required routes are mapped.");
 
         var apiHealthResponse = await client.GetAsync("/api/health");
         var apiHealthBody = await apiHealthResponse.Content.ReadAsStringAsync();
