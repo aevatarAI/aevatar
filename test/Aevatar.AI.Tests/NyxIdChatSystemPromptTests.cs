@@ -121,6 +121,31 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void ComposedPrompt_ShouldKeepGenericRuntimePromptProviderNeutral()
+    {
+        var prompt = ComposedAgentPrompt();
+
+        prompt.Should().Contain("<channel-context>");
+        prompt.Should().Contain("identity_hints");
+        prompt.Should().Contain("subject");
+        prompt.Should().Contain("kind");
+        prompt.Should().Contain("value");
+        prompt.Should().Contain("provider-backed relay registration");
+        prompt.Should().NotContain("Lark");
+        prompt.Should().NotContain("lark");
+        prompt.Should().NotContain("Feishu");
+        prompt.Should().NotContain("api-lark-bot");
+        prompt.Should().NotContain("lark_messages_");
+        prompt.Should().NotContain("developer-console");
+        prompt.Should().NotContain("/open-apis/");
+        prompt.Should().NotContain("open_id");
+        prompt.Should().NotContain("union_id");
+        prompt.Should().NotContain("employee_id");
+        prompt.Should().NotContain("lark_chat_id");
+        prompt.Should().NotContain("lark_union_id");
+    }
+
+    [Fact]
     public void DecorateSystemPrompt_ShouldUseCatalogSlotsWithoutShadowCandidateBody()
     {
         var agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider());
