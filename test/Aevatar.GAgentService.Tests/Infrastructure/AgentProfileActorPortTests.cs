@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Security.Cryptography;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
@@ -5,6 +7,8 @@ using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.Options;
+using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.GAgentService.Tests.Infrastructure;
 
@@ -13,10 +17,199 @@ public sealed class AgentProfileActorPortTests
     private const string ProfileId = "prof-semantic-alpha";
 
     [Fact]
+    public async Task DispatchMutationAsync_ShouldSignExactTargetTypeAndPayloadWithRsaPssSha256()
+    {
+        using var currentKey = RSA.Create(2048);
+        var proofService = ProofService("key-current", currentKey);
+        var command = new UpdateAgentProfileDraftCommand
+        {
+            Identity = Identity(),
+            Operation = Operation("signed-update"),
+            ExpectedAuthorityStateVersion = 7,
+            Content = GAgentServiceTestKit.CreateAgentProfileContent(),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new AgentProfileActorPort(
+            new RecordingActorRuntime(),
+            dispatch,
+            proofService);
+
+        await port.DispatchUpdateDraftAsync(command);
+
+        var actorId = AgentProfileActorIds.Profile(ProfileId);
+        var signed = dispatch.Calls.Should().ContainSingle().Subject.Envelope.Payload
+            .Unpack<UpdateAgentProfileDraftCommand>();
+        signed.IngressProof.KeyId.Should().Be("key-current");
+        signed.IngressProof.TargetActorId.Should().Be(actorId);
+        signed.IngressProof.CommandTypeUrl.Should().Be(Any.Pack(signed).TypeUrl);
+        signed.IngressProof.CanonicalCommandSha256.Should().Equal(
+            AgentProfileIngressProofIntegrity.ComputeCanonicalCommandSha256(signed));
+        proofService.Verify(actorId, signed).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IngressProof_ShouldRejectEveryChangedAuthorityDimension()
+    {
+        using var currentKey = RSA.Create(2048);
+        var proofService = ProofService("key-current", currentKey);
+        var command = new UpdateAgentProfileDraftCommand
+        {
+            Identity = Identity(),
+            Operation = Operation("tamper-update"),
+            ExpectedAuthorityStateVersion = 7,
+            Content = GAgentServiceTestKit.CreateAgentProfileContent(),
+        };
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new AgentProfileActorPort(
+            new RecordingActorRuntime(),
+            dispatch,
+            proofService);
+        await port.DispatchUpdateDraftAsync(command);
+        var actorId = AgentProfileActorIds.Profile(ProfileId);
+        var signed = dispatch.Calls.Single().Envelope.Payload.Unpack<UpdateAgentProfileDraftCommand>();
+
+        proofService.Verify("profile-actor-other", signed).Should().BeFalse();
+        Tamper(signed, static value => value.IngressProof.CommandTypeUrl += ".other", proofService, actorId);
+        Tamper(signed, static value => value.Identity.Owner.User.SubjectId = "owner-other", proofService, actorId);
+        Tamper(signed, static value => value.ExpectedAuthorityStateVersion++, proofService, actorId);
+        Tamper(signed, static value => value.Content.DisplayName = "Changed", proofService, actorId);
+        Tamper(signed, static value => value.IngressProof.CanonicalCommandSha256 = Digest(0x55), proofService, actorId);
+        Tamper(signed, static value => value.IngressProof.Signature = ByteString.CopyFrom([0x55]), proofService, actorId);
+        Tamper(signed, static value => value.IngressProof.KeyId = "key-unknown", proofService, actorId);
+    }
+
+    [Fact]
+    public async Task IngressProof_ShouldBindCreateBindingAndPublishedSnapshotPayloads()
+    {
+        using var currentKey = RSA.Create(2048);
+        var proofService = ProofService("key-current", currentKey);
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new AgentProfileActorPort(
+            new RecordingActorRuntime(),
+            dispatch,
+            proofService);
+
+        await port.DispatchCreateAsync(CreateCommand());
+        await port.DispatchUpsertSkillBindingAsync(new UpsertAgentProfileSkillBindingCommand
+        {
+            Identity = Identity(),
+            Operation = Operation("binding-proof"),
+            ExpectedAuthorityStateVersion = 11,
+            Binding = new AgentProfileSkillBinding
+            {
+                BindingId = "bind-alpha",
+                ActivationMode = AgentProfileSkillActivationMode.Routed,
+                Skill = new ExactOrnnSkillReference
+                {
+                    SkillGuid = "2d05bf2e-88ee-4f76-9998-728ba2f9b24a53",
+                    LiteralVersion = "1.0",
+                    ExpectedName = "skill-alpha",
+                    ExpectedPublisherId = "publisher-alpha",
+                },
+            },
+        });
+        await port.DispatchPublishAsync(new PublishAgentProfileCommand
+        {
+            Identity = Identity(),
+            Operation = Operation("snapshot-proof"),
+            ExpectedAuthorityStateVersion = 12,
+            ExpectedDraftRevision = 3,
+            ExpectedDraftSha256 = Digest(0x31),
+            Snapshot = new AgentProfilePublishedSnapshot
+            {
+                Identity = Identity(),
+                DisplayName = "Assistant",
+                SnapshotSha256 = Digest(0x32),
+            },
+        });
+
+        var create = dispatch.Calls[0].Envelope.Payload.Unpack<CreateAgentProfileCommand>();
+        var tamperedCreate = create.Clone();
+        tamperedCreate.InitialContent.DisplayName = "Changed";
+        proofService.Verify(AgentProfileActorIds.Namespace, tamperedCreate).Should().BeFalse();
+
+        var actorId = AgentProfileActorIds.Profile(ProfileId);
+        var upsert = dispatch.Calls[1].Envelope.Payload
+            .Unpack<UpsertAgentProfileSkillBindingCommand>();
+        var tamperedBinding = upsert.Clone();
+        tamperedBinding.Binding.BindingId = "bind-beta";
+        proofService.Verify(actorId, tamperedBinding).Should().BeFalse();
+
+        var publish = dispatch.Calls[2].Envelope.Payload.Unpack<PublishAgentProfileCommand>();
+        var tamperedSnapshot = publish.Clone();
+        tamperedSnapshot.Snapshot.DisplayName = "Changed";
+        proofService.Verify(actorId, tamperedSnapshot).Should().BeFalse();
+        var tamperedExpectedDraft = publish.Clone();
+        tamperedExpectedDraft.ExpectedDraftSha256 = Digest(0x33);
+        proofService.Verify(actorId, tamperedExpectedDraft).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task IngressProofRotation_ShouldAcceptRetainedPreviousPublicKeyAndRejectRevokedKey()
+    {
+        using var previousKey = RSA.Create(2048);
+        using var currentKey = RSA.Create(2048);
+        var previousSigner = ProofService("key-previous", previousKey);
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new AgentProfileActorPort(
+            new RecordingActorRuntime(),
+            dispatch,
+            previousSigner);
+        await port.DispatchRemoveSkillBindingAsync(new RemoveAgentProfileSkillBindingCommand
+        {
+            Identity = Identity(),
+            Operation = Operation("rotation-remove"),
+            ExpectedAuthorityStateVersion = 9,
+            BindingId = "bind-alpha",
+        });
+        var signed = dispatch.Calls.Single().Envelope.Payload
+            .Unpack<RemoveAgentProfileSkillBindingCommand>();
+        var actorId = AgentProfileActorIds.Profile(ProfileId);
+        var rotated = ProofService(
+            "key-current",
+            currentKey,
+            ("key-previous", previousKey));
+        var revoked = ProofService("key-current", currentKey);
+
+        rotated.Verify(actorId, signed).Should().BeTrue();
+        revoked.Verify(actorId, signed).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DispatchMutationAsync_ShouldFailClosedBeforeLifecycleWhenSigningKeyIsUnavailable()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var proofService = new AgentProfileIngressProofService(
+            Options.Create(new AgentProfileIngressProofOptions()));
+        var port = new AgentProfileActorPort(runtime, dispatch, proofService);
+
+        var act = () => port.DispatchUpdateDraftAsync(new UpdateAgentProfileDraftCommand
+        {
+            Identity = Identity(),
+            Operation = Operation("missing-key"),
+        });
+
+        var exception = await act.Should()
+            .ThrowAsync<AgentProfileIngressProofUnavailableException>();
+        exception.Which.Code.Should().Be("AGENT_PROFILE_INGRESS_PROOF_UNAVAILABLE");
+        AssertNoLifecycleOrDispatch(runtime, dispatch);
+    }
+
+    [Fact]
+    public void IngressProofService_ShouldExposeVerificationButNotSigningToRawDispatchClients()
+    {
+        typeof(AgentProfileIngressProofService)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+            .Select(static method => method.Name)
+            .Should().Equal(nameof(IAgentProfileIngressProofVerifier.Verify));
+    }
+
+    [Fact]
     public async Task EnsureCreateTargetsAsync_ShouldCreateNamespaceAndOpaqueProfileActors()
     {
         var runtime = new RecordingActorRuntime();
-        var port = new AgentProfileActorPort(runtime, new RecordingActorDispatchPort());
+        var port = CreatePort(runtime, new RecordingActorDispatchPort());
         var expectedProfileActorId = AgentProfileActorIds.Profile(ProfileId);
 
         var targets = await port.EnsureCreateTargetsAsync(ProfileId);
@@ -40,7 +233,7 @@ public sealed class AgentProfileActorPortTests
         var runtime = new RecordingActorRuntime();
         runtime.AddDeactivated<AgentProfileNamespaceGAgent>(AgentProfileActorIds.Namespace);
         runtime.AddDeactivated<AgentProfileGAgent>(expectedProfileActorId);
-        var port = new AgentProfileActorPort(runtime, new RecordingActorDispatchPort());
+        var port = CreatePort(runtime, new RecordingActorDispatchPort());
 
         var targets = await port.EnsureCreateTargetsAsync(ProfileId);
 
@@ -71,7 +264,7 @@ public sealed class AgentProfileActorPortTests
         command.ProfileActorId = "caller-supplied-profile-actor";
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var port = new AgentProfileActorPort(runtime, dispatch);
+        var port = CreatePort(runtime, dispatch);
 
         var act = () => port.DispatchCreateAsync(command);
 
@@ -92,7 +285,7 @@ public sealed class AgentProfileActorPortTests
             command.Operation = null!;
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var port = new AgentProfileActorPort(runtime, dispatch);
+        var port = CreatePort(runtime, dispatch);
 
         var act = () => port.DispatchCreateAsync(command);
 
@@ -190,7 +383,7 @@ public sealed class AgentProfileActorPortTests
             ClearMutationPart(command, invalidPart);
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
-        var port = new AgentProfileActorPort(runtime, dispatch);
+        var port = CreatePort(runtime, dispatch);
 
         var act = () => DispatchMutationAsync(port, dispatchKind, command);
 
@@ -213,7 +406,7 @@ public sealed class AgentProfileActorPortTests
             "rejected-actor",
             "rejected-correlation");
         var dispatch = new RecordingActorDispatchPort(rejection);
-        var port = new AgentProfileActorPort(new RecordingActorRuntime(), dispatch);
+        var port = CreatePort(new RecordingActorRuntime(), dispatch);
 
         var result = await port.DispatchUpdateDraftAsync(command);
 
@@ -235,7 +428,7 @@ public sealed class AgentProfileActorPortTests
             "admission-correlation");
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort(admission);
-        var port = new AgentProfileActorPort(runtime, dispatch);
+        var port = CreatePort(runtime, dispatch);
         using var cancellation = new CancellationTokenSource();
 
         var result = await dispatchCommand(port, cancellation.Token);
@@ -376,6 +569,51 @@ public sealed class AgentProfileActorPortTests
             CorrelationId = $"correlation-trace-{suffix}",
             InputSha256 = ByteString.CopyFrom(0x11, 0x22, 0x33),
         };
+
+    private static AgentProfileIngressProofService ProofService(
+        string currentKeyId,
+        RSA currentKey,
+        params (string KeyId, RSA Key)[] additionalValidationKeys)
+    {
+        var options = new AgentProfileIngressProofOptions
+        {
+            CurrentKeyId = currentKeyId,
+            CurrentPrivateKeyPkcs8 = Convert.ToBase64String(currentKey.ExportPkcs8PrivateKey()),
+        };
+        options.PublicKeys.Add(
+            currentKeyId,
+            Convert.ToBase64String(currentKey.ExportSubjectPublicKeyInfo()));
+        foreach (var (keyId, key) in additionalValidationKeys)
+        {
+            options.PublicKeys.Add(
+                keyId,
+                Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()));
+        }
+
+        return new AgentProfileIngressProofService(Options.Create(options));
+    }
+
+    private static AgentProfileActorPort CreatePort(
+        IActorRuntime runtime,
+        IActorDispatchPort dispatch)
+    {
+        using var key = RSA.Create(2048);
+        return new AgentProfileActorPort(runtime, dispatch, ProofService("key-test", key));
+    }
+
+    private static void Tamper(
+        UpdateAgentProfileDraftCommand signed,
+        Action<UpdateAgentProfileDraftCommand> mutate,
+        AgentProfileIngressProofService proofService,
+        string actorId)
+    {
+        var tampered = signed.Clone();
+        mutate(tampered);
+        proofService.Verify(actorId, tampered).Should().BeFalse();
+    }
+
+    private static ByteString Digest(byte value) =>
+        ByteString.CopyFrom(Enumerable.Repeat(value, 32).ToArray());
 
     private static AgentProfileOperationFact OperationOf(IMessage command) =>
         command switch

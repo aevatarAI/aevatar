@@ -1,15 +1,130 @@
 using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
+using Aevatar.GAgentService.Core.AgentProfiles;
+using Aevatar.GAgentService.Projection.AgentProfiles;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
+using Any = Google.Protobuf.WellKnownTypes.Any;
 
 namespace Aevatar.GAgentService.Tests.Abstractions;
 
 public sealed class AgentProfileContractsTests
 {
     private const string SkillGuid = "2d05bf2e-88ee-4f76-9998-728ba2f9db10";
+
+    [Fact]
+    public void ApplicationMutationCommands_ShouldCarryTheOnlyIngressProofFields()
+    {
+        var externalCommands = new[]
+        {
+            CreateAgentProfileCommand.Descriptor,
+            UpdateAgentProfileDraftCommand.Descriptor,
+            UpsertAgentProfileSkillBindingCommand.Descriptor,
+            RemoveAgentProfileSkillBindingCommand.Descriptor,
+            PublishAgentProfileCommand.Descriptor,
+        };
+
+        externalCommands
+            .Select(static descriptor => descriptor.FindFieldByName("ingress_proof"))
+            .Should().OnlyContain(static field =>
+                field != null && field.MessageType == AgentProfileIngressProof.Descriptor);
+        AgentProfilesReflection.Descriptor.MessageTypes
+            .Except(externalCommands)
+            .Should().NotContain(static descriptor =>
+                descriptor.FindFieldByName("ingress_proof") != null);
+    }
+
+    [Fact]
+    public void IngressProofIntegrity_ShouldHashTheExactCommandWithOnlyProofCleared()
+    {
+        var command = new UpdateAgentProfileDraftCommand
+        {
+            Operation = Operation("op-proof", "cmd-proof", "corr-proof", 0x11),
+            Identity = ProfileIdentity(),
+            ExpectedAuthorityStateVersion = 7,
+            Content = Content("Purpose", "Instructions", ["alpha"]),
+            IngressProof = new AgentProfileIngressProof
+            {
+                KeyId = "key-alpha",
+                Signature = ByteString.CopyFrom([0x11, 0x22]),
+            },
+        };
+
+        var first = AgentProfileIngressProofIntegrity.ComputeCanonicalCommandSha256(command);
+        command.IngressProof = new AgentProfileIngressProof
+        {
+            KeyId = "key-beta",
+            Signature = ByteString.CopyFrom([0x33, 0x44]),
+        };
+        var changedProof = AgentProfileIngressProofIntegrity.ComputeCanonicalCommandSha256(command);
+        command.ExpectedAuthorityStateVersion = 8;
+        var changedCommand = AgentProfileIngressProofIntegrity.ComputeCanonicalCommandSha256(command);
+
+        changedProof.Should().Equal(first);
+        changedCommand.Should().NotEqual(first);
+    }
+
+    [Fact]
+    public void IngressProofIntegrity_ShouldBuildDomainSeparatedDeterministicSigningMaterial()
+    {
+        var command = new RemoveAgentProfileSkillBindingCommand
+        {
+            Operation = Operation("op-proof", "cmd-proof", "corr-proof", 0x22),
+            Identity = ProfileIdentity(),
+            ExpectedAuthorityStateVersion = 11,
+            BindingId = "bind-alpha",
+        };
+
+        var first = AgentProfileIngressProofIntegrity.CreateSigningMaterial(
+            "profile-actor-alpha",
+            command);
+        var second = AgentProfileIngressProofIntegrity.CreateSigningMaterial(
+            "profile-actor-alpha",
+            command.Clone());
+
+        second.Should().Be(first);
+        first.Domain.Should().Be("aevatar.agent-profile.ingress-proof.v1");
+        first.TargetActorId.Should().Be("profile-actor-alpha");
+        first.CommandTypeUrl.Should().Be(Any.Pack(command).TypeUrl);
+        first.CanonicalCommandSha256.Should().HaveCount(32);
+        AgentProfileIngressProofIntegrity.ComputeSigningMaterialSha256(first)
+            .Should().Equal(AgentProfileIngressProofIntegrity.ComputeSigningMaterialSha256(second));
+    }
+
+    [Fact]
+    public void DurableAndProjectedProfileContracts_ShouldNotCarryIngressProofOrSignature()
+    {
+        var roots = new[]
+        {
+            AgentProfileProvisioningStartedEvent.Descriptor,
+            AgentProfileProvisioningCompletedEvent.Descriptor,
+            AgentProfileProvisioningFailedEvent.Descriptor,
+            AgentProfilePublishedSummaryObservedEvent.Descriptor,
+            AgentProfileInitializedEvent.Descriptor,
+            AgentProfileInitializationRejectedEvent.Descriptor,
+            AgentProfileDraftUpdatedEvent.Descriptor,
+            AgentProfileSkillBindingUpsertedEvent.Descriptor,
+            AgentProfileSkillBindingRemovedEvent.Descriptor,
+            AgentProfilePublishedEvent.Descriptor,
+            AgentProfilePublishNoChangeEvent.Descriptor,
+            AgentProfileMutationNoChangeEvent.Descriptor,
+            AgentProfileMutationRejectedEvent.Descriptor,
+            AgentProfileNamespaceState.Descriptor,
+            AgentProfileState.Descriptor,
+            AgentProfileNamespaceCatalogDocument.Descriptor,
+            AgentProfileOwnerDocument.Descriptor,
+            AgentProfileExecutionDocument.Descriptor,
+        };
+
+        ReachableFields(roots)
+            .Select(static field => field.Name)
+            .Should().NotContain(static name =>
+                name.Contains("ingress_proof", StringComparison.Ordinal) ||
+                name.Contains("signature", StringComparison.Ordinal) ||
+                name.Contains("private_key", StringComparison.Ordinal));
+    }
 
     [Fact]
     public void ValidateReference_ShouldAcceptCanonicalHumanReferences()

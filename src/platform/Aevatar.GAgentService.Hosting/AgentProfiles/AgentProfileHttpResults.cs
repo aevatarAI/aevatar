@@ -104,6 +104,9 @@ internal static class AgentProfileHttpResults
             case AgentProfileDependencyUnavailableException unavailable:
                 result = Error(StatusCodes.Status503ServiceUnavailable, unavailable.Code);
                 return true;
+            case AgentProfileIngressProofUnavailableException unavailable:
+                result = Error(StatusCodes.Status503ServiceUnavailable, unavailable.Code);
+                return true;
             case AgentProfileDispatchRejectedException rejected:
                 result = Error(StatusCodes.Status503ServiceUnavailable, rejected.Code);
                 return true;

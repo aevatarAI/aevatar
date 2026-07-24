@@ -12,6 +12,25 @@ namespace Aevatar.GAgentService.Tests.Core;
 public sealed class AgentProfileNamespaceGAgentTests
 {
     [Fact]
+    public async Task Create_ShouldRejectInvalidIngressProofBeforeOperationParsingOrPersistence()
+    {
+        var verifier = new RecordingIngressProofVerifier(false);
+        var (agent, store, publisher) = await CreateActorAsync(verifier);
+        var command = CreateCommand();
+        command.Operation = null!;
+
+        var act = () => agent.HandleCreateAsync(command);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_INGRESS_PROOF_INVALID");
+        verifier.Calls.Should().ContainSingle()
+            .Which.TargetActorId.Should().Be(agent.Id);
+        agent.State.Operations.Should().BeEmpty();
+        (await store.GetEventsAsync(agent.Id)).Should().BeEmpty();
+        publisher.Sends.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Create_ShouldCommitFirstHandleClaimAndSendInitializationContinuationRequest()
     {
         var (agent, store, publisher) = await CreateActorAsync();
@@ -723,15 +742,107 @@ public sealed class AgentProfileNamespaceGAgentTests
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)version);
     }
 
+    [Fact]
+    public async Task OperationRetention_ShouldBoundTerminalWindowAndPinIncompleteProvisioning()
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var pinned = CreateCommand(operationId: "op-pinned-provisioning");
+        await agent.HandleCreateAsync(pinned);
+        var terminalCommands = new List<CreateAgentProfileCommand>();
+        var totalTerminalOperations =
+            AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations + 76;
+        var serializedSizeAtLimit = 0;
+
+        for (var index = 0; index < totalTerminalOperations; index++)
+        {
+            var command = CreateCommand(operationId: $"op-terminal-{index:D4}");
+            command.InitialContent.DisplayName = string.Empty;
+            terminalCommands.Add(command.Clone());
+            await agent.HandleCreateAsync(command);
+
+            if (index == AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations - 1)
+            {
+                agent.State.Operations.Should().HaveCount(
+                    AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations + 1);
+                serializedSizeAtLimit = agent.State.CalculateSize();
+            }
+        }
+
+        agent.State.Profiles.Should().ContainSingle()
+            .Which.Status.Should().Be(AgentProfileProvisioningStatus.Provisioning);
+        agent.State.Operations.Should().HaveCount(
+            AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations + 1);
+        agent.State.Operations.Should().Contain(operation =>
+            operation.Operation.OperationId == pinned.Operation.OperationId);
+        agent.State.Operations.Where(operation => !operation.ProvisioningStarted)
+            .Select(operation => operation.Operation.OperationId)
+            .Should().Equal(terminalCommands
+                .TakeLast(AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations)
+                .Select(command => command.Operation.OperationId));
+        agent.State.CalculateSize().Should().Be(serializedSizeAtLimit);
+
+        var oldestRetained = terminalCommands[
+            totalTerminalOperations -
+            AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations];
+        var versionBeforeReplay = agent.EventSourcing!.CurrentVersion;
+        var retainedReplay = oldestRetained.Clone();
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            retainedReplay.Operation,
+            "retained-terminal-replay");
+        await agent.HandleCreateAsync(retainedReplay);
+        agent.EventSourcing.CurrentVersion.Should().Be(versionBeforeReplay);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)versionBeforeReplay);
+
+        var retainedDrift = oldestRetained.Clone();
+        retainedDrift.InitialContent.Purpose = "Drifted retained payload";
+        var driftAct = () => agent.HandleCreateAsync(retainedDrift);
+        var driftException = await driftAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        driftException.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(versionBeforeReplay);
+
+        await DispatchInitializationRejectedAsync(agent, new AgentProfileInitializationRejectedContinuation
+        {
+            Operation = pinned.Operation.Clone(),
+            Identity = pinned.Identity.Clone(),
+            ProfileActorId = pinned.ProfileActorId,
+            Diagnostic = new AgentProfileSafeDiagnostic
+            {
+                Code = "PROFILE_INITIALIZATION_REJECTED",
+                Message = "Initialization was rejected.",
+                Path = "identity",
+            },
+        });
+        agent.State.Profiles.Single().Status.Should().Be(AgentProfileProvisioningStatus.Failed);
+        agent.State.Operations.Should().Contain(operation =>
+            operation.Operation.OperationId == pinned.Operation.OperationId);
+
+        var newestTerminal = CreateCommand(operationId: "op-terminal-1100");
+        newestTerminal.InitialContent.DisplayName = string.Empty;
+        await agent.HandleCreateAsync(newestTerminal);
+        agent.State.Operations.Should().HaveCount(
+            AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations + 1);
+        agent.State.Operations.Should().Contain(operation =>
+            operation.Operation.OperationId == pinned.Operation.OperationId);
+
+        await DispatchInitializedAsync(agent, Initialized(pinned));
+
+        agent.State.Profiles.Single().Status.Should().Be(AgentProfileProvisioningStatus.Active);
+        agent.State.Operations.Should().HaveCount(
+            AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations);
+        agent.State.Operations.Should().NotContain(operation =>
+            operation.Operation.OperationId == pinned.Operation.OperationId);
+    }
+
     private static async Task<(AgentProfileNamespaceGAgent Agent, InMemoryEventStore Store, RecordingProfileEventPublisher Publisher)>
-        CreateActorAsync()
+        CreateActorAsync(IAgentProfileIngressProofVerifier? verifier = null)
     {
         var store = new InMemoryEventStore();
         var publisher = new RecordingProfileEventPublisher();
         var agent = GAgentServiceTestKit.CreateStatefulAgent<AgentProfileNamespaceGAgent, AgentProfileNamespaceState>(
             store,
             AgentProfileActorIds.Namespace,
-            static () => new AgentProfileNamespaceGAgent());
+            () => new AgentProfileNamespaceGAgent(
+                verifier ?? AcceptingIngressProofVerifier.Instance));
         agent.EventPublisher = publisher;
         await agent.ActivateAsync();
         return (agent, store, publisher);
@@ -821,4 +932,22 @@ public sealed class AgentProfileNamespaceGAgentTests
 
     private static ByteString Digest(byte value) =>
         ByteString.CopyFrom(Enumerable.Repeat(value, 32).ToArray());
+
+    private sealed class AcceptingIngressProofVerifier : IAgentProfileIngressProofVerifier
+    {
+        public static AcceptingIngressProofVerifier Instance { get; } = new();
+
+        public bool Verify(string targetActorId, IMessage command) => true;
+    }
+
+    private sealed class RecordingIngressProofVerifier(bool result) : IAgentProfileIngressProofVerifier
+    {
+        public List<(string TargetActorId, IMessage Command)> Calls { get; } = [];
+
+        public bool Verify(string targetActorId, IMessage command)
+        {
+            Calls.Add((targetActorId, command));
+            return result;
+        }
+    }
 }

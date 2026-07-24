@@ -82,7 +82,8 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
                 "update-draft",
                 AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
                     management.Identity,
-                    surfaceUpdate));
+                    surfaceUpdate),
+                management.AuthorityStateVersion);
             var admission = await _actorPort.DispatchUpdateDraftAsync(
                 new UpdateAgentProfileDraftCommand
                 {
@@ -105,7 +106,8 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
                 $"remove-binding:{removal.BindingId}",
                 AgentProfileDeterminism.ComputeRemoveAgentProfileSkillBindingInputSha256(
                     management.Identity,
-                    removal.BindingId));
+                    removal.BindingId),
+                management.AuthorityStateVersion);
             var admission = await _actorPort.DispatchRemoveSkillBindingAsync(
                 new RemoveAgentProfileSkillBindingCommand
                 {
@@ -128,7 +130,8 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
                 $"upsert-binding:{upsert.BindingId}",
                 AgentProfileDeterminism.ComputeUpsertAgentProfileSkillBindingInputSha256(
                     management.Identity,
-                    upsert));
+                    upsert),
+                management.AuthorityStateVersion);
             var admission = await _actorPort.DispatchUpsertSkillBindingAsync(
                 new UpsertAgentProfileSkillBindingCommand
                 {
@@ -180,7 +183,8 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
             "publish",
             AgentProfileDeterminism.ComputePublishAgentProfileInputSha256(
                 management.Identity,
-                snapshot));
+                snapshot),
+            management.AuthorityStateVersion);
         var publishAdmission = await _actorPort.DispatchPublishAsync(
             new PublishAgentProfileCommand
             {
@@ -215,7 +219,8 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
             definition,
             desiredDigest,
             "create",
-            AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content));
+            AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content),
+            observedAuthorityVersion: null);
         var targets = await _actorPort.EnsureCreateTargetsAsync(profileId, ct);
         var admission = await _actorPort.DispatchCreateAsync(
             new CreateAgentProfileCommand
@@ -336,17 +341,32 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
         SystemAgentProfileDefinition definition,
         ByteString desiredDigest,
         string step,
-        ByteString inputSha256) =>
+        ByteString inputSha256,
+        long? observedAuthorityVersion) =>
         new()
         {
             OperationId = AgentProfileDeterminism.CreateOperationId(
                 OperationKind,
                 definition.DefinitionKey,
-                $"{Convert.ToHexStringLower(desiredDigest.Span)}:{step}"),
+                OperationIdentity(
+                    desiredDigest,
+                    step,
+                    observedAuthorityVersion)),
             InputSha256 = inputSha256,
             CommandId = AgentProfileDeterminism.CreateCommandId(),
             CorrelationId = AgentProfileDeterminism.CreateCorrelationId(),
         };
+
+    private static string OperationIdentity(
+        ByteString desiredDigest,
+        string step,
+        long? observedAuthorityVersion)
+    {
+        var identity = $"{Convert.ToHexStringLower(desiredDigest.Span)}:{step}";
+        return observedAuthorityVersion.HasValue
+            ? $"{identity}:authority-version:{observedAuthorityVersion.Value}"
+            : identity;
+    }
 
     private static string CreateProfileId(SystemAgentProfileDefinition definition)
     {

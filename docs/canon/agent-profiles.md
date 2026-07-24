@@ -41,6 +41,10 @@ The management route derives owner and scope from the authenticated caller.
 Bodies and tool schemas cannot supply an owner subject, scope id, Profile id,
 system authority, sealed content, or credentials. Discovery by human reference
 is authenticated and returns not found when the caller cannot see the resource.
+After caller and entry normalization, an ordinary user Profile is visible only
+when the caller scope equals the entry's `owningScopeId` using ordinal equality.
+The query path does not read the protected execution model for a hidden entry.
+A fully valid `system/*` Profile remains globally discoverable.
 
 ## 3. Architecture
 
@@ -65,6 +69,17 @@ builds typed commands, and returns an honest dispatch receipt. Actors alone
 commit Profile facts. The existing Projection Pipeline fans those facts out to
 the declared read models and audit artifacts.
 
+The five Application-originated mutation commands carry a typed signed ingress
+proof. Infrastructure signs after the final target Actor id is known; Core
+verifies before operation parsing, deduplication, or persistence. The proof
+binds the target id, exact Protobuf command TypeUrl, and SHA-256 digest of
+deterministic command bytes with the proof cleared. Signatures use RSA-PSS with
+SHA-256 and keys of at least 2,048 bits. Hosts configure one current PKCS#8
+private key and a key-id-indexed SubjectPublicKeyInfo public-key ring so previous
+public keys may remain during rotation. Missing, malformed, unknown, revoked, or
+mismatched proof material fails closed. Proofs, signatures, and private keys do
+not enter events, Actor state, read models, audit, responses, labels, or logs.
+
 ## 4. Phase 1 Management Contract
 
 ### HTTP API
@@ -83,6 +98,13 @@ the declared read models and audit artifacts.
 The strong ETag is the Profile Actor's committed authority state version. It is
 not a local projection counter. A known-stale management mutation is rejected;
 the actor remains the final authority for version and idempotency decisions.
+
+Draft structure and publish validity are distinct. Create, full draft update,
+and skill upsert may commit more than one
+`DEFAULT_FOR_UNMATCHED_TURN` binding so an incomplete draft can be represented
+and repaired. `:validate` and `:publish` reject that shape with
+`MULTIPLE_DEFAULT_SKILLS`; publish performs no Ornn resolution for it, and the
+Profile Actor repeats the same defense before accepting sealed content.
 
 ### `agent_profiles` tool
 
@@ -157,6 +179,17 @@ Queries never create actors, activate or prime projections, replay the event
 store, or synchronously wait for a command reply. Eventual visibility is stated
 honestly through authority state versions and committed digests.
 
+Actor idempotency is a documented count-bounded window. A Profile retains its
+single initialization recovery record plus the 256 newest mutation and publish
+operation records. The Namespace retains the 1,024 newest terminal create and
+published-summary records, and additionally pins a provisioning-start record
+while its matching entry is `PROVISIONING` or `FAILED`; activation releases the
+pin. Compaction runs only in state-event appliers and preserves insertion order.
+Inside the retained window, exact replay and payload-drift conflict behavior are
+unchanged. After eviction, the operation id is outside the idempotency guarantee
+and is evaluated as a new command against current identity, uniqueness, and
+expected-version invariants.
+
 ## 7. Read Models And Audit
 
 | Read model | Stable consumer | Exposed content |
@@ -206,6 +239,13 @@ then wakes on a bounded signal. Each pass rereads definitions and all three read
 models and dispatches at most the next required command. The signal is only a
 wake mechanism; no service-level id-to-state registry becomes authoritative.
 
+Reconciliation mutation and publish operation ids include
+`authority-version:<observedVersion>`. Repeating a pass against the same
+management snapshot replays the same operation, while a newly projected
+authority version derives a new operation id and can converge after a committed
+version conflict. Create identity remains stable because no Profile authority
+version exists before creation.
+
 `ISystemAgentProfileOrnnAccessTokenProvider` is replaceable by the host. The
 default provider returns unavailable. Exact skills are published only when the
 host supplies a token through that boundary.
@@ -226,6 +266,8 @@ reports credentials, sealed content, or raw remote errors.
 - Owner-authored draft text is returned only on the authorized management
   surface. Protected sealed content remains server-side.
 - Audit and health use allowlisted safe fields; raw diagnostics are excluded.
+- Ingress proof material and signing keys are transport-boundary secrets and are
+  never committed, projected, audited, logged, or used as metric labels.
 - Activity spans may carry resource correlation facts. Metric labels are
   limited to ingress, operation, outcome/failure class, activation mode, and
   required-system readiness; Profile/resource ids are not metric labels.

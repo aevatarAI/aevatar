@@ -34,7 +34,10 @@ public sealed class AgentProfileQueryApplicationService : IAgentProfileQueryServ
         AgentProfileReference reference,
         CancellationToken ct = default)
     {
-        if (!AgentProfileOwnerSnapshotResolver.IsValidCaller(caller) ||
+        if (!AgentProfileOwnerSnapshotResolver.TryNormalizeCaller(
+                caller,
+                out _,
+                out var callerScopeId) ||
             reference is null ||
             AgentProfilePolicies.ValidateReference(reference).Count > 0)
         {
@@ -49,7 +52,8 @@ public sealed class AgentProfileQueryApplicationService : IAgentProfileQueryServ
             !entry.Reference.Equals(normalizedReference) ||
             summary is null ||
             !summary.Reference.Equals(normalizedReference) ||
-            !IsValidDiscoveryEntry(entry, summary))
+            !IsValidDiscoveryEntry(entry, summary) ||
+            !IsVisibleToCallerScope(callerScopeId, entry))
         {
             return null;
         }
@@ -77,6 +81,19 @@ public sealed class AgentProfileQueryApplicationService : IAgentProfileQueryServ
         return AgentProfilePolicies.ValidateIdentity(identity).Count == 0 &&
             AgentProfilePolicies.ValidatePublishedSummary(summary).Count == 0;
     }
+
+    private static bool IsVisibleToCallerScope(
+        string callerScopeId,
+        AgentProfileNamespaceEntrySnapshot entry) =>
+        entry.Owner.OwnerCase switch
+        {
+            AgentProfileOwnerIdentity.OwnerOneofCase.System => true,
+            AgentProfileOwnerIdentity.OwnerOneofCase.User => string.Equals(
+                callerScopeId,
+                entry.OwningScopeId,
+                StringComparison.Ordinal),
+            _ => false,
+        };
 
     private static bool IsAvailable(
         AgentProfileNamespaceEntrySnapshot entry,

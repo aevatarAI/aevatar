@@ -1,9 +1,19 @@
 using System.Reflection;
 using System.Threading.Channels;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Application.AgentProfiles;
 using Aevatar.GAgentService.Hosting.AgentProfiles;
+using Aevatar.GAgentService.Hosting.DependencyInjection;
+using Aevatar.GAgentService.Projection.AgentProfiles;
+using Aevatar.Workflow.Extensions.Hosting;
 using Google.Protobuf;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Integration.Tests;
@@ -13,6 +23,102 @@ public sealed class SystemAgentProfileBootstrapTests
     private const string DefinitionKey = "system/test-assistant";
     private const string ProfileId = "prof-system-test-assistant";
     private const string ProfileSlug = "test-assistant";
+
+    [Fact]
+    public async Task ReconcileAfterVersionConflict_ShouldConvergeThroughActorAndProjectedManagementReadModel()
+    {
+        var source = new MutableDefinitionSource(Content(displayName: "Initial Assistant"));
+        var configuration = AgentProfileIngressProofTestConfiguration.Create();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IHostEnvironment>(new IntegrationHostEnvironment());
+        services.AddAevatarRuntime();
+        services.AddWorkflowProjectionReadModelProviders(configuration);
+        services.AddSingleton<ISystemAgentProfileDefinitionSource>(source);
+        services.AddGAgentServiceCapability(configuration);
+        AddProjectionWriteBarrier<AgentProfileNamespaceCatalogDocument>(services);
+        AddProjectionWriteBarrier<AgentProfileOwnerDocument>(services);
+        using var provider = services.BuildServiceProvider();
+        var actorPort = provider.GetRequiredService<IAgentProfileActorPort>();
+        var namespaceQuery = provider.GetRequiredService<IAgentProfileNamespaceQueryPort>();
+        var managementQuery = provider.GetRequiredService<IAgentProfileManagementQueryPort>();
+        var executionQuery = provider.GetRequiredService<IAgentProfileExecutionSnapshotQueryPort>();
+        var provisioning = provider.GetRequiredService<ISystemAgentProfileProvisioningService>();
+        var namespaceWrites = provider.GetRequiredService<ProjectionWriteBarrier<AgentProfileNamespaceCatalogDocument>>();
+        var ownerWrites = provider.GetRequiredService<ProjectionWriteBarrier<AgentProfileOwnerDocument>>();
+
+        var initialNamespaceProjected = namespaceWrites.WaitForAsync(document =>
+            document.Entries.Any(candidate =>
+                candidate.Reference?.Equals(SystemReference()) == true &&
+                candidate.Status == AgentProfileProvisioningStatus.Active));
+        var initialOwnerProjected = ownerWrites.WaitForAsync(document =>
+            document.Identity?.Reference?.Equals(SystemReference()) == true &&
+            string.Equals(document.Draft?.DisplayName, "Initial Assistant", StringComparison.Ordinal));
+        await provisioning.ReconcileAsync();
+        await Task.WhenAll(initialNamespaceProjected, initialOwnerProjected).WaitAsync(TimeSpan.FromSeconds(10));
+        var entry = await namespaceQuery.GetByReferenceAsync(SystemReference());
+        entry.Should().NotBeNull();
+        entry!.Status.Should().Be(AgentProfileProvisioningStatus.Active);
+        var stale = await managementQuery.GetAsync(entry.ProfileId);
+        stale.Should().NotBeNull();
+        stale!.Draft.DisplayName.Should().Be("Initial Assistant");
+
+        var racingContent = Content(displayName: "Racing Assistant");
+        var racingUpdateProjected = ownerWrites.WaitForAsync(document =>
+            string.Equals(document.Id, entry.ProfileId, StringComparison.Ordinal) &&
+            string.Equals(document.Draft?.DisplayName, "Racing Assistant", StringComparison.Ordinal));
+        await actorPort.DispatchUpdateDraftAsync(new UpdateAgentProfileDraftCommand
+        {
+            Operation = new AgentProfileOperationFact
+            {
+                OperationId = "op-racing-update",
+                CommandId = "cmd-racing-update",
+                CorrelationId = "corr-racing-update",
+                InputSha256 = AgentProfileDeterminism.ComputeUpdateAgentProfileDraftInputSha256(
+                    stale.Identity,
+                    racingContent),
+            },
+            Identity = stale.Identity,
+            ExpectedAuthorityStateVersion = stale.AuthorityStateVersion,
+            Content = racingContent,
+        });
+        await racingUpdateProjected.WaitAsync(TimeSpan.FromSeconds(10));
+        var raced = await managementQuery.GetAsync(entry.ProfileId);
+        raced.Should().NotBeNull();
+        raced!.Draft.DisplayName.Should().Be("Racing Assistant");
+
+        source.Content = Content(displayName: "Desired Assistant");
+        var reconciliation = new SystemAgentProfileProvisioningService(
+            [source],
+            namespaceQuery,
+            new StaleOnceManagementQueryPort(stale, managementQuery),
+            executionQuery,
+            actorPort,
+            provider.GetRequiredService<AgentProfileSkillSealer>(),
+            provider.GetRequiredService<ISystemAgentProfileOrnnAccessTokenProvider>());
+        var conflictProjected = ownerWrites.WaitForAsync(document =>
+            document.LastMutation?.Status == AgentProfileMutationStatus.Rejected &&
+            string.Equals(document.LastMutation.Diagnostic?.Code, "DRAFT_VERSION_CONFLICT", StringComparison.Ordinal));
+        await reconciliation.ReconcileAsync();
+        await conflictProjected.WaitAsync(TimeSpan.FromSeconds(10));
+        var conflicted = await managementQuery.GetAsync(entry.ProfileId);
+        conflicted.Should().NotBeNull();
+        conflicted!.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        conflicted.LastMutation.Diagnostic.Code.Should().Be("DRAFT_VERSION_CONFLICT");
+        var conflictedOperationId = conflicted.LastMutation.Operation.OperationId;
+
+        var convergenceProjected = ownerWrites.WaitForAsync(document =>
+            string.Equals(document.Draft?.DisplayName, "Desired Assistant", StringComparison.Ordinal) &&
+            document.LastMutation?.Status == AgentProfileMutationStatus.Applied);
+        await reconciliation.ReconcileAsync();
+        await convergenceProjected.WaitAsync(TimeSpan.FromSeconds(10));
+        var converged = await managementQuery.GetAsync(entry.ProfileId);
+        converged.Should().NotBeNull();
+        converged!.Draft.DisplayName.Should().Be("Desired Assistant");
+        converged.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Applied);
+        converged.LastMutation.Operation.OperationId.Should().NotBe(conflictedOperationId);
+        converged.AuthorityStateVersion.Should().BeGreaterThan(conflicted.AuthorityStateVersion);
+    }
 
     [Fact]
     public async Task Readiness_WithNoDefinitions_ShouldBeReadyWithoutQueryingFacts()
@@ -472,6 +578,89 @@ public sealed class SystemAgentProfileBootstrapTests
                     Content.Clone(),
                     _required)];
         }
+    }
+
+    private sealed class StaleOnceManagementQueryPort(
+        AgentProfileManagementSnapshot stale,
+        IAgentProfileManagementQueryPort inner) : IAgentProfileManagementQueryPort
+    {
+        private AgentProfileManagementSnapshot? _stale = stale.DeepClone();
+
+        public Task<AgentProfileManagementSnapshot?> GetAsync(
+            string profileId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            var staleResult = Interlocked.Exchange(ref _stale, null);
+            return staleResult is not null
+                ? Task.FromResult<AgentProfileManagementSnapshot?>(staleResult.DeepClone())
+                : inner.GetAsync(profileId, ct);
+        }
+    }
+
+    private static void AddProjectionWriteBarrier<TReadModel>(IServiceCollection services)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        services.AddSingleton<ProjectionWriteBarrier<TReadModel>>(sp =>
+            new ProjectionWriteBarrier<TReadModel>(
+                sp.GetRequiredService<InMemoryProjectionDocumentStore<TReadModel, string>>()));
+        services.Replace(ServiceDescriptor.Singleton<IProjectionDocumentWriter<TReadModel>>(sp =>
+            sp.GetRequiredService<ProjectionWriteBarrier<TReadModel>>()));
+    }
+
+    private sealed class ProjectionWriteBarrier<TReadModel>(IProjectionDocumentWriter<TReadModel> inner)
+        : IProjectionDocumentWriter<TReadModel>
+        where TReadModel : class, IProjectionReadModel
+    {
+        private readonly Lock _gate = new();
+        private Func<TReadModel, bool>? _predicate;
+        private TaskCompletionSource? _completion;
+
+        public Task WaitForAsync(Func<TReadModel, bool> predicate)
+        {
+            ArgumentNullException.ThrowIfNull(predicate);
+            lock (_gate)
+            {
+                if (_completion is not null)
+                    throw new InvalidOperationException("A projection write wait is already active.");
+
+                _predicate = predicate;
+                _completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                return _completion.Task;
+            }
+        }
+
+        public async Task<ProjectionWriteResult> UpsertAsync(
+            TReadModel readModel,
+            CancellationToken ct = default)
+        {
+            var result = await inner.UpsertAsync(readModel, ct);
+            TaskCompletionSource? completion = null;
+            lock (_gate)
+            {
+                if (_predicate?.Invoke(readModel) == true)
+                {
+                    completion = _completion;
+                    _predicate = null;
+                    _completion = null;
+                }
+            }
+
+            completion?.TrySetResult();
+            return result;
+        }
+
+        public Task<ProjectionWriteResult> DeleteAsync(string id, CancellationToken ct = default) =>
+            inner.DeleteAsync(id, ct);
+    }
+
+    private sealed class IntegrationHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ApplicationName { get; set; } = "AgentProfileIntegrationTests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public Microsoft.Extensions.FileProviders.IFileProvider ContentRootFileProvider { get; set; } =
+            new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 
     private sealed class MutableNamespaceQueryPort : IAgentProfileNamespaceQueryPort

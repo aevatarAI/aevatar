@@ -911,6 +911,7 @@ public sealed class AgentProfileEndpointsTests
     [InlineData(FailureKind.AuthenticationRequired, HttpStatusCode.Unauthorized)]
     [InlineData(FailureKind.PublishValidation, HttpStatusCode.UnprocessableEntity)]
     [InlineData(FailureKind.DependencyUnavailable, HttpStatusCode.ServiceUnavailable)]
+    [InlineData(FailureKind.IngressProofUnavailable, HttpStatusCode.ServiceUnavailable)]
     [InlineData(FailureKind.DispatchRejected, HttpStatusCode.ServiceUnavailable)]
     public async Task TypedTask6Failures_ShouldMapToSafeStatus(
         FailureKind failure,
@@ -1280,7 +1281,7 @@ public sealed class AgentProfileEndpointsTests
             },
         };
 
-    private static AgentProfileApplicationException CreateFailure(FailureKind failure)
+    private static Exception CreateFailure(FailureKind failure)
     {
         var diagnostics = new[]
         {
@@ -1301,6 +1302,7 @@ public sealed class AgentProfileEndpointsTests
             FailureKind.AuthenticationRequired => new AgentProfileAuthenticationRequiredException(diagnostics),
             FailureKind.PublishValidation => new AgentProfilePublishValidationException(diagnostics),
             FailureKind.DependencyUnavailable => new AgentProfileDependencyUnavailableException(diagnostics),
+            FailureKind.IngressProofUnavailable => new AgentProfileIngressProofUnavailableException(),
             FailureKind.DispatchRejected => new AgentProfileDispatchRejectedException(),
             _ => throw new ArgumentOutOfRangeException(nameof(failure), failure, null),
         };
@@ -1314,6 +1316,7 @@ public sealed class AgentProfileEndpointsTests
         FailureKind.AuthenticationRequired => "ORNN_ACCESS_TOKEN_REQUIRED",
         FailureKind.PublishValidation => "ORNN_EXACT_REFERENCE_MISMATCH",
         FailureKind.DependencyUnavailable => "ORNN_DEPENDENCY_UNAVAILABLE",
+        FailureKind.IngressProofUnavailable => "AGENT_PROFILE_INGRESS_PROOF_UNAVAILABLE",
         FailureKind.DispatchRejected => "AGENT_PROFILE_DISPATCH_REJECTED",
         _ => throw new ArgumentOutOfRangeException(nameof(failure), failure, null),
     };
@@ -1378,6 +1381,7 @@ public sealed class AgentProfileEndpointsTests
         AuthenticationRequired,
         PublishValidation,
         DependencyUnavailable,
+        IngressProofUnavailable,
         DispatchRejected,
     }
 

@@ -145,6 +145,21 @@ message AgentProfileOperationFact {
   string correlation_id = 4;
 }
 
+message AgentProfileIngressProof {
+  string key_id = 1;
+  string target_actor_id = 2;
+  string command_type_url = 3;
+  bytes canonical_command_sha256 = 4;
+  bytes signature = 5;
+}
+
+message AgentProfileIngressProofSigningMaterial {
+  string domain = 1;
+  string target_actor_id = 2;
+  string command_type_url = 3;
+  bytes canonical_command_sha256 = 4;
+}
+
 enum AgentProfileOperationKind {
   AGENT_PROFILE_OPERATION_KIND_UNSPECIFIED = 0;
   AGENT_PROFILE_OPERATION_KIND_CREATE = 1;
@@ -222,6 +237,7 @@ message CreateAgentProfileCommand {
   AgentProfileIdentity identity = 2;
   AgentProfileContent initial_content = 3;
   string profile_actor_id = 4;
+  AgentProfileIngressProof ingress_proof = 100;
 }
 
 message InitializeAgentProfileCommand {
@@ -251,6 +267,7 @@ message UpdateAgentProfileDraftCommand {
   AgentProfileIdentity identity = 2;
   int64 expected_authority_state_version = 3;
   AgentProfileContent content = 4;
+  AgentProfileIngressProof ingress_proof = 100;
 }
 
 message UpsertAgentProfileSkillBindingCommand {
@@ -258,6 +275,7 @@ message UpsertAgentProfileSkillBindingCommand {
   AgentProfileIdentity identity = 2;
   int64 expected_authority_state_version = 3;
   AgentProfileSkillBinding binding = 4;
+  AgentProfileIngressProof ingress_proof = 100;
 }
 
 message RemoveAgentProfileSkillBindingCommand {
@@ -265,6 +283,7 @@ message RemoveAgentProfileSkillBindingCommand {
   AgentProfileIdentity identity = 2;
   int64 expected_authority_state_version = 3;
   string binding_id = 4;
+  AgentProfileIngressProof ingress_proof = 100;
 }
 
 message PublishAgentProfileCommand {
@@ -274,6 +293,7 @@ message PublishAgentProfileCommand {
   int64 expected_draft_revision = 4;
   bytes expected_draft_sha256 = 5;
   AgentProfilePublishedSnapshot snapshot = 6;
+  AgentProfileIngressProof ingress_proof = 100;
 }
 
 message ObserveAgentProfilePublishedSummaryCommand {

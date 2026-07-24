@@ -134,6 +134,34 @@ public sealed class AgentProfileQueryApplicationServiceTests
         managementPort.ProfileIds.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ResolveVisibleAsync_CrossScopeUserProfile_ShouldRemainHiddenWithoutExecutionLookup()
+    {
+        var entry = Entry(ProfileId, Identity().Owner, "scope-other", Reference());
+        var executionPort = new RecordingExecutionQueryPort
+        {
+            Result = new AgentProfileExecutionSnapshot(
+                14,
+                "profile-event-other",
+                PublishedSnapshot(new AgentProfileIdentity
+                {
+                    ProfileId = ProfileId,
+                    Owner = entry.Owner,
+                    OwningScopeId = entry.OwningScopeId,
+                    Reference = entry.Reference,
+                })),
+        };
+        var service = new AgentProfileQueryApplicationService(
+            new RecordingNamespaceQueryPort { ReferenceResult = entry },
+            new RecordingManagementQueryPort(),
+            executionPort);
+
+        var result = await service.ResolveVisibleAsync(Caller(), Reference());
+
+        result.Should().BeNull();
+        executionPort.ProfileIds.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(PublishedDisplayFact.DisplayName)]
     [InlineData(PublishedDisplayFact.Purpose)]

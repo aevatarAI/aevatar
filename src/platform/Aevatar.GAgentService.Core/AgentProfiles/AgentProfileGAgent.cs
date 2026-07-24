@@ -10,7 +10,14 @@ namespace Aevatar.GAgentService.Core.AgentProfiles;
 [GAgent("gagent.service.agent-profile")]
 public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
 {
-    public AgentProfileGAgent() => InitializeId();
+    private readonly IAgentProfileIngressProofVerifier _ingressProofVerifier;
+
+    public AgentProfileGAgent(IAgentProfileIngressProofVerifier ingressProofVerifier)
+    {
+        _ingressProofVerifier = ingressProofVerifier ??
+            throw new ArgumentNullException(nameof(ingressProofVerifier));
+        InitializeId();
+    }
 
     [EventHandler]
     public async Task HandleInitializeAsync(InitializeAgentProfileCommand command)
@@ -112,17 +119,6 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 "The initialization operation has no replayable typed outcome.");
         }
 
-        if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(content))
-        {
-            await PersistInitializationRejectionAsync(
-                namespaceActorId,
-                operation,
-                identity,
-                AgentProfileActorInvariants.MultipleDefaultSkills(),
-                replayAuthority);
-            return;
-        }
-
         if (State.Identity is not null)
         {
             await PersistInitializationRejectionAsync(
@@ -165,6 +161,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     public async Task HandleUpdateDraftAsync(UpdateAgentProfileDraftCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        RequireIngressProof(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         var operationKind = AgentProfileOperationKind.UpdateDraft;
         var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
@@ -199,14 +196,6 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             expectedInput);
         if (!await PrepareMutationAsync(operation, identity, replayAuthority))
             return;
-        if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(content))
-        {
-            await PersistNewRejectionAsync(
-                operation,
-                AgentProfileActorInvariants.MultipleDefaultSkills(),
-                replayAuthority);
-            return;
-        }
         if (!await EnsureExpectedVersionAsync(
                 operation,
                 replayAuthority,
@@ -243,6 +232,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     public async Task HandleUpsertSkillBindingAsync(UpsertAgentProfileSkillBindingCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        RequireIngressProof(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         var operationKind = AgentProfileOperationKind.UpsertSkillBinding;
         var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
@@ -295,15 +285,6 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             candidate.SkillBindings.RemoveAt(existingIndex);
         candidate.SkillBindings.Add(binding.Clone());
         candidate = AgentProfileDeterminism.NormalizeContent(candidate);
-        if (!AgentProfileActorInvariants.HasAtMostOneDefaultBinding(candidate))
-        {
-            await PersistNewRejectionAsync(
-                operation,
-                AgentProfileActorInvariants.MultipleDefaultSkills(),
-                replayAuthority);
-            return;
-        }
-
         var draftSha256 = AgentProfileDeterminism.ComputeDraftSha256(candidate);
         if (State.Draft.Equals(candidate))
         {
@@ -334,6 +315,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     public async Task HandleRemoveSkillBindingAsync(RemoveAgentProfileSkillBindingCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        RequireIngressProof(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         var operationKind = AgentProfileOperationKind.RemoveSkillBinding;
         var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
@@ -411,6 +393,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     public async Task HandlePublishAsync(PublishAgentProfileCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        RequireIngressProof(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         var operationKind = AgentProfileOperationKind.Publish;
         var precanonicalReplayAuthority = ComputeMutationPrecanonicalReplayAuthority(command, operationKind);
@@ -900,6 +883,16 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         State.Operations.FirstOrDefault(candidate =>
             string.Equals(candidate.Operation?.OperationId, operationId, StringComparison.Ordinal));
 
+    private void RequireIngressProof(IMessage command)
+    {
+        if (!_ingressProofVerifier.Verify(Id, command))
+        {
+            throw AgentProfileActorInvariants.Error(
+                "PROFILE_INGRESS_PROOF_INVALID",
+                "The Agent Profile command ingress proof is invalid.");
+        }
+    }
+
     private long CurrentStateVersion() =>
         (EventSourcing ?? throw new InvalidOperationException(
             "Event sourcing must be configured before mutating a Profile."))
@@ -989,6 +982,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 DraftSha256 = evt.DraftSha256,
             },
         });
+        CompactOperations(next);
         return next;
     }
 
@@ -1013,6 +1007,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 },
             },
         });
+        CompactOperations(next);
         return next;
     }
 
@@ -1127,5 +1122,42 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         if (summary is not null)
             operation.PublishedSummary = summary.Clone();
         state.Operations.Add(operation);
+        CompactOperations(state);
+    }
+
+    private static void CompactOperations(AgentProfileState state)
+    {
+        var recoveryIndex = -1;
+        for (var index = state.Operations.Count - 1; index >= 0; index--)
+        {
+            if (state.Operations[index].InitializationContinuation is not null)
+            {
+                recoveryIndex = index;
+                break;
+            }
+        }
+
+        if (recoveryIndex < 0)
+        {
+            for (var index = state.Operations.Count - 1; index >= 0; index--)
+            {
+                if (state.Operations[index].InitializationRejection is not null)
+                {
+                    recoveryIndex = index;
+                    break;
+                }
+            }
+        }
+
+        var recovery = recoveryIndex >= 0 ? state.Operations[recoveryIndex] : null;
+        var rollingStart = recoveryIndex + 1;
+        var retained = state.Operations
+            .Skip(rollingStart)
+            .TakeLast(AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations)
+            .ToArray();
+        state.Operations.Clear();
+        if (recovery is not null)
+            state.Operations.Add(recovery);
+        state.Operations.Add(retained);
     }
 }

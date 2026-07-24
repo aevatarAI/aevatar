@@ -10,13 +10,17 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
 {
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly AgentProfileIngressProofService _ingressProofService;
 
     public AgentProfileActorPort(
         IActorRuntime runtime,
-        IActorDispatchPort dispatchPort)
+        IActorDispatchPort dispatchPort,
+        AgentProfileIngressProofService ingressProofService)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _ingressProofService = ingressProofService ??
+            throw new ArgumentNullException(nameof(ingressProofService));
     }
 
     public async Task<AgentProfileActorTargets> EnsureCreateTargetsAsync(
@@ -47,6 +51,7 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
                 "Create Agent Profile command target must match the deterministic Profile Actor target.");
         }
 
+        RequireSigned(AgentProfileActorIds.Namespace, command);
         var targets = await EnsureCreateTargetsAsync(command.Identity.ProfileId, ct);
         return await DispatchAsync(targets.NamespaceActorId, command.Operation, command, ct);
     }
@@ -100,6 +105,7 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         ArgumentNullException.ThrowIfNull(command);
         ct.ThrowIfCancellationRequested();
         var profileActorId = AgentProfileActorIds.Profile(profileId);
+        RequireSigned(profileActorId, command);
         await EnsureActorAsync<AgentProfileGAgent>(profileActorId, ct);
         return await DispatchAsync(profileActorId, operation, command, ct);
     }
@@ -123,4 +129,10 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
             targetActorId,
             AgentProfileEnvelopeFactory.Create(targetActorId, operation, command),
             ct);
+
+    private void RequireSigned(string targetActorId, IMessage command)
+    {
+        if (!_ingressProofService.TrySign(targetActorId, command))
+            throw new AgentProfileIngressProofUnavailableException();
+    }
 }

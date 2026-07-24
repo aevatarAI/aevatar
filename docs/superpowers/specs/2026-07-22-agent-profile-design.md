@@ -169,7 +169,11 @@ Profile's owning scope. `system/*` profiles are the explicit exception.
 
 `GET /api/agent-profiles/{ownerHandle}/{profileSlug}` is an authenticated
 reference-resolution and discovery endpoint. Its GitHub-like route does not
-imply public visibility. Inaccessible resources are reported as not found.
+imply public visibility. After normalization, an ordinary user Profile is
+visible only when the caller scope equals its `owningScopeId` using ordinal
+equality. The query path does not read the protected execution model for a
+hidden entry. A fully valid `system/*` Profile remains globally visible.
+Inaccessible resources are reported as not found.
 
 ## Profile Contract
 
@@ -229,8 +233,12 @@ message AgentProfileToolPolicy {
 catalog copy from silently becoming privileged model instruction.
 
 `bindingId` is an opaque stable identifier for editing one binding. It is not a
-skill identity and is not inferred from the skill name. At most one binding may
-use `DEFAULT_FOR_UNMATCHED_TURN`; publish rejects a second default.
+skill identity and is not inferred from the skill name. Draft initialization,
+full update, and binding upsert may commit more than one
+`DEFAULT_FOR_UNMATCHED_TURN` binding so an incomplete draft can be represented
+and repaired. Validation and publish reject that shape with
+`MULTIPLE_DEFAULT_SKILLS`; publish performs no Ornn resolution for it, and the
+Profile Actor retains the same defense against forged sealed input.
 
 `INHERIT_ROUTE_MAXIMUM` means the Profile adds no extra allowlist restriction.
 It does not grant anything. `EXPLICIT_ALLOWLIST` applies an additional
@@ -378,6 +386,38 @@ tool, credential, scope, or permission. If a selected skill needs a tool removed
 by a later intersection, execution returns a typed capability-unavailable
 result. It never widens the set or silently changes caller identity.
 
+## Signed Application Ingress
+
+Application commands do not gain authority from a caller-authored publisher
+string. The trust boundary is the Infrastructure-owned `IAgentProfileActorPort`.
+Exactly these external commands carry a typed `AgentProfileIngressProof`:
+
+- `CreateAgentProfileCommand`;
+- `UpdateAgentProfileDraftCommand`;
+- `UpsertAgentProfileSkillBindingCommand`;
+- `RemoveAgentProfileSkillBindingCommand`; and
+- `PublishAgentProfileCommand`.
+
+Infrastructure signs only after the final target Actor id is known. The proof
+binds that target, the exact command TypeUrl, and SHA-256 over deterministic
+Protobuf bytes from a clone whose proof is cleared. The signed material is a
+typed, domain-separated Protobuf message. Signatures use RSA-PSS/SHA-256 and
+RSA keys of at least 2,048 bits. Host configuration supplies one current PKCS#8
+private key and a key-id-indexed SubjectPublicKeyInfo public-key ring; retaining
+a previous public key enables rotation, while removing it revokes that key.
+
+Core depends only on `IAgentProfileIngressProofVerifier`. Each external handler
+verifies before operation parsing, replay lookup, or persistence. A missing
+verifier, missing or malformed proof, unknown or revoked key, target/type/digest
+mismatch, or invalid signature fails closed with
+`PROFILE_INGRESS_PROOF_INVALID` and commits no event. A missing or invalid
+signing configuration fails the Infrastructure dispatch boundary with
+`AGENT_PROFILE_INGRESS_PROOF_UNAVAILABLE`, which Host maps to a bounded `503`.
+Initialization, continuations, and published-summary observation remain typed
+Actor protocol messages and do not accept an Application proof. Private keys,
+proofs, and signatures never enter events, Actor state, projections, audit,
+responses, metric labels, or logs.
+
 ## Authority Actors
 
 ### `AgentProfileNamespaceGAgent`
@@ -412,6 +452,11 @@ interrupted provisioning record remains durable and retryable by the same
 idempotency key; no orphan is guessed active and no process-local coordinator
 owns the protocol.
 
+Namespace idempotency retains the 1,024 newest terminal create and
+published-summary operation records. A provisioning-start record is additionally
+pinned while its matching Profile entry is `PROVISIONING` or `FAILED`, preserving
+the continuation protocol; the pin is released when the entry becomes `ACTIVE`.
+
 ### `AgentProfileGAgent`
 
 One Profile Actor owns:
@@ -433,6 +478,14 @@ Application publish service performs the exact preflight through an Ornn port,
 then dispatches a typed command containing the sealed server-created payload.
 The Actor compares owner, expected draft revision, normalized draft digest, and
 sealed snapshot digest before committing.
+
+Profile idempotency retains the single initialization recovery record plus the
+256 newest mutation and publish operation records. Both Actors compact only in
+state-event appliers, preserve insertion order, and use no time-based or
+process-local state. Within the retained window, exact replay and payload-drift
+conflict behavior are unchanged. After eviction, an operation id is outside the
+idempotency guarantee and is evaluated as a new command against current
+identity, uniqueness, and expected-version invariants.
 
 ### Binding owners
 
@@ -618,6 +671,13 @@ different input is `IDEMPOTENCY_PAYLOAD_CONFLICT`.
 have a new `commandId` while retaining the same `operationId`; transport-level
 deduplication cannot replace the Actor's operation digest comparison.
 
+System reconciliation mutation and publish identities include
+`authority-version:<observedVersion>`. Repeated reads of the same management
+version derive the same operation and replay any committed version conflict.
+Once projection exposes a newer authority version, the reconciler derives a new
+operation and can converge. The create operation identity remains stable because
+there is no Profile authority version before creation.
+
 `POST ...:validate` is non-mutating and returns `200` with a typed report tied
 to `draftRevision` and `draftDigest`. `POST ...:publish` is a mutation and
 returns an accepted receipt after exact resolution and command dispatch.
@@ -802,7 +862,7 @@ Audit facts include actor owner identity, profile identity, operation,
 command/correlation IDs, old/new draft and published revisions, old/new digests,
 binding target identity, exact skill reference, and stable outcome code. Audit
 does not include prompt bodies, sealed skill content, access tokens, raw remote
-errors, or credentials.
+errors, credentials, ingress proofs, signatures, or signing keys.
 
 Protected execution snapshots are accessible only through the runtime query
 port. Public discovery cannot be used to download another owner's sealed skill
@@ -845,8 +905,13 @@ and credentials are never logged.
 - system namespace reservation and authorization;
 - draft and published revision separation;
 - expected-version conflict, command deduplication, and payload-drift rejection;
+- exact ingress-proof verification before operation parsing and persistence;
+- Profile 256-operation and Namespace 1,024-terminal-operation retention,
+  including initialization recovery, provisioning pins, replay, drift, and
+  post-eviction behavior;
 - exact reference validation and sealed digest verification;
-- at most one default binding and stable binding order;
+- draft mutations accept multiple defaults while validate and publish reject
+  them with `MULTIPLE_DEFAULT_SKILLS` before Ornn resolution;
 - unchanged publish no-change behavior; and
 - binding Actor ownership and idempotency.
 
@@ -862,7 +927,8 @@ and credentials are never logged.
 ### Application and policy tests
 
 - human reference resolution never becomes authorization;
-- same-scope and `system` binding rules;
+- same-scope user discovery and globally visible valid `system/*` discovery;
+- observed-authority-version reconciliation retry identities and convergence;
 - `:validate` is non-mutating and publish revalidates exact content;
 - runtime uses no Ornn/network dependency;
 - fixed seven-layer prompt order and provenance;
@@ -881,6 +947,7 @@ and credentials are never logged.
 - channel explicit routes beat the default Profile binding;
 - migrated default binding preserves original plain-text arguments;
 - owner tools cannot edit or bind another owner's Profile;
+- a missing ingress signing key fails closed with a bounded `503`;
 - accepted receipts never claim committed or visible state; and
 - API responses never return sealed bodies or credentials.
 
@@ -898,6 +965,9 @@ A focused `tools/ci/agent_profile_boundary_guard.sh` is added to prevent:
   `Metadata`, `Headers`, `Items`, `AsyncLocal`, or a static ambient context;
 - Application, Projection, or orchestration services keeping a Profile or
   binding fact registry in a process-local dictionary;
+- removal or reordering of the signed proof check in any of the five external
+  Actor handlers;
+- bypassing either Actor's exact operation-retention policy;
 - an ingress reintroducing a private Profile composer or prompt order;
 - `default_skill_name` or `DefaultSkillName` returning after migration;
 - `workflow: "studio"` or `BuiltInStudioYaml` representing agent purpose; and

@@ -514,7 +514,8 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             .CreateStatefulAgent<AgentProfileNamespaceGAgent, AgentProfileNamespaceState>(
                 store,
                 AgentProfileActorIds.Namespace,
-                static () => new AgentProfileNamespaceGAgent());
+                static () => new AgentProfileNamespaceGAgent(
+                    AcceptingIngressProofVerifier.Instance));
         agent.EventPublisher = publisher;
         await agent.ActivateAsync();
         var command = CreateCommand();
@@ -605,7 +606,8 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             .CreateStatefulAgent<AgentProfileNamespaceGAgent, AgentProfileNamespaceState>(
                 store,
                 AgentProfileActorIds.Namespace,
-                static () => new AgentProfileNamespaceGAgent());
+                static () => new AgentProfileNamespaceGAgent(
+                    AcceptingIngressProofVerifier.Instance));
         agent.EventPublisher = publisher;
         await agent.ActivateAsync();
         var create = CreateCommand();
@@ -1038,5 +1040,12 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
     private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
     {
         public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class AcceptingIngressProofVerifier : IAgentProfileIngressProofVerifier
+    {
+        public static AcceptingIngressProofVerifier Instance { get; } = new();
+
+        public bool Verify(string targetActorId, IMessage command) => true;
     }
 }

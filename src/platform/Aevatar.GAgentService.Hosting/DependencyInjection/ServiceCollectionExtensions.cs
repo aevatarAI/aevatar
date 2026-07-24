@@ -159,6 +159,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<AgentProfileDraftValidator>();
         services.TryAddSingleton<AgentProfileSkillSealer>();
         services.TryAddSingleton<AgentProfileOperationFactory>();
+        services.AddOptions<AgentProfileIngressProofOptions>()
+            .Bind(configuration.GetSection(AgentProfileIngressProofOptions.SectionName));
+        services.TryAddSingleton<AgentProfileIngressProofService>();
+        services.TryAddSingleton<IAgentProfileIngressProofVerifier>(sp =>
+            sp.GetRequiredService<AgentProfileIngressProofService>());
         services.TryAddSingleton<IAgentProfileActorPort, AgentProfileActorPort>();
         services.TryAddSingleton<IAgentProfileCommandService, AgentProfileCommandApplicationService>();
         services.TryAddSingleton<IAgentProfileQueryService, AgentProfileQueryApplicationService>();

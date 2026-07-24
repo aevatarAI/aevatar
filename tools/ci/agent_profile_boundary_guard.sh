@@ -281,6 +281,9 @@ run_guard() (
   local tool_file="${tool_root}/AgentProfilesTool.cs"
 
   local core_root="src/platform/Aevatar.GAgentService.Core/AgentProfiles"
+  local profile_actor_file="${core_root}/AgentProfileGAgent.cs"
+  local namespace_actor_file="${core_root}/AgentProfileNamespaceGAgent.cs"
+  local retention_policy_file="${core_root}/AgentProfileOperationRetentionPolicy.cs"
   local projection_root="src/platform/Aevatar.GAgentService.Projection/AgentProfiles"
   local profile_semantic_roots=(
     "${core_root}" "${application_root}" "${projection_root}" "${audit_translator_file}")
@@ -292,7 +295,8 @@ run_guard() (
     "${application_root}" "${projection_root}" "${hosting_root}" "${tool_root}")
   local required_paths=(
     "${profile_semantic_roots[@]}" "${hosting_root}" "${tool_root}"
-    "${exact_adapter_file}" "${ornn_client_file}" "${tool_file}")
+    "${exact_adapter_file}" "${ornn_client_file}" "${tool_file}"
+    "${profile_actor_file}" "${namespace_actor_file}" "${retention_policy_file}")
 
   local violations=0
   local required_path="" file="" line_number="" content="" hits="" normalized_hits=""
@@ -305,6 +309,83 @@ run_guard() (
   done
   if (( violations > 0 )); then
     return 1
+  fi
+
+  local handler_label="" handler_file="" handler_method=""
+  local actor_code="" handler_body="" proof_body="" compact_body=""
+  while IFS='|' read -r handler_label handler_file handler_method; do
+    actor_code="$(
+      strip_csharp_comments_and_inactive_code < "${handler_file}" \
+        | strip_csharp_strings
+    )"
+    if ! handler_body="$(
+        printf '%s\n' "${actor_code}" | extract_csharp_method_body "${handler_method}"
+      )" ||
+       ! printf '%s\n' "${handler_body}" | rg -q -U -P \
+         '\A\s*ArgumentNullException\.ThrowIfNull\s*\(\s*command\s*\)\s*;\s*RequireIngressProof\s*\(\s*command\s*\)\s*;\s*var\s+operation\s*=\s*AgentProfileActorInvariants\.RequireOperation\s*\(\s*command\.Operation\s*\)\s*;'; then
+      echo "${handler_file}:${handler_method}"
+      echo "Every external Agent Profile command handler must verify its ingress proof before parsing the operation."
+      violations=$((violations + 1))
+    fi
+  done <<CASES
+create|${namespace_actor_file}|HandleCreateAsync
+update|${profile_actor_file}|HandleUpdateDraftAsync
+upsert|${profile_actor_file}|HandleUpsertSkillBindingAsync
+remove|${profile_actor_file}|HandleRemoveSkillBindingAsync
+publish|${profile_actor_file}|HandlePublishAsync
+CASES
+
+  while IFS='|' read -r handler_label handler_file; do
+    actor_code="$(
+      strip_csharp_comments_and_inactive_code < "${handler_file}" \
+        | strip_csharp_strings
+    )"
+    if ! proof_body="$(
+        printf '%s\n' "${actor_code}" | extract_csharp_method_body RequireIngressProof
+      )" ||
+       ! printf '%s\n' "${proof_body}" | rg -q -U -P \
+         '\A\s*if\s*\(\s*!\s*_ingressProofVerifier\.Verify\s*\(\s*Id\s*,\s*command\s*\)\s*\)'; then
+      echo "${handler_file}:RequireIngressProof"
+      echo "Each Agent Profile Actor must delegate ingress proof validation to IAgentProfileIngressProofVerifier."
+      violations=$((violations + 1))
+    fi
+  done <<CASES
+profile|${profile_actor_file}
+namespace|${namespace_actor_file}
+CASES
+
+  local retention_member=""
+  while IFS='|' read -r handler_label handler_file retention_member; do
+    actor_code="$(
+      strip_csharp_comments_and_inactive_code < "${handler_file}" \
+        | strip_csharp_strings
+    )"
+    if ! compact_body="$(
+        printf '%s\n' "${actor_code}" | extract_csharp_method_body CompactOperations
+      )" ||
+       ! printf '%s\n' "${compact_body}" | rg -q -U -P \
+         "\\bAgentProfileOperationRetentionPolicy\\.${retention_member}\\b"; then
+      echo "${handler_file}:CompactOperations"
+      echo "Both Agent Profile Actors must compact operation state through AgentProfileOperationRetentionPolicy."
+      violations=$((violations + 1))
+    fi
+  done <<CASES
+profile|${profile_actor_file}|MaxRetainedProfileMutationOperations
+namespace|${namespace_actor_file}|MaxRetainedNamespaceTerminalOperations
+CASES
+
+  local retention_policy_code=""
+  retention_policy_code="$(
+    strip_csharp_comments_and_inactive_code < "${retention_policy_file}" \
+      | strip_csharp_strings
+  )"
+  if ! printf '%s\n' "${retention_policy_code}" | rg -q -U -P \
+       '\bpublic\s+const\s+int\s+MaxRetainedProfileMutationOperations\s*=\s*256\s*;' ||
+     ! printf '%s\n' "${retention_policy_code}" | rg -q -U -P \
+       '\bpublic\s+const\s+int\s+MaxRetainedNamespaceTerminalOperations\s*=\s*1_?024\s*;'; then
+    echo "${retention_policy_file}"
+    echo "AgentProfileOperationRetentionPolicy must declare the exact 256/1024 operation retention bounds."
+    violations=$((violations + 1))
   fi
 
   hits=""
@@ -556,6 +637,65 @@ write_valid_fixture() {
   mkdir -p "${core}" "${application}" "${projection}" "${audit}" "${hosting}" "${ornn}/AgentProfiles" "${tool}"
 
   write_lines "${core}/AgentProfile.cs" 'public sealed class AgentProfileDefinition { }'
+  write_lines "${core}/AgentProfileOperationRetentionPolicy.cs" \
+    'public static class AgentProfileOperationRetentionPolicy {' \
+    '  public const int MaxRetainedProfileMutationOperations = 256;' \
+    '  public const int MaxRetainedNamespaceTerminalOperations = 1024;' \
+    '}'
+  write_lines "${core}/AgentProfileNamespaceGAgent.cs" \
+    'public sealed class AgentProfileNamespaceGAgent {' \
+    '  public async Task HandleCreateAsync(CreateAgentProfileCommand command) {' \
+    '    ArgumentNullException.ThrowIfNull(command);' \
+    '    RequireIngressProof(command);' \
+    '    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);' \
+    '    await PersistAsync(operation);' \
+    '  }' \
+    '  private static void CompactOperations(AgentProfileNamespaceState state) {' \
+    '    var removeCount = state.Operations.Count -' \
+    '      AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations;' \
+    '    RemoveOldestTerminalOperations(state, removeCount);' \
+    '  }' \
+    '  private void RequireIngressProof(IMessage command) {' \
+    '    if (!_ingressProofVerifier.Verify(Id, command))' \
+    '      throw new InvalidOperationException();' \
+    '  }' \
+    '}'
+  write_lines "${core}/AgentProfileGAgent.cs" \
+    'public sealed class AgentProfileGAgent {' \
+    '  public async Task HandleUpdateDraftAsync(UpdateAgentProfileDraftCommand command) {' \
+    '    ArgumentNullException.ThrowIfNull(command);' \
+    '    RequireIngressProof(command);' \
+    '    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);' \
+    '    await PersistAsync(operation);' \
+    '  }' \
+    '  public async Task HandleUpsertSkillBindingAsync(UpsertAgentProfileSkillBindingCommand command) {' \
+    '    ArgumentNullException.ThrowIfNull(command);' \
+    '    RequireIngressProof(command);' \
+    '    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);' \
+    '    await PersistAsync(operation);' \
+    '  }' \
+    '  public async Task HandleRemoveSkillBindingAsync(RemoveAgentProfileSkillBindingCommand command) {' \
+    '    ArgumentNullException.ThrowIfNull(command);' \
+    '    RequireIngressProof(command);' \
+    '    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);' \
+    '    await PersistAsync(operation);' \
+    '  }' \
+    '  public async Task HandlePublishAsync(PublishAgentProfileCommand command) {' \
+    '    ArgumentNullException.ThrowIfNull(command);' \
+    '    RequireIngressProof(command);' \
+    '    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);' \
+    '    await PersistAsync(operation);' \
+    '  }' \
+    '  private static void CompactOperations(AgentProfileState state) {' \
+    '    var retained = state.Operations.TakeLast(' \
+    '      AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations);' \
+    '    ReplaceOperations(state, retained);' \
+    '  }' \
+    '  private void RequireIngressProof(IMessage command) {' \
+    '    if (!_ingressProofVerifier.Verify(Id, command))' \
+    '      throw new InvalidOperationException();' \
+    '  }' \
+    '}'
   write_lines "${application}/AgentProfileService.cs" \
     'public sealed class AgentProfileService {' \
     '  // The latest wording in a comment is harmless.' \
@@ -639,6 +779,76 @@ run_self_tests() {
     'public string DescribeContextBags() => "Metadata Headers Items AsyncLocal";' \
     >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
   expect_pass "semantic identifiers inside C# strings" "${case_root}"
+
+  local handler_label="" handler_file="" handler_method=""
+  while IFS='|' read -r handler_label handler_file handler_method; do
+    fresh_case "ingress-proof-${handler_label}"
+    HANDLER_METHOD="${handler_method}" perl -0777 -pi -e '
+      my $method = $ENV{"HANDLER_METHOD"};
+      s{(\b\Q$method\E\s*\([^)]*\)\s*\{\s*ArgumentNullException\.ThrowIfNull\(command\);\s*)RequireIngressProof\(command\);}{$1}s;
+    ' "${case_root}/${handler_file}"
+    expect_fail "external handler proof ${handler_label}" "${case_root}" \
+      "must verify its ingress proof before parsing the operation"
+  done <<'CASES'
+create|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs|HandleCreateAsync
+update|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|HandleUpdateDraftAsync
+upsert|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|HandleUpsertSkillBindingAsync
+remove|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|HandleRemoveSkillBindingAsync
+publish|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|HandlePublishAsync
+CASES
+
+  fresh_case "ingress-proof-after-operation"
+  perl -0777 -pi -e '
+    s{RequireIngressProof\(command\);\s*(var operation = AgentProfileActorInvariants\.RequireOperation\(command\.Operation\);)}{$1\n    RequireIngressProof(command);}s;
+  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
+  expect_fail "external handler proof after operation parsing" "${case_root}" \
+    "must verify its ingress proof before parsing the operation"
+
+  local verifier_label="" verifier_file=""
+  while IFS='|' read -r verifier_label verifier_file; do
+    fresh_case "ingress-proof-verifier-${verifier_label}"
+    perl -0777 -pi -e \
+      's/_ingressProofVerifier\.Verify\(Id, command\)/true/g' \
+      "${case_root}/${verifier_file}"
+    expect_fail "Actor proof verifier ${verifier_label}" "${case_root}" \
+      "must delegate ingress proof validation to IAgentProfileIngressProofVerifier"
+  done <<'CASES'
+profile|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs
+namespace|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs
+CASES
+
+  local retention_label="" retention_file="" retention_member="" retention_literal=""
+  while IFS='|' read -r retention_label retention_file retention_member retention_literal; do
+    fresh_case "retention-${retention_label}"
+    RETENTION_MEMBER="${retention_member}" RETENTION_LITERAL="${retention_literal}" \
+      perl -0777 -pi -e '
+        my $member = $ENV{"RETENTION_MEMBER"};
+        my $literal = $ENV{"RETENTION_LITERAL"};
+        s/AgentProfileOperationRetentionPolicy\.\Q$member\E/$literal/g;
+      ' "${case_root}/${retention_file}"
+    expect_fail "Actor retention policy ${retention_label}" "${case_root}" \
+      "must compact operation state through AgentProfileOperationRetentionPolicy"
+  done <<'CASES'
+profile|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|MaxRetainedProfileMutationOperations|256
+namespace|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs|MaxRetainedNamespaceTerminalOperations|1024
+CASES
+
+  local retention_constant="" retention_value="" replacement_value=""
+  while IFS='|' read -r retention_constant retention_value replacement_value; do
+    fresh_case "retention-policy-${retention_constant}"
+    RETENTION_CONSTANT="${retention_constant}" RETENTION_VALUE="${retention_value}" \
+      REPLACEMENT_VALUE="${replacement_value}" perl -0777 -pi -e '
+        my $constant = $ENV{"RETENTION_CONSTANT"};
+        my $value = $ENV{"RETENTION_VALUE"};
+        my $replacement = $ENV{"REPLACEMENT_VALUE"};
+        s/(\b\Q$constant\E\s*=\s*)\Q$value\E\b/$1$replacement/g;
+      ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileOperationRetentionPolicy.cs"
+    expect_fail "retention policy constant ${retention_constant}" "${case_root}" \
+      "must declare the exact 256/1024 operation retention bounds"
+  done <<'CASES'
+MaxRetainedProfileMutationOperations|256|255
+MaxRetainedNamespaceTerminalOperations|1024|1023
+CASES
 
   fresh_case "typed-static-profile-state"
   printf '%s\n' 'private static AgentProfileIdentity? _current;' \

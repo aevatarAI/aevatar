@@ -356,6 +356,59 @@ public sealed class SystemAgentProfileProvisioningServiceTests
             AgentProfileDeterminism.ComputeSourceDraftSha256(desired));
     }
 
+    [Theory]
+    [InlineData("update")]
+    [InlineData("remove")]
+    [InlineData("upsert")]
+    [InlineData("publish")]
+    public async Task ReconcileAsync_MutationOperationIdentity_ShouldIncludeObservedAuthorityVersion(
+        string mutation)
+    {
+        var desired = Content(withSkill: mutation == "upsert", displayName: "Desired Assistant");
+        var current = mutation == "update"
+            ? Content(displayName: "Current Assistant")
+            : desired.Clone();
+        if (mutation == "remove")
+        {
+            desired = Content(displayName: "Desired Assistant");
+            current = desired.Clone();
+            current.SkillBindings.Add(Binding("legacy-binding", 9, "legacy-skill"));
+        }
+        else if (mutation == "upsert")
+        {
+            current = Content(displayName: "Desired Assistant");
+        }
+
+        var managementQuery = new RecordingManagementQueryPort
+        {
+            Result = Management(current, authorityVersion: 11),
+        };
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(
+            new MutableDefinitionSource(desired),
+            namespaceQuery: new RecordingNamespaceQueryPort { Result = NamespaceEntry() },
+            managementQuery: managementQuery,
+            actorPort: actorPort);
+
+        await service.ReconcileAsync();
+        await service.ReconcileAsync();
+        managementQuery.Result = Management(current, authorityVersion: 12);
+        await service.ReconcileAsync();
+
+        var operations = mutation switch
+        {
+            "update" => actorPort.UpdateCommands.Select(static command => command.Operation),
+            "remove" => actorPort.RemoveCommands.Select(static command => command.Operation),
+            "upsert" => actorPort.UpsertCommands.Select(static command => command.Operation),
+            "publish" => actorPort.PublishCommands.Select(static command => command.Operation),
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
+        };
+        var operationIds = operations.Select(static operation => operation.OperationId).ToArray();
+        operationIds.Should().HaveCount(3);
+        operationIds[1].Should().Be(operationIds[0]);
+        operationIds[2].Should().NotBe(operationIds[0]);
+    }
+
     [Fact]
     public async Task ReconcileAsync_WhenExecutionMatches_ShouldRereadEveryFactAndAdmitNoCommand()
     {

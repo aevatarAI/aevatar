@@ -14,6 +14,28 @@ public sealed class AgentProfileGAgentTests
     private const string SkillGuidBeta = "bbde72de-cf15-4eef-a8cb-10d8f9b24a53";
 
     [Fact]
+    public async Task Mutation_ShouldRejectInvalidIngressProofBeforeOperationParsingOrPersistence()
+    {
+        var verifier = new RecordingIngressProofVerifier(false);
+        var (agent, store, publisher) = await CreateActorAsync(verifier);
+        var command = new UpdateAgentProfileDraftCommand
+        {
+            Identity = GAgentServiceTestKit.CreateAgentProfileIdentity(),
+            Operation = null!,
+        };
+
+        var act = () => agent.HandleUpdateDraftAsync(command);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_INGRESS_PROOF_INVALID");
+        verifier.Calls.Should().ContainSingle()
+            .Which.TargetActorId.Should().Be(agent.Id);
+        agent.State.Operations.Should().BeEmpty();
+        (await store.GetEventsAsync(agent.Id)).Should().BeEmpty();
+        publisher.Sends.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Initialize_ShouldCommitImmutableIdentityAndClonedInitialDraftThenSendContinuation()
     {
         var (agent, store, publisher) = await CreateActorAsync();
@@ -162,34 +184,26 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
-    public async Task InitializeRejection_ShouldCommitBeforeSendAndReplayStoredContinuation()
+    public async Task Initialize_ShouldCommitDraftWithMultipleDefaultBindings()
     {
         var (agent, store, publisher) = await CreateActorAsync();
-        publisher.SendFailuresRemaining = 1;
         var command = InitializeCommand(content: ContentWithMultipleDefaultBindings());
 
-        var initialize = () => DispatchInitializeAsync(agent, command);
-        await initialize.Should().ThrowAsync<InvalidOperationException>();
+        await DispatchInitializeAsync(agent, command);
 
         (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
         agent.State.Operations.Should().ContainSingle();
-        var replay = command.Clone();
-        replay.Operation.CommandId = "cmd-initialize-rejection-recovery";
-        replay.Operation.CorrelationId = "corr-initialize-rejection-recovery";
-        await DispatchInitializeAsync(agent, replay);
-
-        (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
+        agent.State.Identity.Should().NotBeNull();
+        agent.State.Draft.SkillBindings.Should().HaveCount(2);
+        agent.State.Operations[0].InitializationContinuation.Should().NotBeNull();
         publisher.Sends.Should().ContainSingle();
-        var continuation = publisher.Sends[0].Payload.Unpack<AgentProfileInitializationRejectedContinuation>();
-        continuation.Operation.CommandId.Should().Be("cmd-initialize-rejection-recovery");
+        var continuation = publisher.Sends[0].Payload.Unpack<AgentProfileInitializedContinuation>();
         continuation.Identity.Should().BeEquivalentTo(command.Identity);
         continuation.ProfileActorId.Should().Be(agent.Id);
-        continuation.Diagnostic.Code.Should().Be("MULTIPLE_DEFAULT_SKILLS");
     }
 
     [Theory]
     [InlineData("input-digest", "OPERATION_INPUT_SHA256_MISMATCH")]
-    [InlineData("default-binding", "MULTIPLE_DEFAULT_SKILLS")]
     [InlineData("identity", "PROFILE_IDENTITY_CONFLICT")]
     public async Task InitializeStoredRejection_ShouldRecoverFailedSendFromExactReplay(
         string rejection,
@@ -201,9 +215,6 @@ public sealed class AgentProfileGAgentTests
         var (agent, store, publisher) = fixture;
         var command = rejection switch
         {
-            "default-binding" => InitializeCommand(
-                content: ContentWithMultipleDefaultBindings(),
-                operationId: "op-initialize-default-rejection"),
             "identity" => InitializeCommand(
                 identity: GAgentServiceTestKit.CreateAgentProfileIdentity(
                     profileId: "prof-other",
@@ -239,7 +250,6 @@ public sealed class AgentProfileGAgentTests
 
     [Theory]
     [InlineData("input-digest")]
-    [InlineData("default-binding")]
     [InlineData("identity")]
     public async Task InitializeStoredRejection_ShouldRejectSemanticDrift(string rejection)
     {
@@ -249,9 +259,6 @@ public sealed class AgentProfileGAgentTests
         var (agent, store, publisher) = fixture;
         var command = rejection switch
         {
-            "default-binding" => InitializeCommand(
-                content: ContentWithMultipleDefaultBindings(),
-                operationId: "op-initialize-default-drift"),
             "identity" => InitializeCommand(
                 identity: GAgentServiceTestKit.CreateAgentProfileIdentity(
                     profileId: "prof-other",
@@ -327,19 +334,20 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
-    public async Task InitializeSuccess_ShouldPreserveEarlierRejectedOperationFacts()
+    public async Task InitializeSuccess_ShouldReplaceEarlierRejectedRecoveryRecord()
     {
         var (agent, store, _) = await CreateActorAsync();
-        await DispatchInitializeAsync(agent, InitializeCommand(
-            content: ContentWithMultipleDefaultBindings(),
-            operationId: "op-initialize-rejected"));
+        var rejected = InitializeCommand(operationId: "op-initialize-rejected");
+        rejected.InitialContent.DisplayName = string.Empty;
+        await DispatchInitializeAsync(agent, rejected);
 
         await DispatchInitializeAsync(agent, InitializeCommand(operationId: "op-initialize-valid"));
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
         agent.State.Identity.Should().NotBeNull();
-        agent.State.Operations.Select(x => x.Operation.OperationId).Should().BeEquivalentTo(
-            ["op-initialize-rejected", "op-initialize-valid"]);
+        agent.State.Operations.Should().ContainSingle()
+            .Which.Operation.OperationId.Should().Be("op-initialize-valid");
+        agent.State.Operations[0].InitializationContinuation.Should().NotBeNull();
     }
 
     [Fact]
@@ -531,6 +539,25 @@ public sealed class AgentProfileGAgentTests
             newPublishedSnapshotSha256: published.SnapshotSha256);
         committed.DraftRevision.Should().Be(committed.Outcome.Transition.After.DraftRevision);
         committed.DraftSha256.Should().Equal(committed.Outcome.Transition.After.DraftSha256);
+    }
+
+    [Fact]
+    public async Task UpdateDraft_ShouldCommitDraftWithMultipleDefaultBindings()
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var content = ContentWithMultipleDefaultBindings();
+
+        await agent.HandleUpdateDraftAsync(UpdateCommand(
+            agent.State.Identity,
+            content,
+            "op-update-multiple-defaults",
+            expectedVersion: 1));
+
+        agent.State.Draft.SkillBindings.Should().HaveCount(2);
+        agent.State.DraftRevision.Should().Be(2);
+        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Applied);
+        (await store.GetEventsAsync(agent.Id))[^1].EventData
+            .Is(AgentProfileDraftUpdatedEvent.Descriptor).Should().BeTrue();
     }
 
     [Fact]
@@ -742,7 +769,7 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
-    public async Task UpsertBinding_ShouldRejectMoreThanOneDefaultBinding()
+    public async Task UpsertBinding_ShouldCommitMoreThanOneDefaultBinding()
     {
         var content = GAgentServiceTestKit.CreateAgentProfileContent();
         content.SkillBindings.Add(Binding(
@@ -757,9 +784,9 @@ public sealed class AgentProfileGAgentTests
 
         await agent.HandleUpsertSkillBindingAsync(UpsertCommand(agent, second, "op-upsert-second-default"));
 
-        agent.State.Draft.SkillBindings.Should().ContainSingle();
-        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
-        agent.State.LastMutation.Diagnostic.Code.Should().Be("MULTIPLE_DEFAULT_SKILLS");
+        agent.State.Draft.SkillBindings.Should().HaveCount(2);
+        agent.State.DraftRevision.Should().Be(2);
+        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Applied);
     }
 
     [Fact]
@@ -791,6 +818,25 @@ public sealed class AgentProfileGAgentTests
         agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
         agent.State.LastMutation.Diagnostic.Code.Should().Be("PUBLISH_SOURCE_CHANGED");
         publisher.Sends.Should().ContainSingle(); // initialization only
+    }
+
+    [Fact]
+    public async Task Publish_ShouldRejectForgedSealedSnapshotForDraftWithMultipleDefaultBindings()
+    {
+        var content = ContentWithMultipleDefaultBindings();
+        var (agent, store, publisher) = await CreateInitializedActorAsync(content: content);
+        var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+
+        await agent.HandlePublishAsync(PublishCommand(
+            agent,
+            snapshot,
+            "op-publish-multiple-defaults"));
+
+        agent.State.Published.Should().BeNull();
+        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        agent.State.LastMutation.Diagnostic.Code.Should().Be("MULTIPLE_DEFAULT_SKILLS");
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+        publisher.Sends.Should().ContainSingle();
     }
 
     [Fact]
@@ -1350,8 +1396,80 @@ public sealed class AgentProfileGAgentTests
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
     }
 
+    [Fact]
+    public async Task MutationOperationRetention_ShouldKeepInitializationAndNewestBoundedReplayWindow()
+    {
+        var (agent, store, _) = await CreateInitializedActorAsync();
+        var initializationOperations = agent.State.Operations
+            .Where(operation => operation.InitializationContinuation is not null)
+            .ToArray();
+        var initializationOperationId = initializationOperations.Should().ContainSingle()
+            .Which.Operation.OperationId;
+        var commands = new List<UpdateAgentProfileDraftCommand>();
+        var totalMutations = AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations + 64;
+        var serializedSizeAtLimit = 0;
+
+        for (var index = 0; index < totalMutations; index++)
+        {
+            var command = UpdateCommand(
+                agent.State.Identity,
+                agent.State.Draft,
+                $"op-retention-{index:D4}",
+                agent.EventSourcing!.CurrentVersion);
+            commands.Add(command.Clone());
+            await agent.HandleUpdateDraftAsync(command);
+
+            if (index == AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations - 1)
+            {
+                agent.State.Operations.Should().HaveCount(
+                    AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations + 1);
+                serializedSizeAtLimit = agent.State.CalculateSize();
+            }
+        }
+
+        agent.State.Operations.Should().HaveCount(
+            AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations + 1);
+        agent.State.Operations[0].Operation.OperationId.Should().Be(initializationOperationId);
+        agent.State.Operations.Skip(1).Select(operation => operation.Operation.OperationId)
+            .Should().Equal(commands
+                .TakeLast(AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations)
+                .Select(command => command.Operation.OperationId));
+        agent.State.CalculateSize().Should().Be(serializedSizeAtLimit);
+
+        var oldestRetained = commands[^AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations];
+        var versionBeforeReplay = agent.EventSourcing!.CurrentVersion;
+        var retainedReplay = oldestRetained.Clone();
+        GAgentServiceTestKit.SetAgentProfileDispatchAttempt(
+            retainedReplay.Operation,
+            "retained-operation-replay");
+        await agent.HandleUpdateDraftAsync(retainedReplay);
+        agent.EventSourcing.CurrentVersion.Should().Be(versionBeforeReplay);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)versionBeforeReplay);
+
+        var retainedDrift = oldestRetained.Clone();
+        retainedDrift.Content.DisplayName = "Drifted retained payload";
+        var driftAct = () => agent.HandleUpdateDraftAsync(retainedDrift);
+        var driftException = await driftAct.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        driftException.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
+        agent.EventSourcing.CurrentVersion.Should().Be(versionBeforeReplay);
+
+        var evicted = commands[totalMutations -
+            AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations - 1].Clone();
+        evicted.ExpectedAuthorityStateVersion = agent.EventSourcing.CurrentVersion;
+        await agent.HandleUpdateDraftAsync(evicted);
+
+        agent.EventSourcing.CurrentVersion.Should().Be(versionBeforeReplay + 1);
+        agent.State.Operations.Should().HaveCount(
+            AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations + 1);
+        agent.State.Operations.Should().Contain(operation =>
+            operation.Operation.OperationId == evicted.Operation.OperationId);
+        agent.State.Operations.Should().Contain(operation =>
+            operation.Operation.OperationId == initializationOperationId);
+        agent.State.CalculateSize().Should().Be(serializedSizeAtLimit);
+    }
+
     private static async Task<(AgentProfileGAgent Agent, InMemoryEventStore Store, RecordingProfileEventPublisher Publisher)>
-        CreateActorAsync()
+        CreateActorAsync(IAgentProfileIngressProofVerifier? verifier = null)
     {
         var store = new InMemoryEventStore();
         var publisher = new RecordingProfileEventPublisher();
@@ -1359,7 +1477,8 @@ public sealed class AgentProfileGAgentTests
         var agent = GAgentServiceTestKit.CreateStatefulAgent<AgentProfileGAgent, AgentProfileState>(
             store,
             AgentProfileActorIds.Profile(identity.ProfileId),
-            static () => new AgentProfileGAgent());
+            () => new AgentProfileGAgent(
+                verifier ?? AcceptingIngressProofVerifier.Instance));
         agent.EventPublisher = publisher;
         await agent.ActivateAsync();
         return (agent, store, publisher);
@@ -1809,4 +1928,22 @@ public sealed class AgentProfileGAgentTests
 
     private static ByteString Digest(byte value) =>
         ByteString.CopyFrom(Enumerable.Repeat(value, 32).ToArray());
+
+    private sealed class AcceptingIngressProofVerifier : IAgentProfileIngressProofVerifier
+    {
+        public static AcceptingIngressProofVerifier Instance { get; } = new();
+
+        public bool Verify(string targetActorId, IMessage command) => true;
+    }
+
+    private sealed class RecordingIngressProofVerifier(bool result) : IAgentProfileIngressProofVerifier
+    {
+        public List<(string TargetActorId, IMessage Command)> Calls { get; } = [];
+
+        public bool Verify(string targetActorId, IMessage command)
+        {
+            Calls.Add((targetActorId, command));
+            return result;
+        }
+    }
 }

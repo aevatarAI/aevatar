@@ -10,12 +10,20 @@ namespace Aevatar.GAgentService.Core.AgentProfiles;
 [GAgent("gagent.service.agent-profile-namespace")]
 public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespaceState>
 {
-    public AgentProfileNamespaceGAgent() => InitializeId();
+    private readonly IAgentProfileIngressProofVerifier _ingressProofVerifier;
+
+    public AgentProfileNamespaceGAgent(IAgentProfileIngressProofVerifier ingressProofVerifier)
+    {
+        _ingressProofVerifier = ingressProofVerifier ??
+            throw new ArgumentNullException(nameof(ingressProofVerifier));
+        InitializeId();
+    }
 
     [EventHandler]
     public async Task HandleCreateAsync(CreateAgentProfileCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        RequireIngressProof(command);
         var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         var profileActorId = AgentProfileActorInvariants.RequireActorId(
             command.ProfileActorId,
@@ -484,6 +492,16 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         State.Operations.FirstOrDefault(entry =>
             string.Equals(entry.Operation?.OperationId, operationId, StringComparison.Ordinal));
 
+    private void RequireIngressProof(IMessage command)
+    {
+        if (!_ingressProofVerifier.Verify(Id, command))
+        {
+            throw AgentProfileActorInvariants.Error(
+                "PROFILE_INGRESS_PROOF_INVALID",
+                "The Agent Profile command ingress proof is invalid.");
+        }
+    }
+
     private static void EnsureCreateValidationRejectionReplay(
         AgentProfileNamespaceOperationState existing,
         AgentProfileOperationReplayAuthority replayAuthority)
@@ -551,6 +569,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             ProvisioningStarted = true,
             ReplayAuthority = evt.ReplayAuthority.Clone(),
         });
+        CompactOperations(next);
         return next;
     }
 
@@ -563,6 +582,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             string.Equals(profile.Identity.ProfileId, evt.Identity.ProfileId, StringComparison.Ordinal));
         entry.Status = AgentProfileProvisioningStatus.Active;
         entry.Failure = null;
+        CompactOperations(next);
         return next;
     }
 
@@ -610,6 +630,7 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             operation.Diagnostic = evt.Diagnostic.Clone();
             operation.FailureKind = evt.FailureKind;
         }
+        CompactOperations(next);
         return next;
     }
 
@@ -629,6 +650,37 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
             PublishedSummary = evt.Summary.Clone(),
             ReplayAuthority = evt.ReplayAuthority.Clone(),
         });
+        CompactOperations(next);
         return next;
     }
+
+    private static void CompactOperations(AgentProfileNamespaceState state)
+    {
+        var pinnedTargets = state.Profiles
+            .Where(profile => profile.Status is
+                AgentProfileProvisioningStatus.Provisioning or
+                AgentProfileProvisioningStatus.Failed)
+            .Select(profile => (profile.Identity?.ProfileId ?? string.Empty, profile.ProfileActorId))
+            .ToHashSet();
+        var terminalCount = state.Operations.Count(operation => !IsPinned(operation, pinnedTargets));
+        var removeCount = terminalCount -
+            AgentProfileOperationRetentionPolicy.MaxRetainedNamespaceTerminalOperations;
+        for (var index = 0; removeCount > 0 && index < state.Operations.Count;)
+        {
+            if (IsPinned(state.Operations[index], pinnedTargets))
+            {
+                index++;
+                continue;
+            }
+
+            state.Operations.RemoveAt(index);
+            removeCount--;
+        }
+    }
+
+    private static bool IsPinned(
+        AgentProfileNamespaceOperationState operation,
+        HashSet<(string ProfileId, string ProfileActorId)> pinnedTargets) =>
+        operation.ProvisioningStarted &&
+        pinnedTargets.Contains((operation.ProfileId, operation.ProfileActorId));
 }
