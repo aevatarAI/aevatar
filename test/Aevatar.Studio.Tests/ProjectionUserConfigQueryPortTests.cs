@@ -170,7 +170,25 @@ public sealed class ProjectionUserConfigQueryPortTests
         var act = () => port.GetAsync();
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Authenticated caller has no resolvable scope*");
+            .WithMessage("HTTP request has no resolvable scope*");
+        reader.GetKeys.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenUnauthenticatedRequestHasNoScope_ShouldThrowBeforeDocumentRead()
+    {
+        var reader = new RecordingDocumentReader();
+        var port = CreatePort(
+            reader,
+            new StubScopeResolver(
+                scopeId: null,
+                authenticatedWithoutScope: false,
+                hasHttpRequestContext: true));
+
+        var act = () => port.GetAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("HTTP request has no resolvable scope*");
         reader.GetKeys.Should().BeEmpty();
     }
 
@@ -201,13 +219,17 @@ public sealed class ProjectionUserConfigQueryPortTests
 
     private sealed class StubScopeResolver(
         string? scopeId = "ambient-scope",
-        bool authenticatedWithoutScope = false) : IAppScopeResolver
+        bool authenticatedWithoutScope = false,
+        bool hasHttpRequestContext = false) : IAppScopeResolver
     {
         public AppScopeContext? Resolve(HttpContext? httpContext = null) =>
             string.IsNullOrWhiteSpace(scopeId) ? null : new(scopeId, "test");
 
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) =>
             authenticatedWithoutScope;
+
+        public bool HasHttpRequestContext(HttpContext? httpContext = null) =>
+            hasHttpRequestContext || authenticatedWithoutScope;
     }
 
     private sealed class StubUserConfigDefaults : IUserConfigDefaults

@@ -9,6 +9,12 @@ public interface IAppScopeResolver
     AppScopeContext? Resolve(HttpContext? httpContext = null);
 
     /// <summary>
+    /// True when scope resolution is occurring within an HTTP request context. Ambient callers use
+    /// this signal to distinguish an unresolved request from a genuine CLI or background context.
+    /// </summary>
+    bool HasHttpRequestContext(HttpContext? httpContext = null);
+
+    /// <summary>
     /// True when the current HTTP request has an authenticated caller but no scope can be
     /// resolved from their claims. Typically means the JWT reached the endpoint without a
     /// <c>scope_id</c> claim — the auth provider's claims transformer is misconfigured or

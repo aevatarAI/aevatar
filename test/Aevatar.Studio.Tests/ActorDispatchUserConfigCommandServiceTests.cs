@@ -186,5 +186,7 @@ public sealed class ActorDispatchUserConfigCommandServiceTests
 
         public bool HasAuthenticatedRequestWithoutScope(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) =>
             false;
+
+        public bool HasHttpRequestContext(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => false;
     }
 }

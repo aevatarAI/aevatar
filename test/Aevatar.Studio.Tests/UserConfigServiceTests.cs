@@ -382,12 +382,12 @@ public sealed class UserConfigServiceTests
     [Fact]
     public async Task GetAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeReadingConfig()
     {
-        var fixture = CreateAuthenticatedMissingScopeService();
+        var fixture = CreateMissingScopeService(authenticatedWithoutScope: true);
 
         var act = () => fixture.Service.GetAsync();
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Authenticated caller has no resolvable scope*");
+            .WithMessage("HTTP request has no resolvable scope*");
         fixture.Query.GetCalls.Should().Be(0);
         fixture.Commands.Updates.Should().BeEmpty();
         fixture.Catalog.GetServicesCalls.Should().Be(0);
@@ -396,12 +396,12 @@ public sealed class UserConfigServiceTests
     [Fact]
     public async Task GetRuntimeAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeReadingConfig()
     {
-        var fixture = CreateAuthenticatedMissingScopeService();
+        var fixture = CreateMissingScopeService(authenticatedWithoutScope: true);
 
         var act = () => fixture.Service.GetRuntimeAsync();
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Authenticated caller has no resolvable scope*");
+            .WithMessage("HTTP request has no resolvable scope*");
         fixture.Query.GetCalls.Should().Be(0);
         fixture.Commands.Updates.Should().BeEmpty();
         fixture.Catalog.GetServicesCalls.Should().Be(0);
@@ -410,12 +410,12 @@ public sealed class UserConfigServiceTests
     [Fact]
     public async Task SaveAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeDispatchingConfig()
     {
-        var fixture = CreateAuthenticatedMissingScopeService();
+        var fixture = CreateMissingScopeService(authenticatedWithoutScope: true);
 
         var act = () => fixture.Service.SaveAsync(new SaveUserConfigCommand(DefaultModel: "gpt-5.5"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Authenticated caller has no resolvable scope*");
+            .WithMessage("HTTP request has no resolvable scope*");
         fixture.Query.GetCalls.Should().Be(0);
         fixture.Commands.Updates.Should().BeEmpty();
         fixture.Catalog.GetServicesCalls.Should().Be(0);
@@ -424,14 +424,42 @@ public sealed class UserConfigServiceTests
     [Fact]
     public async Task SaveLlmPreferenceAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeCatalogOrDispatch()
     {
-        var fixture = CreateAuthenticatedMissingScopeService();
+        var fixture = CreateMissingScopeService(authenticatedWithoutScope: true);
 
         var act = () => fixture.Service.SaveLlmPreferenceAsync(
             "bearer",
             new SaveUserLlmPreferenceCommand(UserServiceId: "us-alpha"));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("Authenticated caller has no resolvable scope*");
+            .WithMessage("HTTP request has no resolvable scope*");
+        fixture.Query.GetCalls.Should().Be(0);
+        fixture.Commands.Updates.Should().BeEmpty();
+        fixture.Catalog.GetServicesCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetAsync_WhenUnauthenticatedRequestHasNoScope_ShouldThrowBeforeReadingConfig()
+    {
+        var fixture = CreateMissingScopeService(authenticatedWithoutScope: false);
+
+        var act = () => fixture.Service.GetAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("HTTP request has no resolvable scope*");
+        fixture.Query.GetCalls.Should().Be(0);
+        fixture.Commands.Updates.Should().BeEmpty();
+        fixture.Catalog.GetServicesCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenUnauthenticatedRequestHasNoScope_ShouldThrowBeforeDispatchingConfig()
+    {
+        var fixture = CreateMissingScopeService(authenticatedWithoutScope: false);
+
+        var act = () => fixture.Service.SaveAsync(new SaveUserConfigCommand(DefaultModel: "gpt-5.5"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("HTTP request has no resolvable scope*");
         fixture.Query.GetCalls.Should().Be(0);
         fixture.Commands.Updates.Should().BeEmpty();
         fixture.Catalog.GetServicesCalls.Should().Be(0);
@@ -551,7 +579,7 @@ public sealed class UserConfigServiceTests
         UserConfigService Service,
         StubUserConfigQueryPort Query,
         RecordingUserConfigCommandService Commands,
-        StubUserLlmCatalogPort Catalog) CreateAuthenticatedMissingScopeService()
+        StubUserLlmCatalogPort Catalog) CreateMissingScopeService(bool authenticatedWithoutScope)
     {
         var query = new StubUserConfigQueryPort(new UserConfig(DefaultModel: string.Empty));
         var commands = new RecordingUserConfigCommandService();
@@ -563,7 +591,10 @@ public sealed class UserConfigServiceTests
             query,
             commands,
             writer,
-            new StubScopeResolver(scopeId: null, authenticatedWithoutScope: true));
+            new StubScopeResolver(
+                scopeId: null,
+                authenticatedWithoutScope,
+                hasHttpRequestContext: true));
         return (service, query, commands, catalog);
     }
 
@@ -587,13 +618,17 @@ public sealed class UserConfigServiceTests
 
     private sealed class StubScopeResolver(
         string? scopeId,
-        bool authenticatedWithoutScope = false) : IAppScopeResolver
+        bool authenticatedWithoutScope = false,
+        bool hasHttpRequestContext = false) : IAppScopeResolver
     {
         public AppScopeContext? Resolve(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) =>
             string.IsNullOrWhiteSpace(scopeId) ? null : new(scopeId, "test");
 
         public bool HasAuthenticatedRequestWithoutScope(
             Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => authenticatedWithoutScope;
+
+        public bool HasHttpRequestContext(
+            Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => hasHttpRequestContext;
     }
 
     private sealed class StubUserConfigQueryPort(UserConfig config) : IUserConfigQueryPort

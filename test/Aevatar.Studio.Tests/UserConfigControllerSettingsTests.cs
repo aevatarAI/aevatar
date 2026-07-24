@@ -893,6 +893,8 @@ public sealed class UserConfigControllerSettingsTests
         public AppScopeContext? Resolve(HttpContext? httpContext = null) => new(scopeId, "test");
 
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
+
+        public bool HasHttpRequestContext(HttpContext? httpContext = null) => false;
     }
 
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
