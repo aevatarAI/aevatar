@@ -185,6 +185,7 @@ extract_csharp_method_body() {
 
 extract_csharp_executable_code() {
   perl -0777 -ne '
+    exit 1 if /(?m)^[ \t]*#/;
     s{^[ \t]*(?:async[ \t]+)?[A-Za-z_][A-Za-z0-9_.?]*(?:[ \t]*<[^;\r\n{}]+>)?[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\([^;\r\n{}]*\)[ \t]*=>[^;\r\n]*;}{}gm;
     my $depth = 0;
     my @live_try = ();
@@ -846,6 +847,18 @@ CASES
   expect_fail "exact adapter throw-unreachable tail decoys" "${case_root}" \
     "ResolveAsync must execute"
 
+  fresh_case "adapter-pragma-throw-unreachable-tail-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    #pragma warning disable CS0162' \
+    '    throw new InvalidOperationException();' \
+    '    var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
+    '  } }'
+  expect_fail "exact adapter pragma-hidden throw-unreachable tail decoys" "${case_root}" \
+    "structurally valid"
+
   fresh_case "adapter-labeled-throw-unreachable-tail-decoy"
   write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
     'public sealed class OrnnExactAgentProfileSkillResolver {' \
@@ -869,6 +882,21 @@ CASES
     '    return default!;' \
     '  } }'
   expect_fail "exact adapter goto-unreachable tail decoys" "${case_root}" \
+    "structurally valid"
+
+  fresh_case "adapter-pragma-goto-unreachable-tail-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    #pragma warning disable CS0162' \
+    '    goto AfterReads;' \
+    '    var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
+    '    #pragma warning restore CS0162' \
+    '    AfterReads:' \
+    '    return default!;' \
+    '  } }'
+  expect_fail "exact adapter pragma-hidden goto-unreachable tail decoys" "${case_root}" \
     "structurally valid"
 
   fresh_case "adapter-labeled-goto-unreachable-tail-decoy"
