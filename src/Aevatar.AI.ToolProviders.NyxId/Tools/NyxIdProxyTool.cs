@@ -14,6 +14,9 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
 {
     private const string TextResponseMode = "text";
     private const string FileArtifactResponseMode = "file_artifact";
+    private const string ServiceIdRequiredErrorCode = "NYXID_PROXY_SERVICE_ID_REQUIRED";
+    private const string ServiceIdRequiredErrorMessage = "'service_id' is required when 'slug' is provided";
+    private const string ServiceIdRequiredResult = """{"error":"'service_id' is required when 'slug' is provided"}""";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -64,6 +67,21 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         var args = ToolArgs.Parse(argumentsJson);
         if (args.HasParseError)
             return null;
+
+        if (string.IsNullOrWhiteSpace(args.Str("service_id")) &&
+            !string.IsNullOrWhiteSpace(args.Str("slug") ?? args.Str("service")) &&
+            string.Equals(resultJson, ServiceIdRequiredResult, StringComparison.Ordinal))
+        {
+            return new AgentToolReceipt
+            {
+                CallId = callId ?? string.Empty,
+                ToolName = string.IsNullOrWhiteSpace(toolName) ? Name : toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = ServiceIdRequiredErrorCode,
+                ErrorMessage = ServiceIdRequiredErrorMessage,
+                ResultJson = resultJson,
+            };
+        }
 
         return NyxIdProxyReceiptFactory.TryCreate(
             callId,
@@ -161,7 +179,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         {
             return responseMode == FileArtifactResponseMode
                 ? FileArtifactError("file_artifact_requires_service_id", "response_mode=file_artifact requires exact service_id.")
-                : """{"error":"'service_id' is required when 'slug' is provided"}""";
+                : ServiceIdRequiredResult;
         }
 
         if (string.IsNullOrWhiteSpace(path))
