@@ -1993,6 +1993,7 @@ const TeamDetailPage: React.FC = () => {
           serviceRevisionId: row.serviceRevisionId,
           workflowSupported: row.workflowSupported,
         }))}
+        routeMemberId={routeState.memberId}
         scopeId={scopeId}
         serviceIdentitiesLoading={automationsServicesQuery.isLoading}
         teamId={selectedTeamId}

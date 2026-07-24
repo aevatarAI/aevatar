@@ -2507,8 +2507,13 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
         includeTotalCount: true,
+        scopeId: "scope-1",
         take: 200,
+        teamId: "t-alpha",
       });
+      expect((scheduledDispatchApi.listAll as jest.Mock).mock.calls[0]?.[0]).not.toHaveProperty(
+        "memberId",
+      );
       expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
         appId: "default",
       });
@@ -2544,7 +2549,9 @@ describe("TeamDetailPage", () => {
     expect(screen.queryByText("Other team first page task")).toBeNull();
     expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
       includeTotalCount: true,
+      scopeId: "scope-1",
       take: 200,
+      teamId: "t-alpha",
     });
   });
 
@@ -2704,7 +2711,7 @@ describe("TeamDetailPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/scopes/scope-1/teams/t-alpha?memberId=member-team-alpha&tab=automations",
+      "/scopes/scope-1/teams/t-alpha/members/member-team-alpha/automations",
     );
     (scheduledDispatchApi.listAll as jest.Mock)
       .mockResolvedValueOnce({
@@ -2719,6 +2726,16 @@ describe("TeamDetailPage", () => {
       });
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await waitFor(() => {
+      expect(scheduledDispatchApi.listAll).toHaveBeenCalledWith({
+        includeTotalCount: true,
+        memberId: "member-team-alpha",
+        scopeId: "scope-1",
+        take: 200,
+        teamId: "t-alpha",
+      });
+    });
 
     fireEvent.click(await screen.findByRole("button", { name: "添加周期任务" }));
     expect(await screen.findByText("1. 目标成员")).toBeTruthy();

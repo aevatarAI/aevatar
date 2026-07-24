@@ -71,6 +71,7 @@ export type TeamAutomationMemberRow = {
 
 type TeamAutomationsTabProps = {
   readonly members?: readonly TeamAutomationMemberRow[];
+  readonly routeMemberId?: string;
   readonly scopeId: string;
   readonly serviceIdentitiesLoading?: boolean;
   readonly teamId: string;
@@ -680,6 +681,7 @@ function hasBackendObservedManualRun(
 
 const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   members = [],
+  routeMemberId: routeMemberIdInput = "",
   scopeId,
   serviceIdentitiesLoading = false,
   teamId,
@@ -687,6 +689,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
   const intl = useIntl();
   const queryClient = useQueryClient();
   const { token } = theme.useToken();
+  const routeMemberId = trimText(routeMemberIdInput);
   const automatableMembers = React.useMemo(
     () => members.filter((member) => member.canAutomateMember),
     [members],
@@ -726,8 +729,9 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     timezone: resolveDefaultTimezone(),
   }));
   const scheduleQueryKey = React.useMemo(
-    () => ["scheduled-dispatches", "team", scopeId, teamId] as const,
-    [scopeId, teamId],
+    () =>
+      ["scheduled-dispatches", "team", scopeId, teamId, routeMemberId] as const,
+    [routeMemberId, scopeId, teamId],
   );
   const serviceKeyToMember = React.useMemo(() => {
     const next = new Map<string, TeamAutomationMemberRow>();
@@ -750,7 +754,10 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
     queryFn: () =>
       scheduledDispatchApi.listAll({
         includeTotalCount: true,
+        ...(routeMemberId ? { memberId: routeMemberId } : {}),
+        scopeId,
         take: scheduleListTake,
+        teamId,
       }),
     queryKey: scheduleQueryKey,
     retry: (failureCount) => failureCount < scheduleListRetryLimit,
@@ -1915,7 +1922,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
               : schedule.displayName;
 
           return (
-            <div
+            <article
               aria-label={rowAriaLabel}
               className="team-automation-row"
               key={scheduleId}
@@ -2075,7 +2082,7 @@ const TeamAutomationsTab: React.FC<TeamAutomationsTabProps> = ({
                   onClick: () => deleteMutation.mutate(scheduleId),
                 })}
               </div>
-            </div>
+            </article>
           );
         })}
       </div>
