@@ -768,6 +768,35 @@ run_self_tests() {
     fi
   }
 
+  expect_fail_cases() {
+    local label="$1"
+    local root="$2"
+    shift 2
+    local expectation="" case_label="" expected_hit="" expected_diagnostic=""
+    if output="$(run_guard "${root}" 2>&1)"; then
+      echo "agent_profile_boundary_guard self-test expected FAIL: ${label}" >&2
+      echo "${output}" >&2
+      failures=$((failures + 1))
+      return
+    fi
+
+    for expectation in "$@"; do
+      IFS='|' read -r case_label expected_hit expected_diagnostic <<< "${expectation}"
+      if [[ "${output}" != *"${expected_hit}"* ]]; then
+        echo "agent_profile_boundary_guard self-test missed expected hit: ${case_label}" >&2
+        echo "Expected hit: ${expected_hit}" >&2
+        echo "${output}" >&2
+        failures=$((failures + 1))
+      fi
+      if [[ "${output}" != *"${expected_diagnostic}"* ]]; then
+        echo "agent_profile_boundary_guard self-test missed expected diagnostic: ${case_label}" >&2
+        echo "Expected: ${expected_diagnostic}" >&2
+        echo "${output}" >&2
+        failures=$((failures + 1))
+      fi
+    done
+  }
+
   fresh_case() {
     local label="$1"
     case_root="${temp_dir}/${label}"
@@ -783,14 +812,12 @@ run_self_tests() {
   expect_pass "semantic identifiers inside C# strings" "${case_root}"
 
   local handler_label="" handler_file="" handler_method=""
+  fresh_case "ingress-proof-handlers"
   while IFS='|' read -r handler_label handler_file handler_method; do
-    fresh_case "ingress-proof-${handler_label}"
     HANDLER_METHOD="${handler_method}" perl -0777 -pi -e '
       my $method = $ENV{"HANDLER_METHOD"};
       s{(\b\Q$method\E\s*\([^)]*\)\s*\{\s*ArgumentNullException\.ThrowIfNull\(command\);\s*)RequireIngressProof\(command\);}{$1}s;
     ' "${case_root}/${handler_file}"
-    expect_fail "external handler proof ${handler_label}" "${case_root}" \
-      "must verify its ingress proof before parsing the operation"
   done <<'CASES'
 create|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs|HandleCreateAsync
 update|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|HandleUpdateDraftAsync
@@ -798,22 +825,23 @@ upsert|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.
 remove|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|HandleRemoveSkillBindingAsync
 publish|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|HandlePublishAsync
 CASES
+  expect_fail_cases "external handler ingress proofs" "${case_root}" \
+    "external handler proof create|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleCreateAsync|Every external Agent Profile command handler must verify its ingress proof before parsing the operation." \
+    "external handler proof update|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleUpdateDraftAsync|Every external Agent Profile command handler must verify its ingress proof before parsing the operation." \
+    "external handler proof upsert|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleUpsertSkillBindingAsync|Every external Agent Profile command handler must verify its ingress proof before parsing the operation." \
+    "external handler proof remove|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleRemoveSkillBindingAsync|Every external Agent Profile command handler must verify its ingress proof before parsing the operation." \
+    "external handler proof publish|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandlePublishAsync|Every external Agent Profile command handler must verify its ingress proof before parsing the operation."
 
-  fresh_case "ingress-proof-after-operation"
+  fresh_case "actor-contract-violations"
   perl -0777 -pi -e '
     s{RequireIngressProof\(command\);\s*(var operation = AgentProfileActorInvariants\.RequireOperation\(command\.Operation\);)}{$1\n    RequireIngressProof(command);}s;
   ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
-  expect_fail "external handler proof after operation parsing" "${case_root}" \
-    "must verify its ingress proof before parsing the operation"
 
   local verifier_label="" verifier_file=""
   while IFS='|' read -r verifier_label verifier_file; do
-    fresh_case "ingress-proof-verifier-${verifier_label}"
     perl -0777 -pi -e \
       's/_ingressProofVerifier\.Verify\(Id, command\)/true/g' \
       "${case_root}/${verifier_file}"
-    expect_fail "Actor proof verifier ${verifier_label}" "${case_root}" \
-      "must delegate ingress proof validation to IAgentProfileIngressProofVerifier"
   done <<'CASES'
 profile|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs
 namespace|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs
@@ -821,21 +849,26 @@ CASES
 
   local retention_label="" retention_file="" retention_member="" retention_literal=""
   while IFS='|' read -r retention_label retention_file retention_member retention_literal; do
-    fresh_case "retention-${retention_label}"
     RETENTION_MEMBER="${retention_member}" RETENTION_LITERAL="${retention_literal}" \
       perl -0777 -pi -e '
         my $member = $ENV{"RETENTION_MEMBER"};
         my $literal = $ENV{"RETENTION_LITERAL"};
         s/AgentProfileOperationRetentionPolicy\.\Q$member\E/$literal/g;
       ' "${case_root}/${retention_file}"
-    expect_fail "Actor retention policy ${retention_label}" "${case_root}" \
-      "must compact operation state through AgentProfileOperationRetentionPolicy"
   done <<'CASES'
 profile|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs|MaxRetainedProfileMutationOperations|256
 namespace|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs|MaxRetainedNamespaceTerminalOperations|1024
 CASES
+  expect_fail_cases "Actor proof ordering, verifier, and retention contracts" "${case_root}" \
+    "external handler proof after operation parsing|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleCreateAsync|Every external Agent Profile command handler must verify its ingress proof before parsing the operation." \
+    "Actor proof verifier profile|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:RequireIngressProof|Each Agent Profile Actor must delegate ingress proof validation to IAgentProfileIngressProofVerifier." \
+    "Actor proof verifier namespace|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:RequireIngressProof|Each Agent Profile Actor must delegate ingress proof validation to IAgentProfileIngressProofVerifier." \
+    "Actor retention policy profile|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:CompactOperations|Both Agent Profile Actors must compact operation state through AgentProfileOperationRetentionPolicy." \
+    "Actor retention policy namespace|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:CompactOperations|Both Agent Profile Actors must compact operation state through AgentProfileOperationRetentionPolicy."
 
   local retention_constant="" retention_value="" replacement_value=""
+  # The production guard intentionally emits one policy-level hit for either bad
+  # constant, so these two cases remain separate to prove each bound independently.
   while IFS='|' read -r retention_constant retention_value replacement_value; do
     fresh_case "retention-policy-${retention_constant}"
     RETENTION_CONSTANT="${retention_constant}" RETENTION_VALUE="${retention_value}" \
@@ -852,33 +885,24 @@ MaxRetainedProfileMutationOperations|256|255
 MaxRetainedNamespaceTerminalOperations|1024|1023
 CASES
 
-  fresh_case "typed-static-profile-state"
+  fresh_case "semantic-state-violations"
+  local semantic_state_file="src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
   printf '%s\n' 'private static AgentProfileIdentity? _current;' \
-    >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
-  expect_fail "typed static Profile state" "${case_root}" "Static typed Agent Profile state"
-
-  fresh_case "typed-static-profile-auto-property"
+    >> "${case_root}/${semantic_state_file}"
   printf '%s\n' \
     'private static AgentProfileIdentity? Current' \
     '{' \
     '  get;' \
     '  set;' \
     '}' \
-    >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
-  expect_fail "typed static Profile auto-property" "${case_root}" "Static typed Agent Profile state"
-
-  fresh_case "profile-fact-collection"
+    >> "${case_root}/${semantic_state_file}"
   printf '%s\n' 'private readonly Dictionary<string, string> _profileBindings = new();' \
-    >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
-  expect_fail "Profile fact collection" "${case_root}" "Private service-level collections"
+    >> "${case_root}/${semantic_state_file}"
 
   local collection_label="" collection_probe=""
   while IFS='|' read -r collection_label collection_probe; do
-    fresh_case "profile-fact-collection-${collection_label}"
     printf '%s\n' "${collection_probe}" \
-      >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
-    expect_fail "Profile fact collection ${collection_label}" "${case_root}" \
-      "Private service-level collections"
+      >> "${case_root}/${semantic_state_file}"
   done <<'CASES'
 idictionary|private readonly IDictionary<string, string> _profileBindings;
 readonly-dictionary|private readonly IReadOnlyDictionary<string, AgentProfileIdentity> _index;
@@ -886,46 +910,51 @@ immutable-dictionary|private readonly ImmutableDictionary<string, string> _profi
 nested-generic|private readonly Dictionary<string, IReadOnlyList<AgentProfileIdentity>> _index = new();
 CASES
 
-  fresh_case "profile-fact-collection-wrapped-nested-generic"
-  write_lines "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs" \
-    'public sealed class AgentProfileService {' \
-    '  private readonly Dictionary<string,' \
-    '    IReadOnlyList<AgentProfileIdentity>> _index = new();' \
-    '}'
-  expect_fail "Profile fact collection wrapped nested generic" "${case_root}" \
-    "Private service-level collections"
+  printf '%s\n' \
+    'private readonly Dictionary<string,' \
+    '  IReadOnlyList<AgentProfileIdentity>> _wrappedIndex = new();' \
+    >> "${case_root}/${semantic_state_file}"
 
   local provider_file="src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileDocumentMetadataProviders.cs"
   local provider_probe="" provider_label=""
   while IFS='|' read -r provider_label provider_probe; do
-    fresh_case "provider-${provider_label}"
     printf '%s\n' "${provider_probe}" >> "${case_root}/${provider_file}"
-    expect_fail "metadata provider ${provider_label}" "${case_root}" "only the exact projection document Metadata contract"
   done <<'CASES'
 async-local|private static readonly AsyncLocal<string?> Current = new();
 items|private readonly Dictionary<string, string> Items = new();
 headers|private string Headers => "forbidden";
 unrelated-metadata|public string Metadata => "forbidden";
 CASES
+  expect_fail_cases "typed state, Profile collections, and context bags" "${case_root}" \
+    "typed static Profile state|AgentProfileIdentity? _current|Static typed Agent Profile state is forbidden." \
+    "typed static Profile auto-property|AgentProfileIdentity? Current|Static typed Agent Profile state is forbidden." \
+    "Profile fact collection|Dictionary<string, string> _profileBindings|Private service-level collections must not hold Agent Profile or binding facts." \
+    "Profile fact collection idictionary|IDictionary<string, string> _profileBindings|Private service-level collections must not hold Agent Profile or binding facts." \
+    "Profile fact collection readonly-dictionary|IReadOnlyDictionary<string, AgentProfileIdentity> _index|Private service-level collections must not hold Agent Profile or binding facts." \
+    "Profile fact collection immutable-dictionary|ImmutableDictionary<string, string> _profileFacts|Private service-level collections must not hold Agent Profile or binding facts." \
+    "Profile fact collection nested-generic|Dictionary<string, IReadOnlyList<AgentProfileIdentity>> _index|Private service-level collections must not hold Agent Profile or binding facts." \
+    "Profile fact collection wrapped nested generic|_wrappedIndex = new();|Private service-level collections must not hold Agent Profile or binding facts." \
+    "metadata provider async-local|AsyncLocal<string?> Current|only the exact projection document Metadata contract is allowed." \
+    "metadata provider items|Dictionary<string, string> Items|only the exact projection document Metadata contract is allowed." \
+    "metadata provider headers|string Headers|only the exact projection document Metadata contract is allowed." \
+    "metadata provider unrelated-metadata|string Metadata|only the exact projection document Metadata contract is allowed."
 
   local remote_file="" remote_probe="" remote_label=""
+  fresh_case "dependency-reference-ingress-violations"
+  local dependency_case_root="${case_root}"
   while IFS='|' read -r remote_label remote_file remote_probe; do
-    fresh_case "remote-${remote_label}"
-    printf '%s\n' "${remote_probe}" >> "${case_root}/${remote_file}"
-    expect_fail "Core/Projection remote dependency ${remote_label}" "${case_root}" "Core/Projection must not depend"
+    printf '%s\n' "${remote_probe}" >> "${dependency_case_root}/${remote_file}"
   done <<'CASES'
 http|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfile.cs|private readonly HttpClient _client;
 ornn|src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileProjector.cs|private readonly OrnnSkillClient _client;
-name-fetch|src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileProjector.cs|private Task GetSkillJsonAsync();
+name-fetch|src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileProjector.cs|private Task GetSkillJsonAsync() => ProjectionOnly();
 search|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfile.cs|private Task SearchSkillsAsync();
 CASES
 
   local application_file="src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
   local application_probe="" application_label=""
   while IFS='|' read -r application_label application_probe; do
-    fresh_case "application-${application_label}"
-    printf '%s\n' "${application_probe}" >> "${case_root}/${application_file}"
-    expect_fail "Application exact-reference ${application_label}" "${case_root}" "Application accepts exact skill references only"
+    printf '%s\n' "${application_probe}" >> "${dependency_case_root}/${application_file}"
   done <<'CASES'
 name-or-id|private string nameOrId = "skill";
 name-or-id-snake|private string name_or_id = "skill";
@@ -935,7 +964,7 @@ latest-identifier-snake|private string latest_version = "1.0";
 latest-contract|private string Version = "latest";
 inline-skill|private string inlineSkill = "content";
 inline-skill-snake|private string inline_skill = "content";
-name-fetch|private Task GetSkillJsonAsync();
+name-fetch|private Task GetSkillJsonAsync() => ApplicationOnly();
 CASES
 
   fresh_case "client-block-bodied"
@@ -1167,9 +1196,7 @@ CASES
 
   local ingress_label="" ingress_file="" ingress_probe=""
   while IFS='|' read -r ingress_label ingress_file ingress_probe; do
-    fresh_case "ingress-${ingress_label}"
-    printf '%s\n' "${ingress_probe}" >> "${case_root}/${ingress_file}"
-    expect_fail "query ingress ${ingress_label}" "${case_root}" "query and ingress surfaces"
+    printf '%s\n' "${ingress_probe}" >> "${dependency_case_root}/${ingress_file}"
   done <<'CASES'
 lookup-service|src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileLookupService.cs|public sealed class AgentProfileLookupService { private readonly IActorRuntime _runtime; }
 actor-runtime|src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileLookupService.cs|public sealed class AgentProfileLookupService { private readonly ActorRuntime _runtime; }
@@ -1191,28 +1218,43 @@ CASES
     password authorization secret clientSecret oauth_code oauthCode caller_scope_id
     session_cookie api_secret
   )
-  fresh_case "schema-aliases"
   write_tool_schema \
-    "${case_root}/src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesTool.cs" \
+    "${dependency_case_root}/src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesTool.cs" \
     "${schema_aliases[@]}"
-  if output="$(run_guard "${case_root}" 2>&1)"; then
-    echo "agent_profile_boundary_guard self-test expected FAIL: tool schema aliases" >&2
-    echo "${output}" >&2
-    failures=$((failures + 1))
-  else
-    if [[ "${output}" != *"forbidden schema properties"* ]]; then
-      echo "agent_profile_boundary_guard self-test missed expected diagnostic: tool schema aliases" >&2
+  expect_fail_cases "remote, exact-reference, query-ingress, and schema violations" \
+    "${dependency_case_root}" \
+    "Core/Projection remote dependency http|HttpClient _client|Agent Profile Core/Projection must not depend on Ornn, HTTP, remote fetchers, or skill-search/name lookup paths." \
+    "Core/Projection remote dependency ornn|OrnnSkillClient _client|Agent Profile Core/Projection must not depend on Ornn, HTTP, remote fetchers, or skill-search/name lookup paths." \
+    "Core/Projection remote dependency name-fetch|ProjectionOnly|Agent Profile Core/Projection must not depend on Ornn, HTTP, remote fetchers, or skill-search/name lookup paths." \
+    "Core/Projection remote dependency search|SearchSkillsAsync|Agent Profile Core/Projection must not depend on Ornn, HTTP, remote fetchers, or skill-search/name lookup paths." \
+    "Application exact-reference name-or-id|nameOrId|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference name-or-id-snake|name_or_id|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference latest-identifier-bare|string latest =|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference latest-identifier-camel|latestVersion|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference latest-identifier-snake|latest_version|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference latest-contract|Version = \"latest\"|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference inline-skill|inlineSkill|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference inline-skill-snake|inline_skill|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "Application exact-reference name-fetch|ApplicationOnly|Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden." \
+    "query ingress lookup-service|IActorRuntime _runtime|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress actor-runtime|private readonly ActorRuntime _runtime|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress prefixed-actor-runtime|OrleansActorRuntime _runtime|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress projection|ProjectionActivation|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress host-endpoint|PrimeAsync|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress tool|IEventStore _eventStore|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress file-event-store|FileEventStore _eventStore|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress event-store|private readonly EventStore _eventStore|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress prefixed-event-store|GarnetEventStore _eventStore|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress replay-async|ReplayAsync|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "query ingress event-replay|EventReplay _eventReplay|Agent Profile query and ingress surfaces must read materialized models only; activation, runtime, event-store, replay, and priming APIs are forbidden." \
+    "tool schema aliases|forbidden schema properties|The agent_profiles tool schema must not accept owner subjects/ids, scope/Profile ids, system authority, sealed content, or credentials."
+  for schema_alias in "${schema_aliases[@]}"; do
+    if ! printf '%s\n' "${output}" | rg -q -F -x -- "${schema_alias}"; then
+      echo "agent_profile_boundary_guard self-test missed schema alias: ${schema_alias}" >&2
       echo "${output}" >&2
       failures=$((failures + 1))
     fi
-    for schema_alias in "${schema_aliases[@]}"; do
-      if ! printf '%s\n' "${output}" | rg -q -F -x -- "${schema_alias}"; then
-        echo "agent_profile_boundary_guard self-test missed schema alias: ${schema_alias}" >&2
-        echo "${output}" >&2
-        failures=$((failures + 1))
-      fi
-    done
-  fi
+  done
 
   if (( failures > 0 )); then
     return 1
