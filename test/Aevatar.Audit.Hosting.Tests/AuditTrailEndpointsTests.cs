@@ -265,6 +265,91 @@ public sealed class AuditTrailEndpointsTests
         authorizer.Calls.Should().Be(1);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuditRead_WhenAllScopesTokenMatchesCallerAndAuthorizerMissing_ReturnsUnavailable(
+        bool exportCloudEvents)
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var http = BuildHttpContext("__all__", bearer: "token", queryPort);
+
+        var result = exportCloudEvents
+            ? await AuditTrailEndpoints.ExportAuditTrailCloudEvents(
+                http,
+                BuildEndpointDependencies(queryPort),
+                NullLoggerFactory.Instance,
+                scope: "__all__")
+            : await AuditTrailEndpoints.QueryAuditTrail(
+                http,
+                BuildEndpointDependencies(queryPort),
+                NullLoggerFactory.Instance,
+                scope: "__all__");
+        var (status, body) = await ExecuteWithBodyAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        body.Should().Contain("AUDIT_ADMIN_AUTH_UNAVAILABLE");
+        queryPort.Queries.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuditRead_WhenAllScopesTokenMatchesCallerAndElevationDenied_DeniesBeforeQuery(
+        bool exportCloudEvents)
+    {
+        var queryPort = new RecordingAuditTrailQueryPort();
+        var authorizer = new FakeAuthorizer(elevated: false);
+        var http = BuildHttpContext("__all__", bearer: "token", queryPort, authorizer);
+
+        var result = exportCloudEvents
+            ? await AuditTrailEndpoints.ExportAuditTrailCloudEvents(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: "__all__")
+            : await AuditTrailEndpoints.QueryAuditTrail(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: "__all__");
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status403Forbidden);
+        queryPort.Queries.Should().BeEmpty();
+        authorizer.Calls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuditRead_WhenAllScopesTokenMatchesCallerAndElevationSucceeds_AuthorizesBeforeQuery(
+        bool exportCloudEvents)
+    {
+        var sequence = new List<string>();
+        var authorizer = new FakeAuthorizer(elevated: true, sequence);
+        var queryPort = new RecordingAuditTrailQueryPort(sequence);
+        var http = BuildHttpContext("__all__", bearer: "token", queryPort, authorizer);
+
+        var result = exportCloudEvents
+            ? await AuditTrailEndpoints.ExportAuditTrailCloudEvents(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: "__all__")
+            : await AuditTrailEndpoints.QueryAuditTrail(
+                http,
+                BuildEndpointDependencies(queryPort, authorizer: authorizer),
+                NullLoggerFactory.Instance,
+                scope: "__all__");
+        var status = await ExecuteAsync(result, http);
+
+        status.Should().Be(StatusCodes.Status200OK);
+        queryPort.Queries.Should().ContainSingle().Which.ScopeId.Should().BeNull();
+        authorizer.Calls.Should().Be(1);
+        sequence.Should().Equal("authorize", "query");
+    }
+
     [Fact]
     public async Task QueryAuditTrail_WhenPlatformAuditScopeMatchesCallerAndAuthorizerMissing_ReturnsUnavailable()
     {
@@ -836,7 +921,7 @@ public sealed class AuditTrailEndpointsTests
         return (http.Response.StatusCode, body);
     }
 
-    private sealed class RecordingAuditTrailQueryPort : IAuditTrailQueryPort
+    private sealed class RecordingAuditTrailQueryPort(ICollection<string>? sequence = null) : IAuditTrailQueryPort
     {
         public List<AuditTrailQuery> Queries { get; } = [];
 
@@ -848,6 +933,7 @@ public sealed class AuditTrailEndpointsTests
             AuditTrailQuery query,
             CancellationToken cancellationToken = default)
         {
+            sequence?.Add("query");
             Queries.Add(query);
             var record = new AuditRecord
             {
@@ -980,21 +1066,15 @@ public sealed class AuditTrailEndpointsTests
         }
     }
 
-    private sealed class FakeAuthorizer : IPlatformAdminAuthorizer
+    private sealed class FakeAuthorizer(bool elevated, ICollection<string>? sequence = null) : IPlatformAdminAuthorizer
     {
-        private readonly bool _elevated;
-
-        public FakeAuthorizer(bool elevated)
-        {
-            _elevated = elevated;
-        }
-
         public int Calls { get; private set; }
 
         public Task<PlatformCaller> ResolveCallerAsync(string bearerToken, CancellationToken ct = default)
         {
+            sequence?.Add("authorize");
             Calls++;
-            return Task.FromResult(_elevated
+            return Task.FromResult(elevated
                 ? new PlatformCaller(true, "admin", "admin@example.test", "admin-1")
                 : PlatformCaller.NotElevated);
         }

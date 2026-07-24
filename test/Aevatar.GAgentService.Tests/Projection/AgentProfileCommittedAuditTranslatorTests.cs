@@ -357,11 +357,25 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
     [Fact]
     public async Task InvalidProfileIdentityCommittedFailure_ShouldAppendToPlatformAuditQuarantine()
     {
+        const string hostileProfileId = "hostile-profile-id";
+        const string hostileOwnerHandle = "hostile-owner";
+        const string hostileProfileSlug = "hostile-slug";
+        const string hostileScopeId = "hostile-scope";
         var evt = new AgentProfileProvisioningFailedEvent
         {
             Operation = Operation("invalid-create"),
-            Identity = new AgentProfileIdentity(),
-            ProfileActorId = AgentProfileActorIds.Profile("invalid-create"),
+            Identity = new AgentProfileIdentity
+            {
+                ProfileId = hostileProfileId,
+                Owner = new AgentProfileOwnerIdentity(),
+                OwningScopeId = hostileScopeId,
+                Reference = new AgentProfileReference
+                {
+                    OwnerHandle = hostileOwnerHandle,
+                    ProfileSlug = hostileProfileSlug,
+                },
+            },
+            ProfileActorId = AgentProfileActorIds.Profile(hostileProfileId),
             Diagnostic = new AgentProfileSafeDiagnostic
             {
                 Code = "MISSING_PROFILE_IDENTITY",
@@ -379,14 +393,29 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             },
             new AgentProfileProvisioningFailedAuditTranslator(),
             evt,
-            "invalid-profile-identity",
+            "invalid-profile-quarantine-event",
             AgentProfileActorIds.Namespace);
 
         document.Should().NotBeNull();
         document!.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
         document.Record.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
         document.Record.Provenance.ScopeId.Should().Be(AuditContractSemantics.PlatformAuditScopeId);
+        document.Record.Target.Id.Should().Be("invalid-profile-identity");
         document.Record.Failure.Code.Should().Be("MISSING_PROFILE_IDENTITY");
+        document.Record.Annotations.Should().NotContainKey("profile_id");
+        document.Record.Annotations.Should().NotContainKey("owner_kind");
+        document.Record.Annotations.Should().NotContainKey("owner_handle");
+        document.Record.Annotations.Should().NotContainKey("profile_slug");
+        foreach (var hostileValue in new[]
+                 {
+                     hostileProfileId,
+                     hostileOwnerHandle,
+                     hostileProfileSlug,
+                     hostileScopeId,
+                 })
+        {
+            document.Record.ToString().Should().NotContain(hostileValue);
+        }
     }
 
     [Fact]

@@ -172,7 +172,9 @@ its `owningScopeId` as the audit scope. The fully valid canonical
 `system/aevatar` identity uses the reserved `platform:aevatar` audit scope.
 Committed Profile failures whose identity is missing or invalid are quarantined
 in that same reserved audit scope so the governance fact is retained; quarantine
-does not grant system authority or repair the invalid domain identity.
+does not grant system authority or repair the invalid domain identity. A
+quarantine record uses a stable non-input-derived target and omits every
+unvalidated identity/reference field while retaining the stable failure code.
 `platform:aevatar` is never an ordinary Profile `owningScopeId`. Query and export
 access to it always requires platform-admin authorization, even when a caller's
 `scope_id` claim has the same literal value.

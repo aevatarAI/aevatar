@@ -59,6 +59,65 @@ scan_prepared_code() {
   return 0
 }
 
+scan_prepared_multiline_code() {
+  local pattern="$1"
+  shift
+  local file=""
+  local hits=""
+  local line=""
+
+  while IFS= read -r file; do
+    [[ -n "${file}" ]] || continue
+    hits="$(
+      strip_csharp_comments_and_inactive_code < "${file}" \
+        | strip_csharp_strings \
+        | rg -n -U -P "${pattern}" \
+        || true
+    )"
+    if [[ -z "${hits}" ]]; then
+      continue
+    fi
+    while IFS= read -r line; do
+      printf '%s:%s\n' "${file}" "${line}"
+    done <<< "${hits}"
+  done < <(list_source_files "$@")
+  return 0
+}
+
+scan_normalized_identifiers() {
+  local pattern="$1"
+  shift
+  local file=""
+  local hits=""
+  local line=""
+
+  while IFS= read -r file; do
+    [[ -n "${file}" ]] || continue
+    hits="$(
+      strip_csharp_comments_and_inactive_code < "${file}" \
+        | strip_csharp_strings \
+        | NORMALIZED_PATTERN="${pattern}" perl -ne '
+            my $pattern = qr/$ENV{"NORMALIZED_PATTERN"}/;
+            while (/\b[A-Za-z_][A-Za-z0-9_]*\b/g) {
+              my $identifier = $&;
+              (my $normalized = lc $identifier) =~ s/_//g;
+              if ($normalized =~ $pattern) {
+                print "$.:$_";
+                last;
+              }
+            }
+          '
+    )"
+    if [[ -z "${hits}" ]]; then
+      continue
+    fi
+    while IFS= read -r line; do
+      printf '%s:%s\n' "${file}" "${line}"
+    done <<< "${hits}"
+  done < <(list_source_files "$@")
+  return 0
+}
+
 scan_application_latest_contracts() {
   local application_root="$1"
   local file=""
@@ -203,7 +262,7 @@ run_guard() (
     "${exact_adapter_file}" "${ornn_client_file}" "${tool_file}")
 
   local violations=0
-  local required_path="" file="" line_number="" content="" hits=""
+  local required_path="" file="" line_number="" content="" hits="" normalized_hits=""
 
   for required_path in "${required_paths[@]}"; do
     if [[ ! -e "${required_path}" ]]; then
@@ -243,8 +302,8 @@ run_guard() (
     "Static current Agent Profile context is forbidden. Profile authority must remain actor/read-model owned."
 
   hits="$(
-    scan_prepared_code \
-      '(?i)\b(?:private|protected|internal|public)\s+static\s+(?:readonly\s+)?(?=[^();\n]*(?:AgentProfile|Profile(?:Identity|Context|State|Binding)))[^();\n]+\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=|;)' \
+    scan_prepared_multiline_code \
+      '(?i)\b(?:private|protected|internal|public)\s+static\s+(?:readonly\s+)?(?=[^;=({\n]*(?:AgentProfile|Profile(?:Identity|Context|State|Binding)))[^;=({\n]+\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=|;|=>|\{\s*(?:(?:public|private|protected|internal)\s+)?(?:get|set|init)\s*;)' \
       "${profile_semantic_roots[@]}"
   )"
   report_violation "${hits}" \
@@ -252,7 +311,7 @@ run_guard() (
 
   hits="$(
     scan_prepared_code \
-      '(?i)private\s+(?:static\s+)?(?:readonly\s+)?(?:(?:(?:Concurrent|Immutable|Sorted|Frozen)?Dictionary|I(?:ReadOnly)?Dictionary|HashSet|Queue)<[^>\n]*(?:AgentProfile|Profile|Binding)[^>\n]*>\s+[A-Za-z_][A-Za-z0-9_]*|(?:(?:Concurrent|Immutable|Sorted|Frozen)?Dictionary|I(?:ReadOnly)?Dictionary|HashSet|Queue)<[^>\n]+>\s+[A-Za-z_][A-Za-z0-9_]*(?:profile|binding)[A-Za-z0-9_]*)\s*(?:=|;)' \
+      '(?i)\bprivate\s+(?:static\s+)?(?:readonly\s+)?(?=[^();\n]*(?:(?:Concurrent|Immutable|Sorted|Frozen)?Dictionary|I(?:ReadOnly)?Dictionary|HashSet|Queue)\s*<)(?=[^();\n]*(?:AgentProfile|Profile|Binding))[^();\n]+\s*(?:=|;)' \
       "${profile_surface_roots[@]}"
   )"
   report_violation "${hits}" \
@@ -268,9 +327,18 @@ run_guard() (
 
   hits="$(
     scan_prepared_code \
-      '(?i)\b(GetSkillJsonAsync|SearchSkillsAsync|IRemoteSkillFetcher|nameOrId|idOrName|inlineSkill)\b' \
+      '(?i)\b(GetSkillJsonAsync|SearchSkillsAsync|IRemoteSkillFetcher)\b' \
       "${application_root}"
   )"
+  normalized_hits="$(
+    scan_normalized_identifiers \
+      '(?:nameorid|idorname|inlineskill)' \
+      "${application_root}"
+  )"
+  if [[ -n "${normalized_hits}" ]]; then
+    [[ -z "${hits}" ]] || hits+=$'\n'
+    hits+="${normalized_hits}"
+  fi
   hits+="$(scan_application_latest_contracts "${application_root}")"
   report_violation "${hits}" \
     "Agent Profile Application accepts exact skill references only; name/latest/inline lookup and name-capable fetchers are forbidden."
@@ -356,7 +424,7 @@ run_guard() (
 
   hits="$(
     scan_prepared_code \
-      'ProjectionActivation|IProjectionPortActivationService|IProjectionPortReleaseService|\b(?:I?ActorRuntime|I?EventStore|FileEventStore|ReplayAsync|EventReplay)\b|event[[:space:]_-]*replay|RebuildAsync|PrimeAsync|Priming|Ensure[A-Za-z0-9_]*Projection|Attach[A-Za-z0-9_]*Projection|ActivateAsync' \
+      'ProjectionActivation|IProjectionPortActivationService|IProjectionPortReleaseService|\b(?:[A-Za-z_][A-Za-z0-9_]*)?(?:ActorRuntime|EventStore)\b|\b(?:ReplayAsync|EventReplay)\b|event[[:space:]_-]*replay|RebuildAsync|PrimeAsync|Priming|Ensure[A-Za-z0-9_]*Projection|Attach[A-Za-z0-9_]*Projection|ActivateAsync' \
       "${query_ingress_roots[@]}"
   )"
   report_violation "${hits}" \
@@ -386,7 +454,7 @@ run_guard() (
           | tr -cd '[:alnum:]'
       )"
       case "${normalized_key}" in
-        ownerid|ownersubject|ownersubjectid|subjectid|scopeid|profileid|systemauthority|systemauthorityid|platformid|apikey|cookie|password|authorization|secret|clientsecret|oauthcode|*sealed*|*credential*|*token*|*bearer*)
+        *ownerid*|*ownersubject*|*subjectid*|*scopeid*|*profileid*|*systemauthority*|*platformid*|*apikey*|*cookie*|*password*|*authorization*|*secret*|*oauthcode*|*sealed*|*credential*|*token*|*bearer*)
           forbidden_schema_keys+="${schema_key}"$'\n'
           ;;
       esac
@@ -535,6 +603,16 @@ run_self_tests() {
     >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
   expect_fail "typed static Profile state" "${case_root}" "Static typed Agent Profile state"
 
+  fresh_case "typed-static-profile-auto-property"
+  printf '%s\n' \
+    'private static AgentProfileIdentity? Current' \
+    '{' \
+    '  get;' \
+    '  set;' \
+    '}' \
+    >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
+  expect_fail "typed static Profile auto-property" "${case_root}" "Static typed Agent Profile state"
+
   fresh_case "profile-fact-collection"
   printf '%s\n' 'private readonly Dictionary<string, string> _profileBindings = new();' \
     >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
@@ -551,6 +629,7 @@ run_self_tests() {
 idictionary|private readonly IDictionary<string, string> _profileBindings;
 readonly-dictionary|private readonly IReadOnlyDictionary<string, AgentProfileIdentity> _index;
 immutable-dictionary|private readonly ImmutableDictionary<string, string> _profileFacts;
+nested-generic|private readonly Dictionary<string, IReadOnlyList<AgentProfileIdentity>> _index = new();
 CASES
 
   local provider_file="src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileDocumentMetadataProviders.cs"
@@ -586,11 +665,13 @@ CASES
     expect_fail "Application exact-reference ${application_label}" "${case_root}" "Application accepts exact skill references only"
   done <<'CASES'
 name-or-id|private string nameOrId = "skill";
+name-or-id-snake|private string name_or_id = "skill";
 latest-identifier-bare|private string latest = "1.0";
 latest-identifier-camel|private string latestVersion = "1.0";
 latest-identifier-snake|private string latest_version = "1.0";
 latest-contract|private string Version = "latest";
 inline-skill|private string inlineSkill = "content";
+inline-skill-snake|private string inline_skill = "content";
 name-fetch|private Task GetSkillJsonAsync();
 CASES
 
@@ -673,11 +754,13 @@ CASES
   done <<'CASES'
 lookup-service|src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileLookupService.cs|public sealed class AgentProfileLookupService { private readonly IActorRuntime _runtime; }
 actor-runtime|src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileLookupService.cs|public sealed class AgentProfileLookupService { private readonly ActorRuntime _runtime; }
+prefixed-actor-runtime|src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileLookupService.cs|public sealed class AgentProfileLookupService { private readonly OrleansActorRuntime _runtime; }
 projection|src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileProjector.cs|private Task ProjectionActivation();
 host-endpoint|src/platform/Aevatar.GAgentService.Hosting/AgentProfiles/AgentProfileEndpoints.cs|private Task PrimeAsync();
 tool|src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesToolSource.cs|private readonly IEventStore _eventStore;
 file-event-store|src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesToolSource.cs|private readonly FileEventStore _eventStore;
 event-store|src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesToolSource.cs|private readonly EventStore _eventStore;
+prefixed-event-store|src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesToolSource.cs|private readonly GarnetEventStore _eventStore;
 replay-async|src/platform/Aevatar.GAgentService.Hosting/AgentProfiles/AgentProfileEndpoints.cs|private Task ReplayAsync();
 event-replay|src/platform/Aevatar.GAgentService.Hosting/AgentProfiles/AgentProfileEndpoints.cs|private readonly EventReplay _eventReplay;
 CASES
@@ -685,7 +768,8 @@ CASES
   local schema_alias=""
   for schema_alias in scopeId subjectId systemAuthority owner_id ownerSubject \
     profileId platformId sealed_content sealedContent credential accessToken \
-    api_key apiKey cookie password authorization secret clientSecret oauth_code oauthCode; do
+    api_key apiKey cookie password authorization secret clientSecret oauth_code oauthCode \
+    caller_scope_id session_cookie api_secret; do
     fresh_case "schema-${schema_alias}"
     write_tool_schema \
       "${case_root}/src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesTool.cs" \

@@ -289,6 +289,8 @@ public sealed class AgentProfileMutationRejectedAuditTranslator
 public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorBase<TEvent>
     where TEvent : class, IMessage<TEvent>, new()
 {
+    private const string InvalidIdentityTargetId = "invalid-profile-identity";
+
     protected static CommittedAuditSeed ProfileSeed(
         string operationName,
         AgentProfileIdentity? identity,
@@ -300,7 +302,8 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         AuditTerminalOutcome terminalOutcome = AuditTerminalOutcome.Succeeded,
         AuditFailure? failure = null)
     {
-        var merged = IdentityAnnotations(identity);
+        var validatedIdentity = ValidatedIdentity(identity);
+        var merged = IdentityAnnotations(validatedIdentity);
         merged["operation_id"] = operation?.OperationId ?? string.Empty;
         merged["outcome_code"] = outcomeCode;
         if (annotations is not null)
@@ -312,8 +315,8 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         return new CommittedAuditSeed(
             operationName,
             "agent_profile",
-            identity?.ProfileId ?? string.Empty,
-            AuditScope(identity),
+            validatedIdentity?.ProfileId ?? InvalidIdentityTargetId,
+            AuditScope(validatedIdentity),
             AuditSensitivityLevel.Restricted,
             isDestructive,
             operation?.CommandId ?? string.Empty,
@@ -440,6 +443,9 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
 
     private static Dictionary<string, string> IdentityAnnotations(AgentProfileIdentity? identity)
     {
+        if (identity is null)
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["profile_id"] = identity?.ProfileId ?? string.Empty,
@@ -450,6 +456,11 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         return annotations;
     }
 
+    private static AgentProfileIdentity? ValidatedIdentity(AgentProfileIdentity? identity) =>
+        identity is not null && AgentProfilePolicies.ValidateIdentity(identity).Count == 0
+            ? identity
+            : null;
+
     private static string OwnerKind(AgentProfileOwnerIdentity? owner) => owner?.OwnerCase switch
     {
         AgentProfileOwnerIdentity.OwnerOneofCase.User => "user",
@@ -459,7 +470,7 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
 
     private static string AuditScope(AgentProfileIdentity? identity)
     {
-        if (identity is null || AgentProfilePolicies.ValidateIdentity(identity).Count > 0)
+        if (identity is null)
             return AuditContractSemantics.PlatformAuditScopeId;
 
         return identity.Owner?.OwnerCase switch

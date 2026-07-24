@@ -163,7 +163,7 @@ public static class AuditTrailEndpoints
             targetScope,
             AuditContractSemantics.PlatformAuditScopeId,
             StringComparison.Ordinal);
-        var requiresAdmin = isCrossScope || isPlatformAuditScope;
+        var requiresAdmin = isAllScopes || isCrossScope || isPlatformAuditScope;
         var logger = loggerFactory.CreateLogger(AuditLoggerCategory);
         if (requiresAdmin)
         {
