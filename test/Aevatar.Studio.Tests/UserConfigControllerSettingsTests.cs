@@ -52,7 +52,13 @@ public sealed class UserConfigControllerSettingsTests
         payload.EffectiveRoute.Should().Be("/api/v1/proxy/s/openai-work");
         payload.DefaultModel.Should().Be("gpt-5.4");
         payload.RouteOptions.Should().Contain(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway);
-        payload.RouteOptions.Should().Contain(option => option.UserServiceId == "us-openai" && option.Ready);
+        payload.RouteOptions.Should().Contain(option =>
+            option.UserServiceId == "us-openai" &&
+            option.Ready &&
+            option.DefaultModel == "gpt-5.4");
+        payload.RouteOptions.Should()
+            .ContainSingle(option => option.RouteValue == UserConfigLlmRouteDefaults.Gateway)
+            .Which.DefaultModel.Should().BeNull();
         payload.ModelGroupsByRoute.Should()
             .Contain(group => group.RouteValue == "/api/v1/proxy/s/openai-work" && group.Models.Contains("gpt-5.4"));
         httpHandler.Requests.Select(request => request.Path)

@@ -36,6 +36,7 @@ public sealed record UserLlmRouteOption(
     bool Ready,
     string? UserServiceId,
     string? ServiceSlug,
+    string? DefaultModel,
     string? Description);
 
 public sealed record UserLlmModelGroup(

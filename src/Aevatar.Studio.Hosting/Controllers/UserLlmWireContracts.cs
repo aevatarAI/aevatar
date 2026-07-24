@@ -75,6 +75,7 @@ public sealed record UserLlmRouteOptionResponse(
     [property: JsonPropertyName("ready")] bool Ready,
     [property: JsonPropertyName("userServiceId")] string? UserServiceId,
     [property: JsonPropertyName("serviceSlug")] string? ServiceSlug,
+    [property: JsonPropertyName("defaultModel")] string? DefaultModel,
     [property: JsonPropertyName("description")] string? Description)
 {
     public static UserLlmRouteOptionResponse FromApplication(UserLlmRouteOption option) => new(
@@ -86,6 +87,7 @@ public sealed record UserLlmRouteOptionResponse(
         option.Ready,
         option.UserServiceId,
         option.ServiceSlug,
+        option.DefaultModel,
         option.Description);
 }
 

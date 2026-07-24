@@ -150,6 +150,34 @@ public sealed class UserLlmSettingsViewBuilderTests
         view.RouteFallbackActive.Should().BeFalse();
     }
 
+    [Fact]
+    public void BuildAvailable_WithDuplicateRouteDefaults_ShouldMapDefaultModelByExactInventoryId()
+    {
+        var view = _builder.BuildAvailable(
+            new NyxIdLlmServicesResult(
+                [
+                    InventoryService("us-alpha", "Alpha service", defaultModel: " gpt-alpha "),
+                    InventoryService("us-beta", "Beta service", defaultModel: "gpt-beta"),
+                    InventoryService("us-blank", "Blank service", defaultModel: " "),
+                ],
+                null),
+            new UserLlmSelectionValue(
+                UserLlmSelectionKind.NyxIdUserService,
+                SharedRoute,
+                "us-beta",
+                "shared-llm"),
+            "gpt-saved");
+
+        view.RouteOptions.Single(option => option.UserServiceId == "us-alpha")
+            .DefaultModel.Should().Be("gpt-alpha");
+        view.RouteOptions.Single(option => option.UserServiceId == "us-beta")
+            .DefaultModel.Should().Be("gpt-beta");
+        view.RouteOptions.Single(option => option.UserServiceId == "us-blank")
+            .DefaultModel.Should().BeNull();
+        view.RouteOptions.Single(option => option.Source == UserLlmRouteSource.GatewayProvider)
+            .DefaultModel.Should().BeNull();
+    }
+
     private UserLlmSettingsView Build(UserLlmSelectionValue selection) =>
         _builder.BuildAvailable(
             new NyxIdLlmServicesResult(
@@ -164,12 +192,13 @@ public sealed class UserLlmSettingsViewBuilderTests
     private static NyxIdLlmService InventoryService(
         string id,
         string displayName,
-        string route = SharedRoute) => new(
+        string route = SharedRoute,
+        string? defaultModel = "gpt-5.5") => new(
         CatalogEntryId: null,
         ServiceSlug: "shared-llm",
         DisplayName: displayName,
         RouteValue: route,
-        DefaultModel: "gpt-5.5",
+        DefaultModel: defaultModel,
         Models: ["gpt-5.5"],
         Status: UserLlmRouteStatus.Ready,
         Source: UserLlmRouteSource.UserService,

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fireEvent, screen } from "@testing-library/react";
 
 type RelayHooks = {
   buildLlmSelectionOptions: (settings: unknown) => Array<{
@@ -8,8 +9,11 @@ type RelayHooks = {
     routeValue: string;
     userServiceId: string | null;
     value: string;
+    defaultModel: string | null;
   }>;
+  enterWizard: (platformId: string) => void;
   renderStep4: () => HTMLElement;
+  loadLlm: (force?: boolean) => Promise<unknown>;
   saveLlm: () => Promise<void>;
   savedLlmSelectionValue: (settings: unknown) => string | null;
   state: Record<string, any>;
@@ -22,6 +26,7 @@ const relayHtmlPath = path.resolve(
 const gatewayRoute = "/api/v1/llm/gateway/v1";
 const sharedRoute = "/api/v1/proxy/s/shared-openai";
 const originalFetch = global.fetch;
+let relayHooksToDispose: RelayHooks[] = [];
 
 function loadRelayHooks(): RelayHooks {
   const html = fs.readFileSync(relayHtmlPath, "utf8");
@@ -42,9 +47,11 @@ function loadRelayHooks(): RelayHooks {
     })};`,
   );
   const factory = new Function(
-    `${executable}\nreturn { buildLlmSelectionOptions, renderStep4, saveLlm, savedLlmSelectionValue, state };`,
+    `${executable}\nreturn { buildLlmSelectionOptions, enterWizard, loadLlm, renderStep4, saveLlm, savedLlmSelectionValue, state };`,
   ) as () => RelayHooks;
-  return factory();
+  const hooks = factory();
+  relayHooksToDispose.push(hooks);
+  return hooks;
 }
 
 function relaySettings(
@@ -83,6 +90,7 @@ function relaySettings(
         ready: true,
         userServiceId: null,
         serviceSlug: null,
+        defaultModel: null,
         description: null,
       },
       {
@@ -94,6 +102,7 @@ function relaySettings(
         ready: true,
         userServiceId: "us-alpha",
         serviceSlug: "shared-openai",
+        defaultModel: "gpt-alpha",
         description: null,
       },
       {
@@ -105,6 +114,7 @@ function relaySettings(
         ready: true,
         userServiceId: "us-beta",
         serviceSlug: "shared-openai",
+        defaultModel: "gpt-beta",
         description: null,
       },
       {
@@ -116,6 +126,7 @@ function relaySettings(
         ready: true,
         userServiceId: "diag-health",
         serviceSlug: "shared-openai",
+        defaultModel: "diagnostic-model",
         description: "Health only",
       },
     ],
@@ -138,7 +149,10 @@ function fetchResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
-function configureDraft(hooks: RelayHooks, settings = relaySettings("us-alpha")) {
+function configureDraft(
+  hooks: RelayHooks,
+  settings: Record<string, unknown> = relaySettings("us-alpha"),
+) {
   hooks.state.llm = settings;
   hooks.state.llmSel = {
     value: "user-service:us-beta",
@@ -151,7 +165,16 @@ function configureDraft(hooks: RelayHooks, settings = relaySettings("us-alpha"))
 }
 
 function renderStep(hooks: RelayHooks): void {
-  document.body.replaceChildren(hooks.renderStep4());
+  document.body.innerHTML = '<div id="app"></div>';
+  document.getElementById("app")?.appendChild(hooks.renderStep4());
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
 }
 
 describe("NyxID relay owner LLM selection", () => {
@@ -162,6 +185,11 @@ describe("NyxID relay owner LLM selection", () => {
   });
 
   afterEach(() => {
+    relayHooksToDispose.forEach((hooks) => {
+      hooks.state.llmSaveToken += 1;
+    });
+    relayHooksToDispose = [];
+    jest.useRealTimers();
     global.fetch = originalFetch;
   });
 
@@ -323,7 +351,12 @@ describe("NyxID relay owner LLM selection", () => {
     const fetchMock = jest
       .fn()
       .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
-      .mockResolvedValueOnce(fetchResponse(200, relaySettings(null, "gateway")));
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...relaySettings(null, "gateway"),
+          defaultModel: "",
+        }),
+      );
     global.fetch = fetchMock as typeof global.fetch;
 
     await hooks.saveLlm();
@@ -332,8 +365,29 @@ describe("NyxID relay owner LLM selection", () => {
     expect(hooks.state.llmSaveState).toBe("observed");
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       routeValue: gatewayRoute,
-      model: null,
+      model: "",
     });
+  });
+
+  it("keeps blank Gateway accepted while a non-empty model remains visible", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks, relaySettings("us-alpha"));
+    hooks.state.llmSel = { value: "gateway", model: "" };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...relaySettings(null, "gateway"),
+          defaultModel: "gpt-old",
+        }),
+      );
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(hooks.state.llmSaved).toBe(false);
+    expect(hooks.state.llmSaveState).toBe("accepted");
   });
 
   it("keeps Gateway accepted while an explicit model change is stale", async () => {
@@ -419,5 +473,222 @@ describe("NyxID relay owner LLM selection", () => {
     renderStep(hooks);
 
     expect(hooks.state.llmSel.model).toBe("beta-first");
+  });
+
+  it("observes a blank service model through that exact option default", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    hooks.state.llmSel.model = "";
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...relaySettings("us-beta"),
+          defaultModel: "gpt-beta",
+        }),
+      );
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(hooks.state.llmSaveState).toBe("observed");
+    expect(hooks.state.llmSaved).toBe(true);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      userServiceId: "us-beta",
+      model: "",
+    });
+  });
+
+  it("observes a blank service model when the exact option default is null", async () => {
+    const hooks = loadRelayHooks();
+    const settings = {
+      ...relaySettings("us-alpha"),
+      routeOptions: relaySettings("us-alpha").routeOptions.map((option) =>
+        option.userServiceId === "us-beta"
+          ? { ...option, defaultModel: null }
+          : option,
+      ),
+    };
+    configureDraft(hooks, settings);
+    hooks.state.llmSel.model = "";
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(
+        fetchResponse(200, {
+          ...settings,
+          savedRouteKind: "nyx_id_user_service",
+          savedUserServiceId: "us-beta",
+          defaultModel: "",
+        }),
+      );
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+
+    expect(hooks.state.llmSaveState).toBe("observed");
+    expect(hooks.state.llmSaved).toBe(true);
+  });
+
+  it("does not let an older failed save replace a newer observed save status", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const oldWrite = createDeferred<Response>();
+    const fetchMock = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body));
+        return body.userServiceId === "us-beta"
+          ? oldWrite.promise
+          : Promise.resolve(fetchResponse(202, { accepted: true }));
+      }
+      return Promise.resolve(
+        fetchResponse(200, {
+          ...relaySettings(null, "gateway"),
+          defaultModel: "",
+        }),
+      );
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const oldSave = hooks.saveLlm();
+    renderStep(hooks);
+    fireEvent.change(screen.getByLabelText("LLM 服务"), {
+      target: { value: "gateway" },
+    });
+    hooks.state.llmSel.model = "";
+    await hooks.saveLlm();
+    expect(hooks.state.llmSaveState).toBe("observed");
+
+    oldWrite.resolve(fetchResponse(400, { error: "old write failed" }));
+    await oldSave;
+
+    expect(hooks.state.llmSel.value).toBe("gateway");
+    expect(hooks.state.llmSaveState).toBe("observed");
+    expect(hooks.state.llmSaved).toBe(true);
+  });
+
+  it("keeps observing an accepted target after an edit without marking the edit saved", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const oldWrite = createDeferred<Response>();
+    const fetchMock = jest
+      .fn()
+      .mockReturnValueOnce(oldWrite.promise)
+      .mockResolvedValueOnce(fetchResponse(200, relaySettings("us-beta")));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const saving = hooks.saveLlm();
+    renderStep(hooks);
+    fireEvent.change(screen.getByLabelText("LLM 服务"), {
+      target: { value: "gateway" },
+    });
+    oldWrite.resolve(fetchResponse(202, { accepted: true }));
+    await saving;
+    renderStep(hooks);
+
+    expect(hooks.state.llmSel.value).toBe("gateway");
+    expect(hooks.state.llmSaved).toBe(false);
+    expect(document.body).toHaveTextContent("Shared OpenAI beta");
+  });
+
+  it("retains the accepted exact target when a stale catalog omits it", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const stale = {
+      ...relaySettings("us-alpha"),
+      routeOptions: relaySettings("us-alpha").routeOptions.filter(
+        (option) => option.userServiceId !== "us-beta",
+      ),
+    };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(202, { accepted: true }))
+      .mockResolvedValueOnce(fetchResponse(200, stale));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await hooks.saveLlm();
+    renderStep(hooks);
+
+    expect(hooks.state.llmSel).toEqual({
+      value: "user-service:us-beta",
+      model: "gpt-shared",
+    });
+    const retained = screen.getByRole("option", { name: "Shared OpenAI beta（暂不可用）" });
+    expect(retained).toBeDisabled();
+    expect(screen.getByRole("button", { name: /保存回复模型|重新确认保存/ }))
+      .toBeDisabled();
+  });
+
+  it("keeps the last good catalog after a transient observation read failure", async () => {
+    const hooks = loadRelayHooks();
+    const initial = relaySettings("us-alpha");
+    hooks.state.llm = initial;
+    localStorage.setItem(
+      "relay-test:token",
+      JSON.stringify({ access_token: "relay-access-token" }),
+    );
+    const fetchMock = jest.fn().mockRejectedValueOnce(new Error("catalog unavailable"));
+    global.fetch = fetchMock as typeof global.fetch;
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(hooks.loadLlm(true)).resolves.toBe(initial);
+
+    expect(hooks.state.llm).toBe(initial);
+    warn.mockRestore();
+  });
+
+  it("keeps the last good catalog when a read has no decodable payload", async () => {
+    const hooks = loadRelayHooks();
+    const initial = relaySettings("us-alpha");
+    hooks.state.llm = initial;
+    localStorage.setItem(
+      "relay-test:token",
+      JSON.stringify({ access_token: "relay-access-token" }),
+    );
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(fetchResponse(200, undefined)) as typeof global.fetch;
+
+    await expect(hooks.loadLlm(true)).resolves.toBe(initial);
+    expect(hooks.state.llm).toBe(initial);
+  });
+
+  it("keeps the relay draft revision monotonic across wizard resets", () => {
+    const hooks = loadRelayHooks();
+    hooks.state.llmDraftRevision = 9;
+
+    hooks.enterWizard("lark");
+
+    expect(hooks.state.llmDraftRevision).toBe(10);
+  });
+
+  it("stops after the exact bounded observation schedule as accepted_unobserved", async () => {
+    jest.useFakeTimers({ now: 0 });
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const getTimes: number[] = [];
+    const fetchMock = jest.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return Promise.resolve(fetchResponse(202, { accepted: true }));
+      }
+      getTimes.push(Date.now());
+      return Promise.resolve(fetchResponse(200, relaySettings("us-alpha")));
+    });
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const saving = hooks.saveLlm();
+    for (const delay of [0, 250, 500, 1000, 2000, 3000, 5000]) {
+      await jest.advanceTimersByTimeAsync(delay);
+    }
+    await saving;
+    renderStep(hooks);
+
+    expect(getTimes).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
+    expect(hooks.state.llmSaveState).toBe("accepted_unobserved");
+    expect(hooks.state.llmSaved).toBe(false);
+    expect(document.body).toHaveTextContent("Shared OpenAI beta");
+    expect(screen.getByRole("button", { name: "重新检查" })).toBeEnabled();
+    expect(document.body).not.toHaveTextContent("保存失败");
   });
 });

@@ -18,6 +18,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     ready: true,
     userServiceId: null,
     serviceSlug: null,
+    defaultModel: null,
     description: null,
   },
   {
@@ -29,6 +30,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     ready: true,
     userServiceId: "us-alpha",
     serviceSlug: "shared-openai",
+    defaultModel: "gpt-alpha",
     description: null,
   },
   {
@@ -40,6 +42,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     ready: true,
     userServiceId: "us-beta",
     serviceSlug: "shared-openai",
+    defaultModel: "gpt-beta",
     description: null,
   },
   {
@@ -51,6 +54,7 @@ const routeOptions: StudioUserLlmRouteOption[] = [
     ready: true,
     userServiceId: "diag-health",
     serviceSlug: "diagnostic-only",
+    defaultModel: "diagnostic-model",
     description: "Visible in health details only",
   },
 ];
@@ -74,6 +78,8 @@ describe("userLlmSelection", () => {
       userServiceId: "us-beta",
       routeValue: duplicateRoute,
     });
+    expect(options.find((option) => option.value === "user-service:us-beta"))
+      .toMatchObject({ defaultModel: "gpt-beta" });
   });
 
   it("encodes exact user service IDs without using their route", () => {

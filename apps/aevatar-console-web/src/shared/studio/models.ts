@@ -1046,6 +1046,7 @@ export interface StudioUserLlmRouteOption {
   readonly ready: boolean;
   readonly userServiceId?: string | null;
   readonly serviceSlug?: string | null;
+  readonly defaultModel: string | null;
   readonly description?: string | null;
 }
 

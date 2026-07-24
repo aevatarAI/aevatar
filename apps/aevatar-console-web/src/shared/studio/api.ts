@@ -433,6 +433,7 @@ function decodeStudioUserLlmSettings(
             `${resolvedOptionLabel}.userServiceId`
           ),
           serviceSlug: readNullableString(option, "serviceSlug", `${resolvedOptionLabel}.serviceSlug`),
+          defaultModel: readNullableString(option, "defaultModel", `${resolvedOptionLabel}.defaultModel`),
           description: readNullableString(option, "description", `${resolvedOptionLabel}.description`),
         };
       }
@@ -3367,17 +3368,18 @@ export const studioApi = {
     routeValue?: string | null;
     model?: string | null;
   }): Promise<StudioUserConfigSaveReceipt> {
+    const userServiceId = trimOptional(input.userServiceId);
+    const routeValue = input.routeValue?.trim() ?? null;
+    const model = input.model?.trim() ?? "";
     return requestDecodedJson(
       "/api/user-config/llm",
       decodeStudioUserConfigSaveReceipt,
       {
         method: "PUT",
         headers: JSON_HEADERS,
-        body: JSON.stringify({
-          userServiceId: trimOptional(input.userServiceId) ?? null,
-          routeValue: input.routeValue?.trim() ?? null,
-          model: input.model?.trim() ?? "",
-        }),
+        body: JSON.stringify(userServiceId
+          ? { userServiceId, model }
+          : { routeValue, model }),
       }
     );
   },

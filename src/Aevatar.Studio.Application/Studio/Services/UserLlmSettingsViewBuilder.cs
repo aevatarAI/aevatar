@@ -98,6 +98,7 @@ internal sealed class UserLlmSettingsViewBuilder
                     Ready: false,
                     UserServiceId: saved.UserServiceId,
                     ServiceSlug: saved.ServiceSlug,
+                    DefaultModel: null,
                     Description: null),
             ],
             ModelGroupsByRoute: [],
@@ -151,6 +152,9 @@ internal sealed class UserLlmSettingsViewBuilder
                 Ready: UserLlmCatalogNormalization.IsReady(service),
                 UserServiceId: userServiceId,
                 ServiceSlug: service.ServiceSlug,
+                DefaultModel: userServiceId is null
+                    ? null
+                    : UserLlmPreferenceWriteCore.NormalizeOptional(service.DefaultModel),
                 Description: UserLlmPreferenceWriteCore.NormalizeOptional(service.Description)));
         }
 
@@ -178,6 +182,7 @@ internal sealed class UserLlmSettingsViewBuilder
             Ready: !hasAny || ready,
             UserServiceId: null,
             ServiceSlug: null,
+            DefaultModel: null,
             Description: null);
     }
 

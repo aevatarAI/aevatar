@@ -33,6 +33,7 @@ const llmSettings: StudioUserLlmSettings = {
       ready: true,
       userServiceId: null,
       serviceSlug: null,
+      defaultModel: null,
       description: null,
     },
     {
@@ -44,6 +45,7 @@ const llmSettings: StudioUserLlmSettings = {
       ready: true,
       userServiceId: "us-anthropic",
       serviceSlug: "anthropic-team",
+      defaultModel: "claude-3-haiku",
       description: null,
     },
   ],

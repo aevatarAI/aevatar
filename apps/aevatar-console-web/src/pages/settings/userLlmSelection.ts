@@ -22,6 +22,7 @@ export type UserLlmSelectionOption = {
   readonly selection: UserLlmSelectionDraft;
   readonly ready: boolean;
   readonly allowed: boolean;
+  readonly defaultModel: string | null;
 };
 
 function trimOptional(value: unknown): string | undefined {
@@ -63,6 +64,7 @@ export function buildUserLlmSelectionOptions(
         selection,
         ready: option.ready,
         allowed: option.allowed,
+        defaultModel: null,
       });
       continue;
     }
@@ -88,6 +90,7 @@ export function buildUserLlmSelectionOptions(
       selection,
       ready: option.ready,
       allowed: option.allowed,
+      defaultModel: trimOptional(option.defaultModel) ?? null,
     });
   }
 

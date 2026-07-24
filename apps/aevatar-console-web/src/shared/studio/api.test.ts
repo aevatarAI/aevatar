@@ -196,6 +196,7 @@ describe('studioApi host-session requests', () => {
             ready: true,
             userServiceId: null,
             serviceSlug: null,
+            defaultModel: null,
             description: null,
           },
           {
@@ -207,6 +208,7 @@ describe('studioApi host-session requests', () => {
             ready: true,
             userServiceId: 'us-alpha',
             serviceSlug: 'openai',
+            defaultModel: 'gpt-5.4-mini',
             description: null,
           },
           {
@@ -218,6 +220,7 @@ describe('studioApi host-session requests', () => {
             ready: true,
             userServiceId: 'us-beta',
             serviceSlug: 'openai',
+            defaultModel: 'gpt-5.4',
             description: null,
           },
         ],
@@ -261,6 +264,7 @@ describe('studioApi host-session requests', () => {
           ready: true,
           userServiceId: null,
           serviceSlug: null,
+          defaultModel: null,
           description: null,
         },
         {
@@ -272,6 +276,7 @@ describe('studioApi host-session requests', () => {
           ready: true,
           userServiceId: 'us-alpha',
           serviceSlug: 'openai',
+          defaultModel: 'gpt-5.4-mini',
           description: null,
         },
         {
@@ -283,6 +288,7 @@ describe('studioApi host-session requests', () => {
           ready: true,
           userServiceId: 'us-beta',
           serviceSlug: 'openai',
+          defaultModel: 'gpt-5.4',
           description: null,
         },
       ],
@@ -368,7 +374,6 @@ describe('studioApi host-session requests', () => {
         method: 'PUT',
         body: JSON.stringify({
           userServiceId: 'us-beta',
-          routeValue: null,
           model: 'gpt-5.4-mini',
         }),
       }),
@@ -409,7 +414,6 @@ describe('studioApi host-session requests', () => {
       expect.objectContaining({
         method: 'PUT',
         body: JSON.stringify({
-          userServiceId: null,
           routeValue: '/api/v1/llm/gateway/v1',
           model: '',
         }),
