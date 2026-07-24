@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Google.Protobuf;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Infrastructure.AgentProfiles;
@@ -9,11 +10,15 @@ public sealed class AgentProfileIngressProofService : IAgentProfileIngressProofV
 {
     private const int MinimumRsaKeySize = 2048;
     private readonly AgentProfileIngressProofOptions _options;
+    private readonly ILogger<AgentProfileIngressProofService> _logger;
 
-    public AgentProfileIngressProofService(IOptions<AgentProfileIngressProofOptions> options)
+    public AgentProfileIngressProofService(
+        IOptions<AgentProfileIngressProofOptions> options,
+        ILogger<AgentProfileIngressProofService> logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? new AgentProfileIngressProofOptions();
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public bool Verify(string targetActorId, IMessage command)
@@ -105,7 +110,7 @@ public sealed class AgentProfileIngressProofService : IAgentProfileIngressProofV
         catch (Exception exception) when (
             exception is ArgumentException or CryptographicException or InvalidOperationException)
         {
-            // A malformed or incomplete key ring is an unavailable dependency, not host startup failure.
+            _logger.LogWarning("Agent Profile ingress proof signing is unavailable.");
         }
 
         ClearProof(command);

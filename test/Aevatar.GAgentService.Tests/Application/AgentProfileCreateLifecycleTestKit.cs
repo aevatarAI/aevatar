@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgentService.Tests.TestSupport;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -15,7 +16,8 @@ internal sealed class MissingProofAgentProfileActorPortHarness
             Runtime,
             Dispatch,
             new AgentProfileIngressProofService(
-                Options.Create(new AgentProfileIngressProofOptions())));
+                Options.Create(new AgentProfileIngressProofOptions()),
+                NullLogger<AgentProfileIngressProofService>.Instance));
     }
 
     public RecordingRuntime Runtime { get; }

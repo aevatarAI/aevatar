@@ -7,6 +7,9 @@ using Aevatar.GAgentService.Infrastructure.AgentProfiles;
 using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 
@@ -209,7 +212,8 @@ public sealed class AgentProfileActorPortTests
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var proofService = new AgentProfileIngressProofService(
-            Options.Create(new AgentProfileIngressProofOptions()));
+            Options.Create(new AgentProfileIngressProofOptions()),
+            NullLogger<AgentProfileIngressProofService>.Instance);
         var port = new AgentProfileActorPort(runtime, dispatch, proofService);
 
         var act = () => port.DispatchUpdateDraftAsync(new UpdateAgentProfileDraftCommand
@@ -231,6 +235,55 @@ public sealed class AgentProfileActorPortTests
             .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
             .Select(static method => method.Name)
             .Should().Equal(nameof(IAgentProfileIngressProofVerifier.Verify));
+    }
+
+    [Fact]
+    public void TrySign_ShouldEmitOneSafeWarningAndClearProofWhenSigningFails()
+    {
+        const string keyId = "key-sensitive-signing";
+        const string targetActorId = " target-sensitive-signing ";
+        using var currentKey = RSA.Create(2048);
+        var options = new AgentProfileIngressProofOptions
+        {
+            CurrentKeyId = keyId,
+            CurrentPrivateKeyPkcs8 = Convert.ToBase64String(currentKey.ExportPkcs8PrivateKey()),
+        };
+        options.PublicKeys.Add(
+            keyId,
+            Convert.ToBase64String(currentKey.ExportSubjectPublicKeyInfo()));
+        var logger = new RecordingLogger<AgentProfileIngressProofService>();
+        var services = new ServiceCollection()
+            .AddSingleton<IOptions<AgentProfileIngressProofOptions>>(Options.Create(options))
+            .AddSingleton<ILogger<AgentProfileIngressProofService>>(logger)
+            .AddSingleton<AgentProfileIngressProofService>();
+        using var provider = services.BuildServiceProvider();
+        var proofService = provider.GetRequiredService<AgentProfileIngressProofService>();
+        var command = CreateCommand();
+        command.IngressProof = new AgentProfileIngressProof
+        {
+            KeyId = "existing-proof-sensitive",
+            TargetActorId = "existing-target-sensitive",
+            CommandTypeUrl = "existing-type-sensitive",
+            CanonicalCommandSha256 = Digest(0x41),
+            Signature = ByteString.CopyFrom(0x42),
+        };
+
+        var trySign = typeof(AgentProfileIngressProofService).GetMethod(
+            "TrySign",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        trySign.Should().NotBeNull();
+        var signed = (bool)trySign!.Invoke(proofService, [targetActorId, command])!;
+
+        signed.Should().BeFalse();
+        command.IngressProof.Should().BeNull();
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Warning);
+        entry.Exception.Should().BeNull();
+        entry.Message.Should().Be("Agent Profile ingress proof signing is unavailable.");
+        entry.Message.Should().NotContain(keyId);
+        entry.Message.Should().NotContain(targetActorId.Trim());
+        entry.Message.Should().NotContain(options.CurrentPrivateKeyPkcs8);
+        entry.Message.Should().NotContain(options.PublicKeys[keyId]);
     }
 
     [Fact]
@@ -324,7 +377,8 @@ public sealed class AgentProfileActorPortTests
         var runtime = new RecordingActorRuntime();
         var dispatch = new RecordingActorDispatchPort();
         var proofService = new AgentProfileIngressProofService(
-            Options.Create(new AgentProfileIngressProofOptions()));
+            Options.Create(new AgentProfileIngressProofOptions()),
+            NullLogger<AgentProfileIngressProofService>.Instance);
         var port = new AgentProfileActorPort(runtime, dispatch, proofService);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
@@ -651,7 +705,9 @@ public sealed class AgentProfileActorPortTests
                 Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()));
         }
 
-        return new AgentProfileIngressProofService(Options.Create(options));
+        return new AgentProfileIngressProofService(
+            Options.Create(options),
+            NullLogger<AgentProfileIngressProofService>.Instance);
     }
 
     private static AgentProfileActorPort CreatePort(
@@ -777,6 +833,23 @@ public sealed class AgentProfileActorPortTests
             return Task.FromResult(
                 _admission ?? DispatchAdmissionFactory.Create(actorId, envelope));
         }
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception), exception));
     }
 
     private sealed class RecordingActor(string id) : IActor
