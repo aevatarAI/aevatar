@@ -802,6 +802,61 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithoutChannelResourceDownloader_AddsProviderNeutralVisibilityWarning()
+    {
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-no-downloader",
+                "describe it",
+                "om_no_downloader",
+                "img_no_downloader",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("channel resource download is not available in this runtime");
+        systemMessage.Content.Should().NotContain("Lark");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithoutChannelUserCredential_AddsProviderNeutralVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-no-token",
+                "describe it",
+                "om_no_token",
+                "img_no_token",
+                token: null),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("channel user credential needed to download the attachment is unavailable");
+        systemMessage.Content.Should().NotContain("Lark");
+        lark.Downloads.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithNonImageAttachment_AddsHonestVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(

@@ -549,7 +549,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 parts,
                 BuildAttachmentVisibilityInstruction(
                     CountAttachments(attachments),
-                    "Lark resource download is not available in this runtime"));
+                    "channel resource download is not available in this runtime"));
         }
 
         var token = NormalizeOptional(attachmentContext?.UserAccessToken)
@@ -561,7 +561,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 parts,
                 BuildAttachmentVisibilityInstruction(
                     CountAttachments(attachments),
-                    "the Lark user credential needed to download the attachment is unavailable"));
+                    "the channel user credential needed to download the attachment is unavailable"));
         }
 
         var unseenCount = 0;
