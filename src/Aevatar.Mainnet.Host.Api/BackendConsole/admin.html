@@ -717,6 +717,8 @@ button{font-family:inherit;cursor:pointer;}
 .obs-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
 .obs-row-name{font-size:13px;color:var(--heading);font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .obs-row-id{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block;}
+.obs-pinned{padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--border);}
+.obs-row-pin{font-size:10.5px;color:var(--waiting);margin-top:2px;}
 .origin-pill{font-size:10.5px;color:var(--subtle);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;flex:0 0 auto;white-space:nowrap;}
 .obs-detail{flex:1 1 auto;min-width:0;overflow:auto;padding:20px;}
 .obs-detail-head .odh-top{display:flex;align-items:center;gap:10px;margin-bottom:11px;}
@@ -1472,6 +1474,7 @@ var OBS_RUNS=[];                 /* 已映射的 summary 行：{id,name,status,o
 var OBS_RUNS_LOADED=false, OBS_RUNS_ERR=null, OBS_RUNS_LOADING=false;
 var OBS_RUNS_REQUEST=0, OBS_POLL_TIMER=null;
 var OBS_DETAIL={};               /* runId -> {loading,err,detail}；detail 为 obsDetail 渲染所需结构 */
+var OBS_DIRECT_RUNS={};          /* explicit admin run-id lookups with unknown owner scope */
 var OBS_QUERY_KEYS=['scope','status','origin','definition','schedule','from','to','run','tab'];
 var OBS_STATUS_VALUES=['running','completed','failed','stopped'];
 var OBS_TAB_VALUES=['timeline','steps','diagnostics','logs','artifacts','graph'];
@@ -1628,9 +1631,6 @@ function loadObsRuns(rerender){
     if(requestId!==OBS_RUNS_REQUEST) return;
     if(j&&j.forbidden){ OBS_RUNS=[]; OBS_RUNS_ERR='需要平台管理员权限才能跨 scope 观测'; }
     else { OBS_RUNS=mapObsRuns(Array.isArray(j)?j:(j&&j.items)||[]); OBS_RUNS_ERR=null;
-      if(OBS_STATE.selectedId && !OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0]){
-        obsUpsertRunFromDetail(OBS_STATE.selectedId,(OBS_DETAIL[OBS_STATE.selectedId]&&OBS_DETAIL[OBS_STATE.selectedId].detail)||null);
-      }
       if(OBS_RUNS.length && !OBS_STATE.selectedId){
         OBS_STATE.selectedId=OBS_RUNS[0].id; } }
   }).catch(function(e){ if(requestId===OBS_RUNS_REQUEST){ if(!OBS_RUNS_LOADED) OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; } })
@@ -1638,17 +1638,33 @@ function loadObsRuns(rerender){
 }
 function obsOpenDirectRun(runId,rerenderList,rerenderDetail){
   runId=(runId||'').trim(); if(!runId) return;
+  OBS_DIRECT_RUNS[runId]=true;
   OBS_STATE.selectedId=runId;
-  obsUpsertRunFromDetail(runId,null);
+  delete OBS_DETAIL[runId];
+  var next=buildHash(['observatory'],obsCanonicalQuery({run:runId}));
+  if(location.hash!==next){ location.hash=next; return; }
   if(rerenderList) rerenderList();
   if(rerenderDetail) rerenderDetail();
-  delete OBS_DETAIL[runId];
   loadObsDetail(runId,function(){ if(rerenderList) rerenderList(); if(rerenderDetail) rerenderDetail(); });
 }
 function obsDetailsEqual(left,right){
   if(left===right) return true;
   if(!left||!right) return false;
   return JSON.stringify(left)===JSON.stringify(right);
+}
+function obsDetailRequestBase(runId){
+  if(OBS_STATE.scope==='all'||OBS_DIRECT_RUNS[runId])
+    return '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId);
+  var base='/api/workflow/observatory/runs/'+encodeURIComponent(runId),p=new URLSearchParams();
+  if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope);
+  return base+(p.toString()?'?'+p.toString():'');
+}
+function obsGraphRequestUrl(runId){
+  if(OBS_STATE.scope==='all'||OBS_DIRECT_RUNS[runId])
+    return '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)+'/graph';
+  var base='/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph',p=new URLSearchParams();
+  if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope);
+  return base+(p.toString()?'?'+p.toString():'');
 }
 /* 选中 run 时懒加载详情 + DAG，缓存到 OBS_DETAIL[runId]；轮询刷新保留已渲染详情。 */
 function loadObsDetail(runId,rerender,refresh){
@@ -1659,9 +1675,7 @@ function loadObsDetail(runId,rerender,refresh){
   var previousDetail=(cache&&cache.detail)||null;
   OBS_DETAIL[runId]={loading:true,err:null,detail:previousDetail};
   if(rerender&&!previousDetail) rerender();
-  var base=(ACCOUNT&&ACCOUNT.admin)
-    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)
-    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId);
+  var base=obsDetailRequestBase(runId);
   return Promise.all([
     adminJson(base).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
     loadObsGraph(runId).catch(function(){ return null; })
@@ -1681,9 +1695,7 @@ function loadObsDetail(runId,rerender,refresh){
   }).then(function(changed){ if(rerender&&changed) rerender(); return changed; });
 }
 function loadObsGraph(runId){
-  var path=(ACCOUNT&&ACCOUNT.admin)
-    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)+'/graph'
-    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph';
+  var path=obsGraphRequestUrl(runId);
   return adminJson(path).then(function(g){
     return (g&&g.forbidden)?null:g; });
 }
@@ -2498,7 +2510,8 @@ function l1Roster(detail,coId){
   /* 真实运行列表（点击行 -> foundation data-run 深链进 observatory，选中该 run） */
   var runRows=detail.runs.slice(0,80).map(function(r){
     var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stuck',disabled:'stuck'}[r.status]||'stuck';
-    return '<tr data-run="'+esc(r.id)+'">'+
+    var scopeId=r.scope||coId;
+    return '<tr data-run="'+esc(r.id)+'" data-scope="'+esc(scopeId)+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.name)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+esc(r.id)+'</div></td>'+
       '<td>'+statusTag(rstatus)+'</td>'+
       '<td>'+originPill(r.origin)+'</td>'+
@@ -2597,7 +2610,7 @@ function viewL2(coId,empId){
 function l2Employee(e,coId){
   var runs=runsForEmployee(e.id), st=statsForEmployee(e.id);
   var rows=runs.map(function(r){
-    return '<tr data-run="'+r.id+'" data-co="'+coId+'" data-emp="'+e.id+'">'+
+    return '<tr data-run="'+r.id+'" data-scope="'+esc(coId)+'" data-co="'+coId+'" data-emp="'+e.id+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.wf)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+r.id+'</div></td>'+
       '<td>'+statusTag(r.status)+'</td>'+
       '<td class="tnum">'+r.dur+'</td>'+
@@ -2638,7 +2651,7 @@ function l2Employee(e,coId){
 function l2Task(coId,empId){
   var t=TASK_DEMO, pct=Math.round(t.done/t.total*100);
   var rows=t.runs.map(function(r){
-    return '<tr class="'+(r.stuck?'run-stuck':'')+'" data-run="'+r.id+'" data-co="'+coId+'" data-emp="'+empId+'">'+
+    return '<tr class="'+(r.stuck?'run-stuck':'')+'" data-run="'+r.id+'" data-scope="'+esc(coId)+'" data-co="'+coId+'" data-emp="'+empId+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.wf)+'</b>'+(r.stuck?'<span class="stuck-tag">卡在这里</span>':'')+'<div style="font-size:11px;color:var(--faint)" class="tnum">'+r.id+'</div></td>'+
       '<td>'+statusTag(r.status)+'</td><td class="tnum">'+r.dur+'</td><td class="tnum">'+fmtMoney(r.cost)+'</td></tr>';
   }).join('');
@@ -2675,7 +2688,7 @@ function viewL3(coId,empId,runId){
       '<span class="sub-title" style="font-size:16px">Run '+esc(runId)+'</span></div>'+
     '<div class="task-note" style="margin-bottom:18px">'+ICON.ext.replace('width="2"','width="1.8" style="width:15px;height:15px"')+
       '<span>Run 详情由<b>运行观测台</b>承载（逐步 trace / DAG / usage / 最终产出，真实接口 /api/workflow/observatory/runs/'+esc(runId)+'）。点击下方进入观测台并选中该 run。</span></div>'+
-    '<div style="margin-top:6px;display:flex;gap:10px"><button class="btn btn-primary" data-run="'+esc(runId)+'">'+ICON.ext+'打开运行观测台</button>'+
+    '<div style="margin-top:6px;display:flex;gap:10px"><button class="btn btn-primary" data-run="'+esc(runId)+'" data-scope="'+esc(coId)+'">'+ICON.ext+'打开运行观测台</button>'+
       '<button class="btn" data-co="'+esc(coId)+'">返回组织运行列表</button></div>'+
   '</div></div>', mount:bindFleet};
 }
@@ -3017,7 +3030,6 @@ function obsUpsertRunFromDetail(runId,d){
   d=d||obsSyntheticRun(runId); var found=false;
   OBS_RUNS=OBS_RUNS.map(function(r){ if(r.id!==runId) return r; found=true;
     return Object.assign({},r,{name:d.name||r.name,status:d.status||r.status,origin:d.origin||r.origin,scope:d.scope||r.scope,definition:d.definition||r.definition,rawStatus:d.rawStatus||r.rawStatus,stateVersion:d.stateVersion!=null?d.stateVersion:r.stateVersion}); });
-  if(!found) OBS_RUNS.unshift({id:runId,name:d.name||('Run '+obsShortRunId(runId)),status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion});
 }
 function originPill(o){ var lbl={schedule:'排班',manual:'手动',api:'API',channel:'通道'}[o]||o; return '<span class="origin-pill">'+esc(lbl)+'</span>'; }
 function obsRunsFiltered(){
@@ -3025,17 +3037,23 @@ function obsRunsFiltered(){
   if(!q) return OBS_RUNS;
   return OBS_RUNS.filter(function(r){ return String(r.name||'').toLowerCase().indexOf(q)>=0||String(r.id||'').toLowerCase().indexOf(q)>=0; });
 }
+function obsPinnedRun(){
+  if(!OBS_STATE.selectedId) return null;
+  return OBS_RUNS.some(function(r){return r.id===OBS_STATE.selectedId;})?null:obsSyntheticRun(OBS_STATE.selectedId);
+}
+function obsRunRow(r,pinned){
+  var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',stuck:'var(--waiting)'}[r.status]||'var(--idle)';
+  return '<button class="obs-row'+(r.id===OBS_STATE.selectedId?' on':'')+'" data-obsrun="'+esc(r.id)+'"'+(pinned?' data-obs-pinned="true"':'')+' aria-current="'+(r.id===OBS_STATE.selectedId)+'">'+
+    '<span class="obs-dot" style="background:'+sd+'"></span>'+
+    '<span class="obs-row-main"><span class="obs-row-name">'+esc(r.name)+'</span><span class="obs-row-id tnum">'+esc(obsShortRunId(r.id))+'</span>'+
+      (pinned?'<span class="obs-row-pin">不在当前筛选结果中</span>':'')+'</span>'+statusTag(r.status)+originPill(r.origin)+'</button>';
+}
 function obsList(){
   if(OBS_RUNS_LOADING&&!OBS_RUNS_LOADED) return '<div class="obs-loading">正在加载运行记录…</div>';
   if(OBS_RUNS_ERR) return '<div class="alert"><span class="grow">'+esc(OBS_RUNS_ERR)+'</span><button class="btn" data-act="obsReload">重试</button></div>';
-  var rows=obsRunsFiltered().map(function(r){
-    var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',stuck:'var(--waiting)'}[r.status]||'var(--idle)';
-    return '<button class="obs-row'+(r.id===OBS_STATE.selectedId?' on':'')+'" data-obsrun="'+esc(r.id)+'">'+
-      '<span class="obs-dot" style="background:'+sd+'"></span>'+
-      '<span class="obs-row-main"><span class="obs-row-name">'+esc(r.name)+'</span><span class="obs-row-id tnum">'+esc(obsShortRunId(r.id))+'</span></span>'+
-      statusTag(r.status)+originPill(r.origin)+'</button>';
-  }).join('');
-  return rows||emptyBlock('run');
+  var pinned=obsPinnedRun(),rows=obsRunsFiltered().map(function(r){return obsRunRow(r,false);}).join('');
+  var pinnedHtml=pinned?'<div class="obs-pinned">'+obsRunRow(pinned,true)+'</div>':'';
+  return pinnedHtml+(rows||emptyBlock('run'));
 }
 function obsTabs(d){
   var tabs=[['timeline','Timeline',''],['steps','Steps',d.steps&&d.steps.length],['diagnostics','Diagnostics',d.diagnostics&&d.diagnostics.length],['logs','Logs',''],['artifacts','Artifacts',''],['graph','Graph','']];
@@ -3629,7 +3647,7 @@ function bindSkills(root){
     else if(a==='skSchedRetry'){ SKILL_STATE.sched.authErr=false; reDetail(); }
     else if(a==='skSchedToggle'){ var tid=act.getAttribute('data-id'); var tx=SKILL_SCHED.filter(function(s){return s.id===tid;})[0]; var op=(tx&&tx.enabled)?':disable':':enable'; adminApi('/api/schedules/'+encodeURIComponent(tid)+op,{method:'POST'}).then(function(res){ if(res&&res.forbidden){ toast('无权操作该排班（403）'); return; } if(res.ok) loadMySchedules(reDetail); else toast('操作失败 HTTP '+res.status); }).catch(function(){ toast('操作失败'); }); }
     else if(a==='skSchedRun'){ var rid=act.getAttribute('data-id'); adminApi('/api/schedules/'+encodeURIComponent(rid)+':run-now',{method:'POST'}).then(function(res){ if(res&&res.forbidden){ toast('无权运行该排班（403）'); return; } toast(res.ok?'已触发立即运行 · '+rid:'触发失败 HTTP '+res.status); }).catch(function(){ toast('触发失败'); }); }
-    else if(a==='skSchedObs'){ navigate(['observatory'],{schedule:act.getAttribute('data-id')}); }
+    else if(a==='skSchedObs'){ obsNavigate({schedule:act.getAttribute('data-id'),run:null}); }
     else if(a==='skSchedRetry'){ SKILL_STATE.sched.authErr=false; SKILL_STATE.sched.result=null; reDetail(); }
     else if(a==='skSchedDel'){ SKILL_CONFIRM=act.getAttribute('data-id'); reDetail(); }
     else if(a==='skDelCancel'){ SKILL_CONFIRM=null; reDetail(); }
@@ -3697,7 +3715,7 @@ function viewSchedules(){
         if(a==='schRefresh'){ SCHED_LOADED=false; re(); loadSchedules(re); }
         else if(a==='schFilter'){ schedSetFilter(act.getAttribute('data-f'), re); }
         else if(a==='schToggleDetail'){ var did=act.getAttribute('data-id'); if(did){ SCHED_OPEN[did]=!SCHED_OPEN[did]; re(); } }
-        else if(a==='schObs'){ var oid=act.getAttribute('data-id'); if(oid) navigate(['observatory'],{schedule:_schObs(oid)}); }
+        else if(a==='schObs'){ var oid=act.getAttribute('data-id'); if(oid) obsNavigate({schedule:_schObs(oid),run:null}); }
         else if(a==='schAction'){ var id=act.getAttribute('data-id'), op=act.getAttribute('data-op'); if(id&&op) schedAction(id, op, re); }
       });
     }};
@@ -4655,13 +4673,9 @@ function bindEvents(){
 
     /* navigation: run > emp > company（顺序很重要） */
     var runEl=t.closest&&t.closest('[data-run]');
-    if(runEl){ var rid=runEl.getAttribute('data-run');
-      /* 深链进观测台并选中该 run：rid 即权威 run id（Fleet 与 observatory 同口径 mapXxxRuns 的 r.runId）。
-         不再依赖 OBS_RUNS 是否已含该 run（看板数据在 FLEET_RUNS_BY_SCOPE，与 OBS_RUNS 是两套加载）。
-         Fleet 为跨 scope __all__，强制 observatory 同口径，确保 loadObsRuns 后该 run 在列表内被选中、
-         详情按其自身 scope 拉取，而非因 selectedId 未命中回落到首行。 */
-      if(rid){ OBS_STATE.selectedId=rid; OBS_STATE.scope='__all__'; obsUpsertRunFromDetail(rid,null); }
-      navigate(['observatory'],{}); return; }
+    if(runEl){ var rid=runEl.getAttribute('data-run'); var runScope=runEl.getAttribute('data-scope');
+      if(rid) obsNavigate({run:rid,scope:runScope||'mine'});
+      return; }
     var empEl=t.closest&&t.closest('[data-emp][data-co]');
     if(empEl){ navigate(['fleet','c',empEl.getAttribute('data-co'),'e',empEl.getAttribute('data-emp')],{}); return; }
     var coEl=t.closest&&t.closest('[data-co]');

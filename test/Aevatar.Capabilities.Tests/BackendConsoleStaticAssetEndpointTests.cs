@@ -123,6 +123,34 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ObservatoryDeepLinks_ShouldPreserveExactScopeAndSchedule()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("data-scope=\"'+esc(scopeId)+'\"");
+        html.Should().Contain("var runScope=runEl.getAttribute('data-scope')");
+        html.Should().Contain("obsNavigate({run:rid,scope:runScope||'mine'})");
+        html.Should().Contain("obsNavigate({schedule:act.getAttribute('data-id'),run:null})");
+        html.Should().NotContain("OBS_STATE.scope='__all__'");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryDetail_ShouldFollowObservationIntentAndPinFilteredRun()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("if(OBS_STATE.scope==='all'||OBS_DIRECT_RUNS[runId])");
+        html.Should().Contain("if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope)");
+        html.Should().Contain("return base+(p.toString()?'?'+p.toString():'')");
+        html.Should().Contain("function obsPinnedRun()");
+        html.Should().Contain("data-obs-pinned=\"true\"");
+        html.Should().Contain("不在当前筛选结果中");
+        html.Should().NotContain("obsUpsertRunFromDetail(OBS_STATE.selectedId");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();
