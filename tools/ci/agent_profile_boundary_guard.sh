@@ -183,6 +183,16 @@ extract_csharp_method_body() {
   '
 }
 
+extract_csharp_prefix_before_protocol_authority() {
+  perl -0777 -ne '
+    if (/\bAgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,[^;]+;/sg) {
+      print substr($_, 0, $-[0]);
+      exit 0;
+    }
+    exit 1;
+  '
+}
+
 extract_csharp_executable_code() {
   perl -0777 -ne '
     exit 1 if /(?m)^[ \t]*#/;
@@ -276,7 +286,7 @@ check_actor_delivery_provenance_contracts() {
   local actor_invariants_file="$6"
   local profile_actor_file="$7"
   local namespace_actor_file="$8"
-  local failures=0 code="" body="" stamp_body=""
+  local failures=0 code="" body="" stamp_body="" authority_prefix=""
 
   code="$(strip_csharp_comments_and_inactive_code < "${envelope_proto_file}")"
   if ! printf '%s\n' "${code}" | rg -q -U -P \
@@ -293,25 +303,33 @@ check_actor_delivery_provenance_contracts() {
   )"
   if ! body="$(printf '%s\n' "${code}" | extract_csharp_method_body CloneForRawDispatch)" ||
      ! printf '%s\n' "${body}" | rg -q -U -P \
-       '\benvelope\.Clone\s*\(\s*\)[\s\S]*\bDeliveryProvenance\s*=\s*null\s*;' ||
-     ! stamp_body="$(printf '%s\n' "${code}" | extract_csharp_method_body StampAuthenticatedActorOrigin)" ||
+       '\A\s*ArgumentNullException\.ThrowIfNull\s*\(\s*envelope\s*\)\s*;\s*var\s+(?<admitted>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*envelope\.Clone\s*\(\s*\)\s*;\s*if\s*\(\s*\k<admitted>\.Runtime\s+is\s+not\s+null\s*\)\s*\k<admitted>\.Runtime\.DeliveryProvenance\s*=\s*null\s*;\s*return\s+\k<admitted>\s*;\s*\z'; then
+    echo "${delivery_semantics_file}:CloneForRawDispatch"
+    echo "Raw dispatch provenance must clear and return the same admitted envelope clone."
+    failures=$((failures + 1))
+  fi
+  if ! stamp_body="$(printf '%s\n' "${code}" | extract_csharp_method_body StampAuthenticatedActorOrigin)" ||
      ! printf '%s\n' "${stamp_body}" | rg -q -U -P \
        '\bDeliveryProvenance\s*=\s*new\s+EnvelopeDeliveryProvenance\b[\s\S]*\bAuthenticatedActorId\s*=\s*actorId\s*,'; then
-    echo "${delivery_semantics_file}:CloneForRawDispatch/StampAuthenticatedActorOrigin"
-    echo "Runtime provenance semantics must clear raw origin claims and stamp only the bound Actor id."
+    echo "${delivery_semantics_file}:StampAuthenticatedActorOrigin"
+    echo "Actor-bound provenance must stamp only the bound Actor id."
     failures=$((failures + 1))
   fi
 
-  local dispatch_file=""
+  local dispatch_file="" admitted_delivery_pattern=""
   for dispatch_file in "${local_dispatch_file}" "${orleans_dispatch_file}"; do
     code="$(
       strip_csharp_comments_and_inactive_code < "${dispatch_file}" | strip_csharp_strings
     )"
+    if [[ "${dispatch_file}" == "${local_dispatch_file}" ]]; then
+      admitted_delivery_pattern='\bAcceptDispatchedEnvelope\s*\(\s*EnvelopeDeliveryProvenanceSemantics\.CloneForRawDispatch\s*\(\s*envelope\s*\)\s*\)'
+    else
+      admitted_delivery_pattern='\bProduceAsync\s*\(\s*EnvelopeDeliveryProvenanceSemantics\.CloneForRawDispatch\s*\(\s*envelope\s*\)\s*,'
+    fi
     if ! body="$(printf '%s\n' "${code}" | extract_csharp_method_body DispatchAsync)" ||
-       ! printf '%s\n' "${body}" | rg -q -U -P \
-         '\bEnvelopeDeliveryProvenanceSemantics\.CloneForRawDispatch\s*\(\s*envelope\s*\)'; then
+       ! printf '%s\n' "${body}" | rg -q -U -P "${admitted_delivery_pattern}"; then
       echo "${dispatch_file}:DispatchAsync"
-      echo "Raw Local and Orleans dispatch admission must clear caller-authored authenticated Actor origin."
+      echo "Raw Local and Orleans dispatch admission must deliver the cleared clone instead of the caller envelope."
       failures=$((failures + 1))
     fi
   done
@@ -332,16 +350,15 @@ check_actor_delivery_provenance_contracts() {
   )"
   if ! body="$(printf '%s\n' "${code}" | extract_csharp_method_body RequireProtocolPublisher)" ||
      ! printf '%s\n' "${body}" | rg -q -U -P \
-       '\bstring\.Equals\s*\(\s*envelope\?\.Route\?\.PublisherActorId\s*,\s*expected\s*,\s*StringComparison\.Ordinal\s*\)' ||
-     ! printf '%s\n' "${body}" | rg -q -U -P \
-       '\bstring\.Equals\s*\(\s*envelope\?\.Runtime\?\.DeliveryProvenance\?\.AuthenticatedActorId\s*,\s*expected\s*,\s*StringComparison\.Ordinal\s*\)'; then
-    echo "${actor_invariants_file}:RequireProtocolPublisher"
-    echo "Agent Profile protocol authority must compare route publisher and runtime-authenticated origin to the expected Actor."
+       '\bif\s*\(\s*!string\.Equals\s*\(\s*envelope\?\.Route\?\.PublisherActorId\s*,\s*expected\s*,\s*StringComparison\.Ordinal\s*\)\s*\|\|\s*!string\.Equals\s*\(\s*envelope\?\.Runtime\?\.DeliveryProvenance\?\.AuthenticatedActorId\s*,\s*expected\s*,\s*StringComparison\.Ordinal\s*\)\s*\)\s*\{\s*throw\s+Error\s*\([^;]+;'; then
+    echo "${actor_invariants_file}:RequireProtocolPublisher.fail-closed"
+    echo "Agent Profile protocol authority must fail closed when either required Actor identity mismatches."
     failures=$((failures + 1))
   fi
 
   local profile_actor_code="" namespace_actor_code=""
   local handler_file="" handler_method="" handler_code=""
+  local sensitive_before_authority_pattern='\b(?:Find|Require|Prepare)[A-Za-z0-9_]*Operation[A-Za-z0-9_]*\s*\(|\bRequireContinuationEntry\s*\(|\bAgentProfileActorInvariants\.EnsureSameReplayAuthority\s*\(|\b(?:Persist|Send|Publish|Dispatch)[A-Za-z0-9_]*Async\s*\(|\bState(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s*(?:=|\+=|-=|\+\+|--)|\bState(?:\.[A-Za-z_][A-Za-z0-9_]*)+\.(?:Add|Remove|RemoveAt|Clear)\s*\('
   profile_actor_code="$(
     strip_csharp_comments_and_inactive_code < "${profile_actor_file}" | strip_csharp_strings
   )"
@@ -354,10 +371,12 @@ check_actor_delivery_provenance_contracts() {
       handler_code="${profile_actor_code}"
     fi
     if ! body="$(printf '%s\n' "${handler_code}" | extract_csharp_method_body "${handler_method}")" ||
+       ! authority_prefix="$(printf '%s\n' "${body}" | extract_csharp_prefix_before_protocol_authority)" ||
+       printf '%s\n' "${authority_prefix}" | rg -q -U -P "${sensitive_before_authority_pattern}" ||
        ! printf '%s\n' "${body}" | rg -q -U -P \
-         '\A(?:(?!AgentProfileActorInvariants\.RequireOperation)[\s\S])*?AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,[^;]+;[\s\S]*?AgentProfileActorInvariants\.RequireOperation\s*\('; then
-      echo "${handler_file}:${handler_method}"
-      echo "Every internal Agent Profile protocol handler must verify delivery authority before parsing the operation."
+         '\bAgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,[^;]+;[\s\S]*?\bAgentProfileActorInvariants\.RequireOperation\s*\('; then
+      echo "${handler_file}:${handler_method}.authority-order"
+      echo "Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
       failures=$((failures + 1))
     fi
   done <<CASES
@@ -782,8 +801,10 @@ write_valid_fixture() {
   write_lines "${runtime_propagation}/EnvelopeDeliveryProvenanceSemantics.cs" \
     'public static class EnvelopeDeliveryProvenanceSemantics {' \
     '  public static EventEnvelope CloneForRawDispatch(EventEnvelope envelope) {' \
+    '    ArgumentNullException.ThrowIfNull(envelope);' \
     '    var admitted = envelope.Clone();' \
-    '    admitted.Runtime.DeliveryProvenance = null;' \
+    '    if (admitted.Runtime is not null)' \
+    '      admitted.Runtime.DeliveryProvenance = null;' \
     '    return admitted;' \
     '  }' \
     '  public static void StampAuthenticatedActorOrigin(EventEnvelope envelope, string actorId) {' \
@@ -802,13 +823,17 @@ write_valid_fixture() {
   write_lines "${local_runtime}/LocalActorDispatchPort.cs" \
     'public sealed class LocalActorDispatchPort {' \
     '  public Task DispatchAsync(EventEnvelope envelope) {' \
-    '    return DeliverAsync(EnvelopeDeliveryProvenanceSemantics.CloneForRawDispatch(envelope));' \
+    '    target.AcceptDispatchedEnvelope(' \
+    '      EnvelopeDeliveryProvenanceSemantics.CloneForRawDispatch(envelope));' \
+    '    return Task.CompletedTask;' \
     '  }' \
     '}'
   write_lines "${orleans_runtime}/OrleansActorDispatchPort.cs" \
     'public sealed class OrleansActorDispatchPort {' \
-    '  public Task DispatchAsync(EventEnvelope envelope) {' \
-    '    return DeliverAsync(EnvelopeDeliveryProvenanceSemantics.CloneForRawDispatch(envelope));' \
+    '  public async Task DispatchAsync(EventEnvelope envelope) {' \
+    '    await stream.ProduceAsync(' \
+    '      EnvelopeDeliveryProvenanceSemantics.CloneForRawDispatch(envelope),' \
+    '      ct);' \
     '  }' \
     '}'
   write_lines "${core}/AgentProfileOperationRetentionPolicy.cs" \
@@ -903,7 +928,9 @@ write_valid_fixture() {
     '  public static void RequireProtocolPublisher(EventEnvelope? envelope, string expected) {' \
     '    if (!string.Equals(envelope?.Route?.PublisherActorId, expected, StringComparison.Ordinal) ||' \
     '        !string.Equals(envelope?.Runtime?.DeliveryProvenance?.AuthenticatedActorId, expected, StringComparison.Ordinal))' \
-    '      throw new InvalidOperationException();' \
+    '    {' \
+    '      throw Error("PROFILE_PROTOCOL_PUBLISHER_MISMATCH", "Publisher mismatch.");' \
+    '    }' \
     '  }' \
     '}'
   write_lines "${application}/AgentProfileService.cs" \
@@ -1093,15 +1120,74 @@ CASES
   expect_fail_cases "runtime-authenticated Actor delivery provenance" "${case_root}" \
     --check-delivery-provenance \
     "typed delivery provenance contract|src/Aevatar.Foundation.Abstractions/agent_messages.proto:EnvelopeRuntime.delivery_provenance|EventEnvelope runtime must expose typed delivery provenance for the authenticated Actor origin." \
-    "delivery provenance semantics|src/Aevatar.Foundation.Runtime/Propagation/EnvelopeDeliveryProvenanceSemantics.cs:CloneForRawDispatch/StampAuthenticatedActorOrigin|Runtime provenance semantics must clear raw origin claims and stamp only the bound Actor id." \
-    "Local raw dispatch admission|src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must clear caller-authored authenticated Actor origin." \
-    "Orleans raw dispatch admission|src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must clear caller-authored authenticated Actor origin." \
+    "raw delivery provenance clone|src/Aevatar.Foundation.Runtime/Propagation/EnvelopeDeliveryProvenanceSemantics.cs:CloneForRawDispatch|Raw dispatch provenance must clear and return the same admitted envelope clone." \
+    "bound Actor provenance stamp|src/Aevatar.Foundation.Runtime/Propagation/EnvelopeDeliveryProvenanceSemantics.cs:StampAuthenticatedActorOrigin|Actor-bound provenance must stamp only the bound Actor id." \
+    "Local raw dispatch admission|src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must deliver the cleared clone instead of the caller envelope." \
+    "Orleans raw dispatch admission|src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must deliver the cleared clone instead of the caller envelope." \
     "bound Actor publish context|src/Aevatar.Foundation.Runtime/Propagation/EnvelopePublishContextHelpers.cs:ApplyOutboundPublishContext|Actor-bound publishing must stamp runtime-authenticated origin after propagation." \
-    "protocol invariant comparison|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs:RequireProtocolPublisher|Agent Profile protocol authority must compare route publisher and runtime-authenticated origin to the expected Actor." \
-    "Profile initialization authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync|Every internal Agent Profile protocol handler must verify delivery authority before parsing the operation." \
-    "Namespace initialized authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializedAsync|Every internal Agent Profile protocol handler must verify delivery authority before parsing the operation." \
-    "Namespace rejected authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializationRejectedAsync|Every internal Agent Profile protocol handler must verify delivery authority before parsing the operation." \
-    "Namespace summary authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleObservePublishedSummaryAsync|Every internal Agent Profile protocol handler must verify delivery authority before parsing the operation."
+    "protocol invariant comparison|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs:RequireProtocolPublisher.fail-closed|Agent Profile protocol authority must fail closed when either required Actor identity mismatches." \
+    "Profile initialization authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
+    "Namespace initialized authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
+    "Namespace rejected authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializationRejectedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
+    "Namespace summary authority|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleObservePublishedSummaryAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
+
+  fresh_case "actor-delivery-clone-binding"
+  perl -0777 -pi -e \
+    's/admitted\.Runtime\.DeliveryProvenance = null;/envelope.Runtime.DeliveryProvenance = null;/' \
+    "${case_root}/src/Aevatar.Foundation.Runtime/Propagation/EnvelopeDeliveryProvenanceSemantics.cs"
+  expect_fail_cases "raw dispatch clone, clear, and return binding" "${case_root}" \
+    --check-delivery-provenance \
+    "raw dispatch admitted clone binding|src/Aevatar.Foundation.Runtime/Propagation/EnvelopeDeliveryProvenanceSemantics.cs:CloneForRawDispatch|Raw dispatch provenance must clear and return the same admitted envelope clone."
+
+  fresh_case "actor-delivery-clone-reassignment"
+  perl -0777 -pi -e \
+    's/admitted\.Runtime\.DeliveryProvenance = null;/admitted.Runtime.DeliveryProvenance = null;\n    admitted = envelope.Clone();/' \
+    "${case_root}/src/Aevatar.Foundation.Runtime/Propagation/EnvelopeDeliveryProvenanceSemantics.cs"
+  expect_fail_cases "raw dispatch admitted clone cannot be replaced" "${case_root}" \
+    --check-delivery-provenance \
+    "raw dispatch admitted clone reassignment|src/Aevatar.Foundation.Runtime/Propagation/EnvelopeDeliveryProvenanceSemantics.cs:CloneForRawDispatch|Raw dispatch provenance must clear and return the same admitted envelope clone."
+
+  fresh_case "actor-delivery-dispatch-consumption"
+  perl -0777 -pi -e '
+    s{target\.AcceptDispatchedEnvelope\(\s*EnvelopeDeliveryProvenanceSemantics\.CloneForRawDispatch\(envelope\)\s*\);}{EnvelopeDeliveryProvenanceSemantics.CloneForRawDispatch(envelope);\n    target.AcceptDispatchedEnvelope(envelope);}s;
+  ' "${case_root}/src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs"
+  perl -0777 -pi -e '
+    s{await stream\.ProduceAsync\(\s*EnvelopeDeliveryProvenanceSemantics\.CloneForRawDispatch\(envelope\),\s*ct\);}{EnvelopeDeliveryProvenanceSemantics.CloneForRawDispatch(envelope);\n    await stream.ProduceAsync(envelope, ct);}s;
+  ' "${case_root}/src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorDispatchPort.cs"
+  expect_fail_cases "raw dispatch must consume admitted clone" "${case_root}" \
+    --check-delivery-provenance \
+    "Local raw dispatch admitted clone consumption|src/Aevatar.Foundation.Runtime.Implementations.Local/Actors/LocalActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must deliver the cleared clone instead of the caller envelope." \
+    "Orleans raw dispatch admitted clone consumption|src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors/OrleansActorDispatchPort.cs:DispatchAsync|Raw Local and Orleans dispatch admission must deliver the cleared clone instead of the caller envelope."
+
+  fresh_case "actor-delivery-fail-closed-dual-predicate"
+  perl -0777 -pi -e 's/\|\|/&&/' \
+    "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs"
+  expect_fail_cases "fail-closed dual protocol publisher predicate" "${case_root}" \
+    --check-delivery-provenance \
+    "protocol publisher fail-closed predicate|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs:RequireProtocolPublisher.fail-closed|Agent Profile protocol authority must fail closed when either required Actor identity mismatches."
+
+  fresh_case "actor-delivery-fail-closed-branch"
+  perl -0777 -pi -e 's/throw Error\([^;]+;/return;/s' \
+    "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs"
+  expect_fail_cases "protocol publisher mismatch branch must throw" "${case_root}" \
+    --check-delivery-provenance \
+    "protocol publisher throwing mismatch branch|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileActorInvariants.cs:RequireProtocolPublisher.fail-closed|Agent Profile protocol authority must fail closed when either required Actor identity mismatches."
+
+  fresh_case "actor-delivery-authority-order"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1FindOperation(command.Operation.OperationId);\n    $2};
+  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
+  perl -0777 -pi -e '
+    s{(\bHandleInitializedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.LastPublishedRevision = continuation.DraftRevision;\n    $2};
+    s{(\bHandleInitializationRejectedAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1await SendToAsync(profileActorId, continuation);\n    $2};
+    s{(\bHandleObservePublishedSummaryAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1await PersistAsync(command.Operation);\n    $2};
+  ' "${case_root}/src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
+  expect_fail_cases "protocol authority before replay, state, and effects" "${case_root}" \
+    --check-delivery-provenance \
+    "Profile initialization authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
+    "Namespace initialized authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
+    "Namespace rejected authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleInitializationRejectedAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing." \
+    "Namespace summary authority order|src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs:HandleObservePublishedSummaryAsync.authority-order|Internal Agent Profile protocol authority must precede replay lookup, state mutation, continuation effects, and operation parsing."
 
   fresh_case "actor-contract-violations"
   perl -0777 -pi -e '
