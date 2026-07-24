@@ -772,7 +772,28 @@ run_self_tests() {
     local label="$1"
     local root="$2"
     shift 2
+    local -a expectations=("$@")
     local expectation="" case_label="" expected_hit="" expected_diagnostic=""
+    local other_case_label="" other_expected_hit="" other_expected_diagnostic=""
+    local expectation_index=0 other_expectation_index=0
+    for ((expectation_index = 0; expectation_index < ${#expectations[@]}; expectation_index++)); do
+      IFS='|' read -r case_label expected_hit expected_diagnostic \
+        <<< "${expectations[expectation_index]}"
+      for ((other_expectation_index = expectation_index + 1;
+            other_expectation_index < ${#expectations[@]};
+            other_expectation_index++)); do
+        IFS='|' read -r other_case_label other_expected_hit other_expected_diagnostic \
+          <<< "${expectations[other_expectation_index]}"
+        if [[ "${expected_hit}" == *"${other_expected_hit}"* ||
+              "${other_expected_hit}" == *"${expected_hit}"* ]]; then
+          echo "agent_profile_boundary_guard self-test overlapping expected hits: ${case_label} / ${other_case_label}" >&2
+          echo "Expected hits must not contain one another: ${expected_hit} / ${other_expected_hit}" >&2
+          failures=$((failures + 1))
+          return
+        fi
+      done
+    done
+
     if output="$(run_guard "${root}" 2>&1)"; then
       echo "agent_profile_boundary_guard self-test expected FAIL: ${label}" >&2
       echo "${output}" >&2
@@ -780,7 +801,7 @@ run_self_tests() {
       return
     fi
 
-    for expectation in "$@"; do
+    for expectation in "${expectations[@]}"; do
       IFS='|' read -r case_label expected_hit expected_diagnostic <<< "${expectation}"
       if [[ "${output}" != *"${expected_hit}"* ]]; then
         echo "agent_profile_boundary_guard self-test missed expected hit: ${case_label}" >&2
@@ -928,8 +949,8 @@ CASES
   expect_fail_cases "typed state, Profile collections, and context bags" "${case_root}" \
     "typed static Profile state|AgentProfileIdentity? _current|Static typed Agent Profile state is forbidden." \
     "typed static Profile auto-property|AgentProfileIdentity? Current|Static typed Agent Profile state is forbidden." \
-    "Profile fact collection|Dictionary<string, string> _profileBindings|Private service-level collections must not hold Agent Profile or binding facts." \
-    "Profile fact collection idictionary|IDictionary<string, string> _profileBindings|Private service-level collections must not hold Agent Profile or binding facts." \
+    "Profile fact collection|private readonly Dictionary<string, string> _profileBindings = new();|Private service-level collections must not hold Agent Profile or binding facts." \
+    "Profile fact collection idictionary|private readonly IDictionary<string, string> _profileBindings;|Private service-level collections must not hold Agent Profile or binding facts." \
     "Profile fact collection readonly-dictionary|IReadOnlyDictionary<string, AgentProfileIdentity> _index|Private service-level collections must not hold Agent Profile or binding facts." \
     "Profile fact collection immutable-dictionary|ImmutableDictionary<string, string> _profileFacts|Private service-level collections must not hold Agent Profile or binding facts." \
     "Profile fact collection nested-generic|Dictionary<string, IReadOnlyList<AgentProfileIdentity>> _index|Private service-level collections must not hold Agent Profile or binding facts." \
