@@ -1,0 +1,365 @@
+# Transparent Managed Codex Readiness Design
+
+## Product Decision
+
+An eligible user invokes `codex_exec` once. Aevatar prepares or repairs that
+user's managed Codex credential inside the same application use case and
+continues the original execution after the credential actor's committed state
+has been observed. The user does not call a provisioning endpoint, inspect a
+credential status, manage an agent key, or retry merely because provisioning
+was required.
+
+The current product mismatch is:
+
+> The runtime requires users to explicitly manage an infrastructure
+> credential, while the product capability is supposed to be immediately
+> usable by every eligible user.
+
+This is a runtime, contract, and ownership mismatch. Credential readiness is an
+Aevatar-owned application concern, not a workflow argument and not a hidden
+Infrastructure-client fallback.
+
+Eligibility and platform readiness remain separate:
+
+- eligibility determines whether Aevatar may create or use a managed Codex
+  credential for a NyxID user;
+- platform readiness requires that the user already have one usable personal
+  `chrono-sandbox` UserService and one usable `chrono-llm-public` UserService.
+
+Without a new NyxID service-registration contract, Aevatar does not fabricate a
+missing UserService. Consequently, `All` means all native NyxID users whose
+required UserServices are already available. Agent-key creation and repair are
+fully transparent; missing UserService registration remains a typed platform
+readiness failure.
+
+## Approaches Considered
+
+### Application-owned ensure and execute
+
+An Application coordinator owns one `Ensure credential -> Execute Codex` use
+case. Credential mutation is serialized per user, committed through the
+credential actor, and observed through the Projection Pipeline before the
+original execution continues.
+
+This is the selected approach. It preserves layering, Actor authority,
+read/write separation, and same-call completion.
+
+### Infrastructure fallback after a missing-credential error
+
+The chrono client could catch `managed_credential_not_provisioned`, invoke the
+lifecycle service, poll the read model, and retry.
+
+This is rejected because it moves business orchestration into Infrastructure,
+turns a read-side client into a mutation owner, creates a projection race, and
+encourages query-time polling.
+
+### Login-time or background pre-provisioning
+
+Aevatar could try to create keys when users sign in or when an allowlist is
+deployed.
+
+This is rejected as the authoritative path because provisioning needs the
+user's current NyxID bearer, login is not the owner of managed Codex semantics,
+and background provisioning cannot cover every first workflow invocation.
+
+## Configuration Contract
+
+Managed Codex uses a strongly typed eligibility policy:
+
+```json
+{
+  "Aevatar": {
+    "CodexExecution": {
+      "ManagedSandbox": {
+        "Enabled": true,
+        "Eligibility": {
+          "Mode": "Allowlist",
+          "AllowedNyxIdUserIds": [
+            "user-id"
+          ]
+        },
+        "CredentialLifetimeDays": 30,
+        "MaxResponseBytes": 1048576,
+        "MutationLeaseSeconds": 300,
+        "MutationCompletionSeconds": 240
+      }
+    }
+  }
+}
+```
+
+`Mode` has exactly two values:
+
+- `Allowlist`: `AllowedNyxIdUserIds` must contain normalized, distinct user IDs.
+- `All`: `AllowedNyxIdUserIds` must be empty.
+
+The default is `Allowlist`. The existing
+`ProvisioningAllowedNyxIdUserIds` name is removed because eligibility no longer
+means permission to call a separate provisioning workflow. `Enabled` remains
+the global kill switch and controls both managed-target discovery and
+execution.
+
+## Architecture
+
+```text
+NyxIdCodexExecTool
+  -> ManagedCodexExecutionCoordinator (Application, ICodexExecutionPort)
+       -> ManagedCodexEligibilityPolicy
+       -> IManagedCodexCredentialLifecycle.EnsureReadyAsync
+            -> IManagedCodexCredentialQueryPort
+            -> IManagedCodexCredentialReadinessObservationPort
+            -> IManagedCodexCredentialMutationLease
+            -> IManagedCodexNyxIdCredentialPort
+            -> ISecretVault
+            -> IManagedCodexCredentialCommandPort
+       -> IManagedCodexChronoTransport
+            -> ISecretVault
+            -> NyxID proxy
+            -> chrono-sandbox
+```
+
+`ManagedCodexExecutionCoordinator` lives in
+`Aevatar.AI.Application.CodexExecution` and implements the managed-sandbox
+`ICodexExecutionPort`. It owns eligibility, credential readiness, one bounded
+authorization-repair retry, and terminal event mapping.
+
+`IManagedCodexChronoTransport` is a narrow Application-owned port. Its
+Infrastructure implementation receives an already committed credential
+descriptor, resolves the referenced secret just in time, and performs the fixed
+NyxID proxy request. It does not query credential state, provision keys, select
+eligibility, or retry lifecycle mutations.
+
+The Host only binds configuration and composes the Application coordinator with
+Identity and Infrastructure implementations.
+
+## Typed Credential Contract
+
+`ManagedCodexCredentialDescriptor` gains a typed
+`chrono_llm_user_service_id` field. A ready descriptor therefore records:
+
+- exact NyxID owner;
+- NyxID API-key ID;
+- typed Vault reference;
+- exact personal `chrono-sandbox` UserService ID;
+- exact `chrono-llm-public` UserService ID;
+- fixed `chrono-sandbox` service slug;
+- active status and finite expiry.
+
+The LLM UserService ID is not placed in headers, annotations, items, or a
+generic bag. It affects authorization and stable execution decisions, so it is
+part of the protobuf state, domain events, and current-state read model.
+
+The actor also gains a policy-reconciliation command and event. They update the
+two-service authorization fact while preserving the same API-key ID and Vault
+reference when NyxID updates the existing key in place. Provision, rotation,
+revocation, and policy reconciliation remain separate typed transitions.
+
+The read side gains a protobuf readiness snapshot carrying the committed
+descriptor, pending cleanup facts, authoritative state version, and committed
+event ID. A Projection Session publishes this snapshot from
+`CommittedStateEventPublished`; it does not infer readiness from inbound
+commands or local actor runtime state.
+
+## Credential Policy
+
+Every persistent managed Codex agent key must have exactly:
+
+- `scopes=proxy`;
+- `platform=codex`;
+- `allow_all_services=false`;
+- `allowed_service_ids` equal, order-independently, to the user's exact
+  `chrono-sandbox` and `chrono-llm-public` UserService IDs;
+- `allow_all_nodes=false`;
+- no allowed node IDs;
+- a finite configured expiry.
+
+No extra service grant is accepted. The only persistent raw-key copy remains in
+`ISecretVault`; lifecycle and transport methods hold it only for the bounded
+NyxID operation that needs it. It is the Authorization credential on the
+Aevatar-to-NyxID request and is never placed in the chrono body, actor state,
+events, read models, workflow state, logs, or results.
+
+NyxID may continue injecting the short-lived delegation token used by the
+runner. This design does not put the persistent agent key in chrono-sandbox or
+codex-runner and adds no NyxID implementation or configuration change beyond
+the already-required usable UserServices.
+
+## Same-Call Readiness Flow
+
+`EnsureReadyAsync` is a write-capable Application use case, not a query API.
+
+1. Validate the native NyxID authority and the configured eligibility policy.
+2. Read the credential current-state projection.
+3. If the descriptor is complete, active, unexpired, and structurally valid,
+   return it without requiring a caller bearer. This supports scheduled or
+   background workflows after initial provisioning.
+4. Otherwise bind an owner-scoped readiness Projection Session and re-read the
+   projection. The re-read closes the gap between the first read and live
+   subscription without polling.
+5. If the second read is ready, return it.
+6. When mutation is required, require the current user's NyxID bearer and verify
+   that `/users/me` matches the typed caller authority.
+7. Attempt the per-user distributed mutation lease.
+8. If another invocation owns the lease, wait for the owner-scoped committed
+   readiness snapshot instead of returning
+   `managed_credential_mutation_in_progress`.
+9. The lease owner resolves the user's exact required UserServices, reconciles
+   remote Aevatar-managed keys, stores or updates Vault material when needed,
+   and dispatches the typed actor command.
+10. Wait for a committed readiness snapshot that satisfies the exact descriptor
+    contract.
+11. Release the observation and mutation leases.
+12. Pass the observed committed descriptor to the chrono transport and continue
+    the original `codex_exec`.
+
+There is no `Task.Delay` loop, query-time replay, read-model priming, or use of
+an uncommitted method-local descriptor as execution authority.
+
+## Automatic Repair
+
+The lifecycle automatically handles these states:
+
+- **No credential:** create one exact two-service key, store it in Vault,
+  commit it, observe it, and continue.
+- **Legacy single-service key:** update the existing NyxID key to the exact
+  sandbox-plus-LLM grant, verify the persisted policy, commit a policy
+  reconciliation event, observe it, and continue.
+- **Expired or revoked key:** revoke remaining Aevatar-managed artifacts when
+  possible, create a fresh finite key, commit it, and continue.
+- **Missing Vault secret:** when a current user bearer is available, rotate or
+  replace the remote key, store the new one-time secret, commit it, and
+  continue.
+- **Ambiguous prior dispatch:** reconcile the exact remote key and deterministic
+  Vault reference before issuing another key.
+- **Duplicate or orphaned Aevatar-managed keys:** keep an unambiguous committed
+  valid key when possible; otherwise revoke the reserved
+  `aevatar-managed-codex` keys and create one fresh credential. Cleanup facts
+  remain Actor-owned and independently retryable.
+- **Pending cleanup with a ready current credential:** retry cleanup
+  best-effort, but do not block Codex execution solely because an obsolete key
+  or Vault record is still pending deletion.
+
+NyxID mutations are re-read and validated before Actor dispatch. Policy
+comparison is order-independent and requires exactly the two expected IDs.
+
+## Concurrency
+
+The existing cluster-shared Garnet mutation lease remains the sole external
+mutation serializer for a NyxID owner.
+
+Concurrent first invocations behave as follows:
+
+- one invocation acquires the mutation lease and performs the external work;
+- other invocations subscribe to the same owner-scoped committed readiness
+  stream;
+- one external key mutation is performed;
+- every still-active invocation receives the committed ready descriptor and
+  continues its own Codex execution.
+
+No process-local owner-to-task dictionary is introduced. Projection Session
+leases and the distributed mutation lease carry all cross-request coordination.
+
+## Execution Retry
+
+A structurally ready descriptor uses the normal fast path. If the transport
+returns either:
+
+- an exact managed proxy authorization denial; or
+- an unavailable/revoked/missing Vault secret;
+
+the Application coordinator may run one forced remote credential validation and
+repair using the current caller bearer, then retry the chrono request once.
+
+The retry is not used for timeout, capacity, malformed output, non-zero Codex
+exit, cancellation, or arbitrary terminal failures. A second authorization
+failure is returned directly. This prevents an infinite mutation or execution
+loop.
+
+## Failure Semantics
+
+- `managed_target_disabled`: global kill switch is off.
+- `managed_feature_not_enabled`: the user is outside the configured eligibility
+  policy; no external mutation occurs.
+- `managed_user_authorization_unavailable`: first provisioning or repair needs
+  the current user's bearer, but none is available.
+- `nyxid_identity_mismatch`: bearer ownership differs from the typed caller.
+- `managed_user_services_unavailable`: one of the two required UserServices is
+  missing, ambiguous, inactive, or unusable.
+- `managed_credential_commit_timeout`: no ready committed snapshot was observed
+  within the bounded mutation window.
+- existing Vault, NyxID, proxy, timeout, capacity, malformed-output, and
+  cancellation failures retain sanitized typed mappings.
+
+Users are never told to call a provisioning endpoint or retry because the
+normal lifecycle returned `provisioning`. Infrastructure failures may still
+fail the execution, but credential setup is not exposed as a user workflow.
+
+Caller cancellation stops the pending Codex execution. Once an irreversible
+NyxID or Vault mutation has begun, the bounded internal completion token still
+drives the mutation to an Actor-recorded or compensating outcome.
+
+## Manual Lifecycle API
+
+The credential status, provision, rotate, and revoke endpoints remain available
+for diagnostics, explicit credential rotation, emergency recovery, and
+revocation. They are not prerequisites for tool use and are removed from the
+normal rollout instructions.
+
+The normal user-facing contract is only `codex_exec`.
+
+## Tests
+
+Tests must prove:
+
+- `Allowlist` and `All` validation, including mutually exclusive allowlist
+  semantics;
+- an eligible new user's first call creates the exact dual-service key, stores
+  its only persistent raw-key copy in Vault, observes committed state, and
+  completes Codex in that same call;
+- two users resolve different UserService IDs, API keys, Vault references, and
+  actor identities;
+- an already-ready credential performs no lifecycle mutation and does not
+  require a caller bearer;
+- concurrent first calls perform one external mutation and both execute;
+- a legacy single-service key is updated and committed without user action;
+- expired, missing-remote, missing-Vault, ambiguous-dispatch, duplicate-key,
+  and orphan-key states converge to one ready credential;
+- pending obsolete cleanup does not block a ready current credential;
+- an exact authorization or Vault failure triggers at most one repair retry;
+- ineligible users, missing first-use bearer, identity mismatch, and missing
+  UserServices fail closed before unsafe mutation;
+- committed readiness is delivered through the Projection Pipeline without
+  polling, replay, or query-time projection priming;
+- Application owns readiness and retry orchestration while Infrastructure owns
+  only NyxID/Vault/chrono adapters;
+- no raw agent key, interactive bearer, or delegation token appears in
+  protobuf, Actor state, projection documents, logs, exceptions, API responses,
+  workflow output, or serialized test snapshots.
+
+Focused tests cover options, lifecycle, actor transitions, projection
+observation, Application coordination, Infrastructure transport, Host
+composition, endpoint behavior, and architecture boundaries. Changes to tests
+must pass the repository stability and projection guards.
+
+## Documentation And Rollout
+
+The canonical managed Codex document and rollout runbook are updated to state:
+
+- eligible users do not provision manually;
+- the persistent key grants exactly the user's sandbox and LLM UserServices;
+- `All` still depends on required UserService availability;
+- the first interactive invocation supplies the bearer needed for transparent
+  credential creation;
+- later background invocations can use the committed Vault-backed credential;
+- operations configure eligibility and platform services but never receive a
+  user's raw key.
+
+## Out Of Scope
+
+- creating a missing NyxID UserService without a published NyxID contract;
+- moving the persistent agent key into chrono-sandbox or the runner;
+- replacing the existing gVisor runtime model;
+- changing Codex workflow arguments;
+- introducing a global shared agent key;
+- broad public-rollout security changes tracked separately from this internal
+  transparent-readiness migration.
