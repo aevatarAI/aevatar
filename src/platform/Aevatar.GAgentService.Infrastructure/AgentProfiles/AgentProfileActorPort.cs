@@ -46,6 +46,7 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
                 "Create Agent Profile command target must match the deterministic Profile Actor target.");
         }
 
+        ct.ThrowIfCancellationRequested();
         RequireSigned(AgentProfileActorIds.Namespace, command);
         var targets = ResolveCreateTargets(command.Identity.ProfileId);
         await EnsureActorAsync<AgentProfileNamespaceGAgent>(targets.NamespaceActorId, ct);

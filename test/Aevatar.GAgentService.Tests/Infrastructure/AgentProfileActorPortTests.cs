@@ -318,6 +318,43 @@ public sealed class AgentProfileActorPortTests
     }
 
     [Fact]
+    public async Task DispatchCreateAsync_ShouldHonorPreCanceledTokenBeforeUnavailableIngressProof()
+    {
+        var command = CreateCommand();
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var proofService = new AgentProfileIngressProofService(
+            Options.Create(new AgentProfileIngressProofOptions()));
+        var port = new AgentProfileActorPort(runtime, dispatch, proofService);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var act = () => port.DispatchCreateAsync(command, cancellation.Token);
+
+        var exception = await act.Should().ThrowAsync<OperationCanceledException>();
+        exception.Which.CancellationToken.Should().Be(cancellation.Token);
+        AssertNoLifecycleOrDispatch(runtime, dispatch);
+    }
+
+    [Fact]
+    public async Task DispatchCreateAsync_ShouldNotSignOrStartLifecycleWhenPreCanceled()
+    {
+        var command = CreateCommand();
+        var runtime = new RecordingActorRuntime();
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreatePort(runtime, dispatch);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var act = () => port.DispatchCreateAsync(command, cancellation.Token);
+
+        var exception = await act.Should().ThrowAsync<OperationCanceledException>();
+        exception.Which.CancellationToken.Should().Be(cancellation.Token);
+        command.IngressProof.Should().BeNull();
+        AssertNoLifecycleOrDispatch(runtime, dispatch);
+    }
+
+    [Fact]
     public async Task DispatchUpdateDraftAsync_ShouldEnsureOnlyProfileAndDispatchTypedEnvelope()
     {
         var command = new UpdateAgentProfileDraftCommand
