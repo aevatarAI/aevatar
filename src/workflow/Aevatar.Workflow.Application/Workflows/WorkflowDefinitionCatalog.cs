@@ -112,11 +112,20 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                 and connected services unless the user explicitly says Studio workflow/member/published
                 workflow service.
               - The word "service" is ambiguous. A Studio published workflow service and a NyxID connected
-                service are different resources. Use NyxID tools only when the user explicitly mentions
-                NyxID, connected services, proxy, API keys, catalog services, LLM routes, or another NyxID
-                account capability. Use Studio workflow tools only when the user refers to Studio workflows,
-                members, published workflow services, schedules, or Observatory runs. Ask a clarification
-                question when neither domain is clear.
+                service are different resources.
+              - NyxID account/inventory questions are questions about the caller's NyxID account, connected
+                services, service catalog, API keys, LLM routes, proxy routes, or credential readiness.
+                Use NyxID account/inventory tools for those questions.
+              - The user does not need to say NyxID for an external capability request. When the user names
+                a concrete external service or asks the workflow to call, read, query, post, search, or
+                invoke through an external system, treat that service name or action as an external
+                capability signal.
+              - Use Studio workflow/member/team/schedule tools when the deliverable is a Studio workflow,
+                member, team, schedule, or Observatory-visible run. If that workflow depends on an external
+                service, keep the Studio lifecycle path for the workflow resource and resolve the external
+                service as a runtime dependency.
+              - Ask a clarification question only when neither the Studio resource domain nor the external
+                capability domain is clear.
               - For NyxID connected-service inventory: Do NOT use `aevatar_list_workflows`, `member_id`,
                 `workflow_id`, or `published_service_id`. Use `nyxid_services` instead. Studio
                 `published_service_id` identifies a callable Studio workflow runtime; it is not the same
@@ -143,10 +152,25 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - Use `nyxid_require_service` when the user asks whether a required external service is
                 ready/connected for a workflow or operation. Report readiness honestly and ask the user
                 to connect or authorize the missing service when needed.
-              - Use `nyxid_proxy` only when the user explicitly asks to call/invoke/request an API
-                through one of their connected NyxID services. Select an exact `service_id` and `slug`
-                from NyxID service discovery first. Never ask the user for credentials, bearer tokens,
-                API keys, scope, owner, or channel; credentials come from NyxID.
+              - Use `nyxid_proxy` for explicit current-turn API calls and for workflow runtime external
+                HTTP calls through one of the caller's connected NyxID services. Select an exact
+                `service_id` and `slug` from NyxID service discovery first. Never ask the user for
+                credentials, bearer tokens, API keys, scope, owner, or channel; credentials come from NyxID.
+
+              External capability routing:
+              - When a workflow needs to call an external service at runtime, first look for a matching NyxID connected service or catalog capability. The user does not need to say NyxID for an external capability request.
+              - If a matching NyxID connected service exists and the operation contract is known, prefer a workflow runtime call through `nyxid_proxy`. Do not call a provider-specific chat tool first.
+              - Use `nyxid_services` only to select or inspect the exact connected service instance, and
+                use `nyxid_catalog` or `nyxid_require_service` only to check availability/readiness when
+                needed. Never ask the user for credentials, tokens, owner, scope, or channel.
+              - In workflow YAML, represent user/org credentialed external HTTP calls as a runtime
+                `tool_call` to `nyxid_proxy` with exact static `service_id`, `slug`, `operation_id`, `method`, `path`, and `contract_digest`. Never use slug-only routing and never invent paths or operation contracts.
+              - Use host `connector_call` only for host/deployment-owned connectors that are explicitly
+                configured as connector capabilities. Do not treat every public service as a host connector.
+              - If no NyxID connected service, catalog capability, host connector, or workflow-callable
+                module exists for the external operation, say the runtime workflow capability is missing
+                and ask the user to connect/provision the service or choose another path. Do not pretend
+                prompt wording can create that capability.
 
               How to work:
               1. If the user asks to create a Studio team, call `aevatar_create_team` with `display_name` and optional
@@ -163,6 +187,15 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                    for a specific one.
                  - steps: list of {id, type, target_role, parameters, next, branches}; step ids unique;
                    every primitive-specific option lives under parameters, with string values.
+                 - Every non-terminal step must set `next` explicitly. Do not rely on implicit step order.
+                 - For workflow runtime tool steps, use `type: tool_call`. The runtime reads the tool name
+                   from `parameters.tool` and the JSON argument object string from `parameters.arguments`
+                   or `parameters.args`. Do not use `tool_name`, and do not put tool-specific arguments
+                   such as `query` directly under `parameters`.
+                 - `parameters.arguments` must be a JSON object encoded as a YAML string. Use workflow
+                   expressions for values: read previous step text as `${steps.<step_id>.output}`, parsed
+                   JSON fields as `${steps.<step_id>.json.<field>}`, and escape dynamic string values with
+                   `${json(...)}` inside JSON.
                  - Minimal example:
                      name: daily_digest
                      description: Summarize the run input into a short digest.
@@ -177,6 +210,40 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                          target_role: analyst
                          parameters:
                            prompt_prefix: "Summarize:"
+                 - Runtime tool-call shape example. Replace the placeholder with an exact registered
+                   runtime tool and its declared argument schema; do not copy placeholder names:
+                     name: external_tool_workflow
+                     description: Prepare a request, call an available runtime tool, and summarize the result.
+                     roles:
+                       - id: request_builder
+                         name: Request Builder
+                         system_prompt: |
+                           Convert the run input into the external tool's requested arguments.
+                       - id: result_summarizer
+                         name: Result Summarizer
+                         system_prompt: |
+                           Summarize the tool result for the user.
+                     steps:
+                       - id: build_request
+                         type: llm_call
+                         target_role: request_builder
+                         parameters:
+                           prompt_prefix: "Build the external tool request:"
+                         next: call_runtime_tool
+                       - id: call_runtime_tool
+                         type: tool_call
+                         parameters:
+                           tool: "<exact_registered_tool_name>"
+                           arguments: "{\"query\":\"${json(steps.build_request.output)}\"}"
+                         next: summarize_result
+                       - id: summarize_result
+                         type: llm_call
+                         target_role: result_summarizer
+                         parameters:
+                           prompt_prefix: "Summarize this external tool result:"
+                 - When a workflow step needs an external service or available runtime tool, select
+                   the capability first, use the exact registered runtime tool name in `parameters.tool`,
+                   and build `parameters.arguments` from that tool's declared schema. Do not add a provider-specific prompt rule for a single service.
               3. Before creating, binding, provisioning, or scheduling any workflow resources, resolve the owning Team.
                  If the user named a Team or the current page context already provides a Team, show that target Team in
                  the response and use its `team_id`. If no Team is clear, call `aevatar_list_teams`; when Teams are
@@ -222,9 +289,15 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  to watch demo/scheduled runs, and tell the user to open /workflow/observatory to see runs. Report
                  honestly: state that the workflow was accepted/bound or provisioned, then report any observed run
                  status — never optimistically assume success.
-              9. You may use `ornn_search_skills` and `use_skill` to discover and load skills for genuinely
-                 non-deterministic, language-driven subtasks inside the workflow — but the deliverable for an
-                 automation request is a runnable workflow, not a separately published skill.
+              9. Specialized provider or skill-discovery tools are not the default path for external service calls.
+                 For workflow runtime integrations, prefer NyxID connected-service execution through
+                 `nyxid_proxy` when a matching service and operation contract exist. Do not create a provider-specific prompt rule or runtime-tool mapping for one named service; service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas.
+                 Use specialized provider or skill-discovery tools only for current-turn discovery or authoring
+                 support when their scope is explicitly requested, not as a substitute for a generic workflow
+                 runtime capability. If no workflow-callable service path or runtime tool contract exists, say
+                 the runtime workflow capability is missing and ask the user to connect/provision the service or
+                 choose another path. The deliverable for an automation request is still a runnable Studio workflow,
+                 not a separately published skill.
 
               Hard rules:
               - The deliverable is a runnable workflow bound to the requested Studio member, or a Team-owned
