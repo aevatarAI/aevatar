@@ -8,21 +8,27 @@ owner: platform
 
 ## Current Status
 
-This runbook was prepared from read-only production checks on 2026-07-23. No
-production resource, credential, UserConfig value, workload, or deployment was
-changed while preparing it.
+This runbook was prepared from read-only production checks on 2026-07-23 and
+executed once on 2026-07-24. The production canary completed successfully:
 
-The canary is currently **blocked before the mutation boundary**:
+| Proof | Observed result |
+| --- | --- |
+| Release and workload | Short tag `f1a18bac` uniquely resolved to source `f1a18bac0c86df2dd5e1f1fd20bbe32e41c97330` at verification time. The registry tag resolved to digest `sha256:cffd1aef30b1dff7ede81ebd780dced55a7697928703d9199b11e7d909d6cc75`, and the running Pod image ID equaled that digest. The Pod was Ready and `/health/ready` returned ready. |
+| Pre-mutation inventory | One scoped member, zero automations, zero pending authorization operations, and zero active Agent Key automations were observed. No drain pause was required. |
+| Live contract | The production OpenAPI exposed typed UserConfig selection, all five owner-LLM fields, and both revocation-track fields while omitting caller, key, secret-reference, raw-key, and ciphertext fields. |
+| Exact selection and plan | The typed UserConfig GET observed the exact UserService selection. Preflight returned one non-wildcard service grant with both wildcard flags false. |
+| Dedicated key use | The exact deterministic key was active and unused before `run-now`. The workflow completed with its unique marker, and the same key's `last_used_at` changed from empty to `2026-07-24T13:25:59.746+00:00`. |
+| Audit and revocation | The allowlisted `6201` audit proved the verified binding. The allowlisted `6202` audit proved NyxID `Completed` and Vault `Completed` before the owner-correct detail `404` was accepted. |
+| Cleanup | The exact key was absent or inactive, the automation list was `0/0`, the revision was retired, the member and draft returned `404`, the Team was archived, and the exact UserConfig selection remained in place. |
 
-| Gate | Read-only observation | Required disposition |
-| --- | --- | --- |
-| Old-binary drain | The 2026-07-23 read-only snapshot showed zero automations, but that observation is stale at deployment time and caller binding is intentionally non-projected. | Immediately before deploy, exhaust the scoped Team/member automation inventory, require zero pending v1 operations, and pause every active Agent Key automation not covered by an approved non-projected caller-binding audit. Reauthorize those schedules after deploy. |
-| Source provenance | The implementation commits reviewed before final rebase are not valid release identifiers. | The operator must supply the final pushed/release SHA and one immutable manifest proving plan, authorization fact, actor state, projector, and API ship as one release; prove deployed ancestry from that final SHA. |
-| Live HTTP contract | The prepared production OpenAPI did not expose the complete typed UserConfig and automation runtime-integrity fields. The reviewed source now exposes both revocation track statuses through the Studio automation API, but that is not deployment evidence. | Deploy and verify the complete contract. Missing UserConfig, five owner-LLM, or both per-track revocation fields is a hard pre-mutation stop; never invent an admin API. |
-| Workload evidence | `/health/ready` was healthy, including Studio and workflow components, but the scoped production kubeconfig returned upstream nginx `403`. The running Pod image digest and logs could not be inspected. | Obtain read-only workload visibility and prove the running digest; do not weaken the provenance gate. |
-| Automation audit | Caller binding and terminal revocation evidence are intentionally absent from projection/read models. | Use the repository audit query tool for EventIds `6201/StudioMemberAutomationCreateAccepted` and `6202/StudioMemberAutomationRevocationCompleted`; stop without both modes. |
-| NyxID service | `chrono-llm-public` was active and connected with UserService ID `4061b904-62de-4cee-9125-5e3ec8365afd`. | Recheck immediately before the canary. |
-| Owner selection | The prior runbook treated an exact UserConfig mismatch as out-of-scope repair. | Capture the original typed selection, perform the separately approved exact PUT after deployment, observe the typed GET, and approve leaving that exact selection in place. |
+The external release system did not provide an immutable full-source-SHA to
+image-digest attestation. This execution therefore used an explicit
+operator-approved provenance exception backed by the unique short-tag
+resolution, registry digest, matching Pod image ID, live contract, and rollout
+timeline. That correlated evidence is not an immutable attestation and must not
+be represented as one. This was a one-time, non-precedential exception and does
+not alter Section 1. Future executions remain blocked until the required
+immutable release manifest is available.
 
 Do not run any section under **Mutation Boundary** while any deployment,
 contract, authentication, UserConfig, or service gate is unresolved.
@@ -698,8 +704,8 @@ jq -e \
        and .slug == $slug
        and .is_active == true
        and .connected == true
-       and (.proxy_url | type == "string")
-       and (.proxy_url == $route or (.proxy_url | endswith($route))))]
+       and (.proxy_url_slug | type == "string")
+       and (.proxy_url_slug == $route or (.proxy_url_slug | endswith($route + "/{path}"))))]
   | length == 1
 ' "$CANARY_STATE_DIR/nyxid-services.json" >/dev/null
 ```
