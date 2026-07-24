@@ -7,9 +7,9 @@ import {
   ChatHistoryApiError,
   ChatHistoryContractError,
   chatHistoryApi,
+  decodeChatConversationDetail,
   decodeChatCreateRecovery,
   decodeChatHistoryIndex,
-  decodeStoredChatMessages,
 } from "./chatHistoryApi";
 
 function jsonResponse(payload: unknown): Response {
@@ -96,11 +96,23 @@ describe("chatHistoryApi", () => {
         })
       );
 
-    await expect(chatHistoryApi.listConversationMetas("scope-a")).resolves.toEqual(
+    const controller = new AbortController();
+    await expect(
+      chatHistoryApi.listConversationMetas("scope-a", controller.signal)
+    ).resolves.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "conversation-new" }),
         expect.objectContaining({ id: "conversation-old" }),
       ])
+    );
+    expect(authFetch).toHaveBeenNthCalledWith(
+      1,
+      "/api/scopes/scope-a/chat-history",
+      {
+        headers: { Accept: "application/json" },
+        method: "GET",
+        signal: controller.signal,
+      }
     );
     expect(authFetch).toHaveBeenNthCalledWith(
       2,
@@ -108,6 +120,7 @@ describe("chatHistoryApi", () => {
       {
         headers: { Accept: "application/json" },
         method: "GET",
+        signal: controller.signal,
       }
     );
   });
@@ -116,7 +129,7 @@ describe("chatHistoryApi", () => {
     (authFetch as jest.Mock).mockResolvedValue(
       jsonResponse({
         conversationId: "conversation-a",
-        sourceVersion: 3,
+        stateVersion: 3,
         status: "append_committed",
         turnId: "turn-a",
       })
@@ -126,12 +139,12 @@ describe("chatHistoryApi", () => {
       chatHistoryApi.recoverCreate("scope/a", "create/key")
     ).resolves.toEqual({
       conversationId: "conversation-a",
-      sourceVersion: 3,
+      stateVersion: 3,
       status: "append_committed",
       turnId: "turn-a",
     });
     expect(authFetch).toHaveBeenCalledWith(
-      "/api/scopes/scope%2Fa/chat-history/create-recoveries/create%2Fkey",
+      "/api/scopes/scope%2Fa/chat-history/create-recovery/create%2Fkey",
       {
         headers: { Accept: "application/json" },
         method: "GET",
@@ -140,7 +153,7 @@ describe("chatHistoryApi", () => {
     expect(() =>
       decodeChatCreateRecovery({
         conversationId: "conversation-a",
-        sourceVersion: -1,
+        stateVersion: -1,
         status: "reserved",
         turnId: "turn-a",
       })
@@ -149,7 +162,34 @@ describe("chatHistoryApi", () => {
 
   it("preserves documented message fields and unknown role or status strings", async () => {
     (authFetch as jest.Mock).mockResolvedValue(
-      jsonResponse([
+      jsonResponse({
+        messages: [
+          {
+            authorId: null,
+            authorName: "Automation",
+            content: "Queued for review",
+            error: null,
+            id: "turn-a:observer",
+            role: "observer",
+            status: "queued",
+            thinking: null,
+            timestamp: 1784255700000,
+            turnId: "turn-a",
+          },
+        ],
+        stateVersion: 7,
+      })
+    );
+
+    const controller = new AbortController();
+    await expect(
+      chatHistoryApi.loadConversation(
+        "scope/a",
+        "conversation/a",
+        controller.signal
+      )
+    ).resolves.toEqual({
+      messages: [
         {
           authorId: null,
           authorName: "Automation",
@@ -162,30 +202,15 @@ describe("chatHistoryApi", () => {
           timestamp: 1784255700000,
           turnId: "turn-a",
         },
-      ])
-    );
-
-    await expect(
-      chatHistoryApi.loadConversation("scope/a", "conversation/a")
-    ).resolves.toEqual([
-      {
-        authorId: null,
-        authorName: "Automation",
-        content: "Queued for review",
-        error: null,
-        id: "turn-a:observer",
-        role: "observer",
-        status: "queued",
-        thinking: null,
-        timestamp: 1784255700000,
-        turnId: "turn-a",
-      },
-    ]);
+      ],
+      stateVersion: 7,
+    });
     expect(authFetch).toHaveBeenCalledWith(
       "/api/scopes/scope%2Fa/chat-history/conversations/conversation%2Fa",
       {
         headers: { Accept: "application/json" },
         method: "GET",
+        signal: controller.signal,
       }
     );
   });
@@ -194,27 +219,38 @@ describe("chatHistoryApi", () => {
     expect(decodeChatHistoryIndex({ conversations: [] })).toEqual({
       conversations: [],
     });
-    expect(decodeStoredChatMessages([])).toEqual([]);
+    expect(
+      decodeChatConversationDetail({ messages: [], stateVersion: 0 })
+    ).toEqual({ messages: [], stateVersion: 0 });
   });
 
   it("rejects malformed successful response bodies explicitly", () => {
     expect(() => decodeChatHistoryIndex({ conversations: {} })).toThrow(
       ChatHistoryContractError
     );
+    expect(() => decodeChatConversationDetail([])).toThrow(
+      ChatHistoryContractError
+    );
     expect(() =>
-      decodeStoredChatMessages([
-        {
-          content: "hello",
-          id: "message-a",
-          role: "user",
-          status: "complete",
-          timestamp: "not-a-number",
-        },
-      ])
+      decodeChatConversationDetail({ messages: [], stateVersion: -1 })
+    ).toThrow(expect.objectContaining({ path: "$conversation.stateVersion" }));
+    expect(() =>
+      decodeChatConversationDetail({
+        messages: [
+          {
+            content: "hello",
+            id: "message-a",
+            role: "user",
+            status: "complete",
+            timestamp: "not-a-number",
+          },
+        ],
+        stateVersion: 7,
+      })
     ).toThrow(
       expect.objectContaining({
         code: "INVALID_CHAT_HISTORY_RESPONSE",
-        path: "$messages[0].timestamp",
+        path: "$conversation.messages[0].timestamp",
       })
     );
   });

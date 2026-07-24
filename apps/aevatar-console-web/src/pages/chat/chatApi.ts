@@ -7,6 +7,10 @@ import type {
   ChatStudioTarget,
   ChatUsageSummary,
 } from "./chatTypes";
+import {
+  ChatHistoryApiError,
+  ChatHistoryContractError,
+} from "./chatHistoryApi";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -14,12 +18,17 @@ const CHAT_HISTORY_CONTEXT_NAME = "aevatar.chat.context";
 const CHAT_HISTORY_CONTEXT_TYPE_URL =
   "type.googleapis.com/aevatar.workflow.runs.WorkflowChatContextPayload";
 
-export type ChatConversationIntent = {
-  conversationId?: string | null;
-  createIdempotencyKey?: string;
-};
+export type ChatConversationIntent =
+  | {
+      conversationId: null;
+    }
+  | {
+      conversationId: string;
+      minimumStateVersion: number;
+    };
 
 export type ChatStreamRequest = {
+  commandId?: string;
   prompt: string;
   conversation?: ChatConversationIntent;
   sessionId: string;
@@ -40,6 +49,23 @@ export class ChatApiError extends Error {
     this.code = code;
     this.status = status;
   }
+}
+
+export class ChatRetryPreparationError extends Error {
+  readonly cause: unknown;
+  readonly mayHaveBeenAccepted = false;
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = "ChatRetryPreparationError";
+    this.cause = cause;
+  }
+}
+
+export function chatRequestMayHaveBeenAccepted(error: unknown): boolean {
+  return !(
+    error instanceof ChatApiError || error instanceof ChatRetryPreparationError
+  );
 }
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
@@ -231,10 +257,17 @@ export function extractChatHistoryContext(
   const context: ChatHistoryContext = {
     conversationId: readString(payload, "conversationId"),
     scopeId: readString(payload, "scopeId"),
+    stateVersion: readNumber(payload, "stateVersion") ?? Number.NaN,
     turnId: readString(payload, "turnId"),
   };
 
-  return Object.values(context).every(Boolean) ? context : null;
+  return context.conversationId &&
+    context.scopeId &&
+    context.turnId &&
+    Number.isSafeInteger(context.stateVersion) &&
+    context.stateVersion >= 0
+    ? context
+    : null;
 }
 
 export function extractChatStreamArtifacts(frames: readonly unknown[]): {
@@ -291,12 +324,8 @@ function normalizeConversationIntent(
   if (
     !record ||
     Object.keys(record).some(
-      (key) => key !== "conversationId" && key !== "createIdempotencyKey"
-    ) ||
-    (record.conversationId != null &&
-      typeof record.conversationId !== "string") ||
-    (record.createIdempotencyKey != null &&
-      typeof record.createIdempotencyKey !== "string")
+      (key) => key !== "conversationId" && key !== "minimumStateVersion"
+    )
   ) {
     throw new ChatApiError(
       "Conversation input is invalid.",
@@ -305,11 +334,23 @@ function normalizeConversationIntent(
     );
   }
 
+  if (record.conversationId === null) {
+    if (record.minimumStateVersion !== undefined) {
+      throw new ChatApiError(
+        "Conversation input is invalid.",
+        400,
+        "INVALID_CONVERSATION_INPUT"
+      );
+    }
+
+    return { conversationId: null };
+  }
+
   const conversationId =
     typeof record.conversationId === "string"
       ? record.conversationId.trim()
-      : undefined;
-  if (record.conversationId != null && !conversationId) {
+      : "";
+  if (!conversationId) {
     throw new ChatApiError(
       "Conversation id is invalid.",
       400,
@@ -317,26 +358,20 @@ function normalizeConversationIntent(
     );
   }
 
-  const createIdempotencyKey =
-    typeof record.createIdempotencyKey === "string"
-      ? record.createIdempotencyKey.trim()
-      : undefined;
-  if (record.createIdempotencyKey != null && !createIdempotencyKey) {
+  const minimumStateVersion = record.minimumStateVersion;
+  if (
+    typeof minimumStateVersion !== "number" ||
+    !Number.isSafeInteger(minimumStateVersion) ||
+    minimumStateVersion <= 0
+  ) {
     throw new ChatApiError(
-      "Create idempotency key is invalid.",
+      "Conversation state version is invalid.",
       400,
-      "INVALID_CONVERSATION_INPUT"
-    );
-  }
-  if (conversationId && createIdempotencyKey) {
-    throw new ChatApiError(
-      "Conversation input is invalid.",
-      400,
-      "INVALID_CONVERSATION_INPUT"
+      "INVALID_CONVERSATION_STATE_VERSION"
     );
   }
 
-  return compactObject({ conversationId, createIdempotencyKey });
+  return { conversationId, minimumStateVersion };
 }
 
 export async function startChatStream(
@@ -346,6 +381,7 @@ export async function startChatStream(
   const response = await authFetch("/api/chat", {
     body: JSON.stringify(
       compactObject({
+        commandId: request.commandId?.trim() || undefined,
         conversation: normalizeConversationIntent(request.conversation),
         prompt: request.prompt.trim(),
         sessionId: request.sessionId.trim(),
@@ -361,7 +397,18 @@ export async function startChatStream(
   });
 
   if (!response.ok) {
-    const details = await readResponseErrorDetails(response);
+    let details: Awaited<ReturnType<typeof readResponseErrorDetails>>;
+    try {
+      details = await readResponseErrorDetails(response);
+    } catch {
+      const statusText = response.statusText.trim();
+      throw new ChatApiError(
+        statusText
+          ? `HTTP ${response.status} ${statusText}`
+          : `HTTP ${response.status}`,
+        response.status
+      );
+    }
     throw new ChatApiError(details.message, details.status, details.code);
   }
 
@@ -389,35 +436,141 @@ function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-export async function startChatStreamWithProjectionRetry(
+function isAbortError(error: unknown, signal: AbortSignal): boolean {
+  return (
+    signal.aborted ||
+    (error instanceof DOMException && error.name === "AbortError")
+  );
+}
+
+function throwIfAbortedBeforeDispatch(signal: AbortSignal): void {
+  if (!signal.aborted) {
+    return;
+  }
+
+  throw new ChatRetryPreparationError(
+    signal.reason ?? new DOMException("Aborted", "AbortError")
+  );
+}
+
+function isRetryableHistoryRefreshError(error: unknown): boolean {
+  if (error instanceof ChatHistoryContractError) {
+    return false;
+  }
+
+  if (error instanceof ChatHistoryApiError) {
+    return error.status >= 500 && error.status < 600;
+  }
+
+  if (error && typeof error === "object" && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    return typeof status === "number" && status >= 500 && status < 600;
+  }
+
+  return true;
+}
+
+export type ChatHistoryRefreshRetryOptions = {
+  refreshMinimumStateVersion?: (signal: AbortSignal) => Promise<number>;
+  retryDelaysMs?: readonly number[];
+};
+
+export async function startChatStreamWithHistoryRefreshRetry(
   request: ChatStreamRequest,
   signal: AbortSignal,
-  retryDelaysMs: readonly number[] = [0, 300, 900]
+  options: ChatHistoryRefreshRetryOptions = {}
 ): Promise<Response> {
-  const attempts = retryDelaysMs.length > 0 ? retryDelaysMs : [0];
-  const isContinuation = Boolean(request.conversation?.conversationId?.trim());
+  const retryDelaysMs = options.retryDelaysMs ?? [300, 900];
+  const attempts = [0, ...retryDelaysMs];
+  let requestForAttempt = request;
+  let refreshBeforeAttempt = false;
+  let lastReservationError: ChatApiError | undefined;
 
   for (let attempt = 0; attempt < attempts.length; attempt += 1) {
     if (attempt > 0) {
-      await abortableDelay(attempts[attempt], signal);
+      try {
+        await abortableDelay(attempts[attempt], signal);
+      } catch (error) {
+        throw new ChatRetryPreparationError(error);
+      }
     }
 
+    if (refreshBeforeAttempt && options.refreshMinimumStateVersion) {
+      let refreshedStateVersion: number;
+      try {
+        refreshedStateVersion = await options.refreshMinimumStateVersion(signal);
+      } catch (error) {
+        if (
+          isAbortError(error, signal) ||
+          !isRetryableHistoryRefreshError(error)
+        ) {
+          throw new ChatRetryPreparationError(error);
+        }
+
+        continue;
+      }
+      if (
+        !Number.isSafeInteger(refreshedStateVersion) ||
+        refreshedStateVersion < 0
+      ) {
+        throw new ChatApiError(
+          "Conversation state version is invalid.",
+          400,
+          "INVALID_CONVERSATION_STATE_VERSION"
+        );
+      }
+
+      const conversation = requestForAttempt.conversation;
+      if (!conversation || conversation.conversationId === null) {
+        throw new ChatApiError(
+          "Conversation input is invalid.",
+          400,
+          "INVALID_CONVERSATION_INPUT"
+        );
+      }
+      if (refreshedStateVersion < conversation.minimumStateVersion) {
+        continue;
+      }
+      const minimumStateVersion = Math.max(
+        conversation.minimumStateVersion,
+        refreshedStateVersion
+      );
+      requestForAttempt = {
+        ...requestForAttempt,
+        conversation: {
+          conversationId: conversation.conversationId,
+          minimumStateVersion,
+        },
+      };
+      refreshBeforeAttempt = false;
+    }
+
+    throwIfAbortedBeforeDispatch(signal);
     try {
-      return await startChatStream(request, signal);
+      return await startChatStream(requestForAttempt, signal);
     } catch (error) {
+      const conversation = requestForAttempt.conversation;
+      const isContinuation = Boolean(
+        conversation && conversation.conversationId !== null
+      );
       const canRetry =
         isContinuation &&
         error instanceof ChatApiError &&
-        error.status === 404 &&
-        error.code === "CONVERSATION_NOT_FOUND" &&
+        error.status === 503 &&
+        error.code === "CHAT_HISTORY_RESERVATION_UNAVAILABLE" &&
+        Boolean(options.refreshMinimumStateVersion) &&
         attempt < attempts.length - 1;
       if (!canRetry) {
         throw error;
       }
+      lastReservationError = error;
+      refreshBeforeAttempt = true;
     }
   }
 
-  throw new Error("Chat stream could not be started.");
+  throw (
+    lastReservationError ?? new Error("Chat stream could not be started.")
+  );
 }
 
 export async function* readChatStreamFrames(
