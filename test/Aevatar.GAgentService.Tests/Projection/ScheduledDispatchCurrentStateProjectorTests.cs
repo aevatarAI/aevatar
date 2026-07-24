@@ -371,7 +371,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         {
             ScopeId = "scope-alpha",
             MemberId = "member-alpha",
-            CurrentTeamId = "team-alpha",
+            TeamId = "team-alpha",
         };
         state.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
         state.TeamAutomationOperationId = "operation-alpha";
@@ -409,6 +409,7 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
             ScopeId = "scope-alpha",
             MemberId = "member-alpha",
         });
+        document.TeamId.Should().Be("team-alpha");
         document.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusDocument.RevocationPending);
         document.RevocationPending.Should().BeTrue();
         document.StateVersion.Should().Be(17);

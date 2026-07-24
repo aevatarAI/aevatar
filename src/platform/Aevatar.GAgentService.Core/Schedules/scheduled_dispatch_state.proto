@@ -87,6 +87,8 @@ message TeamMemberAutomationOwnerState
   // Legacy read compatibility only. Team containment is resolved from the
   // canonical member read model and is not part of the durable owner key.
   string current_team_id = 3 [deprecated = true];
+  // Authoritative team assignment snapshot resolved from the Studio member read model.
+  string team_id = 4;
 }
 
 enum TeamAutomationLifecycleStatusState

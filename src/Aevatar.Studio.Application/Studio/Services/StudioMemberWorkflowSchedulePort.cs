@@ -241,7 +241,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         CancellationToken ct = default)
     {
         var resolved = await ResolveTeamMemberAsync(scopeId, teamId, memberId, ct);
-        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId);
+        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId, resolved.TeamId);
         var result = await _scheduleService.ListTeamAutomationsAsync(
             owner,
             take,
@@ -262,7 +262,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         CancellationToken ct = default)
     {
         var resolved = await ResolveTeamMemberAsync(scopeId, teamId, memberId, ct);
-        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId);
+        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId, resolved.TeamId);
         var detail = await _scheduleService.GetTeamAutomationAsync(
             NormalizeRequired(scheduleId, nameof(scheduleId)),
             owner,
@@ -276,7 +276,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     {
         ArgumentNullException.ThrowIfNull(command);
         var resolved = await ResolveTeamMemberAsync(command.ScopeId, command.TeamId, command.MemberId, ct);
-        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId);
+        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId, resolved.TeamId);
         var scheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
         var existing = await _scheduleService.GetTeamAutomationAsync(scheduleId, owner, ct)
             ?? throw new ScheduledDispatchNotFoundException(scheduleId);
@@ -364,7 +364,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     {
         ArgumentNullException.ThrowIfNull(command);
         var resolved = await ResolveTeamMemberAsync(command.ScopeId, command.TeamId, command.MemberId, ct);
-        var scheduleOwner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId);
+        var scheduleOwner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId, resolved.TeamId);
         var authenticatedOwner = command.AuthenticatedOwner ??
             throw new UnauthorizedAccessException("authenticated_authorization_owner_required");
         var bearerToken = NormalizeRequired(
@@ -394,7 +394,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     {
         ArgumentNullException.ThrowIfNull(command);
         var resolved = await ResolveTeamMemberAsync(command.ScopeId, command.TeamId, command.MemberId, ct);
-        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId);
+        var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId, resolved.TeamId);
         var scheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
         var operationId = NormalizeRequired(command.OperationId, nameof(command.OperationId));
         var idempotencyKey = NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey));
@@ -499,7 +499,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var scheduleCron = NormalizeRequired(request.ScheduleCron, nameof(request.ScheduleCron));
         var scheduleTimezone = NormalizeRequired(request.ScheduleTimezone, nameof(request.ScheduleTimezone));
         var publishedServiceId = resolved.PublishedServiceId;
-        var teamOwner = new TeamMemberAutomationOwner(scopeId, memberId);
+        var teamOwner = new TeamMemberAutomationOwner(scopeId, memberId, resolved.TeamId);
         var operationId = NormalizeRequired(request.OperationId, nameof(request.OperationId));
         var idempotencyKey = NormalizeRequired(request.IdempotencyKey, nameof(request.IdempotencyKey));
         var scheduleId = NormalizeOptional(request.ScheduleId) ??

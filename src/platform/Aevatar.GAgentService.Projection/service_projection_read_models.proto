@@ -449,6 +449,7 @@ message ScheduledDispatchDocument {
   string team_automation_idempotency_key = 54;
   ScheduledInvocationAuthorizationOwnerDocument active_credential_owner = 55;
   reserved 56 to 57;
+  string team_id = 58;
 }
 
 enum TeamAutomationLifecycleStatusDocument {
