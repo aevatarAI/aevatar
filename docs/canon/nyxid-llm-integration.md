@@ -109,7 +109,7 @@ Lark bot 等 channel surface 通过 `/model`、`/models`、`/llm`、`/route` 暴
 openid profile email offline_access urn:nyxid:scope:broker_binding proxy
 ```
 
-`llm:proxy` 是短期 capability token-exchange scope，不是 interactive OAuth scope；DCR、Console login 与 channel `/init` 都不得把它发送到 `/oauth/authorize`。managed execution 只有在请求短期 capability 时才使用它。如果旧 binding 缺少 canonical authorization scope，用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
+`llm:proxy` 是通常的短期 LLM capability token-exchange scope，不是 interactive OAuth scope；DCR、Console login 与 channel `/init` 都不得把它发送到 `/oauth/authorize`。managed Codex 的内部 canary 是明确例外：它调用 NyxID REST proxy 的固定 `chrono-llm-public` 路由，而 NyxID 当前没有 service-scoped delegation，因此暂时要求五分钟 `proxy:*` token。`proxy:*` 同样不得进入 interactive OAuth consent，且在 NyxID 提供窄 capability 前不得用于全用户 rollout。如果旧 binding 缺少 canonical authorization scope，用户可重新发送 `/init` 或重新完成 Studio 登录 consent 来刷新 binding；Aevatar 不会降级到 bot-owner credential、复用入站 bearer 或缓存 token。
 
 ---
 
