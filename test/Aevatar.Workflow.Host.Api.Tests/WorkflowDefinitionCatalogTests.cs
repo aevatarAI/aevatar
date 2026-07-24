@@ -287,6 +287,48 @@ public class WorkflowDefinitionCatalogTests
     }
 
     [Fact]
+    public void BuiltInStudioYaml_ShouldExposeNyxIdCapabilityToolsWithoutCollapsingServiceSemantics()
+    {
+        var workflow = new WorkflowParser().Parse(WorkflowDefinitionCatalog.BuiltInStudioYaml);
+        var role = workflow.Roles.Should().ContainSingle().Subject;
+
+        role.SystemPrompt.Should().Contain("NyxID is a separate caller-account capability domain");
+        role.SystemPrompt.Should().Contain("The word \"service\" is ambiguous");
+        role.SystemPrompt.Should().Contain("我的 nyxId service 有哪些");
+        role.SystemPrompt.Should().Contain("call `nyxid_services` with `action: \"list\"`");
+        role.SystemPrompt.Should().Contain("Do not treat unqualified \"services\" as NyxID services");
+        role.SystemPrompt.Should().Contain("Studio published workflow service");
+        role.SystemPrompt.Should().Contain("NyxID connected service");
+        role.SystemPrompt.Should().Contain("Do NOT use `aevatar_list_workflows`");
+
+        role.AgentToolScope.Should().NotBeNull();
+        var allowed = role.AgentToolScope!.AllowedToolNames;
+        allowed.Should().Contain("nyxid_status");
+        allowed.Should().Contain("nyxid_account");
+        allowed.Should().Contain("nyxid_catalog");
+        allowed.Should().Contain("nyxid_llm_status");
+        allowed.Should().Contain("nyxid_services");
+        allowed.Should().Contain("nyxid_proxy");
+        allowed.Should().Contain("nyxid_require_service");
+
+        allowed.Should().NotContain("nyxid_api_keys");
+        allowed.Should().NotContain("nyxid_nodes");
+        allowed.Should().NotContain("nyxid_approvals");
+        allowed.Should().NotContain("nyxid_providers");
+        allowed.Should().NotContain("nyxid_notifications");
+        allowed.Should().NotContain("nyxid_mfa");
+        allowed.Should().NotContain("nyxid_profile");
+        allowed.Should().NotContain("nyxid_endpoints");
+        allowed.Should().NotContain("nyxid_external_keys");
+        allowed.Should().NotContain("nyxid_channel_bots");
+        allowed.Should().NotContain("nyxid_orgs");
+        allowed.Should().NotContain("nyxid_admin");
+        allowed.Should().NotContain("ssh_exec");
+        allowed.Should().NotContain("codex_exec");
+        allowed.Should().NotContain("code_execute");
+    }
+
+    [Fact]
     public void Catalog_ShouldRegisterStudioWorkflowAlongsideDirect()
     {
         var registry = new WorkflowDefinitionCatalog();
