@@ -176,6 +176,34 @@ public sealed class AgentProfileActorPortTests
     }
 
     [Fact]
+    public async Task IngressProof_ShouldCryptographicallyBindKeyIdWhenAliasesSharePublicKey()
+    {
+        using var key = RSA.Create(2048);
+        var proofService = ProofService("key-current", key, ("key-alias", key));
+        var dispatch = new RecordingActorDispatchPort();
+        var port = new AgentProfileActorPort(
+            new RecordingActorRuntime(),
+            dispatch,
+            proofService);
+        await port.DispatchRemoveSkillBindingAsync(new RemoveAgentProfileSkillBindingCommand
+        {
+            Identity = Identity(),
+            Operation = Operation("key-alias-remove"),
+            ExpectedAuthorityStateVersion = 9,
+            BindingId = "bind-alpha",
+        });
+        var signed = dispatch.Calls.Single().Envelope.Payload
+            .Unpack<RemoveAgentProfileSkillBindingCommand>();
+        var actorId = AgentProfileActorIds.Profile(ProfileId);
+
+        proofService.Verify(actorId, signed).Should().BeTrue();
+        var relabeled = signed.Clone();
+        relabeled.IngressProof.KeyId = "key-alias";
+
+        proofService.Verify(actorId, relabeled).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task DispatchMutationAsync_ShouldFailClosedBeforeLifecycleWhenSigningKeyIsUnavailable()
     {
         var runtime = new RecordingActorRuntime();
@@ -206,44 +234,40 @@ public sealed class AgentProfileActorPortTests
     }
 
     [Fact]
-    public async Task EnsureCreateTargetsAsync_ShouldCreateNamespaceAndOpaqueProfileActors()
+    public void ResolveCreateTargets_ShouldReturnDeterministicOpaqueTargetsWithoutLifecycle()
     {
         var runtime = new RecordingActorRuntime();
         var port = CreatePort(runtime, new RecordingActorDispatchPort());
         var expectedProfileActorId = AgentProfileActorIds.Profile(ProfileId);
 
-        var targets = await port.EnsureCreateTargetsAsync(ProfileId);
+        var targets = port.ResolveCreateTargets(ProfileId);
 
         targets.Should().Be(new AgentProfileActorTargets(
             AgentProfileActorIds.Namespace,
             expectedProfileActorId));
         expectedProfileActorId.Should().NotContain(ProfileId);
-        runtime.GetCalls.Should().Equal(
-            AgentProfileActorIds.Namespace,
-            expectedProfileActorId);
-        runtime.CreateCalls.Should().Equal(
-            (typeof(AgentProfileNamespaceGAgent), AgentProfileActorIds.Namespace),
-            (typeof(AgentProfileGAgent), expectedProfileActorId));
+        runtime.GetCalls.Should().BeEmpty();
+        runtime.CreateCalls.Should().BeEmpty();
+        runtime.MaterializedCalls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task EnsureCreateTargetsAsync_ShouldReactivateKnownActorsThroughRuntimeLookup()
+    public async Task DispatchCreateAsync_ShouldReactivateKnownActorsThroughRuntimeLookup()
     {
         var expectedProfileActorId = AgentProfileActorIds.Profile(ProfileId);
         var runtime = new RecordingActorRuntime();
         runtime.AddDeactivated<AgentProfileNamespaceGAgent>(AgentProfileActorIds.Namespace);
         runtime.AddDeactivated<AgentProfileGAgent>(expectedProfileActorId);
-        var port = CreatePort(runtime, new RecordingActorDispatchPort());
+        var dispatch = new RecordingActorDispatchPort();
+        var port = CreatePort(runtime, dispatch);
 
-        var targets = await port.EnsureCreateTargetsAsync(ProfileId);
+        await port.DispatchCreateAsync(CreateCommand());
 
-        targets.Should().Be(new AgentProfileActorTargets(
-            AgentProfileActorIds.Namespace,
-            expectedProfileActorId));
         runtime.MaterializedCalls.Should().Equal(
             (typeof(AgentProfileNamespaceGAgent), AgentProfileActorIds.Namespace),
             (typeof(AgentProfileGAgent), expectedProfileActorId));
         runtime.CreateCalls.Should().BeEmpty();
+        dispatch.Calls.Should().ContainSingle();
     }
 
     [Fact]

@@ -158,6 +158,7 @@ message AgentProfileIngressProofSigningMaterial {
   string target_actor_id = 2;
   string command_type_url = 3;
   bytes canonical_command_sha256 = 4;
+  string key_id = 5;
 }
 
 enum AgentProfileOperationKind {

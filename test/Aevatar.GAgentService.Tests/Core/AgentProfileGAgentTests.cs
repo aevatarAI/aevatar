@@ -202,28 +202,12 @@ public sealed class AgentProfileGAgentTests
         continuation.ProfileActorId.Should().Be(agent.Id);
     }
 
-    [Theory]
-    [InlineData("input-digest", "OPERATION_INPUT_SHA256_MISMATCH")]
-    [InlineData("identity", "PROFILE_IDENTITY_CONFLICT")]
-    public async Task InitializeStoredRejection_ShouldRecoverFailedSendFromExactReplay(
-        string rejection,
-        string expectedDiagnostic)
+    [Fact]
+    public async Task InitializeStoredRejectionBeforeSuccess_ShouldRecoverFailedSendFromExactReplay()
     {
-        var fixture = rejection == "identity"
-            ? await CreateInitializedActorAsync()
-            : await CreateActorAsync();
-        var (agent, store, publisher) = fixture;
-        var command = rejection switch
-        {
-            "identity" => InitializeCommand(
-                identity: GAgentServiceTestKit.CreateAgentProfileIdentity(
-                    profileId: "prof-other",
-                    profileSlug: "other"),
-                operationId: "op-initialize-identity-rejection"),
-            _ => InitializeCommand(operationId: "op-initialize-digest-rejection"),
-        };
-        if (rejection == "input-digest")
-            command.Operation.InputSha256 = Digest(0x71);
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand(operationId: "op-initialize-digest-rejection");
+        command.Operation.InputSha256 = Digest(0x71);
         var eventCountBeforeRejection = (await store.GetEventsAsync(agent.Id)).Count;
         var sendCountBeforeRejection = publisher.Sends.Count;
         publisher.SendFailuresRemaining = 1;
@@ -233,10 +217,11 @@ public sealed class AgentProfileGAgentTests
 
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCountBeforeRejection + 1);
         agent.State.Operations.Single(x => x.Operation.OperationId == command.Operation.OperationId)
-            .InitializationRejection.Continuation.Diagnostic.Code.Should().Be(expectedDiagnostic);
+            .InitializationRejection.Continuation.Diagnostic.Code.Should()
+            .Be("OPERATION_INPUT_SHA256_MISMATCH");
         var replay = command.Clone();
-        replay.Operation.CommandId = $"cmd-{rejection}-rejection-retry";
-        replay.Operation.CorrelationId = $"corr-{rejection}-rejection-retry";
+        replay.Operation.CommandId = "cmd-input-digest-rejection-retry";
+        replay.Operation.CorrelationId = "corr-input-digest-rejection-retry";
 
         await DispatchInitializeAsync(agent, replay);
 
@@ -245,29 +230,15 @@ public sealed class AgentProfileGAgentTests
         var continuation = publisher.Sends[^1].Payload
             .Unpack<AgentProfileInitializationRejectedContinuation>();
         continuation.Operation.CommandId.Should().Be(replay.Operation.CommandId);
-        continuation.Diagnostic.Code.Should().Be(expectedDiagnostic);
+        continuation.Diagnostic.Code.Should().Be("OPERATION_INPUT_SHA256_MISMATCH");
     }
 
-    [Theory]
-    [InlineData("input-digest")]
-    [InlineData("identity")]
-    public async Task InitializeStoredRejection_ShouldRejectSemanticDrift(string rejection)
+    [Fact]
+    public async Task InitializeStoredRejectionBeforeSuccess_ShouldRejectSemanticDrift()
     {
-        var fixture = rejection == "identity"
-            ? await CreateInitializedActorAsync()
-            : await CreateActorAsync();
-        var (agent, store, publisher) = fixture;
-        var command = rejection switch
-        {
-            "identity" => InitializeCommand(
-                identity: GAgentServiceTestKit.CreateAgentProfileIdentity(
-                    profileId: "prof-other",
-                    profileSlug: "other"),
-                operationId: "op-initialize-identity-drift"),
-            _ => InitializeCommand(operationId: "op-initialize-digest-drift"),
-        };
-        if (rejection == "input-digest")
-            command.Operation.InputSha256 = Digest(0x72);
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand(operationId: "op-initialize-digest-drift");
+        command.Operation.InputSha256 = Digest(0x72);
         await DispatchInitializeAsync(agent, command);
         var committedVersion = agent.EventSourcing!.CurrentVersion;
         var sendCount = publisher.Sends.Count;
@@ -1295,7 +1266,7 @@ public sealed class AgentProfileGAgentTests
     }
 
     [Fact]
-    public async Task InitializeOperationIdReuseForMutation_ShouldConflict()
+    public async Task EvictedInitializationRejectionOperationIdReuseForMutation_ShouldEvaluateAsNewCommand()
     {
         var (agent, store, _) = await CreateInitializedActorAsync();
         var update = UpdateCommand(
@@ -1317,12 +1288,17 @@ public sealed class AgentProfileGAgentTests
         await DispatchInitializeAsync(agent, initialize);
         var rejectedVersion = agent.EventSourcing.CurrentVersion;
 
-        var act = () => agent.HandleUpdateDraftAsync(update);
+        await agent.HandleUpdateDraftAsync(update);
 
-        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
-        exception.Which.Code.Should().Be("IDEMPOTENCY_PAYLOAD_CONFLICT");
-        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion);
-        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion);
+        agent.EventSourcing.CurrentVersion.Should().Be(rejectedVersion + 1);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)rejectedVersion + 1);
+        agent.State.LastMutation.Operation.OperationId.Should().Be(update.Operation.OperationId);
+        agent.State.LastMutation.Diagnostic.Code.Should().Be("DRAFT_VERSION_CONFLICT");
+        agent.State.Operations.Should().NotContain(operation =>
+            operation.InitializationRejection != null);
+        agent.State.Operations.Should().Contain(operation =>
+            operation.Operation.OperationId == update.Operation.OperationId &&
+            operation.ReplayAuthority.OperationKind == AgentProfileOperationKind.UpdateDraft);
     }
 
     [Fact]
@@ -1466,6 +1442,68 @@ public sealed class AgentProfileGAgentTests
         agent.State.Operations.Should().Contain(operation =>
             operation.Operation.OperationId == initializationOperationId);
         agent.State.CalculateSize().Should().Be(serializedSizeAtLimit);
+    }
+
+    [Fact]
+    public async Task MutationOperationRetention_ShouldExcludeLaterInitializationRejectionsFromRollingWindow()
+    {
+        var (agent, _, publisher) = await CreateInitializedActorAsync();
+        var initializationOperationId = agent.State.Operations
+            .Where(operation => operation.InitializationContinuation is not null)
+            .Should().ContainSingle().Which.Operation.OperationId;
+        (string Mutation, AgentProfileOperationKind Kind)[] mutationCases =
+        [
+            ("update", AgentProfileOperationKind.UpdateDraft),
+            ("upsert", AgentProfileOperationKind.UpsertSkillBinding),
+            ("remove", AgentProfileOperationKind.RemoveSkillBinding),
+            ("publish", AgentProfileOperationKind.Publish),
+        ];
+        var expectedMutations = new List<(string OperationId, AgentProfileOperationKind Kind)>();
+        var totalMutations = AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations + 32;
+
+        for (var index = 0; index < totalMutations; index++)
+        {
+            var mutationCase = mutationCases[index % mutationCases.Length];
+            var mutation = CanonicalMutationCommand(
+                agent,
+                mutationCase.Mutation,
+                $"retention-partition-{index:D4}",
+                $"op-retention-partition-{index:D4}");
+            expectedMutations.Add((MutationOperation(mutation).OperationId, mutationCase.Kind));
+            await DispatchMutationAsync(agent, mutation);
+
+            var rejectedIdentity = GAgentServiceTestKit.CreateAgentProfileIdentity(
+                profileId: $"prof-retention-rejected-{index:D4}",
+                profileSlug: $"rejected-{index:D4}");
+            await DispatchInitializeAsync(agent, InitializeCommand(
+                rejectedIdentity,
+                operationId: $"op-retention-initialize-rejected-{index:D4}"));
+        }
+
+        agent.State.Operations.Should().HaveCount(
+            AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations + 1);
+        agent.State.Operations
+            .Where(operation => operation.InitializationContinuation is not null)
+            .Should().ContainSingle()
+            .Which.Operation.OperationId.Should().Be(initializationOperationId);
+        agent.State.Operations.Should().NotContain(operation =>
+            operation.InitializationRejection != null);
+        publisher.Sends.Count(send =>
+                send.Payload.Is(AgentProfileInitializationRejectedContinuation.Descriptor))
+            .Should().Be(totalMutations);
+        var retainedMutations = agent.State.Operations.Skip(1).ToArray();
+        var retainedMutationKinds = mutationCases.Select(mutationCase => mutationCase.Kind).ToArray();
+        retainedMutations.Should().HaveCount(
+            AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations);
+        retainedMutations.Should().OnlyContain(operation =>
+            operation.ReplayAuthority != null &&
+            retainedMutationKinds.Contains(operation.ReplayAuthority.OperationKind));
+        retainedMutations
+            .Select(operation => (
+                operation.Operation.OperationId,
+                operation.ReplayAuthority.OperationKind))
+            .Should().Equal(expectedMutations.TakeLast(
+                AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations));
     }
 
     private static async Task<(AgentProfileGAgent Agent, InMemoryEventStore Store, RecordingProfileEventPublisher Publisher)>

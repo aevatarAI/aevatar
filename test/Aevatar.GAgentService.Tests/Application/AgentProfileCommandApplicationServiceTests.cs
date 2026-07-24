@@ -40,7 +40,7 @@ public sealed class AgentProfileCommandApplicationServiceTests
             ProfileSlug = ProfileSlug,
         });
         firstCommand.InitialContent.SkillBindings.Should().BeEmpty();
-        actorPort.EnsuredProfileIds.Should().Equal(firstCommand.Identity.ProfileId, secondCommand.Identity.ProfileId);
+        actorPort.ResolvedProfileIds.Should().Equal(firstCommand.Identity.ProfileId, secondCommand.Identity.ProfileId);
         firstCommand.ProfileActorId.Should().Be($"profile-actor:{firstCommand.Identity.ProfileId}");
         firstCommand.Operation.OperationId.Should().Be(secondCommand.Operation.OperationId);
         firstCommand.Identity.ProfileId.Should().Be(secondCommand.Identity.ProfileId);
@@ -55,6 +55,21 @@ public sealed class AgentProfileCommandApplicationServiceTests
         first.Accepted.Should().BeTrue();
         first.AckStage.Should().Be("accepted");
         first.ResourceUrl.Should().Be($"/api/scopes/{ScopeId}/agent-profiles/{ProfileSlug}");
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenIngressProofIsUnavailable_ShouldNotTouchActorLifecycleOrDispatch()
+    {
+        var harness = new MissingProofAgentProfileActorPortHarness();
+        var service = CreateService(actorPort: harness.Port);
+
+        var act = () => service.CreateAsync(Caller(), CreateRequest(), "missing-proof-key");
+
+        await act.Should().ThrowAsync<AgentProfileIngressProofUnavailableException>();
+        harness.Runtime.GetCalls.Should().BeEmpty();
+        harness.Runtime.CreateCalls.Should().BeEmpty();
+        harness.Runtime.MaterializedCalls.Should().BeEmpty();
+        harness.Dispatch.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -165,7 +180,7 @@ public sealed class AgentProfileCommandApplicationServiceTests
             string.IsNullOrWhiteSpace(idempotencyKey)
                 ? "IDEMPOTENCY_KEY_REQUIRED"
                 : "INVALID_IDEMPOTENCY_KEY");
-        actorPort.EnsuredProfileIds.Should().BeEmpty();
+        actorPort.ResolvedProfileIds.Should().BeEmpty();
         actorPort.DispatchCount.Should().Be(0);
     }
 
@@ -194,7 +209,7 @@ public sealed class AgentProfileCommandApplicationServiceTests
 
         var exception = await act.Should().ThrowAsync<AgentProfileRequestException>();
         exception.Which.Code.Should().Be("RESERVED_OWNING_SCOPE_ID");
-        actorPort.EnsuredProfileIds.Should().BeEmpty();
+        actorPort.ResolvedProfileIds.Should().BeEmpty();
         actorPort.DispatchCount.Should().Be(0);
     }
 
@@ -857,7 +872,7 @@ public sealed class AgentProfileCommandApplicationServiceTests
     private static AgentProfileCommandApplicationService CreateService(
         RecordingNamespaceQueryPort? namespacePort = null,
         RecordingManagementQueryPort? managementPort = null,
-        RecordingActorPort? actorPort = null,
+        IAgentProfileActorPort? actorPort = null,
         RecordingResolver? resolver = null)
     {
         namespacePort ??= new RecordingNamespaceQueryPort();
@@ -1096,7 +1111,7 @@ public sealed class AgentProfileCommandApplicationServiceTests
     private sealed class RecordingActorPort : IAgentProfileActorPort
     {
         public bool AcceptDispatch { get; init; } = true;
-        public List<string> EnsuredProfileIds { get; } = [];
+        public List<string> ResolvedProfileIds { get; } = [];
         public List<CreateAgentProfileCommand> CreateCommands { get; } = [];
         public List<UpdateAgentProfileDraftCommand> UpdateCommands { get; } = [];
         public List<UpsertAgentProfileSkillBindingCommand> UpsertCommands { get; } = [];
@@ -1106,15 +1121,12 @@ public sealed class AgentProfileCommandApplicationServiceTests
             CreateCommands.Count + UpdateCommands.Count + UpsertCommands.Count +
             RemoveCommands.Count + PublishCommands.Count;
 
-        public Task<AgentProfileActorTargets> EnsureCreateTargetsAsync(
-            string profileId,
-            CancellationToken ct = default)
+        public AgentProfileActorTargets ResolveCreateTargets(string profileId)
         {
-            ct.ThrowIfCancellationRequested();
-            EnsuredProfileIds.Add(profileId);
-            return Task.FromResult(new AgentProfileActorTargets(
+            ResolvedProfileIds.Add(profileId);
+            return new AgentProfileActorTargets(
                 "namespace-actor",
-                $"profile-actor:{profileId}"));
+                $"profile-actor:{profileId}");
         }
 
         public Task<DispatchAdmission> DispatchCreateAsync(

@@ -78,14 +78,17 @@ public sealed class AgentProfileContractsTests
         };
 
         var first = AgentProfileIngressProofIntegrity.CreateSigningMaterial(
+            "key-alpha",
             "profile-actor-alpha",
             command);
         var second = AgentProfileIngressProofIntegrity.CreateSigningMaterial(
+            "key-alpha",
             "profile-actor-alpha",
             command.Clone());
 
         second.Should().Be(first);
         first.Domain.Should().Be("aevatar.agent-profile.ingress-proof.v1");
+        first.KeyId.Should().Be("key-alpha");
         first.TargetActorId.Should().Be("profile-actor-alpha");
         first.CommandTypeUrl.Should().Be(Any.Pack(command).TypeUrl);
         first.CanonicalCommandSha256.Should().HaveCount(32);

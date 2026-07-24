@@ -221,7 +221,7 @@ public sealed class SystemAgentProfileProvisioningService : ISystemAgentProfileP
             "create",
             AgentProfileDeterminism.ComputeCreateAgentProfileInputSha256(identity, content),
             observedAuthorityVersion: null);
-        var targets = await _actorPort.EnsureCreateTargetsAsync(profileId, ct);
+        var targets = _actorPort.ResolveCreateTargets(profileId);
         var admission = await _actorPort.DispatchCreateAsync(
             new CreateAgentProfileCommand
             {

@@ -599,13 +599,15 @@ write_lines() {
 
 write_tool_schema() {
   local file="$1"
-  local extra_property="$2"
-  local extra_line=""
-  if [[ -n "${extra_property}" ]]; then
+  shift
+  local extra_property="" extra_line="" extra_lines=""
+  for extra_property in "$@"; do
+    [[ -n "${extra_property}" ]] || continue
     printf -v extra_line \
       ',\n        "%s": { "type": "string" }' \
       "${extra_property}"
-  fi
+    extra_lines+="${extra_line}"
+  done
   cat > "${file}" <<CS
 public sealed class AgentProfilesTool
 {
@@ -616,7 +618,7 @@ public sealed class AgentProfilesTool
         "action": { "type": "string" },
         "owner_handle": { "type": "string" },
         "skill": { "type": "object", "properties": {
-          "skill_guid": { "type": "string" }${extra_line}
+          "skill_guid": { "type": "string" }${extra_lines}
         }}
       }
     }
@@ -1183,16 +1185,34 @@ event-replay|src/platform/Aevatar.GAgentService.Hosting/AgentProfiles/AgentProfi
 CASES
 
   local schema_alias=""
-  for schema_alias in scopeId subjectId systemAuthority owner_id ownerSubject \
-    profileId platformId sealed_content sealedContent credential accessToken \
-    api_key apiKey cookie password authorization secret clientSecret oauth_code oauthCode \
-    caller_scope_id session_cookie api_secret; do
-    fresh_case "schema-${schema_alias}"
-    write_tool_schema \
-      "${case_root}/src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesTool.cs" \
-      "${schema_alias}"
-    expect_fail "tool schema alias ${schema_alias}" "${case_root}" "forbidden schema properties"
-  done
+  local schema_aliases=(
+    scopeId subjectId systemAuthority owner_id ownerSubject profileId platformId
+    sealed_content sealedContent credential accessToken api_key apiKey cookie
+    password authorization secret clientSecret oauth_code oauthCode caller_scope_id
+    session_cookie api_secret
+  )
+  fresh_case "schema-aliases"
+  write_tool_schema \
+    "${case_root}/src/Aevatar.AI.ToolProviders.AgentCatalog/AgentProfiles/AgentProfilesTool.cs" \
+    "${schema_aliases[@]}"
+  if output="$(run_guard "${case_root}" 2>&1)"; then
+    echo "agent_profile_boundary_guard self-test expected FAIL: tool schema aliases" >&2
+    echo "${output}" >&2
+    failures=$((failures + 1))
+  else
+    if [[ "${output}" != *"forbidden schema properties"* ]]; then
+      echo "agent_profile_boundary_guard self-test missed expected diagnostic: tool schema aliases" >&2
+      echo "${output}" >&2
+      failures=$((failures + 1))
+    fi
+    for schema_alias in "${schema_aliases[@]}"; do
+      if ! printf '%s\n' "${output}" | rg -q -F -x -- "${schema_alias}"; then
+        echo "agent_profile_boundary_guard self-test missed schema alias: ${schema_alias}" >&2
+        echo "${output}" >&2
+        failures=$((failures + 1))
+      fi
+    done
+  fi
 
   if (( failures > 0 )); then
     return 1

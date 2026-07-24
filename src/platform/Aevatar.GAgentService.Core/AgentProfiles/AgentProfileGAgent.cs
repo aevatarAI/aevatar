@@ -833,7 +833,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         AgentProfileSafeDiagnostic diagnostic,
         AgentProfileOperationReplayAuthority replayAuthority)
     {
-        await PersistDomainEventAsync(new AgentProfileInitializationRejectedEvent
+        var rejection = new AgentProfileInitializationRejectedEvent
         {
             Operation = operation.Clone(),
             Identity = identity.Clone(),
@@ -841,13 +841,18 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             ProfileActorId = Id,
             Diagnostic = AgentProfilePolicies.NormalizeDiagnostic(diagnostic),
             ReplayAuthority = replayAuthority.Clone(),
-        });
-        await SendInitializationRejectedAsync(
-            FindOperation(operation.OperationId)
-                ?? throw AgentProfileActorInvariants.Error(
-                    "MISSING_INITIALIZATION_REJECTION",
-                    "The committed initialization rejection is unavailable."),
-            operation);
+        };
+        await PersistDomainEventAsync(rejection);
+        await SendToAsync(
+            rejection.NamespaceActorId,
+            new AgentProfileInitializationRejectedContinuation
+            {
+                Operation = operation.Clone(),
+                Identity = rejection.Identity.Clone(),
+                ProfileActorId = rejection.ProfileActorId,
+                Diagnostic = rejection.Diagnostic.Clone(),
+            },
+            CancellationToken.None);
     }
 
     private Task SendInitializationRejectedAsync(
@@ -1150,9 +1155,13 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
         }
 
         var recovery = recoveryIndex >= 0 ? state.Operations[recoveryIndex] : null;
-        var rollingStart = recoveryIndex + 1;
         var retained = state.Operations
-            .Skip(rollingStart)
+            .Where(static operation =>
+                operation.ReplayAuthority?.OperationKind is
+                    AgentProfileOperationKind.UpdateDraft or
+                    AgentProfileOperationKind.UpsertSkillBinding or
+                    AgentProfileOperationKind.RemoveSkillBinding or
+                    AgentProfileOperationKind.Publish)
             .TakeLast(AgentProfileOperationRetentionPolicy.MaxRetainedProfileMutationOperations)
             .ToArray();
         state.Operations.Clear();

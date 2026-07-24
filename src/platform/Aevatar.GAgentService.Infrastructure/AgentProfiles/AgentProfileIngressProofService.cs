@@ -31,6 +31,7 @@ public sealed class AgentProfileIngressProofService : IAgentProfileIngressProofV
             }
 
             var material = AgentProfileIngressProofIntegrity.CreateSigningMaterial(
+                proof.KeyId,
                 targetActorId,
                 command);
             if (!string.Equals(
@@ -79,6 +80,7 @@ public sealed class AgentProfileIngressProofService : IAgentProfileIngressProofV
             using (rsa)
             {
                 var material = AgentProfileIngressProofIntegrity.CreateSigningMaterial(
+                    _options.CurrentKeyId,
                     targetActorId,
                     command);
                 var signature = rsa.SignHash(

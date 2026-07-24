@@ -399,12 +399,14 @@ Exactly these external commands carry a typed `AgentProfileIngressProof`:
 - `PublishAgentProfileCommand`.
 
 Infrastructure signs only after the final target Actor id is known. The proof
-binds that target, the exact command TypeUrl, and SHA-256 over deterministic
-Protobuf bytes from a clone whose proof is cleared. The signed material is a
-typed, domain-separated Protobuf message. Signatures use RSA-PSS/SHA-256 and
-RSA keys of at least 2,048 bits. Host configuration supplies one current PKCS#8
-private key and a key-id-indexed SubjectPublicKeyInfo public-key ring; retaining
-a previous public key enables rotation, while removing it revokes that key.
+binds the selected key id, that target, the exact command TypeUrl, and SHA-256
+over deterministic Protobuf bytes from a clone whose proof is cleared. The
+signed material is a typed, domain-separated Protobuf message. Create target
+resolution is pure; signing must succeed before runtime lookup, creation,
+materialization, or dispatch. Signatures use RSA-PSS/SHA-256 and RSA keys of at
+least 2,048 bits. Host configuration supplies one current PKCS#8 private key and
+a key-id-indexed SubjectPublicKeyInfo public-key ring; retaining a previous
+public key enables rotation, while removing it revokes that key.
 
 Core depends only on `IAgentProfileIngressProofVerifier`. Each external handler
 verifies before operation parsing, replay lookup, or persistence. A missing
@@ -482,10 +484,13 @@ sealed snapshot digest before committing.
 Profile idempotency retains the single initialization recovery record plus the
 256 newest mutation and publish operation records. Both Actors compact only in
 state-event appliers, preserve insertion order, and use no time-based or
-process-local state. Within the retained window, exact replay and payload-drift
-conflict behavior are unchanged. After eviction, an operation id is outside the
-idempotency guarantee and is evaluated as a new command against current
-identity, uniqueness, and expected-version invariants.
+process-local state. After successful initialization, later initialization
+rejections still send their continuation from the committed typed event but are
+not retained and do not consume the mutation/publish rolling window. Within the
+retained window, exact replay and payload-drift conflict behavior are unchanged.
+After eviction, an operation id is outside the idempotency guarantee and is
+evaluated as a new command against current identity, uniqueness, and
+expected-version invariants.
 
 ### Binding owners
 

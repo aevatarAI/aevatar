@@ -23,14 +23,9 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
             throw new ArgumentNullException(nameof(ingressProofService));
     }
 
-    public async Task<AgentProfileActorTargets> EnsureCreateTargetsAsync(
-        string profileId,
-        CancellationToken ct = default)
+    public AgentProfileActorTargets ResolveCreateTargets(string profileId)
     {
-        ct.ThrowIfCancellationRequested();
         var profileActorId = AgentProfileActorIds.Profile(profileId);
-        await EnsureActorAsync<AgentProfileNamespaceGAgent>(AgentProfileActorIds.Namespace, ct);
-        await EnsureActorAsync<AgentProfileGAgent>(profileActorId, ct);
         return new AgentProfileActorTargets(AgentProfileActorIds.Namespace, profileActorId);
     }
 
@@ -52,7 +47,9 @@ public sealed class AgentProfileActorPort : IAgentProfileActorPort
         }
 
         RequireSigned(AgentProfileActorIds.Namespace, command);
-        var targets = await EnsureCreateTargetsAsync(command.Identity.ProfileId, ct);
+        var targets = ResolveCreateTargets(command.Identity.ProfileId);
+        await EnsureActorAsync<AgentProfileNamespaceGAgent>(targets.NamespaceActorId, ct);
+        await EnsureActorAsync<AgentProfileGAgent>(targets.ProfileActorId, ct);
         return await DispatchAsync(targets.NamespaceActorId, command.Operation, command, ct);
     }
 

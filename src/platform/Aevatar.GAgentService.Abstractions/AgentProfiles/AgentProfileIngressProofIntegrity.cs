@@ -15,17 +15,22 @@ public static class AgentProfileIngressProofIntegrity
     }
 
     public static AgentProfileIngressProofSigningMaterial CreateSigningMaterial(
+        string keyId,
         string targetActorId,
         IMessage command)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyId);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetActorId);
         ArgumentNullException.ThrowIfNull(command);
+        if (!string.Equals(keyId, keyId.Trim(), StringComparison.Ordinal))
+            throw new ArgumentException("Key id cannot have boundary whitespace.", nameof(keyId));
         if (!string.Equals(targetActorId, targetActorId.Trim(), StringComparison.Ordinal))
             throw new ArgumentException("Target Actor id cannot have boundary whitespace.", nameof(targetActorId));
 
         return new AgentProfileIngressProofSigningMaterial
         {
             Domain = SigningDomain,
+            KeyId = keyId,
             TargetActorId = targetActorId,
             CommandTypeUrl = Any.Pack(command).TypeUrl,
             CanonicalCommandSha256 = ComputeCanonicalCommandSha256(command),

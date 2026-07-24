@@ -67,6 +67,23 @@ public sealed class SystemAgentProfileProvisioningServiceTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_WhenIngressProofIsUnavailable_ShouldNotTouchActorLifecycleOrDispatch()
+    {
+        var harness = new MissingProofAgentProfileActorPortHarness();
+        var service = CreateService(
+            new MutableDefinitionSource(Content()),
+            actorPort: harness.Port);
+
+        var act = () => service.ReconcileAsync();
+
+        await act.Should().ThrowAsync<AgentProfileIngressProofUnavailableException>();
+        harness.Runtime.GetCalls.Should().BeEmpty();
+        harness.Runtime.CreateCalls.Should().BeEmpty();
+        harness.Runtime.MaterializedCalls.Should().BeEmpty();
+        harness.Dispatch.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ReconcileAsync_WhenDistinctKeysShareCanonicalReference_ShouldRejectBeforeWork()
     {
         var namespaceQuery = new RecordingNamespaceQueryPort();
@@ -451,7 +468,7 @@ public sealed class SystemAgentProfileProvisioningServiceTests
         RecordingNamespaceQueryPort? namespaceQuery = null,
         RecordingManagementQueryPort? managementQuery = null,
         RecordingExecutionQueryPort? executionQuery = null,
-        RecordingActorPort? actorPort = null,
+        IAgentProfileActorPort? actorPort = null,
         ISystemAgentProfileOrnnAccessTokenProvider? tokenProvider = null,
         RecordingResolver? resolver = null)
     {
@@ -674,15 +691,10 @@ public sealed class SystemAgentProfileProvisioningServiceTests
             CreateCommands.Count + UpdateCommands.Count + UpsertCommands.Count +
             RemoveCommands.Count + PublishCommands.Count;
 
-        public Task<AgentProfileActorTargets> EnsureCreateTargetsAsync(
-            string profileId,
-            CancellationToken ct = default)
-        {
-            ct.ThrowIfCancellationRequested();
-            return Task.FromResult(new AgentProfileActorTargets(
+        public AgentProfileActorTargets ResolveCreateTargets(string profileId) =>
+            new(
                 "agent-profile-namespace",
-                $"agent-profile:{profileId}"));
-        }
+                $"agent-profile:{profileId}");
 
         public Task<DispatchAdmission> DispatchCreateAsync(
             CreateAgentProfileCommand command,

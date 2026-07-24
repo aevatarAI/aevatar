@@ -904,7 +904,8 @@ private static string HashOpaqueAddress(string profileId) =>
 ```
 
 Only this infrastructure adapter calls the helper on behalf of upper layers.
-`EnsureCreateTargetsAsync(profileId)` creates/reactivates
+`ResolveCreateTargets(profileId)` only derives deterministic target ids.
+`DispatchCreateAsync` signs first, then creates/reactivates
 `AgentProfileNamespaceGAgent` and `AgentProfileGAgent`. Each exact dispatch
 method packs its corresponding command into an `EventEnvelope`:
 

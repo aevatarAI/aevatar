@@ -72,13 +72,15 @@ the declared read models and audit artifacts.
 The five Application-originated mutation commands carry a typed signed ingress
 proof. Infrastructure signs after the final target Actor id is known; Core
 verifies before operation parsing, deduplication, or persistence. The proof
-binds the target id, exact Protobuf command TypeUrl, and SHA-256 digest of
+binds the key id, target id, exact Protobuf command TypeUrl, and SHA-256 digest of
 deterministic command bytes with the proof cleared. Signatures use RSA-PSS with
 SHA-256 and keys of at least 2,048 bits. Hosts configure one current PKCS#8
 private key and a key-id-indexed SubjectPublicKeyInfo public-key ring so previous
 public keys may remain during rotation. Missing, malformed, unknown, revoked, or
-mismatched proof material fails closed. Proofs, signatures, and private keys do
-not enter events, Actor state, read models, audit, responses, labels, or logs.
+mismatched proof material fails closed. Create target resolution is pure; signing
+must succeed before runtime lookup, creation, materialization, or dispatch.
+Proofs, signatures, and private keys do not enter events, Actor state, read
+models, audit, responses, labels, or logs.
 
 ## 4. Phase 1 Management Contract
 
@@ -181,14 +183,16 @@ honestly through authority state versions and committed digests.
 
 Actor idempotency is a documented count-bounded window. A Profile retains its
 single initialization recovery record plus the 256 newest mutation and publish
-operation records. The Namespace retains the 1,024 newest terminal create and
-published-summary records, and additionally pins a provisioning-start record
-while its matching entry is `PROVISIONING` or `FAILED`; activation releases the
-pin. Compaction runs only in state-event appliers and preserves insertion order.
-Inside the retained window, exact replay and payload-drift conflict behavior are
-unchanged. After eviction, the operation id is outside the idempotency guarantee
-and is evaluated as a new command against current identity, uniqueness, and
-expected-version invariants.
+operation records. After successful initialization, later initialization
+rejections still send their continuation from the committed typed event but are
+not retained and do not consume that rolling window. The Namespace retains the
+1,024 newest terminal create and published-summary records, and additionally
+pins a provisioning-start record while its matching entry is `PROVISIONING` or
+`FAILED`; activation releases the pin. Compaction runs only in state-event
+appliers and preserves insertion order. Inside the retained window, exact replay
+and payload-drift conflict behavior are unchanged. After eviction, the operation
+id is outside the idempotency guarantee and is evaluated as a new command against
+current identity, uniqueness, and expected-version invariants.
 
 ## 7. Read Models And Audit
 

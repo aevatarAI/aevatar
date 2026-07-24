@@ -70,7 +70,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
             idempotencyKey,
             identity,
             initialContent);
-        var targets = await _actorPort.EnsureCreateTargetsAsync(profileId, ct);
+        var targets = _actorPort.ResolveCreateTargets(profileId);
         var command = new CreateAgentProfileCommand
         {
             Operation = operation,
