@@ -31,7 +31,6 @@ public sealed class ScheduledDispatchEndpointsTests
 {
     [Theory]
     [InlineData("unexpectedField")]
-    [InlineData("owner")]
     [InlineData("teamAutomationOwner")]
     [InlineData("permissionDigest")]
     [InlineData("credentialProvisioningKind")]
@@ -98,6 +97,28 @@ public sealed class ScheduledDispatchEndpointsTests
             {
                 CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
             });
+    }
+
+    [Fact]
+    public async Task Create_ShouldForwardTypedStudioMemberAutomationOwner()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateEnvelopeRequest(scheduleId: "sch-alpha") with
+        {
+            Owner = StudioMemberAutomationOwnerRequest(),
+        };
+
+        var result = await CreateAsync(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        service.Created.Should().ContainSingle().Which.TeamAutomationOwner.Should().Be(owner);
+        service.CreateContexts.Should().ContainSingle().Which!.TeamAutomationOwner.Should().Be(owner);
     }
 
     [Fact]
@@ -685,15 +706,65 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task List_ShouldForwardScopeAndPageQueryParameters()
+    public async Task OwnerActions_ShouldUseTypedOwnerSpecificApplicationPath()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var owner = StudioMemberAutomationOwnerRequest();
+        var expectedOwner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+
+        var enable = await ScheduledDispatchEndpoints.Enable(
+            "sch-alpha",
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "resume", Owner = owner },
+            service);
+        var disable = await ScheduledDispatchEndpoints.Disable(
+            "sch-alpha",
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "pause", Owner = owner },
+            service);
+        var delete = await ScheduledDispatchEndpoints.Delete(
+            "sch-alpha",
+            null,
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "cleanup", Owner = owner },
+            service);
+        var runNow = await ScheduledDispatchEndpoints.RunNow(
+            "sch-alpha",
+            new ScheduledDispatchRunNowHttpRequest { Owner = owner },
+            service);
+
+        var enableHttp = CreateHttpContext();
+        await enable.ExecuteAsync(enableHttp);
+        var disableHttp = CreateHttpContext();
+        await disable.ExecuteAsync(disableHttp);
+        var deleteHttp = CreateHttpContext();
+        await delete.ExecuteAsync(deleteHttp);
+        var runNowHttp = CreateHttpContext();
+        await runNow.ExecuteAsync(runNowHttp);
+
+        enableHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        disableHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        deleteHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        runNowHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        runNowHttp.Response.Headers.Location.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        service.TeamEnabled.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner, "resume"));
+        service.TeamDisabled.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner, "pause"));
+        service.TeamDeleted.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner, "cleanup"));
+        service.TeamRunNow.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner));
+        service.Enabled.Should().BeEmpty();
+        service.Disabled.Should().BeEmpty();
+        service.Deleted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task List_ShouldForwardTypedOwnerAndPageQueryParameters()
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
             service,
-            scopeId: "scope-alpha",
-            teamId: "team-alpha",
-            memberId: "member-alpha",
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha",
             take: 25,
             cursor: "cursor-1",
             includeTotalCount: true);
@@ -706,9 +777,7 @@ public sealed class ScheduledDispatchEndpointsTests
             Take: 25,
             Cursor: "cursor-1",
             IncludeTotalCount: true,
-            TeamAutomationScopeId: "scope-alpha",
-            TeamAutomationTeamId: "team-alpha",
-            TeamAutomationMemberId: "member-alpha"));
+            TeamAutomationOwner: new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
     }
 
     [Fact]
@@ -734,6 +803,35 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task ListAndGet_ShouldRejectLegacyOwnerQueryParameters()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var list = await ScheduledDispatchEndpoints.List(
+            service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "m-alpha");
+        var get = await ScheduledDispatchEndpoints.Get(
+            "sch-alpha",
+            service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "m-alpha");
+
+        var listHttp = CreateHttpContext();
+        await list.ExecuteAsync(listHttp);
+        var getHttp = CreateHttpContext();
+        await get.ExecuteAsync(getHttp);
+
+        listHttp.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        getHttp.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.LastListQuery.Should().BeNull();
+        service.LastScheduleGet.Should().BeNull();
+        service.LastTeamAutomationGet.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Get_ShouldReturnOkAndNotFound()
     {
         var service = new RecordingScheduledDispatchApplicationService
@@ -745,13 +843,17 @@ public sealed class ScheduledDispatchEndpointsTests
         var ok = await ScheduledDispatchEndpoints.Get(
             "schedule-1",
             service,
-            scopeId: "scope-alpha",
-            teamId: "team-alpha",
-            memberId: "member-alpha");
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha");
         var notFound = await ScheduledDispatchEndpoints.Get(
             "missing",
             notFoundService,
-            scopeId: "scope-alpha");
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha");
 
         var okHttp = CreateHttpContext();
         await ok.ExecuteAsync(okHttp);
@@ -760,11 +862,12 @@ public sealed class ScheduledDispatchEndpointsTests
 
         okHttp.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        service.LastTeamScheduleGet.Should().Be(("schedule-1", "scope-alpha", "team-alpha", "member-alpha"));
-        notFoundService.LastTeamScheduleGet.Should().NotBeNull();
-        notFoundService.LastTeamScheduleGet!.Value.ScheduleId.Should().Be("missing");
-        notFoundService.LastTeamScheduleGet.Value.ScopeId.Should().Be("scope-alpha");
-        notFoundService.LastTeamScheduleGet.Value.MemberId.Should().BeNull();
+        service.LastTeamAutomationGet.Should().Be((
+            "schedule-1",
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
+        notFoundService.LastTeamAutomationGet.Should().Be((
+            "missing",
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
     }
 
     [Fact]
@@ -793,7 +896,13 @@ public sealed class ScheduledDispatchEndpointsTests
             GetException = new ArgumentException("invalid id"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Get("invalid/id", service, scopeId: "scope-alpha");
+        var result = await ScheduledDispatchEndpoints.Get(
+            "invalid/id",
+            service,
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha");
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -854,9 +963,11 @@ public sealed class ScheduledDispatchEndpointsTests
     {
         var accepted = await ScheduledDispatchEndpoints.RunNow(
             "schedule-1",
+            null,
             new RecordingScheduledDispatchApplicationService());
         var notFound = await ScheduledDispatchEndpoints.RunNow(
             "missing",
+            null,
             new RecordingScheduledDispatchApplicationService
             {
                 RunNowException = new ScheduledDispatchNotFoundException("missing"),
@@ -879,7 +990,7 @@ public sealed class ScheduledDispatchEndpointsTests
             RunNowException = new ScheduledDispatchConflictException("schedule-1", "Schedule is disabled."),
         };
 
-        var result = await ScheduledDispatchEndpoints.RunNow("schedule-1", service);
+        var result = await ScheduledDispatchEndpoints.RunNow("schedule-1", null, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1574,6 +1685,15 @@ public sealed class ScheduledDispatchEndpointsTests
         },
     };
 
+    private static ScheduledDispatchOwnerHttpRequest StudioMemberAutomationOwnerRequest() =>
+        new()
+        {
+            Kind = ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ScopeId = "scope-alpha",
+            TeamId = "team-alpha",
+            MemberId = "m-alpha",
+        };
+
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
@@ -1882,12 +2002,17 @@ public sealed class ScheduledDispatchEndpointsTests
         public List<(string ScheduleId, string Reason)> Enabled { get; } = [];
         public List<(string ScheduleId, string Reason)> Disabled { get; } = [];
         public List<(string ScheduleId, string Reason)> Deleted { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamEnabled { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamDisabled { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamDeleted { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner)> TeamRunNow { get; } = [];
         public int? LastListTake { get; private set; }
         public string? LastListCursor { get; private set; }
         public bool? LastListIncludeTotalCount { get; private set; }
         public ScheduledDispatchListQuery? LastListQuery { get; private set; }
         public string? LastScheduleGet { get; private set; }
         public (string ScheduleId, string ScopeId, string? TeamId, string? MemberId)? LastTeamScheduleGet { get; private set; }
+        public (string ScheduleId, TeamMemberAutomationOwner Owner)? LastTeamAutomationGet { get; private set; }
         public int? LastPreviewCount { get; private set; }
         public DateTimeOffset? LastPreviewFromUtc { get; private set; }
         public ScheduledDispatchDetail? Detail { get; set; }
@@ -2018,6 +2143,66 @@ public sealed class ScheduledDispatchEndpointsTests
                 AckStage: "accepted"));
         }
 
+        public Task<ScheduledDispatchMutationReceipt> EnableTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string reason,
+            CancellationToken ct = default)
+        {
+            TeamEnabled.Add((scheduleId, owner, reason));
+            if (EnableException != null)
+                throw EnableException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> DisableTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string reason,
+            CancellationToken ct = default)
+        {
+            TeamDisabled.Add((scheduleId, owner, reason));
+            if (DisableException != null)
+                throw DisableException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string reason,
+            CancellationToken ct = default)
+        {
+            TeamDeleted.Add((scheduleId, owner, reason));
+            if (DeleteException != null)
+                throw DeleteException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
             LastScheduleGet = scheduleId;
@@ -2035,6 +2220,18 @@ public sealed class ScheduledDispatchEndpointsTests
             CancellationToken ct = default)
         {
             LastTeamScheduleGet = (scheduleId, scopeId, teamId, memberId);
+            if (GetException != null)
+                throw GetException;
+
+            return Task.FromResult(Detail?.Schedule.ScheduleId == scheduleId ? Detail : null);
+        }
+
+        public Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default)
+        {
+            LastTeamAutomationGet = (scheduleId, owner);
             if (GetException != null)
                 throw GetException;
 
@@ -2092,6 +2289,27 @@ public sealed class ScheduledDispatchEndpointsTests
                 $"actor:{scheduleId}",
                 DateTimeOffset.UtcNow,
                 "run-now:schedule-1",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default)
+        {
+            TeamRunNow.Add((scheduleId, owner));
+            if (RunNowException != null)
+                throw RunNowException;
+
+            return Task.FromResult(new ScheduledDispatchRunNowReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                DateTimeOffset.UtcNow,
+                "backend-owned-run-now",
                 Accepted: true,
                 CommandId: "cmd",
                 CorrelationId: "corr",

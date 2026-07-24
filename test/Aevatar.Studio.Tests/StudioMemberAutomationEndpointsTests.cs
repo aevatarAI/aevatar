@@ -43,15 +43,15 @@ public sealed class StudioMemberAutomationEndpointsTests
 
         const string canonicalBase =
             "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
-        routes.Should().HaveCount(11);
-        routes.Should().OnlyContain(route => route != null && route.StartsWith(canonicalBase, StringComparison.Ordinal));
-        routes.Should().Contain(canonicalBase);
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/reauthorize");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/retry-revocation");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/pause");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/resume");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/run-now");
+        routes.Should().ContainSingle()
+            .Which.Should().Be($"{canonicalBase}/preflight");
+        routes.Should().NotContain(canonicalBase);
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/reauthorize");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/retry-revocation");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/pause");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/resume");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/run-now");
         routes.Should().NotContain(route => route != null && route.StartsWith("/api/teams/", StringComparison.Ordinal));
     }
 

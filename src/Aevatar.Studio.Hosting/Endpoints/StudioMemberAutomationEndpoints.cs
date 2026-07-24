@@ -24,18 +24,6 @@ internal static class StudioMemberAutomationEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
         app.MapPost($"{BasePath}/preflight", HandlePreflightAsync).WithTags("StudioTeamAutomations");
-        app.MapGet(BasePath, HandleListAsync).WithTags("StudioTeamAutomations");
-        app.MapPost(BasePath, HandleCreateAsync).WithTags("StudioTeamAutomations");
-        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync).WithTags("StudioTeamAutomations");
-        app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
-            .WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/retry-revocation", HandleRetryRevocationAsync)
-            .WithTags("StudioTeamAutomations");
-        app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/pause", HandlePauseAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/resume", HandleResumeAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/run-now", HandleRunNowAsync).WithTags("StudioTeamAutomations");
     }
 
     internal static async Task<IResult> HandlePreflightAsync(
