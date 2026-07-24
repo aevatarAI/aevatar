@@ -187,15 +187,14 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string? scheduleId = null;
         if (ShouldSchedule(request))
         {
-            var cronExpression = ResolveCron(request, out var timezone);
+            var timing = ResolveScheduleTiming(request);
             var auth = BuildScheduleAuth(subjectRef);
             scheduleId = await EnsureProvisionScheduleAsync(
                 normalizedScopeId,
                 publishedServiceId,
                 request.Prompt ?? string.Empty,
                 auth,
-                cronExpression,
-                timezone,
+                timing,
                 ct);
         }
 
@@ -271,8 +270,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string publishedServiceId,
         string prompt,
         ScheduledServiceInvocationAuth auth,
-        string cronExpression,
-        string timezone,
+        ProvisionScheduleTiming timing,
         CancellationToken ct)
     {
         const int maxGenerations = 50;
@@ -285,7 +283,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
             {
                 var schedule = await _scheduleService.EnsureAsync(
                     BuildScheduleConfiguration(
-                        scheduleId, scopeId, publishedServiceId, prompt, auth, cronExpression, timezone),
+                        scheduleId, scopeId, publishedServiceId, prompt, auth, timing),
                     ct: ct);
                 return NormalizeOptional(schedule.ScheduleId);
             }
@@ -311,8 +309,7 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         string publishedServiceId,
         string prompt,
         ScheduledServiceInvocationAuth auth,
-        string cronExpression,
-        string timezone) =>
+        ProvisionScheduleTiming timing) =>
         new(
             // Deterministic id: EnsureAsync converges retries onto one schedule.
             // '.'/'-' stay inside the scheduled-dispatch id charset ([A-Za-z0-9._-]).
@@ -335,11 +332,13 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
                         ScopeId = scopeId,
                     }),
                     Auth: auth)),
-            CronExpression: cronExpression,
-            Timezone: timezone,
+            CronExpression: timing.CronExpression,
+            Timezone: timing.Timezone,
             Enabled: true,
             Headers: new Dictionary<string, string>(StringComparer.Ordinal),
-            ScheduleKind: ScheduledDispatchScheduleKind.Workflow);
+            ScheduleKind: ScheduledDispatchScheduleKind.Workflow,
+            ScheduleMode: timing.ScheduleMode,
+            OneShotFireAt: timing.OneShotFireAt);
 
     /// <summary>
     /// A schedule (and therefore a run) is created when there is something to
@@ -350,39 +349,37 @@ public sealed class StudioWorkflowProvisioningService : IStudioWorkflowProvision
         request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron);
 
     /// <summary>
-    /// Resolves the cron expression. A caller-supplied recurring cron is a
-    /// monitor; otherwise a one-shot cron pinned to a near-future minute is
-    /// synthesized so a single demo run fires shortly after the bind. The minute
-    /// granularity matches the standard 5-field cron the dispatch validator
-    /// accepts; the dispatch's recurrence harmlessly re-fires if the bind has not
-    /// completed by the first tick.
+    /// Resolves schedule timing as one typed value. A caller-supplied cron remains
+    /// recurring with its normalized timezone; otherwise a first-class one-shot
+    /// fires shortly after the bind at an exact UTC timestamp.
     /// </summary>
-    private string ResolveCron(ProvisionWorkflowRequest request, out string timezone)
+    private ProvisionScheduleTiming ResolveScheduleTiming(ProvisionWorkflowRequest request)
     {
         var callerCron = NormalizeOptional(request.Cron);
         if (callerCron != null)
         {
-            timezone = ScheduledDispatchCalculator.NormalizeTimezone(request.Timezone);
-            return callerCron;
+            return new ProvisionScheduleTiming(
+                callerCron,
+                ScheduledDispatchCalculator.NormalizeTimezone(request.Timezone),
+                ScheduledDispatchScheduleMode.RecurringCron,
+                null);
         }
 
-        // Demo fire: pin a fixed minute/hour/day/month in UTC at the next whole
-        // minute at/after now+delay. Standard 5-field cron has no year field, so
-        // this technically recurs on that calendar date annually — acceptable for
-        // a throwaway demo schedule (it fires once in the current run window; the
-        // caller deletes it, and a recurring monitor supplies its own Cron). The
-        // round-up is required because a cron never fires within the current
-        // partial minute.
-        timezone = ScheduledDispatchCalculator.DefaultTimezone;
-        var fireAt = _timeProvider
-            .GetUtcNow()
-            .AddSeconds(ProvisionWorkflowRequest.DefaultOneShotDelaySeconds)
-            .UtcDateTime;
-        var fireMinute = new DateTime(
-            fireAt.Year, fireAt.Month, fireAt.Day, fireAt.Hour, fireAt.Minute, 0, DateTimeKind.Utc)
-            .AddMinutes(1);
-        return $"{fireMinute.Minute} {fireMinute.Hour} {fireMinute.Day} {fireMinute.Month} *";
+        return new ProvisionScheduleTiming(
+            string.Empty,
+            ScheduledDispatchCalculator.DefaultTimezone,
+            ScheduledDispatchScheduleMode.OneShotAtUtc,
+            _timeProvider
+                .GetUtcNow()
+                .AddSeconds(ProvisionWorkflowRequest.DefaultOneShotDelaySeconds)
+                .ToUniversalTime());
     }
+
+    private readonly record struct ProvisionScheduleTiming(
+        string CronExpression,
+        string Timezone,
+        ScheduledDispatchScheduleMode ScheduleMode,
+        DateTimeOffset? OneShotFireAt);
 
     /// <summary>
     /// Selects the schedule's single authoritative credential source. A scheduled
