@@ -268,22 +268,77 @@ public sealed class AgentProfileActorPortTests
             Signature = ByteString.CopyFrom(0x42),
         };
 
-        var trySign = typeof(AgentProfileIngressProofService).GetMethod(
-            "TrySign",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        trySign.Should().NotBeNull();
-        var signed = (bool)trySign!.Invoke(proofService, [targetActorId, command])!;
+        var signed = InvokeTrySign(proofService, targetActorId, command);
 
         signed.Should().BeFalse();
         command.IngressProof.Should().BeNull();
-        var entry = logger.Entries.Should().ContainSingle().Subject;
-        entry.Level.Should().Be(LogLevel.Warning);
-        entry.Exception.Should().BeNull();
-        entry.Message.Should().Be("Agent Profile ingress proof signing is unavailable.");
-        entry.Message.Should().NotContain(keyId);
-        entry.Message.Should().NotContain(targetActorId.Trim());
-        entry.Message.Should().NotContain(options.CurrentPrivateKeyPkcs8);
-        entry.Message.Should().NotContain(options.PublicKeys[keyId]);
+        AssertSingleSafeSigningWarning(
+            logger,
+            keyId,
+            targetActorId.Trim(),
+            options.CurrentPrivateKeyPkcs8,
+            options.PublicKeys[keyId]);
+    }
+
+    [Fact]
+    public void TrySign_ShouldWarnOnceForRepeatedMissingConfigurationAndClearProof()
+    {
+        const string targetActorId = "actor-sensitive-missing-configuration";
+        const string existingKeyId = "existing-sensitive-key";
+        var logger = new RecordingLogger<AgentProfileIngressProofService>();
+        var proofService = new AgentProfileIngressProofService(
+            Options.Create(new AgentProfileIngressProofOptions()),
+            logger);
+        var command = CreateCommand();
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            command.IngressProof = new AgentProfileIngressProof
+            {
+                KeyId = existingKeyId,
+                TargetActorId = "existing-sensitive-target",
+                CommandTypeUrl = "existing-sensitive-type",
+                CanonicalCommandSha256 = Digest(0x43),
+                Signature = ByteString.CopyFrom(0x44),
+            };
+
+            InvokeTrySign(proofService, targetActorId, command).Should().BeFalse();
+            command.IngressProof.Should().BeNull();
+        }
+
+        AssertSingleSafeSigningWarning(logger, targetActorId, existingKeyId);
+    }
+
+    [Fact]
+    public void TrySign_ShouldWarnOnceWhenPublicKeyDoesNotMatchPrivateKeyAndClearProof()
+    {
+        const string keyId = "key-sensitive-mismatch";
+        const string targetActorId = "actor-sensitive-mismatch";
+        using var privateKey = RSA.Create(2048);
+        using var differentPublicKey = RSA.Create(2048);
+        var options = new AgentProfileIngressProofOptions
+        {
+            CurrentKeyId = keyId,
+            CurrentPrivateKeyPkcs8 = Convert.ToBase64String(privateKey.ExportPkcs8PrivateKey()),
+        };
+        options.PublicKeys.Add(
+            keyId,
+            Convert.ToBase64String(differentPublicKey.ExportSubjectPublicKeyInfo()));
+        var logger = new RecordingLogger<AgentProfileIngressProofService>();
+        var proofService = new AgentProfileIngressProofService(Options.Create(options), logger);
+        var command = CreateCommand();
+
+        InvokeTrySign(proofService, targetActorId, command).Should().BeFalse();
+        command.IngressProof.Should().BeNull();
+        InvokeTrySign(proofService, targetActorId, command).Should().BeFalse();
+        command.IngressProof.Should().BeNull();
+
+        AssertSingleSafeSigningWarning(
+            logger,
+            keyId,
+            targetActorId,
+            options.CurrentPrivateKeyPkcs8,
+            options.PublicKeys[keyId]);
     }
 
     [Fact]
@@ -708,6 +763,30 @@ public sealed class AgentProfileActorPortTests
         return new AgentProfileIngressProofService(
             Options.Create(options),
             NullLogger<AgentProfileIngressProofService>.Instance);
+    }
+
+    private static bool InvokeTrySign(
+        AgentProfileIngressProofService proofService,
+        string targetActorId,
+        IMessage command)
+    {
+        var trySign = typeof(AgentProfileIngressProofService).GetMethod(
+            "TrySign",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        trySign.Should().NotBeNull();
+        return (bool)trySign!.Invoke(proofService, [targetActorId, command])!;
+    }
+
+    private static void AssertSingleSafeSigningWarning(
+        RecordingLogger<AgentProfileIngressProofService> logger,
+        params string[] sensitiveValues)
+    {
+        var entry = logger.Entries.Should().ContainSingle().Subject;
+        entry.Level.Should().Be(LogLevel.Warning);
+        entry.Exception.Should().BeNull();
+        entry.Message.Should().Be("Agent Profile ingress proof signing is unavailable.");
+        foreach (var sensitiveValue in sensitiveValues.Where(static value => value.Length > 0))
+            entry.Message.Should().NotContain(sensitiveValue);
     }
 
     private static AgentProfileActorPort CreatePort(

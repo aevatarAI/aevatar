@@ -848,6 +848,7 @@ write_valid_fixture() {
     '    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);' \
     '    await PersistAsync(operation);' \
     '  }' \
+    '  [EventHandler]' \
     '  public async Task HandleInitializedAsync(AgentProfileInitializedContinuation continuation) {' \
     '    ArgumentNullException.ThrowIfNull(continuation);' \
     '    var profileActorId = AgentProfileActorInvariants.RequireActorId(' \
@@ -857,6 +858,7 @@ write_valid_fixture() {
     '    var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);' \
     '    await PersistAsync(operation);' \
     '  }' \
+    '  [EventHandler]' \
     '  public async Task HandleInitializationRejectedAsync(AgentProfileInitializationRejectedContinuation continuation) {' \
     '    ArgumentNullException.ThrowIfNull(continuation);' \
     '    var profileActorId = AgentProfileActorInvariants.RequireActorId(' \
@@ -866,6 +868,7 @@ write_valid_fixture() {
     '    var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);' \
     '    await PersistAsync(operation);' \
     '  }' \
+    '  [EventHandler]' \
     '  public async Task HandleObservePublishedSummaryAsync(ObserveAgentProfilePublishedSummaryCommand command) {' \
     '    ArgumentNullException.ThrowIfNull(command);' \
     '    AgentProfileIdentity identity;' \
@@ -900,6 +903,7 @@ write_valid_fixture() {
     '}'
   write_lines "${core}/AgentProfileGAgent.cs" \
     'public sealed class AgentProfileGAgent {' \
+    '  [EventHandler]' \
     '  public async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {' \
     '    ArgumentNullException.ThrowIfNull(command);' \
     '    var namespaceActorId = State.Identity is null' \
@@ -1089,7 +1093,7 @@ run_self_tests() {
 
   local structured_profile_file="src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
   local structured_namespace_file="src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
-  local structured_message="Handler must match the canonical pre-authority statements, exact authority call, and immediate operation parse."
+  local structured_message="The actual [EventHandler] must be the unique expected handler for the message and match the canonical pre-authority statements, exact authority call, and immediate operation parse."
   local -a structured_roots=() structured_expected_hits=()
 
   record_structured_case() {
@@ -1123,6 +1127,19 @@ run_self_tests() {
   perl -0777 -pi -e '
     s{(\bHandleInitializeAsync\s*\([^)]*\)\s*\{[\s\S]*?)(AgentProfileActorInvariants\.RequireProtocolPublisher\s*\(\s*ActiveInboundEnvelope\s*,)}{$1State.Operations.Insert(0, new AgentProfileOperationFact());\n    $2};
     s~(public sealed class AgentProfileGAgent \{\n)~$1  private const string AuthorityHandlerDecoy = """\npublic async Task HandleInitializeAsync(InitializeAgentProfileCommand command) {\n    ArgumentNullException.ThrowIfNull(command);\n    var namespaceActorId = State.Identity is null\n        ? AgentProfileActorIds.Namespace\n        : AgentProfileActorInvariants.RequireActorId(\n            State.NamespaceActorId,\n            "state.namespace_actor_id");\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);\n    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);\n}\n""";\n~;
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-unregistered-canonical-other-handler"
+  perl -0777 -pi -e '
+    s{  \[EventHandler\]\n  (public async Task HandleInitializeAsync)}{  $1};
+    s~(public sealed class AgentProfileGAgent \{\n)~$1  [EventHandler]\n  public async Task HandleUnsafeInitializeAsync(InitializeAgentProfileCommand command) {\n    ArgumentNullException.ThrowIfNull(command);\n    State.Operations.Insert(0, new AgentProfileOperationFact());\n    var namespaceActorId = State.Identity is null\n      ? AgentProfileActorIds.Namespace\n      : AgentProfileActorInvariants.RequireActorId(\n        State.NamespaceActorId,\n        "state.namespace_actor_id");\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);\n    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);\n    await PersistAsync(operation);\n  }\n~;
+  ' "${case_root}/${structured_profile_file}"
+  record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "structured-duplicate-registered-handler"
+  perl -0777 -pi -e '
+    s~(public sealed class AgentProfileGAgent \{\n)~$1  [EventHandler]\n  public async Task HandleUnsafeInitializeAsync(InitializeAgentProfileCommand command) {\n    ArgumentNullException.ThrowIfNull(command);\n    State.Operations.Insert(0, new AgentProfileOperationFact());\n    var namespaceActorId = State.Identity is null\n      ? AgentProfileActorIds.Namespace\n      : AgentProfileActorInvariants.RequireActorId(\n        State.NamespaceActorId,\n        "state.namespace_actor_id");\n    AgentProfileActorInvariants.RequireProtocolPublisher(ActiveInboundEnvelope, namespaceActorId);\n    var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);\n    await PersistAsync(operation);\n  }\n~;
   ' "${case_root}/${structured_profile_file}"
   record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
 

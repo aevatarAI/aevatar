@@ -164,8 +164,6 @@ public sealed class OrnnAgentProfileSkillPackageMapper
             parsed.Name ?? skillName,
             parsed.ScriptEntry,
             workflowExtraction.RemainingFiles);
-        var remainingAfterWorkflows = workflowExtraction.RemainingFiles ??
-                                      new Dictionary<string, string>(StringComparer.Ordinal);
         if (scriptExtraction.RemainingFiles?.Keys.Any(IsScriptPath) == true)
         {
             path = "scripts";

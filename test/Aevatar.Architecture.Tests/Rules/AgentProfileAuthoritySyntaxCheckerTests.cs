@@ -67,6 +67,36 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
     }
 
     [Theory]
+    [InlineData("HandleInitializeAsync")]
+    [InlineData("HandleInitializedAsync")]
+    [InlineData("HandleInitializationRejectedAsync")]
+    [InlineData("HandleObservePublishedSummaryAsync")]
+    public void RejectsMissingEventHandlerRegistrationIndependentlyForEveryHandler(string methodName)
+    {
+        using var fixture = AuthoritySyntaxFixture.Create();
+        fixture.RemoveEventHandler(methodName);
+        fixture.AssertGovernedSourcesParse();
+
+        var result = new AgentProfileAuthoritySyntaxChecker().Check(fixture.Root);
+
+        Assert.Contains(result.Violations, violation => violation.MethodName == methodName);
+    }
+
+    [Theory]
+    [InlineData("registered-handler-moved-to-unsafe-method")]
+    [InlineData("duplicate-registered-handler")]
+    public void RejectsAmbiguousOrMisdirectedEventHandlerRegistration(string corruption)
+    {
+        using var fixture = AuthoritySyntaxFixture.Create();
+        fixture.ApplyCorruption(corruption);
+        fixture.AssertGovernedSourcesParse();
+
+        var result = new AgentProfileAuthoritySyntaxChecker().Check(fixture.Root);
+
+        Assert.Contains(result.Violations, violation => violation.MethodName == "HandleInitializeAsync");
+    }
+
+    [Theory]
     [InlineData("duplicate-target-class")]
     [InlineData("duplicate-target-method")]
     [InlineData("wrong-signature")]
@@ -303,6 +333,13 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
                         SummaryAuthority,
                         $"await PersistAsync(command.Operation);{Environment.NewLine}        {SummaryAuthority}");
                     break;
+                case "registered-handler-moved-to-unsafe-method":
+                    RemoveEventHandler("HandleInitializeAsync");
+                    AddUnsafeRegisteredInitializeHandler();
+                    break;
+                case "duplicate-registered-handler":
+                    AddUnsafeRegisteredInitializeHandler();
+                    break;
                 case "duplicate-target-class":
                     File.AppendAllText(ProfilePath, $"{Environment.NewLine}{ValidProfileActor}");
                     break;
@@ -329,6 +366,15 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
                 default:
                     throw new ArgumentOutOfRangeException(nameof(corruption), corruption, null);
             }
+        }
+
+        public void RemoveEventHandler(string methodName)
+        {
+            var path = methodName == "HandleInitializeAsync" ? ProfilePath : NamespacePath;
+            ReplaceOnce(
+                path,
+                $"[EventHandler]{Environment.NewLine}    public async Task {methodName}",
+                $"public async Task {methodName}");
         }
 
         public void RemoveAuthority(string methodName)
@@ -444,6 +490,31 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
                 ProfileAuthority,
                 $"State.Operations.Insert(0, new AgentProfileOperationFact());{Environment.NewLine}        {ProfileAuthority}");
 
+        private void AddUnsafeRegisteredInitializeHandler() =>
+            ReplaceOnce(
+                ProfilePath,
+                "public sealed class AgentProfileGAgent\n{",
+                """
+                public sealed class AgentProfileGAgent
+                {
+                    [EventHandler]
+                    public async Task HandleUnsafeInitializeAsync(InitializeAgentProfileCommand command)
+                    {
+                        ArgumentNullException.ThrowIfNull(command);
+                        State.Operations.Insert(0, new AgentProfileOperationFact());
+                        var namespaceActorId = State.Identity is null
+                            ? AgentProfileActorIds.Namespace
+                            : AgentProfileActorInvariants.RequireActorId(
+                                State.NamespaceActorId,
+                                "state.namespace_actor_id");
+                        AgentProfileActorInvariants.RequireProtocolPublisher(
+                            ActiveInboundEnvelope,
+                            namespaceActorId);
+                        var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
+                        await PersistAsync(operation);
+                    }
+                """);
+
         private void AddOtherTopLevelCanonicalHandler() =>
             ReplaceOnce(
                 ProfilePath,
@@ -519,6 +590,7 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
         }
 
         private const string CanonicalInitializeMethod = """
+            [EventHandler]
             public async Task HandleInitializeAsync(InitializeAgentProfileCommand command)
             {
                 ArgumentNullException.ThrowIfNull(command);
@@ -540,6 +612,7 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
 
             public sealed class AgentProfileGAgent
             {
+                [EventHandler]
                 public async Task HandleInitializeAsync(InitializeAgentProfileCommand command)
                 {
                     ArgumentNullException.ThrowIfNull(command);
@@ -560,6 +633,7 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
 
             public sealed class AgentProfileNamespaceGAgent
             {
+                [EventHandler]
                 public async Task HandleInitializedAsync(AgentProfileInitializedContinuation continuation)
                 {
                     ArgumentNullException.ThrowIfNull(continuation);
@@ -571,6 +645,7 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
                     await PersistAsync(operation);
                 }
 
+                [EventHandler]
                 public async Task HandleInitializationRejectedAsync(
                     AgentProfileInitializationRejectedContinuation continuation)
                 {
@@ -583,6 +658,7 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
                     await PersistAsync(operation);
                 }
 
+                [EventHandler]
                 public async Task HandleObservePublishedSummaryAsync(
                     ObserveAgentProfilePublishedSummaryCommand command)
                 {

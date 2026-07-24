@@ -420,11 +420,11 @@ public static class AgentProfilePolicies
                     $"{path}.binding_id"));
             }
 
-            if (binding.ActivationMode == AgentProfileSkillActivationMode.Unspecified)
+            if (!IsSupportedSkillActivationMode(binding.ActivationMode))
             {
                 diagnostics.Add(Diagnostic(
                     "INVALID_SKILL_ACTIVATION_MODE",
-                    "Skill activation mode must be specified.",
+                    "Skill activation mode must be supported.",
                     $"{path}.activation_mode"));
             }
 
@@ -484,11 +484,11 @@ public static class AgentProfilePolicies
                     "skill_bindings.binding_id"));
             }
 
-            if (binding.ActivationMode == AgentProfileSkillActivationMode.Unspecified)
+            if (!IsSupportedSkillActivationMode(binding.ActivationMode))
             {
                 diagnostics.Add(Diagnostic(
                     "INVALID_SKILL_ACTIVATION_MODE",
-                    "Skill activation mode must be specified.",
+                    "Skill activation mode must be supported.",
                     "skill_bindings.activation_mode"));
             }
 
@@ -652,11 +652,11 @@ public static class AgentProfilePolicies
             return [Diagnostic("MISSING_TOOL_POLICY", "Profile tool policy is required.", "tool_policy")];
 
         var diagnostics = new List<AgentProfileSafeDiagnostic>();
-        if (policy.Mode == AgentProfileToolPolicyMode.Unspecified)
+        if (!IsSupportedToolPolicyMode(policy.Mode))
         {
             diagnostics.Add(Diagnostic(
                 "INVALID_TOOL_POLICY_MODE",
-                "Profile tool policy mode must be specified.",
+                "Profile tool policy mode must be supported.",
                 "tool_policy.mode"));
         }
 
@@ -700,6 +700,15 @@ public static class AgentProfilePolicies
 
         return diagnostics;
     }
+
+    private static bool IsSupportedSkillActivationMode(AgentProfileSkillActivationMode mode) =>
+        mode is AgentProfileSkillActivationMode.Always or
+            AgentProfileSkillActivationMode.Routed or
+            AgentProfileSkillActivationMode.DefaultForUnmatchedTurn;
+
+    private static bool IsSupportedToolPolicyMode(AgentProfileToolPolicyMode mode) =>
+        mode is AgentProfileToolPolicyMode.InheritRouteMaximum or
+            AgentProfileToolPolicyMode.ExplicitAllowlist;
 
     private static bool IsHumanReferenceSegment(string? value) =>
         value is { Length: >= 1 and <= HumanReferenceSegmentMaxLength } &&

@@ -327,6 +327,52 @@ public sealed class AgentProfileContractsTests
     }
 
     [Fact]
+    public void ValidateContent_ShouldRejectUndefinedSkillActivationMode()
+    {
+        var content = Content("Purpose", "Instructions", ["alpha"]);
+        content.SkillBindings.Add(new AgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = (AgentProfileSkillActivationMode)99,
+            Skill = ExactReference(),
+        });
+
+        AgentProfilePolicies.ValidateContent(content)
+            .Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "INVALID_SKILL_ACTIVATION_MODE" &&
+                diagnostic.Path == "skill_bindings[0].activation_mode");
+    }
+
+    [Fact]
+    public void ValidatePublishedSnapshot_ShouldRejectUndefinedSkillActivationMode()
+    {
+        var snapshot = PublishedSnapshot(Content("Purpose", "Instructions", ["alpha"]));
+        snapshot.SkillBindings.Add(new SealedAgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = (AgentProfileSkillActivationMode)99,
+            Skill = ValidSealedSkill(),
+        });
+
+        AgentProfilePolicies.ValidatePublishedSnapshot(snapshot)
+            .Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "INVALID_SKILL_ACTIVATION_MODE" &&
+                diagnostic.Path == "skill_bindings.activation_mode");
+    }
+
+    [Fact]
+    public void ValidateContent_ShouldRejectUndefinedToolPolicyMode()
+    {
+        var content = Content("Purpose", "Instructions", ["alpha"]);
+        content.ToolPolicy.Mode = (AgentProfileToolPolicyMode)99;
+
+        AgentProfilePolicies.ValidateContent(content)
+            .Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "INVALID_TOOL_POLICY_MODE" &&
+                diagnostic.Path == "tool_policy.mode");
+    }
+
+    [Fact]
     public void ComputeSealedSkillSha256_ShouldCanonicalizeAssetOrderingAndLineEndings()
     {
         var first = SealedSkill(

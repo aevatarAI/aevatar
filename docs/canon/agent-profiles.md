@@ -96,11 +96,12 @@ effects. Local and Orleans implement the same admission and publishing
 semantics, and dispatch ACKs remain accepted-only.
 
 The authority-order governance fact is derived from Roslyn syntax rather than
-shell text matching. The guard requires one top-level target Actor class, one
-direct handler member with the fixed signature and block body, the canonical
-pre-authority statements, the exact authority call, and the immediate operation
-parse. Source-like text in strings, inactive code, nested types, local functions,
-or other classes is not valid evidence.
+shell text matching. For each governed message, the guard requires one top-level
+target Actor class and exactly one actual `[EventHandler]` direct member. That
+registered member must be the expected named method with the fixed signature and
+block body, the canonical pre-authority statements, the exact authority call,
+and the immediate operation parse. Source-like text in strings, inactive code,
+nested types, local functions, or other classes is not valid evidence.
 
 ## 4. Phase 1 Management Contract
 

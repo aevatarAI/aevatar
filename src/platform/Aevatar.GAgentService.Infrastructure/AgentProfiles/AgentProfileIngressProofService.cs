@@ -11,6 +11,7 @@ public sealed class AgentProfileIngressProofService : IAgentProfileIngressProofV
     private const int MinimumRsaKeySize = 2048;
     private readonly AgentProfileIngressProofOptions _options;
     private readonly ILogger<AgentProfileIngressProofService> _logger;
+    private int _signingUnavailableWarningEmitted;
 
     public AgentProfileIngressProofService(
         IOptions<AgentProfileIngressProofOptions> options,
@@ -79,6 +80,7 @@ public sealed class AgentProfileIngressProofService : IAgentProfileIngressProofV
             if (!IsKeyId(_options.CurrentKeyId) ||
                 !TryImportPrivateKey(_options.CurrentPrivateKeyPkcs8, out var rsa))
             {
+                WarnSigningUnavailableOnce();
                 return false;
             }
 
@@ -106,15 +108,22 @@ public sealed class AgentProfileIngressProofService : IAgentProfileIngressProofV
 
             if (Verify(targetActorId, command))
                 return true;
+            WarnSigningUnavailableOnce();
         }
         catch (Exception exception) when (
             exception is ArgumentException or CryptographicException or InvalidOperationException)
         {
-            _logger.LogWarning("Agent Profile ingress proof signing is unavailable.");
+            WarnSigningUnavailableOnce();
         }
 
         ClearProof(command);
         return false;
+    }
+
+    private void WarnSigningUnavailableOnce()
+    {
+        if (Interlocked.Exchange(ref _signingUnavailableWarningEmitted, 1) == 0)
+            _logger.LogWarning("Agent Profile ingress proof signing is unavailable.");
     }
 
     private static bool IsComplete(AgentProfileIngressProof? proof) =>

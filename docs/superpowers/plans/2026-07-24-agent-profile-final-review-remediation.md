@@ -6,7 +6,7 @@
 
 **Architecture:** Application-originated commands receive an RSA-PSS signed typed proof at the Infrastructure port and Core verifies it before any decision. Discovery adds the missing scope predicate, system reconciliation keys retries by observed authority version, Actor state compacts operation replay records to documented count-bounded windows, and default-binding multiplicity becomes publish-only validation.
 
-**Tech Stack:** .NET 9, C#, Protobuf, RSA-PSS/SHA-256, xUnit, FluentAssertions, existing Actor event sourcing and Projection Pipeline.
+**Tech Stack:** .NET 10, C#, Protobuf, RSA-PSS/SHA-256, xUnit, FluentAssertions, existing Actor event sourcing and Projection Pipeline.
 
 ## Global Constraints
 

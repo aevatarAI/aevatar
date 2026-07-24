@@ -7,7 +7,7 @@ namespace Aevatar.AgentProfileBoundaryGuard.Tool;
 internal sealed class AgentProfileAuthoritySyntaxChecker
 {
     internal const string AuthorityOrderMessage =
-        "Handler must match the canonical pre-authority statements, exact authority call, and immediate operation parse.";
+        "The actual [EventHandler] must be the unique expected handler for the message and match the canonical pre-authority statements, exact authority call, and immediate operation parse.";
 
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.Preview);
 
@@ -186,13 +186,25 @@ internal sealed class AgentProfileAuthoritySyntaxChecker
         if (targetClasses.Length != 1)
             return false;
 
-        var targetMethods = targetClasses[0]
+        var directMethods = targetClasses[0]
             .Members
             .OfType<MethodDeclarationSyntax>()
+            .ToArray();
+        var registeredMethods = directMethods
+            .Where(candidate =>
+                HasEventHandlerAttribute(candidate) &&
+                HasExactMessageParameter(candidate, contract.ParameterType))
+            .ToArray();
+        if (registeredMethods.Length != 1)
+            return false;
+
+        var targetMethods = directMethods
             .Where(candidate =>
                 string.Equals(candidate.Identifier.ValueText, contract.MethodName, StringComparison.Ordinal))
             .ToArray();
-        if (targetMethods.Length != 1 || !MatchesSignature(targetMethods[0], contract))
+        if (targetMethods.Length != 1 ||
+            !ReferenceEquals(registeredMethods[0], targetMethods[0]) ||
+            !MatchesSignature(targetMethods[0], contract))
             return false;
 
         var statements = targetMethods[0].Body!.Statements;
@@ -218,6 +230,23 @@ internal sealed class AgentProfileAuthoritySyntaxChecker
 
     private static bool IsTopLevel(ClassDeclarationSyntax candidate) =>
         candidate.Parent is CompilationUnitSyntax or BaseNamespaceDeclarationSyntax;
+
+    private static bool HasEventHandlerAttribute(MethodDeclarationSyntax method) =>
+        method.AttributeLists.Any(attributeList =>
+            (attributeList.Target is null ||
+             string.Equals(attributeList.Target.Identifier.ValueText, "method", StringComparison.Ordinal)) &&
+            attributeList.Attributes.Any(static attribute =>
+                attribute.Name.GetLastToken().ValueText is "EventHandler" or "EventHandlerAttribute"));
+
+    private static bool HasExactMessageParameter(MethodDeclarationSyntax method, string parameterType)
+    {
+        if (method.ParameterList.Parameters.Count != 1)
+            return false;
+
+        var type = method.ParameterList.Parameters[0].Type;
+        return type is NameSyntax &&
+               string.Equals(type.GetLastToken().ValueText, parameterType, StringComparison.Ordinal);
+    }
 
     private static bool MatchesSignature(MethodDeclarationSyntax method, HandlerContract contract)
     {
