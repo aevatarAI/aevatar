@@ -10,6 +10,7 @@ type TeamToStudioMode = 'create-member' | 'edit-member' | 'build-member';
 type QueryValue = string | undefined;
 type TeamDetailRouteState = {
   readonly memberId: string;
+  readonly routeMemberId: string;
   readonly runId: string;
   readonly scopeId: string;
   readonly serviceId: string;
@@ -311,10 +312,8 @@ export function readTeamDetailRouteState(
       ? decodePathSegment(pathnameSegments[membersIndex + 1])
       : '';
   const defaultTab: TeamDetailTab = 'overview';
-  const memberId =
-    memberIdFromPath === 'new'
-      ? ''
-      : memberIdFromPath || trimOptional(params.get('memberId'));
+  const routeMemberId = memberIdFromPath === 'new' ? '' : memberIdFromPath;
+  const memberId = routeMemberId || trimOptional(params.get('memberId'));
   const memberSurfaceFromPath =
     membersIndex >= 0 && pathnameSegments[membersIndex + 2]
       ? decodePathSegment(pathnameSegments[membersIndex + 2])
@@ -324,6 +323,7 @@ export function readTeamDetailRouteState(
 
   return {
     memberId,
+    routeMemberId,
     runId: trimOptional(params.get('runId')),
     scopeId: scopeIdFromPath || trimOptional(params.get('scopeId')),
     serviceId: trimOptional(params.get('serviceId')),

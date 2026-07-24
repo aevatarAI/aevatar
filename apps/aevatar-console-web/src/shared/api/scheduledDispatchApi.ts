@@ -121,7 +121,10 @@ export type ScheduledDispatchListResult = {
 export type ScheduledDispatchListQuery = {
   readonly cursor?: string;
   readonly includeTotalCount?: boolean;
+  readonly memberId?: string;
+  readonly scopeId?: string;
   readonly take?: number;
+  readonly teamId?: string;
 };
 
 const missingOwnerBindingMessage =
@@ -505,6 +508,9 @@ function listScheduledDispatches(
 ): Promise<ScheduledDispatchListResult> {
   return requestJson(
     withQuery("/api/schedules", {
+      scopeId: trimOptional(query?.scopeId),
+      teamId: trimOptional(query?.teamId),
+      memberId: trimOptional(query?.memberId),
       cursor: query?.cursor,
       includeTotalCount: query?.includeTotalCount,
       take: query?.take,
