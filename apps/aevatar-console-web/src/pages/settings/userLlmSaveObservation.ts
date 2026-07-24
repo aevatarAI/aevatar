@@ -19,7 +19,7 @@ export type PendingUserLlmSave<TDraft> = {
 type ObserveUserLlmSaveInput<TSample> = {
   readonly saveToken: number;
   readonly isCurrent: (saveToken: number) => boolean;
-  readonly read: () => Promise<TSample>;
+  readonly read: (signal: AbortSignal) => Promise<TSample>;
   readonly isObserved: (sample: TSample) => boolean;
   readonly onResponse?: (sample: TSample) => void;
   readonly onTransientError?: (error: unknown) => void;
@@ -40,45 +40,116 @@ export function expectedCommittedUserLlmModel(input: {
     : String(input.optionDefaultModel ?? "").trim();
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, milliseconds);
-  });
-}
-
 export async function observeUserLlmSave<TSample>(
   input: ObserveUserLlmSaveInput<TSample>,
 ): Promise<{ readonly attempts: number; readonly phase: UserLlmSaveObservationPhase }> {
-  let attempts = 0;
+  return new Promise((resolve) => {
+    let active = true;
+    let attempts = 0;
+    let elapsedMilliseconds = 0;
+    let attemptGeneration = 0;
+    let currentController: AbortController | null = null;
+    const timers: number[] = [];
 
-  for (const milliseconds of USER_LLM_SAVE_OBSERVATION_DELAYS_MS) {
-    if (!input.isCurrent(input.saveToken)) {
-      return { attempts, phase: "superseded" };
-    }
+    const finish = (phase: UserLlmSaveObservationPhase) => {
+      if (!active) {
+        return;
+      }
 
-    await delay(milliseconds);
-    if (!input.isCurrent(input.saveToken)) {
-      return { attempts, phase: "superseded" };
-    }
+      active = false;
+      attemptGeneration += 1;
+      timers.forEach((timer) => window.clearTimeout(timer));
+      currentController?.abort();
+      currentController = null;
+      resolve({ attempts, phase });
+    };
 
-    attempts += 1;
-    try {
-      const sample = await input.read();
+    const launchRead = () => {
+      if (!active) {
+        return;
+      }
       if (!input.isCurrent(input.saveToken)) {
-        return { attempts, phase: "superseded" };
+        finish("superseded");
+        return;
       }
 
-      input.onResponse?.(sample);
-      if (input.isObserved(sample)) {
-        return { attempts, phase: "observed" };
+      attempts += 1;
+      currentController?.abort();
+      currentController = null;
+      attemptGeneration += 1;
+      const generation = attemptGeneration;
+      const controller = new AbortController();
+      currentController = controller;
+      let pendingRead: Promise<TSample>;
+      try {
+        pendingRead = input.read(controller.signal);
+      } catch (error) {
+        if (currentController === controller) {
+          currentController = null;
+        }
+        if (!active || generation !== attemptGeneration || controller.signal.aborted) {
+          return;
+        }
+        if (!input.isCurrent(input.saveToken)) {
+          finish("superseded");
+          return;
+        }
+        input.onTransientError?.(error);
+        return;
       }
-    } catch (error) {
-      if (!input.isCurrent(input.saveToken)) {
-        return { attempts, phase: "superseded" };
-      }
-      input.onTransientError?.(error);
+
+      void pendingRead.then(
+        (sample) => {
+          if (
+            !active ||
+            generation !== attemptGeneration ||
+            controller.signal.aborted ||
+            currentController !== controller
+          ) {
+            return;
+          }
+          currentController = null;
+          if (!input.isCurrent(input.saveToken)) {
+            finish("superseded");
+            return;
+          }
+
+          input.onResponse?.(sample);
+          if (input.isObserved(sample)) {
+            finish("observed");
+          }
+        },
+        (error) => {
+          if (
+            !active ||
+            generation !== attemptGeneration ||
+            controller.signal.aborted ||
+            currentController !== controller
+          ) {
+            return;
+          }
+          currentController = null;
+          if (!input.isCurrent(input.saveToken)) {
+            finish("superseded");
+            return;
+          }
+          input.onTransientError?.(error);
+        },
+      );
+    };
+
+    for (const delayMilliseconds of USER_LLM_SAVE_OBSERVATION_DELAYS_MS) {
+      elapsedMilliseconds += delayMilliseconds;
+      timers.push(window.setTimeout(launchRead, elapsedMilliseconds));
     }
-  }
-
-  return { attempts, phase: "accepted_unobserved" };
+    timers.push(
+      window.setTimeout(() => {
+        finish(
+          input.isCurrent(input.saveToken)
+            ? "accepted_unobserved"
+            : "superseded",
+        );
+      }, elapsedMilliseconds),
+    );
+  });
 }

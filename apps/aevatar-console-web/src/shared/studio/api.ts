@@ -3356,10 +3356,11 @@ export const studioApi = {
     );
   },
 
-  getUserLlmSettings(): Promise<StudioUserLlmSettings> {
+  getUserLlmSettings(signal?: AbortSignal): Promise<StudioUserLlmSettings> {
     return requestDecodedJson(
       "/api/user-config/llm",
-      decodeStudioUserLlmSettings
+      decodeStudioUserLlmSettings,
+      signal ? { signal } : undefined,
     );
   },
 

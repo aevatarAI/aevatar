@@ -147,6 +147,7 @@ public sealed class UserLlmSettingsViewBuilderTests
         view.SavedUserServiceId.Should().Be("us-beta");
         view.SavedRouteLabel.Should().Be("Beta service");
         view.EffectiveRoute.Should().Be(SharedRoute);
+        view.EffectiveRouteLabel.Should().Be("Beta service");
         view.RouteFallbackActive.Should().BeFalse();
     }
 

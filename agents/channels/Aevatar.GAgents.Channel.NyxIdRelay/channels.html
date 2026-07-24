@@ -616,6 +616,7 @@ const state = {
   statuses:{},                        // registrationId -> { status, last_event_at }
   llm:null,                           // GET /api/user-config/llm
   llmSel:{ value:null, model:null },  // step4 exact service selection + model
+  llmDraftOption:null,                // immutable display/runtime snapshot for a newer draft identity
   llmSaveToken:0,
   llmDraftRevision:0,
   llmPending:null,                    // immutable exact target for the active save generation
@@ -729,13 +730,17 @@ function signOutSilent(){ clearToken(); state.signedIn=false; state.llmSaveToken
 /* ===========================================================================
    API helpers (relative, scope-gated bearer)
    =========================================================================== */
-async function apiGet(path){
+async function apiGet(path,signal){
   const token = getToken(); if(!token) throw new Error("not-authenticated");
-  const res = await fetch(path, { headers:{ Authorization:"Bearer " + token.access_token } });
+  const opts = { headers:{ Authorization:"Bearer " + token.access_token } };
+  if(signal) opts.signal=signal;
+  const res = await fetch(path, opts);
+  if(signal && signal.aborted) throw new Error("aborted");
   if(res.status === 401){ signOutSilent(); throw new Error("unauthorized"); }
   if(res.status === 404) return null;
   if(!res.ok) throw new Error("api-error-" + res.status);
   const txt = await res.text(); if(!txt) return null;
+  if(signal && signal.aborted) throw new Error("aborted");
   try { return JSON.parse(txt); } catch(e){ return null; }
 }
 async function apiSend(path, method, body){
@@ -777,8 +782,8 @@ async function loadLlm(force){
   catch(e){ if(e.message!=="unauthorized") console.warn("channels: llm read failed", e); }
   return state.llm;
 }
-async function readLlm(){
-  return apiGet("/api/user-config/llm");
+async function readLlm(signal){
+  return apiGet("/api/user-config/llm",signal);
 }
 async function fetchStatus(regId){
   try { return await apiGet("/api/channels/registrations/" + encodeURIComponent(regId) + "/status"); }
@@ -916,6 +921,17 @@ function freezeLlmPending(target){
     expectedCommittedDraft:Object.freeze({...target.expectedCommittedDraft})
   });
 }
+function snapshotLlmSelectionOption(option){
+  if(!option) return null;
+  return Object.freeze({
+    value:option.value,
+    label:option.label,
+    kind:option.kind,
+    routeValue:option.routeValue,
+    userServiceId:option.userServiceId,
+    defaultModel:option.defaultModel
+  });
+}
 function isCurrentLlmSave(target){
   return !!target && state.llmSaveToken===target.saveToken &&
     !!state.llmPending && state.llmPending.saveToken===target.saveToken;
@@ -924,12 +940,6 @@ function llmDraftStillMatches(target){
   return state.llmDraftRevision===target.submittedRevision &&
     state.llmSel.value===target.submittedDraft.value &&
     normalizeLlmModel(state.llmSel.model)===target.submittedDraft.model;
-}
-function waitForLlmObservation(milliseconds){
-  return new Promise(resolve=>{
-    const timer=setTimeout(resolve,milliseconds);
-    if(timer && typeof timer.unref==="function") timer.unref();
-  });
 }
 function completeLlmObservation(target){
   if(!isCurrentLlmSave(target)) return;
@@ -943,45 +953,100 @@ function completeLlmObservation(target){
       value:target.expectedCommittedDraft.value,
       model:target.expectedCommittedDraft.model
     };
+    state.llmDraftOption=null;
   }
   render();
 }
-async function observeLlmOnce(target){
-  if(!isCurrentLlmSave(target)) return "superseded";
-  try {
-    const observedLlm=await readLlm();
-    if(!isCurrentLlmSave(target)) return "superseded";
-    if(!observedLlm) return "pending";
-    state.llm=observedLlm;
-    if(llmSelectionObserved(target,observedLlm)){
-      completeLlmObservation(target);
-      return "observed";
-    }
-    render();
-    return "pending";
-  } catch(e){
-    if(!isCurrentLlmSave(target)) return "superseded";
-    if(e.message!=="unauthorized") console.warn("channels: llm observation read failed", e);
-    return "pending";
-  }
-}
-async function continueLlmObservation(target){
-  for(let i=1;i<USER_LLM_SAVE_OBSERVATION_DELAYS_MS.length;i+=1){
-    if(!isCurrentLlmSave(target)) return;
-    await waitForLlmObservation(USER_LLM_SAVE_OBSERVATION_DELAYS_MS[i]);
-    if(!isCurrentLlmSave(target)) return;
-    const outcome=await observeLlmOnce(target);
-    if(outcome!=="pending") return;
-  }
-  if(!isCurrentLlmSave(target)) return;
-  state.llmPending=freezeLlmPending({...state.llmPending,phase:"accepted_unobserved"});
-  state.llmSaveState="accepted_unobserved";
-  state.llmSaved=false;
-  render();
-}
-async function startLlmObservation(target){
-  const firstOutcome=await observeLlmOnce(target);
-  if(firstOutcome==="pending") void continueLlmObservation(target);
+function startLlmObservation(target){
+  return new Promise(resolve=>{
+    let active=true;
+    let attemptGeneration=0;
+    let currentController=null;
+    let foregroundSettled=false;
+    let elapsedMilliseconds=0;
+    const timers=[];
+    const settleForeground=()=>{
+      if(foregroundSettled) return;
+      foregroundSettled=true;
+      resolve();
+    };
+    const stopObservation=()=>{
+      if(!active) return;
+      active=false;
+      attemptGeneration+=1;
+      timers.forEach(timer=>clearTimeout(timer));
+      if(currentController) currentController.abort();
+      currentController=null;
+      settleForeground();
+    };
+    const schedule=(callback,milliseconds)=>{
+      const timer=setTimeout(callback,milliseconds);
+      if(timer && typeof timer.unref==="function") timer.unref();
+      timers.push(timer);
+    };
+    const launchRead=(attemptIndex)=>{
+      if(!active) return;
+      if(!isCurrentLlmSave(target)){
+        stopObservation();
+        return;
+      }
+
+      if(currentController) currentController.abort();
+      currentController=null;
+      attemptGeneration+=1;
+      const generation=attemptGeneration;
+      const controller=new AbortController();
+      currentController=controller;
+      const isAuthoritative=()=>active && generation===attemptGeneration &&
+        !controller.signal.aborted && currentController===controller;
+      const handleError=(error)=>{
+        if(!isAuthoritative()) return;
+        currentController=null;
+        if(!isCurrentLlmSave(target)){
+          stopObservation();
+          return;
+        }
+        if(error.message!=="unauthorized") console.warn("channels: llm observation read failed", error);
+        if(attemptIndex===0) settleForeground();
+      };
+
+      let pendingRead;
+      try { pendingRead=readLlm(controller.signal); }
+      catch(error){ handleError(error); return; }
+      void pendingRead.then(observedLlm=>{
+        if(!isAuthoritative()) return;
+        currentController=null;
+        if(!isCurrentLlmSave(target)){
+          stopObservation();
+          return;
+        }
+        if(observedLlm){
+          state.llm=observedLlm;
+          if(llmSelectionObserved(target,observedLlm)){
+            completeLlmObservation(target);
+            stopObservation();
+            return;
+          }
+          render();
+        }
+        if(attemptIndex===0) settleForeground();
+      },handleError);
+    };
+
+    USER_LLM_SAVE_OBSERVATION_DELAYS_MS.forEach((delayMilliseconds,attemptIndex)=>{
+      elapsedMilliseconds+=delayMilliseconds;
+      schedule(()=>launchRead(attemptIndex),elapsedMilliseconds);
+    });
+    schedule(()=>{
+      const stillCurrent=isCurrentLlmSave(target);
+      stopObservation();
+      if(!stillCurrent) return;
+      state.llmPending=freezeLlmPending({...state.llmPending,phase:"accepted_unobserved"});
+      state.llmSaveState="accepted_unobserved";
+      state.llmSaved=false;
+      render();
+    },elapsedMilliseconds);
+  });
 }
 function retryLlmObservation(){
   const pending=state.llmPending;
@@ -998,6 +1063,13 @@ function noteLlmDraftEdit(){
   state.llmSaveError=null;
   state.llmSaved=false;
   if(!state.llmPending) state.llmSaveState="idle";
+}
+function completeLlmWriteFailure(target,message){
+  if(!isCurrentLlmSave(target)) return;
+  const draftStillMatches=llmDraftStillMatches(target);
+  state.llmPending=null;
+  state.llmSaveState=draftStillMatches ? "failed" : "idle";
+  state.llmSaveError=draftStillMatches ? message : null;
 }
 async function saveLlm(){
   const option=buildLlmSelectionOptions(state.llm).find(item=>item.value===state.llmSel.value);
@@ -1020,6 +1092,7 @@ async function saveLlm(){
     expectedModelKnown:modelExpectation.known
   });
   state.llmPending=pending;
+  state.llmDraftOption=snapshotLlmSelectionOption(option);
   state.llmSel.model=requestedModel;
   state.llmSaveState="saving"; state.llmSaveError=null; state.llmSaved=false; render();
   try {
@@ -1029,10 +1102,11 @@ async function saveLlm(){
     const result=await apiSend("/api/user-config/llm", "PUT", body);
     if(!isCurrentLlmSave(pending)) return;
     if(!result.ok || !result.data || result.data.accepted!==true){
-      state.llmPending=null;
-      state.llmSaveState="failed";
-      state.llmSaveError=(result.data && (result.data.error||result.data.note)) ||
-        (result.ok ? "保存请求未被接受" : ("HTTP " + result.status));
+      completeLlmWriteFailure(
+        pending,
+        (result.data && (result.data.error||result.data.note)) ||
+          (result.ok ? "保存请求未被接受" : ("HTTP " + result.status))
+      );
       return;
     }
 
@@ -1043,9 +1117,7 @@ async function saveLlm(){
   } catch(e){
     if(isCurrentLlmSave(pending) && e.message!=="unauthorized"){
       console.warn("channels: llm save failed", e);
-      state.llmPending=null;
-      state.llmSaveState="failed";
-      state.llmSaveError=String(e.message||e);
+      completeLlmWriteFailure(pending,String(e.message||e));
     }
   } finally { if(state.llmSaveToken===saveToken) render(); }
 }
@@ -1544,6 +1616,16 @@ function renderStep4(){
       disabled:true
     });
   };
+  if(state.llmDraftOption && state.llmDraftOption.value===state.llmSel.value){
+    addRetainedOption(
+      state.llmDraftOption.value,
+      state.llmDraftOption.label,
+      state.llmDraftOption.kind,
+      state.llmDraftOption.routeValue,
+      state.llmDraftOption.userServiceId,
+      state.llmDraftOption.defaultModel
+    );
+  }
   if(state.llmPending){
     addRetainedOption(
       state.llmPending.submittedDraft.value,
@@ -1586,7 +1668,7 @@ function renderStep4(){
   const grid=el("div",{class:"select-grid"});
   const selectionChoices = (state.llmSel.value==null ? [{value:"",label:"请选择 LLM 服务",disabled:true}] : []).concat(selectionOpts);
   const serviceSel=selField("LLM 服务", selectionChoices, state.llmSel.value||"");
-  serviceSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.value=e.target.value; state.llmSel.model=null; noteLlmDraftEdit(); render(); });
+  serviceSel.querySelector("select").addEventListener("change",(e)=>{ state.llmSel.value=e.target.value; state.llmSel.model=null; state.llmDraftOption=snapshotLlmSelectionOption(selectionOpts.find(option=>option.value===e.target.value)); noteLlmDraftEdit(); render(); });
   grid.appendChild(serviceSel);
   // Always offer the genuine "(平台默认)" sentinel; append real models when the catalog has them.
   const currentModel=normalizeLlmModel(state.llmSel.model);
@@ -1746,7 +1828,7 @@ function renderManage(){
 /* ===========================================================================
    Compose / render
    =========================================================================== */
-function enterWizard(platformId){ state.llmSaveToken+=1; state.llmDraftRevision+=1; state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.llmSel={ value:null, model:null }; state.llmPending=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
+function enterWizard(platformId){ state.llmSaveToken+=1; state.llmDraftRevision+=1; state.platform=(platformId&&PLATFORMS[platformId])?platformId:"lark"; state.view="wizard"; state.step=1; state.s="idle"; state.err=null; state.reg=null; state.llmSel={ value:null, model:null }; state.llmDraftOption=null; state.llmPending=null; state.llmSaveState="idle"; state.llmSaveError=null; state.llmSaved=false; state.cred={ app_id:"", app_secret:"", verification_token:"", bot_token:"", label:"" }; render(); }
 function render(){
   const app=$("#app"); app.innerHTML="";
   app.appendChild(renderTopbar());

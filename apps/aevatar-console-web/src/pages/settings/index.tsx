@@ -549,7 +549,7 @@ const SettingsPage: React.FC = () => {
       void observeUserLlmSave({
         saveToken: target.saveToken,
         isCurrent: (saveToken) => saveTokenRef.current === saveToken,
-        read: () => studioApi.getUserLlmSettings(),
+        read: (signal) => studioApi.getUserLlmSettings(signal),
         isObserved: (settings) => {
           const candidate = normalizeUserConfigDraft(settings);
           const observed = draftsEqual(candidate, target.expectedCommittedDraft);

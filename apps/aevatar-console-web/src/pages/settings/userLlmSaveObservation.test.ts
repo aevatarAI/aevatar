@@ -97,4 +97,54 @@ describe("userLlmSaveObservation", () => {
     await expect(observation).resolves.toEqual({ attempts: 1, phase: "superseded" });
     expect(onResponse).not.toHaveBeenCalled();
   });
+
+  it("reaches the fixed deadline when reads hang and ignores late responses and errors", async () => {
+    const observedAt: number[] = [];
+    const resolvers: Array<(value: { observed: boolean }) => void> = [];
+    const rejecters: Array<(reason?: unknown) => void> = [];
+    const signals: AbortSignal[] = [];
+    const onResponse = jest.fn();
+    const onTransientError = jest.fn();
+    let settled:
+      | { readonly attempts: number; readonly phase: string }
+      | undefined;
+    const observation = observeUserLlmSave({
+      saveToken: 13,
+      isCurrent: (saveToken) => saveToken === 13,
+      read: (signal) =>
+        new Promise<{ observed: boolean }>((resolve, reject) => {
+          observedAt.push(Date.now());
+          signals.push(signal);
+          resolvers.push(resolve);
+          rejecters.push(reject);
+        }),
+      isObserved: (sample) => sample.observed,
+      onResponse,
+      onTransientError,
+    });
+    void observation.then((result) => {
+      settled = result;
+    });
+
+    await jest.advanceTimersByTimeAsync(0);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(250);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(11_500);
+
+    expect(observedAt).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
+    expect(settled).toEqual({ attempts: 7, phase: "accepted_unobserved" });
+    expect(signals).toHaveLength(7);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    resolvers[0]?.({ observed: true });
+    rejecters[1]?.(new Error("late failure"));
+    await Promise.resolve();
+    expect(onResponse).not.toHaveBeenCalled();
+    expect(onTransientError).not.toHaveBeenCalled();
+  });
 });

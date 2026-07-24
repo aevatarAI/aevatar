@@ -23,7 +23,7 @@ internal sealed class UserLlmSettingsViewBuilder
             .Select(option => option.RouteValue)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var effectiveRoute = ResolveEffectiveRoute(saved, options);
-        var effectiveRouteLabel = ResolveRouteLabel(effectiveRoute, options);
+        var effectiveRouteLabel = ResolveEffectiveRouteLabel(saved, effectiveRoute, options);
         var savedRouteLabel = ResolveSavedRouteLabel(saved, options);
         var catalogStatus = result.Services.Count == 0
             ? UserLlmCatalogStatusValue.Empty
@@ -308,6 +308,20 @@ internal sealed class UserLlmSettingsViewBuilder
             return _gatewayRouteLabel;
 
         return FindSavedOption(saved, routeOptions)?.Label ?? saved.ServiceSlug ?? saved.Route;
+    }
+
+    private string ResolveEffectiveRouteLabel(
+        SavedSelection saved,
+        string effectiveRoute,
+        IReadOnlyList<UserLlmRouteOption> routeOptions)
+    {
+        if (FindSavedOption(saved, routeOptions) is { Ready: true, Allowed: true } savedOption &&
+            string.Equals(savedOption.RouteValue, effectiveRoute, StringComparison.OrdinalIgnoreCase))
+        {
+            return savedOption.Label;
+        }
+
+        return ResolveRouteLabel(effectiveRoute, routeOptions);
     }
 
     private string ResolveRouteLabel(string route, IReadOnlyList<UserLlmRouteOption> routeOptions)

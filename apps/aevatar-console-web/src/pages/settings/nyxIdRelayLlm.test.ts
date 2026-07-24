@@ -171,10 +171,12 @@ function renderStep(hooks: RelayHooks): void {
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 describe("NyxID relay owner LLM selection", () => {
@@ -568,6 +570,29 @@ describe("NyxID relay owner LLM selection", () => {
     expect(hooks.state.llmSaved).toBe(true);
   });
 
+  it("does not apply an in-flight PUT failure to a newer edited draft", async () => {
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const write = createDeferred<Response>();
+    global.fetch = jest.fn().mockReturnValueOnce(write.promise) as typeof global.fetch;
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const saving = hooks.saveLlm();
+    renderStep(hooks);
+    fireEvent.change(screen.getByLabelText("LLM 服务"), {
+      target: { value: "gateway" },
+    });
+    write.reject(new Error("old write failed"));
+    await saving;
+    renderStep(hooks);
+
+    expect(hooks.state.llmSel.value).toBe("gateway");
+    expect(hooks.state.llmSaveState).toBe("idle");
+    expect(hooks.state.llmSaveError).toBeNull();
+    expect(document.body).not.toHaveTextContent("保存失败");
+    warn.mockRestore();
+  });
+
   it("keeps observing an accepted target after an edit without marking the edit saved", async () => {
     const hooks = loadRelayHooks();
     configureDraft(hooks);
@@ -590,6 +615,57 @@ describe("NyxID relay owner LLM selection", () => {
     expect(hooks.state.llmSel.value).toBe("gateway");
     expect(hooks.state.llmSaved).toBe(false);
     expect(document.body).toHaveTextContent("Shared OpenAI beta");
+  });
+
+  it("retains a newer third-service draft when observation omits it", async () => {
+    const hooks = loadRelayHooks();
+    const initial = relaySettings("us-alpha");
+    configureDraft(hooks, {
+      ...initial,
+      routeOptions: [
+        ...initial.routeOptions,
+        {
+          routeValue: sharedRoute,
+          label: "Shared OpenAI gamma",
+          source: "user_service",
+          status: "ready",
+          allowed: true,
+          ready: true,
+          userServiceId: "us-gamma",
+          serviceSlug: "shared-openai",
+          defaultModel: "gpt-gamma",
+          description: null,
+        },
+      ],
+    });
+    const readStarted = createDeferred<void>();
+    const observationRead = createDeferred<Response>();
+    global.fetch = jest.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return Promise.resolve(fetchResponse(202, { accepted: true }));
+      }
+      readStarted.resolve();
+      return observationRead.promise;
+    }) as typeof global.fetch;
+
+    const saving = hooks.saveLlm();
+    await readStarted.promise;
+    expect(hooks.state.llmSaveState).toBe("accepted");
+    renderStep(hooks);
+    fireEvent.change(screen.getByLabelText("LLM 服务"), {
+      target: { value: "user-service:us-gamma" },
+    });
+    observationRead.resolve(fetchResponse(200, relaySettings("us-alpha")));
+    await saving;
+    renderStep(hooks);
+
+    expect(hooks.state.llmSel.value).toBe("user-service:us-gamma");
+    expect(
+      screen.getByRole("option", { name: "Shared OpenAI gamma（暂不可用）" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: /保存回复模型|重新确认保存/ }),
+    ).toBeDisabled();
   });
 
   it("retains the accepted exact target when a stale catalog omits it", async () => {
@@ -690,5 +766,57 @@ describe("NyxID relay owner LLM selection", () => {
     expect(document.body).toHaveTextContent("Shared OpenAI beta");
     expect(screen.getByRole("button", { name: "重新检查" })).toBeEnabled();
     expect(document.body).not.toHaveTextContent("保存失败");
+  });
+
+  it("reaches the fixed deadline when observation GETs hang", async () => {
+    jest.useFakeTimers({ now: 0 });
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const getTimes: number[] = [];
+    const signals: AbortSignal[] = [];
+    const reads: Array<ReturnType<typeof createDeferred<Response>>> = [];
+    global.fetch = jest.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return Promise.resolve(fetchResponse(202, { accepted: true }));
+      }
+      getTimes.push(Date.now());
+      if (init?.signal) signals.push(init.signal);
+      const read = createDeferred<Response>();
+      reads.push(read);
+      return read.promise;
+    }) as typeof global.fetch;
+
+    const saving = hooks.saveLlm();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(250);
+    expect(signals).toHaveLength(2);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(11_500);
+
+    expect(getTimes).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
+    await saving;
+    expect(hooks.state.llmSaveState).toBe("accepted_unobserved");
+    expect(signals).toHaveLength(7);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    const lastGoodCatalog = hooks.state.llm;
+    reads[0]?.resolve(
+      fetchResponse(200, {
+        ...relaySettings("us-beta"),
+        defaultModel: "gpt-shared",
+      }),
+    );
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    reads[1]?.reject(new Error("late observation failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(hooks.state.llm).toBe(lastGoodCatalog);
+    expect(hooks.state.llmSaveState).toBe("accepted_unobserved");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
