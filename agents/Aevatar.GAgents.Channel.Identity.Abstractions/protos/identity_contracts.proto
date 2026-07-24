@@ -76,6 +76,14 @@ message ManagedCodexCredentialDescriptor {
   string chrono_sandbox_service_slug = 5;
   google.protobuf.Timestamp expires_at = 6;
   ManagedCodexCredentialStatus status = 7;
+  string chrono_llm_user_service_id = 8;
+}
+
+message ManagedCodexCredentialSnapshot {
+  ManagedCodexCredentialDescriptor credential = 1;
+  repeated ManagedCodexCredentialCleanup pending_revocations = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
 }
 
 message ManagedCodexCredentialCleanup {

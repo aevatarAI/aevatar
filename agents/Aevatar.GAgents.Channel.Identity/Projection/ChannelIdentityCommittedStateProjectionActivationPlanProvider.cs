@@ -71,6 +71,8 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
     private static bool IsManagedCodexCredentialEvent(Any payload) =>
         payload.Is(ManagedCodexCredentialProvisionedEvent.Descriptor) ||
         payload.Is(ManagedCodexCredentialRotatedEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialPolicyReconciledEvent.Descriptor) ||
+        payload.Is(ManagedCodexCredentialReadinessConfirmedEvent.Descriptor) ||
         payload.Is(ManagedCodexCredentialRevokedEvent.Descriptor) ||
         payload.Is(ManagedCodexCredentialCleanupQueuedEvent.Descriptor) ||
         payload.Is(ManagedCodexCredentialCleanupTrackCompletedEvent.Descriptor);

@@ -40,6 +40,7 @@ public sealed class ManagedCodexCredentialProjectorTests
                     OwnerScopeKey = actorId,
                 },
                 ChronoSandboxUserServiceId = "user-service-sandbox",
+                ChronoLlmUserServiceId = "user-service-llm",
                 ChronoSandboxServiceSlug = "chrono-sandbox",
                 ExpiresAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-08-21T00:00:00Z")),
                 Status = ManagedCodexCredentialStatus.Active,
@@ -67,6 +68,7 @@ public sealed class ManagedCodexCredentialProjectorTests
         document.StateVersion.Should().Be(7);
         document.LastEventId.Should().Be("event-7");
         document.Credential.ApiKeyId.Should().Be("key-1");
+        document.Credential.ChronoLlmUserServiceId.Should().Be("user-service-llm");
         document.PendingRevocations.Should().ContainSingle();
         document.ToString().Should().NotContain("raw-agent-key");
     }

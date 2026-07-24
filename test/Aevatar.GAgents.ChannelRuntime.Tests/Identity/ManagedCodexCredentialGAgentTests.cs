@@ -89,6 +89,44 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleProvisioned_WithoutChronoLlmUserServiceId_DoesNotCommit()
+    {
+        var descriptor = Descriptor("key-a", "sec-a", 1);
+        descriptor.ChronoLlmUserServiceId = string.Empty;
+
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        });
+
+        _agent.State.Credential.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandlePolicyReconciled_PreservesKeyAndVaultReferenceAndChangesLlmService()
+    {
+        var legacy = Descriptor("key-a", "sec-a", 1);
+        legacy.ChronoLlmUserServiceId = "us-llm-old";
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = legacy,
+        });
+
+        var reconciled = legacy.Clone();
+        reconciled.ChronoLlmUserServiceId = "us-llm";
+        await _agent.HandlePolicyReconciled(
+            new CommitManagedCodexCredentialPolicyReconciledCommand
+            {
+                ExpectedApiKeyId = "key-a",
+                Credential = reconciled,
+            });
+
+        _agent.State.Credential.ApiKeyId.Should().Be("key-a");
+        _agent.State.Credential.SecretReference.Ref.Should().Be("sec-a");
+        _agent.State.Credential.ChronoLlmUserServiceId.Should().Be("us-llm");
+    }
+
+    [Fact]
     public async Task HandleRotated_WithStaleExpectedKey_QueuesIncomingKeyForCleanup()
     {
         await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
@@ -177,6 +215,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
                 ExpiresAtUnixMs = ExpiresAt.ToUnixTimeMilliseconds(),
             },
             ChronoSandboxUserServiceId = "user-service-sandbox",
+            ChronoLlmUserServiceId = "user-service-llm",
             ChronoSandboxServiceSlug = "chrono-sandbox",
             ExpiresAt = Timestamp.FromDateTimeOffset(ExpiresAt),
             Status = ManagedCodexCredentialStatus.Active,

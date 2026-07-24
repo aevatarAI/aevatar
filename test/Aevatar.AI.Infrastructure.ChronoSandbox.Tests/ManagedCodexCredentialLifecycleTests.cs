@@ -378,7 +378,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var current = Descriptor("key-1", "sec-1", version: 1);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(current, [], 4));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
         var vault = Substitute.For<ISecretVault>();
         StoreSecretRequest? stored = null;
         vault.PutAsync(
@@ -510,7 +515,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var current = Descriptor("key-old", "sec-old", version: 1);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(current, [], 4));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
         var vault = Substitute.For<ISecretVault>();
         vault.ResolveAsync(Arg.Any<ResolveSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(call => ResolvedSecret(call.Arg<ResolveSecretRequest>(), expiresAt));
@@ -549,7 +559,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var current = Descriptor("key-1", "sec-1", version: 1);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(current, [], 4));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
         var vault = Substitute.For<ISecretVault>();
         vault.PutAsync(Arg.Any<StoreSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(new StoreSecretResult(Reference(
@@ -592,7 +607,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var current = Descriptor("key-1", "sec-1", version: 1);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(current, [], 4));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
         var vault = Substitute.For<ISecretVault>();
         vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns<Task<RevokeSecretResult>>(_ => throw new InvalidOperationException("vault unavailable"));
@@ -625,7 +645,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var current = Descriptor("key-1", "sec-1", version: 1);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(current, [], 4));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
         var vault = Substitute.For<ISecretVault>();
         vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(new RevokeSecretResult(false));
@@ -657,7 +682,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var current = Descriptor("key-1", "sec-1", version: 1);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(current, [], 4));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
         var vault = Substitute.For<ISecretVault>();
         CancellationToken vaultToken = default;
         vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
@@ -726,7 +756,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var current = Descriptor("key-1", "sec-1", version: 1);
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(current, [], 4));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
         var vault = Substitute.For<ISecretVault>();
         vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(new RevokeSecretResult(true));
@@ -829,17 +864,24 @@ public sealed class ManagedCodexCredentialLifecycleTests
         previous.Status = ManagedCodexCredentialStatus.Revoked;
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(
-                previous,
-                [new ManagedCodexCredentialCleanup
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = previous.Clone(),
+                PendingRevocations =
                 {
-                    ApiKeyId = "key-orphan",
-                    SecretRef = "sec-orphan",
-                    NyxIdPending = true,
-                    VaultPending = true,
-                    RequestedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddMinutes(-5)),
-                }],
-                5));
+                    new ManagedCodexCredentialCleanup
+                    {
+                        ApiKeyId = "key-orphan",
+                        SecretRef = "sec-orphan",
+                        NyxIdPending = true,
+                        VaultPending = true,
+                        RequestedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                            Now.AddMinutes(-5)),
+                    },
+                },
+                StateVersion = 5,
+                LastEventId = "event-5",
+            });
         var vault = Substitute.For<ISecretVault>();
         vault.RevokeAsync(Arg.Any<RevokeSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(new RevokeSecretResult(true));
@@ -993,6 +1035,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
             },
             ChronoSandboxUserServiceId = "us-sandbox",
+            ChronoLlmUserServiceId = "us-llm",
             ChronoSandboxServiceSlug = "chrono-sandbox",
             ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
             Status = ManagedCodexCredentialStatus.Active,

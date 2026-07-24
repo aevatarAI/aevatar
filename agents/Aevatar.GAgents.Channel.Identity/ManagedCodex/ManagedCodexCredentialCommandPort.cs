@@ -42,6 +42,23 @@ internal sealed class ManagedCodexCredentialCommandPort(
             ct);
     }
 
+    public Task<DispatchAdmission> CommitPolicyReconciledAsync(
+        string expectedApiKeyId,
+        ManagedCodexCredentialDescriptor credential,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedApiKeyId);
+        ArgumentNullException.ThrowIfNull(credential);
+        return DispatchAsync(
+            credential.Owner,
+            new CommitManagedCodexCredentialPolicyReconciledCommand
+            {
+                ExpectedApiKeyId = expectedApiKeyId.Trim(),
+                Credential = credential.Clone(),
+            },
+            ct);
+    }
+
     public Task<DispatchAdmission> CommitRevokedAsync(
         ExternalSubjectRef owner,
         string expectedApiKeyId,

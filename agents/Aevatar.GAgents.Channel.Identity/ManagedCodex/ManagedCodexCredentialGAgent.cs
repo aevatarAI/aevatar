@@ -21,6 +21,8 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             .Match(current, evt)
             .On<ManagedCodexCredentialProvisionedEvent>(ApplyProvisioned)
             .On<ManagedCodexCredentialRotatedEvent>(ApplyRotated)
+            .On<ManagedCodexCredentialPolicyReconciledEvent>(ApplyPolicyReconciled)
+            .On<ManagedCodexCredentialReadinessConfirmedEvent>(static (state, _) => state.Clone())
             .On<ManagedCodexCredentialRevokedEvent>(ApplyRevoked)
             .On<ManagedCodexCredentialCleanupQueuedEvent>(ApplyCleanupQueued)
             .On<ManagedCodexCredentialCleanupTrackCompletedEvent>(ApplyCleanupTrackCompleted)
@@ -35,6 +37,12 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
 
         if (State.Credential is { Status: ManagedCodexCredentialStatus.Active } current)
         {
+            if (current.Equals(credential))
+            {
+                await PersistReadinessConfirmedAsync(current);
+                return;
+            }
+
             if (string.Equals(current.ApiKeyId, credential.ApiKeyId, StringComparison.Ordinal))
                 return;
 
@@ -57,7 +65,10 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
 
         var current = State.Credential;
         if (current is not null && current.Equals(credential))
+        {
+            await PersistReadinessConfirmedAsync(current);
             return;
+        }
 
         if (current is null ||
             current.Status != ManagedCodexCredentialStatus.Active ||
@@ -81,6 +92,40 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         await PersistDomainEventAsync(new ManagedCodexCredentialRotatedEvent
         {
             PreviousApiKeyId = current.ApiKeyId,
+            Credential = credential,
+        });
+    }
+
+    [EventHandler]
+    public async Task HandlePolicyReconciled(
+        CommitManagedCodexCredentialPolicyReconciledCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!TryValidateCredential(command.Credential, out var credential))
+            return;
+
+        var current = State.Credential;
+        if (current is null ||
+            current.Status != ManagedCodexCredentialStatus.Active ||
+            !string.Equals(current.ApiKeyId, command.ExpectedApiKeyId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(
+                current.SecretReference?.Ref,
+                credential.SecretReference?.Ref,
+                StringComparison.Ordinal))
+        {
+            await QueueIncomingCredentialCleanupAsync(credential);
+            return;
+        }
+
+        if (current.Equals(credential))
+        {
+            await PersistReadinessConfirmedAsync(current);
+            return;
+        }
+
+        await PersistDomainEventAsync(new ManagedCodexCredentialPolicyReconciledEvent
+        {
+            ApiKeyId = current.ApiKeyId,
             Credential = credential,
         });
     }
@@ -151,6 +196,13 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         });
     }
 
+    private Task PersistReadinessConfirmedAsync(ManagedCodexCredentialDescriptor credential) =>
+        PersistDomainEventAsync(new ManagedCodexCredentialReadinessConfirmedEvent
+        {
+            ApiKeyId = credential.ApiKeyId,
+            VerifiedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        });
+
     private async Task QueueIncomingCredentialCleanupAsync(ManagedCodexCredentialDescriptor credential)
     {
         var sameVaultRef = string.Equals(
@@ -194,6 +246,11 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             string.IsNullOrWhiteSpace(candidate.SecretReference.Fingerprint) ||
             candidate.SecretReference.Version <= 0 ||
             string.IsNullOrWhiteSpace(candidate.ChronoSandboxUserServiceId) ||
+            string.IsNullOrWhiteSpace(candidate.ChronoLlmUserServiceId) ||
+            string.Equals(
+                candidate.ChronoSandboxUserServiceId.Trim(),
+                candidate.ChronoLlmUserServiceId.Trim(),
+                StringComparison.Ordinal) ||
             !string.Equals(candidate.ChronoSandboxServiceSlug, "chrono-sandbox", StringComparison.Ordinal) ||
             candidate.ExpiresAt is null ||
             candidate.SecretReference.ExpiresAtUnixMs !=
@@ -207,6 +264,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         credential = candidate.Clone();
         credential.ApiKeyId = credential.ApiKeyId.Trim();
         credential.ChronoSandboxUserServiceId = credential.ChronoSandboxUserServiceId.Trim();
+        credential.ChronoLlmUserServiceId = credential.ChronoLlmUserServiceId.Trim();
         return true;
     }
 
@@ -272,6 +330,16 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
     private static ManagedCodexCredentialState ApplyRotated(
         ManagedCodexCredentialState current,
         ManagedCodexCredentialRotatedEvent evt)
+    {
+        var next = current.Clone();
+        next.Credential = evt.Credential?.Clone();
+        next.RevokedAt = null;
+        return next;
+    }
+
+    private static ManagedCodexCredentialState ApplyPolicyReconciled(
+        ManagedCodexCredentialState current,
+        ManagedCodexCredentialPolicyReconciledEvent evt)
     {
         var next = current.Clone();
         next.Credential = evt.Credential?.Clone();

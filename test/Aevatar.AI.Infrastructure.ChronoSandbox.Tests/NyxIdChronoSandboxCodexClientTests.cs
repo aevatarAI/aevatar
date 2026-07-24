@@ -207,7 +207,12 @@ public sealed class NyxIdChronoSandboxCodexClientTests
         descriptor ??= Descriptor();
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(descriptor, [], 3));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = descriptor.Clone(),
+                StateVersion = 3,
+                LastEventId = "event-3",
+            });
         var vault = Substitute.For<ISecretVault>();
         vault.ResolveAsync(Arg.Any<ResolveSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(new ResolveSecretResult(descriptor.SecretReference.Clone(), RawKey));
@@ -243,6 +248,7 @@ public sealed class NyxIdChronoSandboxCodexClientTests
             ExpiresAtUnixMs = Now.AddDays(30).ToUnixTimeMilliseconds(),
         },
         ChronoSandboxUserServiceId = "us-sandbox",
+        ChronoLlmUserServiceId = "us-llm",
         ChronoSandboxServiceSlug = "chrono-sandbox",
         ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(Now.AddDays(30)),
         Status = ManagedCodexCredentialStatus.Active,

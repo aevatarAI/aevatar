@@ -4,15 +4,6 @@ using Aevatar.GAgents.Channel.Abstractions;
 namespace Aevatar.GAgents.Channel.Identity.Abstractions;
 
 /// <summary>
-/// Current non-secret managed Codex credential facts materialized from the
-/// authoritative per-user actor.
-/// </summary>
-public sealed record ManagedCodexCredentialSnapshot(
-    ManagedCodexCredentialDescriptor Credential,
-    IReadOnlyList<ManagedCodexCredentialCleanup> PendingRevocations,
-    long StateVersion);
-
-/// <summary>
 /// Read-only current-state projection query for one NyxID user's managed Codex
 /// invocation credential.
 /// </summary>
@@ -37,6 +28,12 @@ public interface IManagedCodexCredentialCommandPort
     /// <summary>Admits a rotation guarded by the expected current NyxID API key ID.</summary>
     Task<DispatchAdmission> CommitRotatedAsync(
         string expectedPreviousApiKeyId,
+        ManagedCodexCredentialDescriptor credential,
+        CancellationToken ct = default);
+
+    /// <summary>Admits policy reconciliation while preserving the current API key and Vault reference.</summary>
+    Task<DispatchAdmission> CommitPolicyReconciledAsync(
+        string expectedApiKeyId,
         ManagedCodexCredentialDescriptor credential,
         CancellationToken ct = default);
 

@@ -99,7 +99,12 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
                 Arg.Is<ExternalSubjectRef>(owner =>
                     owner.Platform == "nyxid" && owner.ExternalUserId == "user-a"),
                 Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(Descriptor(), [], 7));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = Descriptor(),
+                StateVersion = 7,
+                LastEventId = "event-7",
+            });
 
         var result = await ManagedCodexCredentialEndpoints.StatusAsync(
             Context(subject: "user-a"),
@@ -119,7 +124,12 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     {
         var query = Substitute.For<IManagedCodexCredentialQueryPort>();
         query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot(Descriptor(), [], 7));
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = Descriptor(),
+                StateVersion = 7,
+                LastEventId = "event-7",
+            });
         var now = new FakeTimeProvider(DateTimeOffset.Parse("2031-01-01T00:00:00Z"));
 
         var result = await ManagedCodexCredentialEndpoints.StatusAsync(
@@ -245,6 +255,7 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
             Version = 1,
         },
         ChronoSandboxUserServiceId = "us-sandbox",
+        ChronoLlmUserServiceId = "us-llm",
         ChronoSandboxServiceSlug = "chrono-sandbox",
         ExpiresAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
             DateTimeOffset.Parse("2030-01-01T00:00:00Z")),
