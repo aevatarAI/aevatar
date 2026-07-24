@@ -95,6 +95,91 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ObservatoryRouteState_ShouldDefaultToMineAndBuildSupportedFilters()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:''");
+        html.Should().Contain("if(OBS_STATE.scope==='all') p.set('scope','__all__')");
+        html.Should().Contain("['status','origin','definition','schedule','from','to'].forEach");
+        html.Should().Contain("p.set('take','100')");
+        html.Should().Contain("if((key==='from'||key==='to')&&value&&!obsValidTimestamp(value)) return");
+        html.Should().NotContain("scope:'__all__'");
+        html.Should().NotContain("statusFilter:[]");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryRouteState_ShouldUseCanonicalHashKeys()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain(
+            "var OBS_QUERY_KEYS=['scope','status','origin','definition','schedule','from','to','run','tab']");
+        html.Should().Contain("OBS_STATUS_VALUES.indexOf(q.status)>=0");
+        html.Should().Contain("OBS_TAB_VALUES.indexOf(q.tab)>=0");
+        html.Should().Contain("selectedId:q.run||null");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryDeepLinks_ShouldPreserveExactScopeAndSchedule()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("data-scope=\"'+esc(scopeId)+'\"");
+        html.Should().Contain("var runScope=runEl.getAttribute('data-scope')");
+        html.Should().Contain("obsNavigate({run:rid,scope:runScope||'mine'})");
+        html.Should().Contain("obsNavigate({schedule:act.getAttribute('data-id'),run:null})");
+        html.Should().NotContain("OBS_STATE.scope='__all__'");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryDetail_ShouldFollowObservationIntentAndPinFilteredRun()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("if(OBS_STATE.scope==='all'||OBS_DIRECT_RUNS[runId])");
+        html.Should().Contain("if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope)");
+        html.Should().Contain("return base+(p.toString()?'?'+p.toString():'')");
+        html.Should().Contain("function obsPinnedRun()");
+        html.Should().Contain("data-obs-pinned=\"true\"");
+        html.Should().Contain("不在当前筛选结果中");
+        html.Should().NotContain("obsUpsertRunFromDetail(OBS_STATE.selectedId");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryWorkspace_ShouldExposeScopeRailAndAdminTools()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("class=\"obs-scope-switch\" role=\"group\" aria-label=\"观测 scope\"");
+        html.Should().Contain("aria-pressed=\"'+(OBS_STATE.scope===");
+        html.Should().Contain("data-act=\"obsRailToggle\"");
+        html.Should().Contain("class=\"obs-admin-tools\"");
+        html.Should().Contain("data-act=\"obsLocalSearch\"");
+        html.Should().Contain("显示 '+visible+' / 已加载 '+loaded");
+        html.Should().NotContain("class=\"obs-adminbar\"");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryImmersiveMode_ShouldBeExplicitSessionState()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("data-act=\"obsImmersive\"");
+        html.Should().Contain("sessionStorage.setItem(OBS_SESSION_IMMERSIVE,enabled?'1':'0')");
+        html.Should().Contain("if(OBS_STATE.immersive){ obsSetImmersive(false); render(); }");
+        html.Should().Contain("body.obs-immersive .rail");
+        html.Should().Contain("body.obs-immersive .app-header");
+        html.Should().Contain("class=\"obs-immersive-bar\"");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();

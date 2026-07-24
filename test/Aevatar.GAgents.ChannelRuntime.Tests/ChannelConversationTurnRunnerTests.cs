@@ -468,8 +468,16 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkChatId].Should().Be("oc_chat_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
-
         var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.Channel.IdentityHints.Should().BeEquivalentTo(
+            new[]
+            {
+                new AgentToolChannelIdentityHint("sender", "global", "on_union_1"),
+                new AgentToolChannelIdentityHint("conversation", "platform", "oc_chat_1"),
+                new AgentToolChannelIdentityHint("subject", "account", "lark-user-1"),
+                new AgentToolChannelIdentityHint("subject", "directory", "emp-1"),
+            },
+            options => options.WithStrictOrdering());
         toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectUserId].Should().Be("lark-user-1");
         toolContext.ExternalMetadata[ChannelMetadataKeys.LarkSubjectEmployeeId].Should().Be("emp-1");
         nyxHandler.Requests.Should().ContainSingle();
@@ -540,6 +548,15 @@ public sealed class ChannelConversationTurnRunnerTests
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUserId].Should().NotBe("nyx-user-1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorOpenId].Should().Be("ou_open_operator_1");
         result.LlmReplyRequest.Metadata[ChannelMetadataKeys.LarkOperatorUnionId].Should().Be("on_operator_1");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest.ToolContext);
+        toolContext.Channel.IdentityHints.Should().BeEquivalentTo(
+            new[]
+            {
+                new AgentToolChannelIdentityHint("operator", "account", "lark-user-1"),
+                new AgentToolChannelIdentityHint("operator", "platform", "ou_open_operator_1"),
+                new AgentToolChannelIdentityHint("operator", "global", "on_operator_1"),
+            },
+            options => options.WithStrictOrdering());
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectUserId);
         result.LlmReplyRequest.Metadata.Should().NotContainKey(ChannelMetadataKeys.LarkSubjectEmployeeId);
     }

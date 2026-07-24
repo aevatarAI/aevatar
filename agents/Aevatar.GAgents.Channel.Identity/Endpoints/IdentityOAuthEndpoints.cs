@@ -91,8 +91,11 @@ public static class IdentityOAuthEndpoints
         [FromQuery] string? error,
         [FromQuery] string? format,
         [FromServices] INyxIdBrokerCallbackClient brokerCallback,
+        [FromServices] INyxIdCapabilityBroker capabilityBroker,
         [FromServices] IExternalIdentityBindingQueryPort queryPort,
         [FromServices] ICommandDispatchService<CommitBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingDispatch,
+        [FromServices] ICommandDispatchService<ReplaceBindingCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> bindingReplaceDispatch,
+        [FromServices] IOwnerScopeResolver ownerScopeResolver,
         [FromServices] ICommandDispatchService<ObserveBrokerCapabilityCommand, ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> brokerCapabilityDispatch,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -201,6 +204,16 @@ public static class IdentityOAuthEndpoints
                 }, statusCode: StatusCodes.Status409Conflict);
             }
 
+            var updatedBindingProbe = await ProbeIssuedBindingAsync(
+                    capabilityBroker,
+                    subject,
+                    existingBinding!.Value,
+                    logger,
+                    ct)
+                .ConfigureAwait(false);
+            if (updatedBindingProbe != IssuedBindingProbeResult.Usable)
+                return BuildIssuedBindingProbeError(updatedBindingProbe);
+
             logger.LogInformation(
                 "Updated NyxID service grant in place for {Platform}:{Tenant}:{User}; binding_id remained unchanged",
                 subject.Platform,
@@ -241,33 +254,142 @@ public static class IdentityOAuthEndpoints
             }, statusCode: StatusCodes.Status502BadGateway);
         }
 
-        var actorId = subject.ToActorId();
-
-        if (existingBinding is not null)
+        var stateExpectedBindingHash = decode.ExpectedBindingHash?.Trim() ?? string.Empty;
+        var projectedBindingHash = existingBinding is null
+            ? string.Empty
+            : NyxIdRemoteCapabilityBroker.HashBindingId(existingBinding.Value);
+        if (!string.Equals(stateExpectedBindingHash, projectedBindingHash, StringComparison.Ordinal))
         {
-            // Concurrent /init protection: if the subject is already bound,
-            // the freshly-issued binding_id we just got from NyxID is an
-            // orphan. Best-effort revoke at NyxID before responding so the
-            // orphan does not accumulate at NyxID with no local reference.
+            logger.LogWarning(
+                "OAuth callback received a new binding for a stale local binding reference. correlation={CorrelationId}",
+                decode.CorrelationId);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
-            return RenderBoundSuccess(displayName: null, alreadyBound: true, format: format);
+            return Results.Json(new
+            {
+                error = "binding_changed_during_review",
+                detail = "Lark 中的 NyxID 绑定在授权期间发生了变化。请回到 Lark 重新发送 /init。",
+            }, statusCode: StatusCodes.Status409Conflict);
+        }
+
+        var actorId = subject.ToActorId();
+        var replacingExistingBinding = existingBinding is not null;
+        if (replacingExistingBinding)
+        {
+            OwnerScopeId? existingOwnerScope;
+            try
+            {
+                existingOwnerScope = await ownerScopeResolver.ResolveAsync(subject, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "OAuth callback could not resolve the current binding owner for actor={ActorId}",
+                    actorId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = "binding_owner_lookup_failed",
+                    detail = "Aevatar 暂时无法核对当前 NyxID 账号。请稍后回到 Lark 重新发送 /init。",
+                }, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            if (string.IsNullOrWhiteSpace(existingOwnerScope?.Value))
+            {
+                try
+                {
+                    existingOwnerScope = await brokerCallback
+                        .ResolveBindingOwnerScopeAsync(existingBinding!.Value, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(
+                        ex,
+                        "OAuth callback could not introspect the legacy binding owner for actor={ActorId}",
+                        actorId);
+                    await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                    return Results.Json(new
+                    {
+                        error = "binding_owner_lookup_failed",
+                        detail = "Aevatar 暂时无法核对当前 NyxID 账号。请稍后回到 Lark 重新发送 /init。",
+                    }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }
+
+            var existingOwnerScopeId = existingOwnerScope?.Value?.Trim() ?? string.Empty;
+            if (existingOwnerScopeId.Length == 0)
+            {
+                logger.LogWarning(
+                    "OAuth callback cannot safely replace a binding without a materialized owner scope. actor={ActorId}, correlation={CorrelationId}",
+                    actorId,
+                    decode.CorrelationId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = "binding_owner_missing",
+                    detail = "当前绑定缺少可验证的 NyxID 账号归属。请先在 Lark 发送 /unbind，再发送 /init 重新绑定。",
+                }, statusCode: StatusCodes.Status409Conflict);
+            }
+
+            if (!string.Equals(existingOwnerScopeId, ownerScopeId, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "OAuth callback rejected a silent NyxID account switch for actor={ActorId}, correlation={CorrelationId}",
+                    actorId,
+                    decode.CorrelationId);
+                await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+                return Results.Json(new
+                {
+                    error = "binding_owner_mismatch",
+                    detail = "当前 Lark 身份已绑定另一个 NyxID 账号。如需切换账号，请先在 Lark 发送 /unbind，再发送 /init。",
+                }, statusCode: StatusCodes.Status409Conflict);
+            }
+        }
+
+        var issuedBindingProbe = await ProbeIssuedBindingAsync(
+                capabilityBroker,
+                subject,
+                exchange.BindingId,
+                logger,
+                ct)
+            .ConfigureAwait(false);
+        if (issuedBindingProbe != IssuedBindingProbeResult.Usable)
+        {
+            await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
+            return BuildIssuedBindingProbeError(issuedBindingProbe);
         }
 
         CommandDispatchResult<ChannelIdentityOAuthAcceptedReceipt, ChannelIdentityOAuthDispatchError> accepted;
         try
         {
-            accepted = await bindingDispatch
-                .DispatchAsync(new CommitBindingCommand
-                {
-                    ExternalSubject = subject.Clone(),
-                    BindingId = exchange.BindingId,
-                    OwnerScopeId = ownerScopeId,
-                }, ct)
-                .ConfigureAwait(false);
+            accepted = replacingExistingBinding
+                ? await bindingReplaceDispatch
+                    .DispatchAsync(new ReplaceBindingCommand
+                    {
+                        ExternalSubject = subject.Clone(),
+                        BindingId = exchange.BindingId,
+                        ExpectedPreviousBindingId = existingBinding!.Value,
+                        OwnerScopeId = ownerScopeId,
+                        Reason = "channel_service_access_review",
+                    }, ct)
+                    .ConfigureAwait(false)
+                : await bindingDispatch
+                    .DispatchAsync(new CommitBindingCommand
+                    {
+                        ExternalSubject = subject.Clone(),
+                        BindingId = exchange.BindingId,
+                        OwnerScopeId = ownerScopeId,
+                    }, ct)
+                    .ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "OAuth callback failed to dispatch CommitBindingCommand for actor={ActorId}", actorId);
+            logger.LogError(
+                ex,
+                "OAuth callback failed to dispatch the binding {Operation} command for actor={ActorId}",
+                replacingExistingBinding ? "replacement" : "commit",
+                actorId);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
             return Results.Json(new
             {
@@ -279,7 +401,8 @@ public static class IdentityOAuthEndpoints
         if (!accepted.Succeeded || accepted.Receipt is null)
         {
             logger.LogError(
-                "OAuth callback dispatch rejected for actor={ActorId}: error={Error}",
+                "OAuth callback binding {Operation} dispatch rejected for actor={ActorId}: error={Error}",
+                replacingExistingBinding ? "replacement" : "commit",
                 actorId,
                 accepted.Error);
             await TryRevokeOrphanBindingAsync(brokerCallback, exchange.BindingId, logger, ct).ConfigureAwait(false);
@@ -305,15 +428,92 @@ public static class IdentityOAuthEndpoints
 
         var displayName = ResolveDisplayName(exchange.IdToken);
         logger.LogInformation(
-            "Accepted external identity binding dispatch {Platform}:{Tenant}:{User} -> binding_id={BindingId}, command_id={CommandId}",
+            "Accepted external identity binding {Operation} dispatch for {Platform}:{Tenant}:{User}, command_id={CommandId}",
+            replacingExistingBinding ? "replacement" : "commit",
             subject.Platform,
             subject.Tenant,
             subject.ExternalUserId,
-            exchange.BindingId,
             accepted.Receipt.CommandId);
 
         return RenderBindingAccepted(displayName, accepted.Receipt, format);
     }
+
+    private enum IssuedBindingProbeResult
+    {
+        Usable,
+        MissingRequiredAccess,
+        Invalid,
+        Unavailable,
+    }
+
+    private static async Task<IssuedBindingProbeResult> ProbeIssuedBindingAsync(
+        INyxIdCapabilityBroker capabilityBroker,
+        ExternalSubjectRef subject,
+        string bindingId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            await capabilityBroker
+                .IssueShortLivedByBindingIdAsync(
+                    subject,
+                    bindingId,
+                    new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy },
+                    ct)
+                .ConfigureAwait(false);
+            return IssuedBindingProbeResult.Usable;
+        }
+        catch (BindingScopeMismatchException ex)
+        {
+            logger.LogInformation(ex, "New channel NyxID binding lacks the required proxy scope.");
+            return IssuedBindingProbeResult.MissingRequiredAccess;
+        }
+        catch (BindingServiceAccessMismatchException ex)
+        {
+            logger.LogInformation(ex, "New channel NyxID binding lacks one or more required services.");
+            return IssuedBindingProbeResult.MissingRequiredAccess;
+        }
+        catch (BindingRevokedException ex)
+        {
+            logger.LogWarning(ex, "New channel NyxID binding was already revoked before adoption.");
+            return IssuedBindingProbeResult.Invalid;
+        }
+        catch (BindingNotFoundException ex)
+        {
+            logger.LogWarning(ex, "New channel NyxID binding was not found before adoption.");
+            return IssuedBindingProbeResult.Invalid;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "New channel NyxID binding could not be verified before adoption.");
+            return IssuedBindingProbeResult.Unavailable;
+        }
+    }
+
+    private static IResult BuildIssuedBindingProbeError(IssuedBindingProbeResult probeResult) =>
+        probeResult switch
+        {
+            IssuedBindingProbeResult.MissingRequiredAccess => Results.Json(new
+            {
+                error = "required_service_access_missing",
+                detail = "NyxID 授权没有覆盖 Aevatar 所需的 scope 或 services。请回到 Lark 重新发送 /init，并在授权页保留所有必需 services。",
+            }, statusCode: StatusCodes.Status409Conflict),
+            IssuedBindingProbeResult.Invalid => Results.Json(new
+            {
+                error = "issued_binding_invalid",
+                detail = "NyxID 新授权在 Aevatar 接管前已失效。请回到 Lark 重新发送 /init。",
+            }, statusCode: StatusCodes.Status502BadGateway),
+            _ => Results.Json(new
+            {
+                error = "issued_binding_probe_failed",
+                detail = "Aevatar 暂时无法验证新的 NyxID 服务授权。请稍后回到 Lark 重新发送 /init。",
+            }, statusCode: StatusCodes.Status503ServiceUnavailable),
+        };
 
     // ─── Status endpoint ───
 

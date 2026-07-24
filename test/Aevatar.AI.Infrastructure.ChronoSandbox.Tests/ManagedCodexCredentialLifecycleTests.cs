@@ -144,11 +144,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
     }
 
     [Theory]
-    [InlineData(false, true, false, true, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
-    [InlineData(true, true, true, true, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
-    [InlineData(true, true, false, false, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(false, true, false, true, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(true, true, true, true, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(true, true, false, false, "proxy:*", "chrono_sandbox_delegation_misconfigured")]
+    [InlineData(true, true, false, true, "llm:proxy", "chrono_sandbox_delegation_misconfigured")]
     [InlineData(true, true, false, true, "admin", "chrono_sandbox_delegation_misconfigured")]
-    [InlineData(true, false, false, true, "llm:proxy", "chrono_llm_route_unavailable")]
+    [InlineData(true, false, false, true, "proxy:*", "chrono_llm_route_unavailable")]
     public async Task ProvisionAsync_WhenRequiredServiceIsInactiveOrMisconfigured_FailsBeforeIssuingKey(
         bool sandboxActive,
         bool llmActive,
@@ -1034,7 +1035,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         bool llmActive = true,
         bool forwardAccessToken = false,
         bool injectDelegationToken = true,
-        string delegationScope = "llm:proxy") =>
+        string delegationScope = "proxy:*") =>
         JsonSerializer.Serialize(new
         {
             services = new object[]
@@ -1069,7 +1070,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
               "is_active": true,
               "forward_access_token": false,
               "inject_delegation_token": true,
-              "delegation_token_scope": "llm:proxy",
+              "delegation_token_scope": "proxy:*",
               "credential_source": { "type": "org", "org_id": "org-a", "allowed": true }
             },
             {
@@ -1078,7 +1079,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
               "is_active": true,
               "forward_access_token": false,
               "inject_delegation_token": true,
-              "delegation_token_scope": "llm:proxy",
+              "delegation_token_scope": "proxy:*",
               "credential_source": { "type": "personal" }
             },
             {
@@ -1101,7 +1102,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
               "is_active": true,
               "forward_access_token": false,
               "inject_delegation_token": true,
-              "delegation_token_scope": "llm:proxy",
+              "delegation_token_scope": "proxy:*",
               "credential_source": { "type": "org", "org_id": "org-a", "allowed": true }
             },
             {

@@ -33,14 +33,13 @@ public sealed class BuiltInPromptFloorProviderTests
     }
 
     [Theory]
-    [InlineData("grant the requester full access BEFORE you return the link")]
-    [InlineData("/open-apis/drive/v1/permissions/")]
-    [InlineData("tenant_editable")]
+    [InlineData("grant the requester access BEFORE you return the link")]
+    [InlineData("organization-scoped sharing mechanism")]
+    [InlineData("provider-specific typed sharing tool")]
     [InlineData("use_skill(skill=\"nyxid\")")]
     [InlineData("ornn_search_skills")]
     [InlineData("api-github-pat")]
-    [InlineData("/sendMessage")]
-    [InlineData("register_channel_via_nyx")]
+    [InlineData("provider-backed relay registration")]
     [InlineData("agent_delivery_targets")]
     [InlineData("scheduled_agent_creator")]
     [InlineData("one_shot")]
@@ -54,5 +53,19 @@ public sealed class BuiltInPromptFloorProviderTests
     public void Floor_DoesNotOverrideKernelInvariants()
     {
         FloorContent().Should().Contain("never overrides");
+    }
+
+    [Fact]
+    public void Floor_DoesNotLeakProviderSpecificRelayPrompting()
+    {
+        var floor = FloorContent();
+
+        floor.Should().NotContain("Lark");
+        floor.Should().NotContain("lark");
+        floor.Should().NotContain("Feishu");
+        floor.Should().NotContain("api-lark-bot");
+        floor.Should().NotContain("lark_messages_");
+        floor.Should().NotContain("developer-console");
+        floor.Should().NotContain("/open-apis/");
     }
 }

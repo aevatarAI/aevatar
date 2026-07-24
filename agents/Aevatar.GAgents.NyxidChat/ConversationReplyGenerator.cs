@@ -549,7 +549,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 parts,
                 BuildAttachmentVisibilityInstruction(
                     CountAttachments(attachments),
-                    "Lark resource download is not available in this runtime"));
+                    "channel resource download is not available in this runtime"));
         }
 
         var token = NormalizeOptional(attachmentContext?.UserAccessToken)
@@ -561,7 +561,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 parts,
                 BuildAttachmentVisibilityInstruction(
                     CountAttachments(attachments),
-                    "the Lark user credential needed to download the attachment is unavailable"));
+                    "the channel user credential needed to download the attachment is unavailable"));
         }
 
         var unseenCount = 0;
@@ -1415,7 +1415,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         AppendRuntimeFact(
             runtimeFacts,
             NyxIdRelayPromptConfiguration.BuildChannelRuntimeConfigurationSection(_relayOptions));
-        var channelContext = ChannelContextMiddleware.BuildChannelContextSection(metadata);
+        var channelContext = ChannelContextMiddleware.BuildChannelContextSection(
+            metadata,
+            toolContext.Channel.IdentityHints);
         AppendRuntimeFact(runtimeFacts, channelContext);
 
         if (_localSkillCatalog is not null && _localSkillCatalog.Count > 0)

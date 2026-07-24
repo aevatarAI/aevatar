@@ -458,7 +458,7 @@ steps:
 
 `codex_exec` 是 NyxID tool provider 暴露的受限执行路由，不是独立 workflow primitive，也不使用 Aevatar CLI connector 或 `~/.aevatar/connectors.json`。它只接受强类型 target；workflow 不能选择镜像、provider、Codex flags 或 sandbox/isolation 配置。
 
-- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 使用用户级 Vault agent key 调用固定 NyxID `chrono-sandbox` proxy 路由，只接受 `empty_git` workspace 和最长 `180s` timeout。NyxID 为该请求注入五分钟 `llm:proxy` delegation token；chrono-sandbox 负责 OpenSandbox、runner 镜像、gVisor 隔离、provider 配置与清理（ADR-0044）。用户必须先通过 authenticated self-service endpoint 完成 allowlisted credential provisioning。
+- `managed_sandbox`：Aevatar 通过 `ICodexExecutionPort` 使用用户级 Vault agent key 调用固定 NyxID `chrono-sandbox` proxy 路由，只接受 `empty_git` workspace 和最长 `180s` timeout。内部 canary 阶段 NyxID 为该请求注入五分钟 `proxy:*` delegation token，Codex 只配置固定 `chrono-llm-public` proxy URL；chrono-sandbox 负责 OpenSandbox、runner 镜像、gVisor 隔离、provider 配置与清理（ADR-0044）。用户必须先通过 authenticated self-service endpoint 完成 allowlisted credential provisioning；在 NyxID 提供窄 scope 前禁止扩大到全用户。
 - `private_ssh`：`target.private_ssh.service` 是 NyxID SSH UserService 的 slug/UUID，不是 `node_id`；`principal` 是该 service 允许的 Unix principal。Codex 登录态、workspace 与 sandbox policy 由目标机固定 wrapper 负责，最长 `300s`。
 - prompt 最多 `6000` UTF-8 bytes，只通过 stdin/file boundary 进入固定命令，不参与 shell command 拼接。
 - managed target 返回包含 `status/target/output/exit_code/diagnostic_id/elapsed_ms` 的 JSON；private SSH target 保留 NyxID SSH executor 的结构化结果。
