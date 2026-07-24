@@ -214,6 +214,7 @@ extract_csharp_executable_code() {
         if ($is_executable && $statement_prefix !~ /\S/) {
           my $remaining = substr($_, $index);
           # Label reachability is intentionally outside this structural scanner.
+          exit 1 if $remaining =~ /\A@?[A-Za-z_][A-Za-z0-9_]*\s*:(?!:)/;
           exit 1 if $remaining =~ /\Agoto\b/;
           if ($remaining =~ /\A(?:return|throw)\b/) {
             $terminated = 1;
@@ -845,6 +846,18 @@ CASES
   expect_fail "exact adapter throw-unreachable tail decoys" "${case_root}" \
     "ResolveAsync must execute"
 
+  fresh_case "adapter-labeled-throw-unreachable-tail-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    Entry:' \
+    '    throw new InvalidOperationException();' \
+    '    var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
+    '  } }'
+  expect_fail "exact adapter labeled throw-unreachable tail decoys" "${case_root}" \
+    "structurally valid"
+
   fresh_case "adapter-goto-unreachable-tail-decoy"
   write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
     'public sealed class OrnnExactAgentProfileSkillResolver {' \
@@ -856,6 +869,20 @@ CASES
     '    return default!;' \
     '  } }'
   expect_fail "exact adapter goto-unreachable tail decoys" "${case_root}" \
+    "structurally valid"
+
+  fresh_case "adapter-labeled-goto-unreachable-tail-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    Entry:' \
+    '    goto AfterReads;' \
+    '    var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
+    '    AfterReads:' \
+    '    return default!;' \
+    '  } }'
+  expect_fail "exact adapter labeled goto-unreachable tail decoys" "${case_root}" \
     "structurally valid"
 
   fresh_case "adapter-dead-helper-decoy"
