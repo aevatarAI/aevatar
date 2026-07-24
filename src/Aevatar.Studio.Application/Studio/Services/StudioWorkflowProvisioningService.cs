@@ -25,9 +25,9 @@ namespace Aevatar.Studio.Application.Studio.Services;
 /// polled the bind to completion would exhaust the gateway timeout and never
 /// invoke. Instead the run is produced by a scheduled-dispatch:
 /// <list type="bullet">
-///   <item>it fires after the bind publishes the deterministic
-///   <c>member-{memberId}</c> service (an early fire simply retries on the
-///   schedule's recurrence);</item>
+///   <item>it schedules the requested run without polling the bind; binding-terminal
+///   readiness and reconciliation when a one-shot fires before the deterministic
+///   <c>member-{memberId}</c> service is callable remain tracked by issue #2679;</item>
 ///   <item>because the schedule kind is <see cref="ScheduledDispatchScheduleKind.Workflow"/>,
 ///   the dispatch projects a freshly re-minted caller NyxID token onto the run's
 ///   <c>ChatRequestEvent</c> (<c>LlmControl.SenderNyxIdAccessToken</c>), so the

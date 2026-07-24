@@ -90,9 +90,9 @@ public sealed record ProvisionWorkflowRequest(
 
     /// <summary>
     /// Delay ahead of "now" for the synthesized one-shot fire when no recurring
-    /// <see cref="Cron"/> is supplied. Short enough to feel immediate, long enough
-    /// to let the bind publish the deterministic member service before the fire
-    /// (an early fire simply retries on the dispatch's recurrence).
+    /// <see cref="Cron"/> is supplied. This near-future fire does not guarantee
+    /// binding-terminal readiness; readiness and reconciliation remain tracked by
+    /// issue #2679.
     /// </summary>
     public const int DefaultOneShotDelaySeconds = 30;
 }
