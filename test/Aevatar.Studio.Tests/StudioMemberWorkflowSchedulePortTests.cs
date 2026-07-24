@@ -1663,11 +1663,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldDigestNormalizedSemanticMutationWithoutCredentialMaterial()
+    public async Task CreateAsync_ShouldDigestNormalizedSemanticMutationIncludingTeamAssignmentWithoutCredentialMaterial()
     {
         var first = new RecordingScheduleService();
         var replay = new RecordingScheduleService();
         var drifted = new RecordingScheduleService();
+        var otherTeam = new RecordingScheduleService();
         var request = Request("scope-1", "member-1") with
         {
             DisplayName = " Daily digest ",
@@ -1677,10 +1678,16 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         await ScheduleAsync(NewPort(first), request);
         await ScheduleAsync(NewPort(replay), request);
         await ScheduleAsync(NewPort(drifted), request with { Prompt = "summarize something else" });
+        await ScheduleAsync(
+            NewPort(
+                otherTeam,
+                new RecordingMemberService { Detail = CreateWorkflowMemberDetail(teamId: "team-2") }),
+            request with { TeamId = "team-2" });
 
         first.BeginOperation!.MutationDigest.Should().MatchRegex("^[a-f0-9]{64}$");
         replay.BeginOperation!.MutationDigest.Should().Be(first.BeginOperation.MutationDigest);
         drifted.BeginOperation!.MutationDigest.Should().NotBe(first.BeginOperation.MutationDigest);
+        otherTeam.BeginOperation!.MutationDigest.Should().NotBe(first.BeginOperation.MutationDigest);
         first.BeginOperation.CredentialEffectLocator.CredentialOwner.Should().Be(
             new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "nyx-owner-alpha"));
     }

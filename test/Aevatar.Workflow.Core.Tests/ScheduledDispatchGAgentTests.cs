@@ -2514,6 +2514,24 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task TeamAutomationCredentialOperation_WithActivationDecisionTeamMismatch_ShouldRejectBegin()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateTeamBeginCommand();
+        command.Owner.TeamId = "team-alpha";
+        command.ActivationDecision.Owner.TeamId = "team-beta";
+
+        var act = () => agent.HandleBeginTeamAutomationCredentialOperationAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_activation_decision_invalid");
+        agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Unspecified);
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task TeamAutomationCredentialCandidate_WithWrongSecretPurpose_ShouldRejectBeforeCommit()
     {
         var eventStore = new TestEventStore();

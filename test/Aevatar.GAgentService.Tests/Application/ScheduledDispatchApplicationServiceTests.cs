@@ -1337,7 +1337,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var decision = new TeamAutomationActivationDecision(
             configuration.ScheduleId,
             "Authorization fact schedule",
-            new TeamMemberAutomationOwner("scope-alpha", "member-alpha"),
+            new TeamMemberAutomationOwner("scope-alpha", "member-alpha", "team-alpha"),
             configuration.Target.ServiceInvocation!.Identity.Clone(),
             configuration.Target.ServiceInvocation.EndpointId,
             configuration.Target.ServiceInvocation.Payload.Clone(),
@@ -1384,7 +1384,12 @@ public sealed class ScheduledDispatchApplicationServiceTests
         var begin = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
             .Unpack<BeginTeamAutomationCredentialOperationCommand>();
         begin.ActivationDecision.ScheduleId.Should().Be(decision.ScheduleId);
-        begin.ActivationDecision.Owner.ScopeId.Should().Be(decision.Owner.ScopeId);
+        begin.ActivationDecision.Owner.Should().BeEquivalentTo(new TeamMemberAutomationOwnerState
+        {
+            ScopeId = "scope-alpha",
+            MemberId = "member-alpha",
+            TeamId = "team-alpha",
+        });
         begin.ActivationDecision.ServiceIdentity.Should().BeEquivalentTo(decision.ServiceIdentity);
         begin.ActivationDecision.Payload.Should().Be(decision.Payload);
         begin.ActivationDecision.CallerAuthority.Should().BeEquivalentTo(callerAuthority);

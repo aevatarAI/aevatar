@@ -1555,11 +1555,12 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
     private static string BuildTeamAutomationMutationDigest(TeamAutomationActivationDecision decision)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AppendDigestValue(hash, "aevatar.team-automation-mutation.v3");
+        AppendDigestValue(hash, "aevatar.team-automation-mutation.v4");
         AppendDigestValue(hash, decision.ScheduleId);
         AppendDigestValue(hash, decision.DisplayName);
         AppendDigestValue(hash, decision.Owner.ScopeId);
         AppendDigestValue(hash, decision.Owner.MemberId);
+        AppendDigestValue(hash, decision.Owner.TeamId);
         AppendDigestValue(hash, decision.ServiceIdentity.TenantId);
         AppendDigestValue(hash, decision.ServiceIdentity.AppId);
         AppendDigestValue(hash, decision.ServiceIdentity.Namespace);

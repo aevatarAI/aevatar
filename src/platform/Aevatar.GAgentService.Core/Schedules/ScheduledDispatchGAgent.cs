@@ -2140,6 +2140,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                string.Equals(left.MemberId, right.MemberId, StringComparison.Ordinal);
     }
 
+    private static bool TeamAutomationOwnerAssignmentEquals(
+        TeamMemberAutomationOwnerState? left,
+        TeamMemberAutomationOwnerState? right) =>
+        TeamAutomationOwnerEquals(left, right) &&
+        string.Equals(left?.TeamId, right?.TeamId, StringComparison.Ordinal);
+
     private static void EnsureCredentialAuthorizationOwnerAccess(
         ScheduledInvocationAuthorizationOwnerState? supplied,
         ScheduledInvocationAuthorizationOwnerState? expected)
@@ -2471,7 +2477,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         var fact = decision.AuthorizationFact;
         var authority = decision.CallerAuthority;
         if (!string.Equals(decision.ScheduleId, scheduleId, StringComparison.Ordinal) ||
-            !TeamAutomationOwnerEquals(decision.Owner, owner) ||
+            !TeamAutomationOwnerAssignmentEquals(decision.Owner, owner) ||
             decision.ServiceIdentity == null ||
             string.IsNullOrWhiteSpace(decision.ServiceIdentity.TenantId) ||
             string.IsNullOrWhiteSpace(decision.ServiceIdentity.AppId) ||
