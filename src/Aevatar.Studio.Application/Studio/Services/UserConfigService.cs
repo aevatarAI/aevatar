@@ -80,7 +80,7 @@ public sealed class UserConfigService : IUserConfigService
         _llmPreferenceWriter.SaveAsync(ResolveOwnerResource(), bearerToken, command, ct);
 
     private UserConfigResourceKey ResolveOwnerResource() =>
-        UserConfigResourceKey.ForOwnerScope(_scopeResolver.Resolve()?.ScopeId ?? "default");
+        UserConfigResourceKey.ForOwnerScope(_scopeResolver.ResolveScopeIdOrDefault());
 
     private static string? NormalizeOptional(string? value)
     {

@@ -379,6 +379,64 @@ public sealed class UserConfigServiceTests
         recorded.Update.LlmSelection.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeReadingConfig()
+    {
+        var fixture = CreateAuthenticatedMissingScopeService();
+
+        var act = () => fixture.Service.GetAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Authenticated caller has no resolvable scope*");
+        fixture.Query.GetCalls.Should().Be(0);
+        fixture.Commands.Updates.Should().BeEmpty();
+        fixture.Catalog.GetServicesCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetRuntimeAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeReadingConfig()
+    {
+        var fixture = CreateAuthenticatedMissingScopeService();
+
+        var act = () => fixture.Service.GetRuntimeAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Authenticated caller has no resolvable scope*");
+        fixture.Query.GetCalls.Should().Be(0);
+        fixture.Commands.Updates.Should().BeEmpty();
+        fixture.Catalog.GetServicesCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeDispatchingConfig()
+    {
+        var fixture = CreateAuthenticatedMissingScopeService();
+
+        var act = () => fixture.Service.SaveAsync(new SaveUserConfigCommand(DefaultModel: "gpt-5.5"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Authenticated caller has no resolvable scope*");
+        fixture.Query.GetCalls.Should().Be(0);
+        fixture.Commands.Updates.Should().BeEmpty();
+        fixture.Catalog.GetServicesCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SaveLlmPreferenceAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeCatalogOrDispatch()
+    {
+        var fixture = CreateAuthenticatedMissingScopeService();
+
+        var act = () => fixture.Service.SaveLlmPreferenceAsync(
+            "bearer",
+            new SaveUserLlmPreferenceCommand(UserServiceId: "us-alpha"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Authenticated caller has no resolvable scope*");
+        fixture.Query.GetCalls.Should().Be(0);
+        fixture.Commands.Updates.Should().BeEmpty();
+        fixture.Catalog.GetServicesCalls.Should().Be(0);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("cloud")]
@@ -489,6 +547,26 @@ public sealed class UserConfigServiceTests
         return new UserConfigService(query, commands, writer, new StubScopeResolver("scope-alpha"));
     }
 
+    private static (
+        UserConfigService Service,
+        StubUserConfigQueryPort Query,
+        RecordingUserConfigCommandService Commands,
+        StubUserLlmCatalogPort Catalog) CreateAuthenticatedMissingScopeService()
+    {
+        var query = new StubUserConfigQueryPort(new UserConfig(DefaultModel: string.Empty));
+        var commands = new RecordingUserConfigCommandService();
+        var catalog = new StubUserLlmCatalogPort(new NyxIdLlmServicesResult(
+            [InventoryService("us-alpha", "shared")],
+            null));
+        var writer = new UserLlmPreferenceWriter(commands, catalog);
+        var service = new UserConfigService(
+            query,
+            commands,
+            writer,
+            new StubScopeResolver(scopeId: null, authenticatedWithoutScope: true));
+        return (service, query, commands, catalog);
+    }
+
     private static NyxIdLlmService InventoryService(
         string id,
         string slug,
@@ -507,21 +585,32 @@ public sealed class UserConfigServiceTests
             UserLlmIdentityAuthority.NyxIdUserServicesInventory,
             id));
 
-    private sealed class StubScopeResolver(string scopeId) : IAppScopeResolver
+    private sealed class StubScopeResolver(
+        string? scopeId,
+        bool authenticatedWithoutScope = false) : IAppScopeResolver
     {
         public AppScopeContext? Resolve(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) =>
-            new(scopeId, "test");
+            string.IsNullOrWhiteSpace(scopeId) ? null : new(scopeId, "test");
 
         public bool HasAuthenticatedRequestWithoutScope(
-            Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => false;
+            Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => authenticatedWithoutScope;
     }
 
     private sealed class StubUserConfigQueryPort(UserConfig config) : IUserConfigQueryPort
     {
-        public Task<UserConfig> GetAsync(CancellationToken ct = default) => Task.FromResult(config);
+        public int GetCalls { get; private set; }
 
-        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) =>
-            Task.FromResult(config);
+        public Task<UserConfig> GetAsync(CancellationToken ct = default)
+        {
+            GetCalls++;
+            return Task.FromResult(config);
+        }
+
+        public Task<UserConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default)
+        {
+            GetCalls++;
+            return Task.FromResult(config);
+        }
     }
 
     private sealed class RecordingUserConfigCommandService : IUserConfigCommandService

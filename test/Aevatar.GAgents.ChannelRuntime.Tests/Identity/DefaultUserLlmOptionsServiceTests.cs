@@ -12,6 +12,41 @@ public sealed class DefaultUserLlmOptionsServiceTests
 {
     private const string SharedRoute = "/api/v1/proxy/s/shared-llm";
 
+    [Theory]
+    [InlineData(MissingTypedSelectionCase.NullConfig, "")]
+    [InlineData(MissingTypedSelectionCase.NullConfig, SharedRoute)]
+    [InlineData(MissingTypedSelectionCase.NullSelection, "")]
+    [InlineData(MissingTypedSelectionCase.NullSelection, SharedRoute)]
+    [InlineData(MissingTypedSelectionCase.Unspecified, "")]
+    [InlineData(MissingTypedSelectionCase.Unspecified, SharedRoute)]
+    public async Task GetOptionsAsync_WithoutAuthoritativeTypedSelection_ShouldIgnoreCompatibilityRoute(
+        MissingTypedSelectionCase selectionCase,
+        string compatibilityRoute)
+    {
+        var config = selectionCase switch
+        {
+            MissingTypedSelectionCase.NullConfig => null,
+            MissingTypedSelectionCase.NullSelection => new StudioConfig(
+                DefaultModel: "gpt-5.5",
+                PreferredLlmRoute: compatibilityRoute,
+                LlmSelection: null),
+            MissingTypedSelectionCase.Unspecified => new StudioConfig(
+                DefaultModel: "gpt-5.5",
+                PreferredLlmRoute: compatibilityRoute,
+                LlmSelection: new UserLlmSelectionValue(
+                    UserLlmSelectionKind.Unspecified,
+                    SharedRoute,
+                    "us-alpha",
+                    "shared-llm")),
+            _ => throw new ArgumentOutOfRangeException(nameof(selectionCase)),
+        };
+
+        var view = await GetOptionsAsync(config, GatewayService(), InventoryService("us-alpha"));
+
+        view.Current.Should().BeNull();
+        view.CurrentRouteValue.Should().BeNullOrEmpty();
+    }
+
     [Fact]
     public async Task GetOptionsAsync_WithTypedServiceMissingIdAndGatewayRoute_ShouldHaveNoCurrentOption()
     {
@@ -84,7 +119,7 @@ public sealed class DefaultUserLlmOptionsServiceTests
         LlmSelection: selection);
 
     private static async Task<UserLlmOptionsView> GetOptionsAsync(
-        StudioConfig config,
+        StudioConfig? config,
         params NyxIdLlmService[] services)
     {
         using var provider = new ServiceCollection()
@@ -156,12 +191,19 @@ public sealed class DefaultUserLlmOptionsServiceTests
             throw new NotSupportedException();
     }
 
-    private sealed class StubUserConfigQueryPort(StudioConfig config) : IUserConfigQueryPort
+    private sealed class StubUserConfigQueryPort(StudioConfig? config) : IUserConfigQueryPort
     {
         public Task<StudioConfig> GetAsync(UserConfigResourceKey resource, CancellationToken ct = default) =>
-            Task.FromResult(config);
+            Task.FromResult(config!);
 
         public Task<StudioConfig> GetAsync(CancellationToken ct = default) =>
-            Task.FromResult(config);
+            Task.FromResult(config!);
+    }
+
+    public enum MissingTypedSelectionCase
+    {
+        NullConfig,
+        NullSelection,
+        Unspecified,
     }
 }

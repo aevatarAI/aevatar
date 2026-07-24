@@ -103,9 +103,7 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
             UserLlmSelectionKind.NyxIdUserService => FindInventoryOption(
                 config.LlmSelection.NyxIdUserServiceId,
                 available),
-            null or UserLlmSelectionKind.Unspecified => FindRouteOption(
-                config?.PreferredLlmRoute,
-                available),
+            null or UserLlmSelectionKind.Unspecified => null,
             _ => null,
         };
     }
@@ -142,7 +140,7 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
             UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
             UserLlmSelectionKind.NyxIdUserService => current?.RouteValue ??
                                                      UserConfigLlmRoute.Normalize(config.LlmSelection.RouteValue),
-            _ => UserConfigLlmRoute.Normalize(config?.PreferredLlmRoute),
+            _ => string.Empty,
         };
 
 }

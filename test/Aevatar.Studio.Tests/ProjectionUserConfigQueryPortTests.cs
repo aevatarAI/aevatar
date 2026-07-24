@@ -159,8 +159,25 @@ public sealed class ProjectionUserConfigQueryPortTests
         config.PreferredLlmRoute.Should().BeEmpty();
     }
 
-    private static ProjectionUserConfigQueryPort CreatePort(RecordingDocumentReader reader) =>
-        new(reader, new StubScopeResolver(), new StubUserConfigDefaults());
+    [Fact]
+    public async Task GetAsync_WhenAuthenticatedCallerHasNoScope_ShouldThrowBeforeDocumentRead()
+    {
+        var reader = new RecordingDocumentReader();
+        var port = CreatePort(
+            reader,
+            new StubScopeResolver(scopeId: null, authenticatedWithoutScope: true));
+
+        var act = () => port.GetAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Authenticated caller has no resolvable scope*");
+        reader.GetKeys.Should().BeEmpty();
+    }
+
+    private static ProjectionUserConfigQueryPort CreatePort(
+        RecordingDocumentReader reader,
+        IAppScopeResolver? scopeResolver = null) =>
+        new(reader, scopeResolver ?? new StubScopeResolver(), new StubUserConfigDefaults());
 
     private sealed class RecordingDocumentReader
         : IProjectionDocumentReader<UserConfigCurrentStateDocument, string>
@@ -182,12 +199,15 @@ public sealed class ProjectionUserConfigQueryPortTests
             Task.FromResult(ProjectionDocumentQueryResult<UserConfigCurrentStateDocument>.Empty);
     }
 
-    private sealed class StubScopeResolver : IAppScopeResolver
+    private sealed class StubScopeResolver(
+        string? scopeId = "ambient-scope",
+        bool authenticatedWithoutScope = false) : IAppScopeResolver
     {
         public AppScopeContext? Resolve(HttpContext? httpContext = null) =>
-            new("ambient-scope", "test");
+            string.IsNullOrWhiteSpace(scopeId) ? null : new(scopeId, "test");
 
-        public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
+        public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) =>
+            authenticatedWithoutScope;
     }
 
     private sealed class StubUserConfigDefaults : IUserConfigDefaults

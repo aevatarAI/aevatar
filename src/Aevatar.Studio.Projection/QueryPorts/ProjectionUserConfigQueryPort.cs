@@ -34,7 +34,7 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
 
     public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
         GetAsync(
-            UserConfigResourceKey.ForOwnerScope(_scopeResolver.Resolve()?.ScopeId ?? "default"),
+            UserConfigResourceKey.ForOwnerScope(_scopeResolver.ResolveScopeIdOrDefault()),
             ct);
 
     public async Task<UserConfig> GetAsync(
