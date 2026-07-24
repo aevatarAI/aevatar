@@ -13,6 +13,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -60,6 +61,40 @@ public sealed class StudioMemberAutomationEndpointsTests
         routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/resume");
         routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/run-now");
         routes.Should().NotContain(route => route != null && route.StartsWith("/api/teams/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Map_ShouldDeclareTypedAutomationReadResponsesForOpenApi()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddSingleton<IStudioMemberWorkflowSchedulePort, StubSchedules>();
+        builder.Services.AddSingleton<IExternalIdentityBindingQueryPort, StubBindingQuery>();
+        builder.Services.AddRouting();
+        var app = builder.Build();
+
+        StudioMemberAutomationEndpoints.Map(app);
+
+        const string canonicalBase =
+            "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
+        var endpoints = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(static source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .ToArray();
+        var listEndpoint = endpoints.Single(endpoint =>
+            endpoint.RoutePattern.RawText == canonicalBase &&
+            endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods.Contains(HttpMethods.Get) == true);
+        var detailEndpoint = endpoints.Single(endpoint =>
+            endpoint.RoutePattern.RawText == $"{canonicalBase}/{{scheduleId}}" &&
+            endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods.Contains(HttpMethods.Get) == true);
+
+        listEndpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>()
+            .Should().Contain(metadata =>
+                metadata.StatusCode == StatusCodes.Status200OK &&
+                metadata.Type == typeof(StudioMemberAutomationListResponse));
+        detailEndpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>()
+            .Should().Contain(metadata =>
+                metadata.StatusCode == StatusCodes.Status200OK &&
+                metadata.Type == typeof(StudioMemberAutomationView));
     }
 
     [Fact]

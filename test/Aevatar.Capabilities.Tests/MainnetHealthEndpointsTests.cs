@@ -143,6 +143,37 @@ public sealed class MainnetHealthEndpointsTests
             .Should()
             .BeTrue();
 
+        var automationProperties = openApiDocument.RootElement
+            .GetProperty("components")
+            .GetProperty("schemas")
+            .GetProperty("StudioMemberAutomationView")
+            .GetProperty("properties");
+        foreach (var propertyName in new[]
+                 {
+                     "ownerLLMRouteKind",
+                     "ownerLLMRoute",
+                     "ownerLLMUserServiceId",
+                     "ownerLLMServiceSlug",
+                     "ownerLLMModel",
+                     "nyxIdRevocationStatus",
+                     "vaultRevocationStatus",
+                 })
+        {
+            automationProperties.TryGetProperty(propertyName, out _).Should().BeTrue(propertyName);
+        }
+        foreach (var propertyName in new[]
+                 {
+                     "callerAuthority",
+                     "verifiedBindingId",
+                     "secretReference",
+                     "apiKeyId",
+                     "fullKey",
+                     "ciphertext",
+                 })
+        {
+            automationProperties.TryGetProperty(propertyName, out _).Should().BeFalse(propertyName);
+        }
+
         await app.StopAsync();
     }
 

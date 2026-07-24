@@ -29,9 +29,13 @@ internal static class StudioMemberAutomationEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
         app.MapPost($"{BasePath}/preflight", HandlePreflightAsync).WithTags("StudioTeamAutomations");
-        app.MapGet(BasePath, HandleListAsync).WithTags("StudioTeamAutomations");
+        app.MapGet(BasePath, HandleListAsync)
+            .Produces<StudioMemberAutomationListResponse>(StatusCodes.Status200OK)
+            .WithTags("StudioTeamAutomations");
         app.MapPost(BasePath, HandleCreateAsync).WithTags("StudioTeamAutomations");
-        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync).WithTags("StudioTeamAutomations");
+        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync)
+            .Produces<StudioMemberAutomationView>(StatusCodes.Status200OK)
+            .WithTags("StudioTeamAutomations");
         app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
         app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
             .WithTags("StudioTeamAutomations");
