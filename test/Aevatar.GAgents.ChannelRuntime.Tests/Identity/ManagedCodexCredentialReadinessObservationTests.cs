@@ -7,6 +7,7 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests.Identity;
@@ -89,6 +90,27 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
     }
 
     [Fact]
+    public async Task Projector_WhenEnvelopeIsNotCommittedState_DoesNotPublish()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new ManagedCodexCredentialReadinessProjector(hub);
+        var owner = Owner("user-a");
+        var actorId = ManagedCodexCredentialActorIdentity.From(owner);
+
+        await projector.ProjectAsync(
+            Context("session-a", actorId),
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new ManagedCodexCredentialState
+                {
+                    Credential = Descriptor(owner, "key-a", "us-sandbox-a", "us-llm-a"),
+                }),
+            });
+
+        hub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task BindAsync_TwoSubscribersReceiveIndependentSessionSnapshots()
     {
         var activation = new RecordingActivationService();
@@ -157,6 +179,40 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
     }
 
     [Fact]
+    public async Task DisposeAsync_WhenWriterIsBlocked_CompletesPublishAndReleasesWithoutCallbackFailure()
+    {
+        var activation = new RecordingActivationService();
+        var release = new RecordingReleaseService();
+        var hub = new RecordingSessionEventHub();
+        var port = new ManagedCodexCredentialReadinessObservationPort(activation, release, hub);
+        var owner = Owner("user-a");
+        var actorId = ManagedCodexCredentialActorIdentity.From(owner);
+        var lease = await port.BindAsync(owner);
+        var sessionId = activation.LastRequest!.SessionId;
+        for (var version = 1; version <= 16; version++)
+        {
+            await hub.PublishAsync(
+                actorId,
+                sessionId,
+                Snapshot(owner, $"key-{version}", $"sandbox-{version}", $"llm-{version}", version));
+        }
+
+        var blockedPublish = hub.PublishAsync(
+            actorId,
+            sessionId,
+            Snapshot(owner, "key-17", "sandbox-17", "llm-17", stateVersion: 17));
+        blockedPublish.IsCompleted.Should().BeFalse();
+
+        var disposal = lease.DisposeAsync().AsTask();
+
+        await Task.WhenAll(blockedPublish, disposal);
+        hub.Subscriptions.Should().ContainSingle()
+            .Which.DisposeCalls.Should().Be(1);
+        release.Calls.Should().ContainSingle();
+        release.Calls[0].CancellationToken.CanBeCanceled.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task DisposeAsync_CompletesObservationAndReleasesRuntimeLeaseOnceWithoutCallerCancellation()
     {
         var activation = new RecordingActivationService();
@@ -191,6 +247,55 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
 
         await dispose.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("subscription disposal failed");
+        hub.Subscriptions.Should().ContainSingle()
+            .Which.DisposeCalls.Should().Be(1);
+        release.Calls.Should().ContainSingle();
+        release.Calls[0].CancellationToken.CanBeCanceled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task BindAsync_WhenSubscriptionFails_ReleasesActivatedRuntimeLeaseOnceWithoutCallerCancellation()
+    {
+        var activation = new RecordingActivationService();
+        var release = new RecordingReleaseService();
+        var hub = new RecordingSessionEventHub(throwOnSubscribe: true);
+        var port = new ManagedCodexCredentialReadinessObservationPort(activation, release, hub);
+
+        var bind = () => port.BindAsync(Owner("user-a"));
+
+        await bind.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("subscription failed");
+        activation.Leases.Should().ContainSingle();
+        hub.Subscriptions.Should().BeEmpty();
+        release.Calls.Should().ContainSingle();
+        release.Calls[0].Lease.Should().BeSameAs(activation.Leases.Single());
+        release.Calls[0].CancellationToken.CanBeCanceled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WhenCalledConcurrently_JoinsTheSameTeardownCompletion()
+    {
+        var disposalStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowDisposal = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var activation = new RecordingActivationService();
+        var release = new RecordingReleaseService();
+        var hub = new RecordingSessionEventHub(
+            disposalStarted: disposalStarted,
+            disposalRelease: allowDisposal.Task);
+        var port = new ManagedCodexCredentialReadinessObservationPort(activation, release, hub);
+        var lease = await port.BindAsync(Owner("user-a"));
+
+        var firstDisposal = lease.DisposeAsync().AsTask();
+        await disposalStarted.Task;
+        var secondDisposal = lease.DisposeAsync().AsTask();
+        var secondCompletedBeforeRelease = secondDisposal.IsCompleted;
+
+        allowDisposal.TrySetResult(true);
+        await Task.WhenAll(firstDisposal, secondDisposal);
+
+        secondCompletedBeforeRelease.Should().BeFalse();
         hub.Subscriptions.Should().ContainSingle()
             .Which.DisposeCalls.Should().Be(1);
         release.Calls.Should().ContainSingle();
@@ -384,7 +489,10 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
 
     private sealed class RecordingSessionEventHub(
         List<string>? operations = null,
-        bool throwOnDispose = false)
+        bool throwOnDispose = false,
+        bool throwOnSubscribe = false,
+        TaskCompletionSource<bool>? disposalStarted = null,
+        Task? disposalRelease = null)
         : IProjectionSessionEventHub<ManagedCodexCredentialSnapshot>
     {
         private readonly Dictionary<
@@ -418,10 +526,18 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         {
             ct.ThrowIfCancellationRequested();
             operations?.Add("subscribe");
+            if (throwOnSubscribe)
+            {
+                return Task.FromException<IAsyncDisposable>(
+                    new InvalidOperationException("subscription failed"));
+            }
+
             _handlers.Add((rootActorId, sessionId), handler);
             var subscription = new RecordingSubscription(
                 () => _handlers.Remove((rootActorId, sessionId)),
-                throwOnDispose);
+                throwOnDispose,
+                disposalStarted,
+                disposalRelease);
             Subscriptions.Add(subscription);
             return Task.FromResult<IAsyncDisposable>(subscription);
         }
@@ -429,18 +545,21 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
 
     private sealed class RecordingSubscription(
         Action onDispose,
-        bool throwOnDispose) : IAsyncDisposable
+        bool throwOnDispose,
+        TaskCompletionSource<bool>? disposalStarted,
+        Task? disposalRelease) : IAsyncDisposable
     {
         public int DisposeCalls { get; private set; }
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
             DisposeCalls++;
             onDispose();
-            return throwOnDispose
-                ? ValueTask.FromException(
-                    new InvalidOperationException("subscription disposal failed"))
-                : ValueTask.CompletedTask;
+            disposalStarted?.TrySetResult(true);
+            if (disposalRelease is not null)
+                await disposalRelease;
+            if (throwOnDispose)
+                throw new InvalidOperationException("subscription disposal failed");
         }
     }
 

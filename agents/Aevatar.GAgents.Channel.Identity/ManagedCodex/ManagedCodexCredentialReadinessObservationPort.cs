@@ -42,29 +42,54 @@ internal sealed class ManagedCodexCredentialReadinessObservationPort
                 SessionId = sessionId,
             },
             ct);
-        var snapshots = System.Threading.Channels.Channel.CreateBounded<ManagedCodexCredentialSnapshot>(
-            new BoundedChannelOptions(16)
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                FullMode = BoundedChannelFullMode.Wait,
-                AllowSynchronousContinuations = false,
-            });
+        var snapshots = new SnapshotBuffer(
+            System.Threading.Channels.Channel.CreateBounded<ManagedCodexCredentialSnapshot>(
+                new BoundedChannelOptions(16)
+                {
+                    SingleReader = true,
+                    SingleWriter = false,
+                    FullMode = BoundedChannelFullMode.Wait,
+                    AllowSynchronousContinuations = false,
+                }));
 
         try
         {
             var subscription = await _eventHub.SubscribeAsync(
                 actorId,
                 sessionId,
-                snapshot => snapshots.Writer.WriteAsync(snapshot.Clone()),
+                snapshots.WriteAsync,
                 ct);
             return new ObservationLease(runtimeLease, subscription, snapshots, _releaseService);
         }
         catch
         {
-            snapshots.Writer.TryComplete();
+            snapshots.BeginTeardown();
             await _releaseService.ReleaseIfIdleAsync(runtimeLease, CancellationToken.None);
             throw;
+        }
+    }
+
+    private sealed class SnapshotBuffer(Channel<ManagedCodexCredentialSnapshot> snapshots)
+    {
+        private int _teardownStarted;
+
+        public ChannelReader<ManagedCodexCredentialSnapshot> Reader => snapshots.Reader;
+
+        public async ValueTask WriteAsync(ManagedCodexCredentialSnapshot snapshot)
+        {
+            try
+            {
+                await snapshots.Writer.WriteAsync(snapshot.Clone());
+            }
+            catch (ChannelClosedException) when (Volatile.Read(ref _teardownStarted) != 0)
+            {
+            }
+        }
+
+        public void BeginTeardown()
+        {
+            Volatile.Write(ref _teardownStarted, 1);
+            snapshots.Writer.TryComplete();
         }
     }
 
@@ -72,21 +97,24 @@ internal sealed class ManagedCodexCredentialReadinessObservationPort
     {
         private readonly ManagedCodexCredentialReadinessRuntimeLease _runtimeLease;
         private readonly IAsyncDisposable _subscription;
-        private readonly Channel<ManagedCodexCredentialSnapshot> _snapshots;
+        private readonly SnapshotBuffer _snapshots;
         private readonly IProjectionScopeReleaseService<ManagedCodexCredentialReadinessRuntimeLease>
             _releaseService;
-        private int _disposed;
+        private readonly Lazy<Task> _disposal;
 
         public ObservationLease(
             ManagedCodexCredentialReadinessRuntimeLease runtimeLease,
             IAsyncDisposable subscription,
-            Channel<ManagedCodexCredentialSnapshot> snapshots,
+            SnapshotBuffer snapshots,
             IProjectionScopeReleaseService<ManagedCodexCredentialReadinessRuntimeLease> releaseService)
         {
             _runtimeLease = runtimeLease;
             _subscription = subscription;
             _snapshots = snapshots;
             _releaseService = releaseService;
+            _disposal = new Lazy<Task>(
+                DisposeCoreAsync,
+                LazyThreadSafetyMode.ExecutionAndPublication);
         }
 
         public async IAsyncEnumerable<ManagedCodexCredentialSnapshot> ReadAllAsync(
@@ -96,12 +124,11 @@ internal sealed class ManagedCodexCredentialReadinessObservationPort
                 yield return snapshot.Clone();
         }
 
-        public async ValueTask DisposeAsync()
-        {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-                return;
+        public ValueTask DisposeAsync() => new(_disposal.Value);
 
-            _snapshots.Writer.TryComplete();
+        private async Task DisposeCoreAsync()
+        {
+            _snapshots.BeginTeardown();
             try
             {
                 await _subscription.DisposeAsync();
