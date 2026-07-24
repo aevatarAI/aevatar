@@ -202,36 +202,6 @@ public sealed class AgentProfileSkillSealer
                 "Only one default-for-unmatched-turn skill is allowed.",
                 "skill_bindings");
         }
-
-        if (content.ToolPolicy is not null &&
-            content.ToolPolicy.Mode is not AgentProfileToolPolicyMode.Unspecified and
-                not AgentProfileToolPolicyMode.InheritRouteMaximum and
-                not AgentProfileToolPolicyMode.ExplicitAllowlist)
-        {
-            AddDiagnostic(
-                diagnostics,
-                "INVALID_TOOL_POLICY_MODE",
-                "Profile tool policy mode is invalid.",
-                "tool_policy.mode");
-        }
-
-        for (var index = 0; index < content.SkillBindings.Count; index++)
-        {
-            var activationMode = content.SkillBindings[index].ActivationMode;
-            if (activationMode is AgentProfileSkillActivationMode.Unspecified or
-                AgentProfileSkillActivationMode.Always or
-                AgentProfileSkillActivationMode.Routed or
-                AgentProfileSkillActivationMode.DefaultForUnmatchedTurn)
-            {
-                continue;
-            }
-
-            AddDiagnostic(
-                diagnostics,
-                "INVALID_SKILL_ACTIVATION_MODE",
-                "Skill activation mode is invalid.",
-                $"skill_bindings[{index}].activation_mode");
-        }
     }
 
     private void ValidateToolSetReferences(

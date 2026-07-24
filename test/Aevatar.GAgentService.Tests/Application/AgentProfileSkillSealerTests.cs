@@ -121,6 +121,25 @@ public sealed class AgentProfileSkillSealerTests
     }
 
     [Fact]
+    public async Task ResolveAndSealAsync_ShouldRejectUnknownActivationModeBeforeResolution()
+    {
+        var resolver = SuccessResolver();
+        var content = Content();
+        content.SkillBindings.Add(Binding(
+            "bind-alpha",
+            (AgentProfileSkillActivationMode)999,
+            ExactReference()));
+
+        var result = await CreateSealer(resolver).ResolveAndSealAsync(Identity(), content, "token");
+
+        result.IsSuccess.Should().BeFalse();
+        result.Diagnostics.Should().ContainSingle(diagnostic =>
+            diagnostic.Code == "INVALID_SKILL_ACTIVATION_MODE" &&
+            diagnostic.Path == "skill_bindings[0].activation_mode");
+        resolver.Calls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task ResolveAndSealAsync_ShouldRejectUnknownToolPolicyModeBeforeResolution()
     {
         var resolver = SuccessResolver();
