@@ -547,7 +547,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                     var challenge = await broker.StartExternalBindingAsync(subject, ct).ConfigureAwait(false);
                     reply = InitChannelSlashCommandHandler.BuildBindingCard(
                         challenge.AuthorizeUrl,
-                        challenge.ReviewsExistingBinding);
+                        challenge.RenewsExistingBinding);
                 }
                 catch (AevatarOAuthClientNotProvisionedException ex)
                 {
@@ -2735,7 +2735,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         {
             _logger.LogWarning(
                 ex,
-                "Sender NyxID binding lacks a required service; preserving the binding for in-place /init grant review. subject={Platform}:{Tenant}:{User}",
+                "Sender NyxID binding lacks a required service; preserving it until /init service authorization renewal succeeds. subject={Platform}:{Tenant}:{User}",
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
