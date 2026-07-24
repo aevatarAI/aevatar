@@ -57,7 +57,10 @@ jest.mock("../studio/components/StudioMemberInvokePanel", () => ({
   },
 }));
 
-function createWorkflowMember(overrides?: Record<string, unknown>) {
+function createWorkflowMember(
+  summaryOverrides?: Record<string, unknown>,
+  detailOverrides?: Record<string, unknown>,
+) {
   return {
     summary: {
       memberId: "member-alpha",
@@ -71,11 +74,12 @@ function createWorkflowMember(overrides?: Record<string, unknown>) {
       lastBoundRevisionId: "rev-alpha",
       createdAt: "2026-06-01T00:00:00Z",
       updatedAt: "2026-06-01T00:00:00Z",
-      ...(overrides ?? {}),
+      ...(summaryOverrides ?? {}),
     },
     implementationRef: null,
     lastBinding: null,
     currentBindingRun: null,
+    ...(detailOverrides ?? {}),
   };
 }
 
@@ -229,6 +233,45 @@ describe("TeamMemberInvokePage", () => {
     expect(scopeRuntimeApi.listServices).toHaveBeenCalledWith("scope-1", {
       appId: "default",
     });
+  });
+
+  it("carries the member read-model draft workflow id into Workflow Studio", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/invoke",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValueOnce(
+      createWorkflowMember(
+        {
+          memberId: "m-alpha",
+          publishedServiceId: "svc-alpha",
+          teamId: "t-alpha",
+        },
+        {
+          implementationRef: {
+            implementationKind: "workflow",
+            workflowId: "wf-alpha",
+          },
+        },
+      ),
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberInvokePage));
+
+    expect(await screen.findByTestId("member-invoke-panel")).toHaveTextContent(
+      "member:m-alpha",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Workflow Studio" }));
+
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow",
+    );
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("workflowId")).toBe("wf-alpha");
+    expect(params.get("workflowId")).not.toBe("m-alpha");
+    expect(params.get("workflowId")).not.toBe("svc-alpha");
+    expect(params.get("serviceId")).toBeNull();
   });
 
   it("does not read removed legacy Team member invoke links", async () => {

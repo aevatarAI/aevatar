@@ -44,6 +44,8 @@ const zhCNMessages = {
   'pages.chat.index.composerPlaceholder': '描述你想要的 workflow，或询问当前配置...',
   'pages.chat.index.confirmAndCreate': '确认并创建',
   'pages.chat.index.confirmPrompt': '确认，请现在创建。',
+  'pages.chat.index.continuationContextMissing':
+    '续聊请求可能已经被接受，但未收到本轮身份。请重新加载此页面后再继续。',
   'pages.chat.index.cancel': '取消',
   'pages.chat.index.delete': '删除',
   'pages.chat.index.deleteChat': '删除 {title}',
@@ -60,6 +62,7 @@ const zhCNMessages = {
   'pages.chat.index.historyTitle': '会话历史',
   'pages.chat.index.loadingConversation': '正在加载会话',
   'pages.chat.index.loadingHistory': '正在加载会话历史',
+  'pages.chat.index.historySynchronizing': '会话历史仍在同步，请稍后重试。',
   'pages.chat.index.missingChatHistoryContext': 'Chat 已完成，但未返回会话上下文。',
   'pages.chat.index.newChat': '新会话',
   'pages.chat.index.newChatAction': '新建会话',
@@ -978,8 +981,14 @@ const zhCNMessages = {
   'pages.runs.memberPublishedRuns.timeline': '时间线',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     '你可以在这里搭建或编辑 Workflow YAML。保存时会创建可恢复的 Workflow 草稿，直到成员关联完成物化。',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     '这个成员还没有关联 Workflow 草稿。',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': '关闭',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': '草稿运行控制台',
   'teamMemberWorkflowStudio.executionPanel.duration': '耗时',
@@ -1047,6 +1056,9 @@ const zhCNMessages = {
     '服务已就绪',
   'teamMemberWorkflowStudio.executionsPanel.title': '执行记录',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': '未知',
+  'teamMemberWorkflowStudio.graph.branchCount.one': '1 个分支',
+  'teamMemberWorkflowStudio.graph.branchCount.other': '{count} 个分支',
+  'teamMemberWorkflowStudio.graph.role': '角色',
   'teamMemberWorkflowStudio.header.activateAria': '激活 Workflow 成员',
   'teamMemberWorkflowStudio.header.activation.active': '已激活',
   'teamMemberWorkflowStudio.header.activation.error': '错误',
