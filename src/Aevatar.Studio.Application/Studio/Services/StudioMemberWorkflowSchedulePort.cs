@@ -529,6 +529,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
             scheduleId,
             displayName,
             scopeId,
+            resolved.TeamId,
             memberId,
             publishedServiceId,
             chatPayload,
@@ -1479,6 +1480,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         string scheduleId,
         string displayName,
         string scopeId,
+        string teamId,
         string memberId,
         string publishedServiceId,
         Any payload,
@@ -1490,7 +1492,7 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         new(
             scheduleId,
             displayName,
-            new TeamMemberAutomationOwner(scopeId, memberId),
+            new TeamMemberAutomationOwner(scopeId, memberId, teamId),
             new ServiceIdentity
             {
                 TenantId = scopeId,
