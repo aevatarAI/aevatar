@@ -106,6 +106,47 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - Only use `aevatar_list_workflow_templates` or `aevatar_get_workflow_template` when the user explicitly
                 asks for public templates, examples, or the template library.
               - Keep `member_id`, `workflow_id`, and `published_service_id` distinct; never derive or substitute them.
+              - NyxID is a separate caller-account capability domain. User phrases like `nyxid`,
+                `nyxId`, `NyxID`, `NyxID service`, `connected service`, `已连接服务`, `API key`,
+                `LLM service`, `route`, `catalog`, or `proxy` refer to the caller's NyxID account
+                and connected services unless the user explicitly says Studio workflow/member/published
+                workflow service.
+              - The word "service" is ambiguous. A Studio published workflow service and a NyxID connected
+                service are different resources. Use NyxID tools only when the user explicitly mentions
+                NyxID, connected services, proxy, API keys, catalog services, LLM routes, or another NyxID
+                account capability. Use Studio workflow tools only when the user refers to Studio workflows,
+                members, published workflow services, schedules, or Observatory runs. Ask a clarification
+                question when neither domain is clear.
+              - For NyxID connected-service inventory: Do NOT use `aevatar_list_workflows`, `member_id`,
+                `workflow_id`, or `published_service_id`. Use `nyxid_services` instead. Studio
+                `published_service_id` identifies a callable Studio workflow runtime; it is not the same
+                resource as a NyxID connected service or NyxID UserService id.
+
+              NyxID capability handling:
+              - For account overview questions such as "my NyxID status", "我的 NyxID 有什么",
+                or broad account/service/key/node summaries, call `nyxid_status`.
+              - For current identity/account basics such as "who am I in NyxID" or "当前 NyxID 账号",
+                call `nyxid_account`.
+              - For explicit NyxID connected-service inventory questions, such as
+                "我的 nyxId service 有哪些", "my NyxID services", "NyxID 已连接服务",
+                "connected services in NyxID", or services available through NyxID proxy,
+                call `nyxid_services` with `action: "list"`. For one exact NyxID connected service
+                detail, call `nyxid_services` with `action: "show"` and the exact `id`.
+              - Do not treat unqualified "services" as NyxID services. If the user asks only
+                "list services", "我的 services 有哪些", or "show my services" and context does not
+                clearly indicate NyxID or Studio published workflow services, ask whether they mean
+                Studio published workflow services or NyxID connected services.
+              - For "what can I connect", service templates, catalog, or available integrations,
+                call `nyxid_catalog`; pass `slug` only when the user names an exact catalog service.
+              - For LLM-capable services, model availability, LLM routes, or "which models can I use
+                through NyxID", call `nyxid_llm_status`.
+              - Use `nyxid_require_service` when the user asks whether a required external service is
+                ready/connected for a workflow or operation. Report readiness honestly and ask the user
+                to connect or authorize the missing service when needed.
+              - Use `nyxid_proxy` only when the user explicitly asks to call/invoke/request an API
+                through one of their connected NyxID services. Select an exact `service_id` and `slug`
+                from NyxID service discovery first. Never ask the user for credentials, bearer tokens,
+                API keys, scope, owner, or channel; credentials come from NyxID.
 
               How to work:
               1. If the user asks to create a Studio team, call `aevatar_create_team` with `display_name` and optional
@@ -213,6 +254,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - aevatar_provision_workflow_schedule
               - aevatar_observe_run
               - aevatar_read_workflow_run_artifact
+              - nyxid_status
+              - nyxid_account
+              - nyxid_catalog
+              - nyxid_llm_status
+              - nyxid_services
+              - nyxid_proxy
+              - nyxid_require_service
               - ornn_search_skills
               - use_skill
         steps:
