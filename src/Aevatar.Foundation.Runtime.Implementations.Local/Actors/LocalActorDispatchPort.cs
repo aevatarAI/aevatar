@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Runtime.Propagation;
 
 namespace Aevatar.Foundation.Runtime.Implementations.Local.Actors;
 
@@ -20,7 +21,8 @@ public sealed class LocalActorDispatchPort : IActorDispatchPort
         if (await _runtime.GetAsync(actorId) is not LocalActor target)
             throw new InvalidOperationException($"Actor {actorId} not found.");
 
-        target.AcceptDispatchedEnvelope(envelope.Clone());
+        target.AcceptDispatchedEnvelope(
+            EnvelopeDeliveryProvenanceSemantics.CloneForRawDispatch(envelope));
         return DispatchAdmissionFactory.Create(actorId, envelope);
     }
 }

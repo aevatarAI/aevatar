@@ -78,6 +78,69 @@ public sealed class LocalActorDispatchAdmissionTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldClearCallerAuthoredActorOriginFromAdmittedClone()
+    {
+        var streams = new InMemoryStreamProvider(
+            new InMemoryStreamOptions(),
+            NullLoggerFactory.Instance,
+            new InMemoryStreamForwardingRegistry());
+        var services = new ServiceCollection()
+            .AddAevatarAgentKindRegistry(builder => builder.Register<GateAgent>())
+            .BuildServiceProvider();
+        var runtime = new LocalActorRuntime(streams, services, streams);
+        await runtime.CreateAsync<GateAgent>("provenance-actor");
+        var dispatchPort = new LocalActorDispatchPort(runtime);
+        var envelope = CreateEnvelope("cmd-forged-origin", "provenance-actor");
+        envelope.Runtime = new EnvelopeRuntime
+        {
+            SourceActorId = "forged-actor",
+            DeliveryProvenance = new EnvelopeDeliveryProvenance
+            {
+                AuthenticatedActorId = "forged-actor",
+            },
+        };
+
+        await dispatchPort.DispatchAsync("provenance-actor", envelope, CancellationToken.None);
+        GateAgent.Release.SetResult();
+        var handled = await GateAgent.Handled.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        handled.Runtime!.SourceActorId.Should().Be("forged-actor");
+        handled.Runtime.DeliveryProvenance.Should().BeNull();
+        envelope.Runtime.DeliveryProvenance.AuthenticatedActorId.Should().Be("forged-actor");
+    }
+
+    [Fact]
+    public async Task SendToAsync_ShouldStampBoundActorAsAuthenticatedOrigin()
+    {
+        var streams = new InMemoryStreamProvider(
+            new InMemoryStreamOptions(),
+            NullLoggerFactory.Instance,
+            new InMemoryStreamForwardingRegistry());
+        var received = new TaskCompletionSource<EventEnvelope>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = await streams.GetStream("receiver-actor")
+            .SubscribeAsync<EventEnvelope>(envelope =>
+            {
+                received.TrySetResult(envelope);
+                return Task.CompletedTask;
+            });
+        var publisher = new LocalActorPublisher(
+            "bound-local-actor",
+            static () => null,
+            static () => 0,
+            streams);
+
+        await publisher.SendToAsync(
+            "receiver-actor",
+            new StringValue { Value = "payload" },
+            CancellationToken.None);
+
+        var delivered = await received.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        delivered.Runtime!.DeliveryProvenance!.AuthenticatedActorId
+            .Should().Be("bound-local-actor");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldRejectMissingActor()
     {
         var streams = new InMemoryStreamProvider(

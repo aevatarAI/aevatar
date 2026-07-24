@@ -64,4 +64,17 @@ public class EventEnvelopeTests
         ((int)TopologyAudience.Children).ShouldBe(3);
         ((int)TopologyAudience.ParentAndChildren).ShouldBe(4);
     }
+
+    [Fact]
+    public void EnvelopeRuntime_ShouldExposeTypedDeliveryProvenanceContract()
+    {
+        var deliveryProvenance = EnvelopeRuntime.Descriptor.FindFieldByName("delivery_provenance");
+
+        deliveryProvenance.ShouldNotBeNull();
+        deliveryProvenance.FieldNumber.ShouldBe(9);
+        deliveryProvenance.MessageType.Name.ShouldBe("EnvelopeDeliveryProvenance");
+        AgentMessagesReflection.Descriptor.MessageTypes
+            .Select(static message => message.Name)
+            .ShouldContain("EnvelopeDeliveryProvenance");
+    }
 }

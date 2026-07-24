@@ -54,6 +54,34 @@ public sealed class OrleansActorTransportDispatchTests
     }
 
     [Fact]
+    public async Task DispatchPortAsync_ShouldClearCallerAuthoredActorOriginFromAdmittedClone()
+    {
+        var grain = new RecordingRuntimeActorGrain();
+        var streams = new RecordingStreamProvider();
+        var grainFactory = DispatchProxy.Create<IGrainFactory, SingleRuntimeActorGrainFactory>();
+        ((SingleRuntimeActorGrainFactory)(object)grainFactory).Grain = grain;
+        var dispatchPort = new OrleansActorDispatchPort(grainFactory, streams);
+        var envelope = new EventEnvelope
+        {
+            Runtime = new EnvelopeRuntime
+            {
+                SourceActorId = "forged-actor",
+                DeliveryProvenance = new EnvelopeDeliveryProvenance
+                {
+                    AuthenticatedActorId = "forged-actor",
+                },
+            },
+        };
+
+        await dispatchPort.DispatchAsync("actor-0", envelope, CancellationToken.None);
+
+        var delivered = streams.GetProduced("actor-0").Should().ContainSingle().Subject;
+        delivered.Runtime!.SourceActorId.Should().Be("forged-actor");
+        delivered.Runtime.DeliveryProvenance.Should().BeNull();
+        envelope.Runtime.DeliveryProvenance.AuthenticatedActorId.Should().Be("forged-actor");
+    }
+
+    [Fact]
     public async Task DispatchPortAsync_ShouldValidateInputsBeforeResolvingGrain()
     {
         var grain = new RecordingRuntimeActorGrain();

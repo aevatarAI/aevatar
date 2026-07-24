@@ -231,13 +231,13 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
     public async Task HandleInitializedAsync(AgentProfileInitializedContinuation continuation)
     {
         ArgumentNullException.ThrowIfNull(continuation);
-        var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);
         var profileActorId = AgentProfileActorInvariants.RequireActorId(
             continuation.ProfileActorId,
             "profile_actor_id");
         AgentProfileActorInvariants.RequireProtocolPublisher(
-            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            ActiveInboundEnvelope,
             profileActorId);
+        var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);
         var entry = RequireContinuationEntry(
             continuation.Identity,
             profileActorId,
@@ -271,13 +271,13 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         AgentProfileInitializationRejectedContinuation continuation)
     {
         ArgumentNullException.ThrowIfNull(continuation);
-        var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);
         var profileActorId = AgentProfileActorInvariants.RequireActorId(
             continuation.ProfileActorId,
             "profile_actor_id");
         AgentProfileActorInvariants.RequireProtocolPublisher(
-            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            ActiveInboundEnvelope,
             profileActorId);
+        var operation = AgentProfileActorInvariants.RequireOperation(continuation.Operation);
         var entry = RequireContinuationEntry(
             continuation.Identity,
             profileActorId,
@@ -318,7 +318,6 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
         ObserveAgentProfilePublishedSummaryCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         AgentProfileIdentity identity;
         AgentProfilePublishedSummary summary;
         try
@@ -346,8 +345,9 @@ public sealed class AgentProfileNamespaceGAgent : GAgentBase<AgentProfileNamespa
                 "The published summary does not belong to the mapped Profile.");
         }
         AgentProfileActorInvariants.RequireProtocolPublisher(
-            ActiveInboundEnvelope?.Route?.PublisherActorId,
+            ActiveInboundEnvelope,
             entry.ProfileActorId);
+        var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
         var replayAuthority = AgentProfileActorInvariants.CanonicalReplayAuthority(
             AgentProfileOperationKind.ObservePublishedSummary,
             Id,

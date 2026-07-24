@@ -38,7 +38,16 @@ public sealed class EnvelopePublishContextHelpersTests
 
         using var activity = AevatarActivitySource.Source.StartActivity("apply-outbound-publish-context-test");
         activity.Should().NotBeNull();
-        var outbound = new EventEnvelope();
+        var outbound = new EventEnvelope
+        {
+            Runtime = new EnvelopeRuntime
+            {
+                DeliveryProvenance = new EnvelopeDeliveryProvenance
+                {
+                    AuthenticatedActorId = "forged-actor",
+                },
+            },
+        };
 
         EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
             outbound,
@@ -52,7 +61,32 @@ public sealed class EnvelopePublishContextHelpersTests
         outbound.Propagation.Trace.TraceFlags.Should().Be(((byte)activity.ActivityTraceFlags).ToString("x2"));
         outbound.Runtime!.SourceActorId.Should().Be("actor-1");
         outbound.Runtime.RouteTargetCount.Should().Be(3);
+        outbound.Runtime.DeliveryProvenance!.AuthenticatedActorId.Should().Be("actor-1");
         outbound.Propagation.Baggage["custom.key"].Should().Be("v1");
+    }
+
+    [Fact]
+    public void ApplyOutboundPublishContext_WhenSourceActorIsBlank_ShouldClearAuthenticatedOrigin()
+    {
+        var outbound = new EventEnvelope
+        {
+            Runtime = new EnvelopeRuntime
+            {
+                DeliveryProvenance = new EnvelopeDeliveryProvenance
+                {
+                    AuthenticatedActorId = "forged-actor",
+                },
+            },
+        };
+
+        var act = () => EnvelopePublishContextHelpers.ApplyOutboundPublishContext(
+            outbound,
+            sourceEnvelope: null,
+            new PassthroughEnvelopePropagationPolicy(),
+            sourceActorId: " ");
+
+        act.Should().NotThrow();
+        outbound.Runtime.DeliveryProvenance.Should().BeNull();
     }
 
     private sealed class PassthroughEnvelopePropagationPolicy : IEnvelopePropagationPolicy

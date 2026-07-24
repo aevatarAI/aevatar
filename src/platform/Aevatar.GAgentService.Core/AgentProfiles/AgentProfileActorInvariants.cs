@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Google.Protobuf;
 
@@ -97,15 +98,22 @@ internal static class AgentProfileActorInvariants
         };
 
     public static void RequireProtocolPublisher(
-        string? publisherActorId,
+        EventEnvelope? envelope,
         string expectedPublisherActorId)
     {
         var expected = RequireActorId(expectedPublisherActorId, "expected_publisher_actor_id");
-        if (!string.Equals(publisherActorId, expected, StringComparison.Ordinal))
+        if (!string.Equals(
+                envelope?.Route?.PublisherActorId,
+                expected,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                envelope?.Runtime?.DeliveryProvenance?.AuthenticatedActorId,
+                expected,
+                StringComparison.Ordinal))
         {
             throw Error(
                 "PROFILE_PROTOCOL_PUBLISHER_MISMATCH",
-                "The Profile protocol envelope publisher does not match the expected Actor.");
+                "The Profile protocol envelope publisher or authenticated Actor origin does not match the expected Actor.");
         }
     }
 

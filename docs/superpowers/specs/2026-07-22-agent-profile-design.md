@@ -420,6 +420,19 @@ Actor protocol messages and do not accept an Application proof. Private keys,
 proofs, and signatures never enter events, Actor state, projections, audit,
 responses, metric labels, or logs.
 
+Internal protocol authority instead uses the runtime-owned typed
+`EventEnvelope.runtime.delivery_provenance.authenticated_actor_id`. Raw
+`IActorDispatchPort` admission must clone and clear any caller-authored
+authenticated Actor origin, while Actor-bound `SendToAsync` stamps the bound
+Actor id after propagation. The legacy route publisher and runtime source Actor
+fields remain unauthenticated routing/propagation claims. Each internal Profile
+protocol handler validates both the expected route publisher and the matching
+runtime-authenticated Actor origin before operation parsing, replay lookup,
+state mutation, or continuation effects. Local and Orleans have identical
+semantics, and their accepted-only dispatch ACK contract is unchanged. This
+delivery provenance is transient and never enters Profile state, events,
+projections, audit, logs, metrics, or responses.
+
 ## Authority Actors
 
 ### `AgentProfileNamespaceGAgent`
@@ -972,6 +985,9 @@ A focused `tools/ci/agent_profile_boundary_guard.sh` is added to prevent:
   binding fact registry in a process-local dictionary;
 - removal or reordering of the signed proof check in any of the five external
   Actor handlers;
+- removal of the typed runtime delivery provenance, raw-dispatch clearing,
+  Actor-bound stamping, or pre-operation dual authority check in any of the four
+  internal protocol handlers;
 - bypassing either Actor's exact operation-retention policy;
 - an ingress reintroducing a private Profile composer or prompt order;
 - `default_skill_name` or `DefaultSkillName` returning after migration;

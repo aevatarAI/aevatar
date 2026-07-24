@@ -82,6 +82,19 @@ must succeed before runtime lookup, creation, materialization, or dispatch.
 Proofs, signatures, and private keys do not enter events, Actor state, read
 models, audit, responses, labels, or logs.
 
+The four internal provisioning and published-summary messages do not carry an
+Application proof. Their authority comes from the runtime-owned typed
+`EventEnvelope.runtime.delivery_provenance.authenticated_actor_id`. Raw
+`IActorDispatchPort` admission clones the envelope and clears any caller-authored
+authenticated Actor origin; Actor-bound `SendToAsync` overwrites that origin
+from its bound Actor id after propagation. `Route.PublisherActorId` and
+`Runtime.SourceActorId` remain routing/propagation claims and cannot authenticate
+an Actor by themselves. The Profile and Namespace handlers require both the
+expected route publisher and the matching runtime-authenticated Actor origin
+before operation parsing, replay lookup, state mutation, or continuation
+effects. Local and Orleans implement the same admission and publishing
+semantics, and dispatch ACKs remain accepted-only.
+
 ## 4. Phase 1 Management Contract
 
 ### HTTP API
@@ -272,6 +285,9 @@ reports credentials, sealed content, or raw remote errors.
 - Audit and health use allowlisted safe fields; raw diagnostics are excluded.
 - Ingress proof material and signing keys are transport-boundary secrets and are
   never committed, projected, audited, logged, or used as metric labels.
+- Runtime-authenticated Actor delivery provenance is transient envelope context.
+  It is not copied into Profile state, events, projections, audit, logs, metrics,
+  or responses.
 - Activity spans may carry resource correlation facts. Metric labels are
   limited to ingress, operation, outcome/failure class, activation mode, and
   required-system readiness; Profile/resource ids are not metric labels.

@@ -594,6 +594,60 @@ public sealed class AgentProfileNamespaceGAgentTests
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)version);
     }
 
+    [Theory]
+    [InlineData("initialized", null)]
+    [InlineData("initialized", "attacker-actor")]
+    [InlineData("rejected", null)]
+    [InlineData("rejected", "attacker-actor")]
+    [InlineData("summary", null)]
+    [InlineData("summary", "attacker-actor")]
+    public async Task ProfileProtocolIngress_ShouldRejectMissingOrForgedAuthenticatedOriginWhenLegacyOriginsMatch(
+        string messageKind,
+        string? authenticatedActorId)
+    {
+        var (agent, store, _) = await CreateActorAsync();
+        var command = CreateCommand(operationId: $"op-forged-origin-{messageKind}");
+        await agent.HandleCreateAsync(command);
+        IMessage payload;
+        switch (messageKind)
+        {
+            case "initialized":
+                payload = Initialized(command);
+                break;
+            case "rejected":
+                payload = new AgentProfileInitializationRejectedContinuation
+                {
+                    Operation = command.Operation.Clone(),
+                    Identity = command.Identity.Clone(),
+                    ProfileActorId = command.ProfileActorId,
+                    Diagnostic = new AgentProfileSafeDiagnostic { Code = "INITIALIZATION_FAILED" },
+                };
+                break;
+            case "summary":
+                await DispatchInitializedAsync(agent, Initialized(command));
+                payload = Summary(
+                    command,
+                    "op-forged-origin-summary-publish",
+                    revision: long.MaxValue,
+                    digestByte: 0x63);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(messageKind));
+        }
+        var version = agent.EventSourcing!.CurrentVersion;
+
+        var act = () => GAgentServiceTestKit.DispatchAsync(
+            agent,
+            payload,
+            command.ProfileActorId,
+            authenticatedActorId);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PROTOCOL_PUBLISHER_MISMATCH");
+        agent.EventSourcing.CurrentVersion.Should().Be(version);
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount((int)version);
+    }
+
     [Fact]
     public async Task InitializationRejection_ShouldBoundEveryPersistedDiagnosticField()
     {

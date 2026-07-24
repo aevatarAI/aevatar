@@ -88,6 +88,28 @@ public sealed class AgentProfileGAgentTests
         publisher.Sends.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("attacker-actor")]
+    public async Task Initialize_ShouldRejectMissingOrForgedAuthenticatedOriginWhenLegacyOriginsMatch(
+        string? authenticatedActorId)
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var command = InitializeCommand(operationId: "op-initialize-forged-origin");
+
+        var act = () => GAgentServiceTestKit.DispatchAsync(
+            agent,
+            command,
+            AgentProfileActorIds.Namespace,
+            authenticatedActorId);
+
+        var exception = await act.Should().ThrowAsync<AgentProfileActorInvariantException>();
+        exception.Which.Code.Should().Be("PROFILE_PROTOCOL_PUBLISHER_MISMATCH");
+        agent.State.Identity.Should().BeNull();
+        (await store.GetEventsAsync(agent.Id)).Should().BeEmpty();
+        publisher.Sends.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task Initialize_ShouldRejectSelfConsistentUnauthorizedNamespaceAuthority()
     {

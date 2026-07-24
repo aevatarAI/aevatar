@@ -126,6 +126,12 @@ message EnvelopeDispatchControl {
   bool propagate_failure = 1;
 }
 
+message EnvelopeDeliveryProvenance {
+  // Runtime-authenticated sender Actor. Raw dispatch admission clears any
+  // caller-authored value; only an Actor-bound publisher may stamp it.
+  string authenticated_actor_id = 1;
+}
+
 message EnvelopeRuntime {
   string                  source_actor_id   = 1;
   int64                   route_target_count = 2;
@@ -135,6 +141,8 @@ message EnvelopeRuntime {
   EnvelopeForwardingContext forwarding      = 6;
   EnvelopeDispatchControl dispatch          = 7;
   repeated string         visited_actor_ids = 8;
+  // Runtime-owned delivery authority, distinct from propagation/source claims.
+  EnvelopeDeliveryProvenance delivery_provenance = 9;
 }
 
 // State events (Event Sourcing).

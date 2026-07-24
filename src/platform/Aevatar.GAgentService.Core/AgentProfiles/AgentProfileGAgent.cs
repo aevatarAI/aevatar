@@ -23,15 +23,18 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
     public async Task HandleInitializeAsync(InitializeAgentProfileCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
-        var claimedNamespaceActorId = AgentProfileActorInvariants.RequireActorId(
-            command.NamespaceActorId,
-            "namespace_actor_id");
         var namespaceActorId = State.Identity is null
             ? AgentProfileActorIds.Namespace
             : AgentProfileActorInvariants.RequireActorId(
                 State.NamespaceActorId,
                 "state.namespace_actor_id");
+        AgentProfileActorInvariants.RequireProtocolPublisher(
+            ActiveInboundEnvelope,
+            namespaceActorId);
+        var operation = AgentProfileActorInvariants.RequireOperation(command.Operation);
+        var claimedNamespaceActorId = AgentProfileActorInvariants.RequireActorId(
+            command.NamespaceActorId,
+            "namespace_actor_id");
         if (!string.Equals(namespaceActorId, AgentProfileActorIds.Namespace, StringComparison.Ordinal) ||
             !string.Equals(claimedNamespaceActorId, namespaceActorId, StringComparison.Ordinal))
         {
@@ -39,9 +42,6 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 "PROFILE_PROTOCOL_PUBLISHER_MISMATCH",
                 "Profile initialization must originate from the committed Phase-1 Namespace Actor.");
         }
-        AgentProfileActorInvariants.RequireProtocolPublisher(
-            ActiveInboundEnvelope?.Route?.PublisherActorId,
-            namespaceActorId);
         var precanonicalReplayAuthority = AgentProfileActorInvariants.PrecanonicalReplayAuthority(
             AgentProfileOperationKind.Initialize,
             Id,

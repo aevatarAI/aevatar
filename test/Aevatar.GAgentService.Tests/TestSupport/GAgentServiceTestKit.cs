@@ -260,6 +260,14 @@ internal static class GAgentServiceTestKit
         IAgent agent,
         IMessage payload,
         string publisherActorId,
+        CancellationToken ct = default) =>
+        DispatchAsync(agent, payload, publisherActorId, publisherActorId, ct);
+
+    public static Task DispatchAsync(
+        IAgent agent,
+        IMessage payload,
+        string publisherActorId,
+        string? authenticatedActorId,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(agent);
@@ -270,6 +278,16 @@ internal static class GAgentServiceTestKit
             Id = $"test-{Guid.NewGuid():N}",
             Payload = Any.Pack(payload),
             Route = EnvelopeRouteSemantics.CreateDirect(publisherActorId, agent.Id),
+            Runtime = new EnvelopeRuntime
+            {
+                SourceActorId = publisherActorId,
+                DeliveryProvenance = string.IsNullOrWhiteSpace(authenticatedActorId)
+                    ? null
+                    : new EnvelopeDeliveryProvenance
+                    {
+                        AuthenticatedActorId = authenticatedActorId,
+                    },
+            },
         }, ct);
     }
 

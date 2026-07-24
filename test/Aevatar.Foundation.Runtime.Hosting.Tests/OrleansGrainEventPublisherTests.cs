@@ -118,6 +118,22 @@ public class OrleansGrainEventPublisherTests
     }
 
     [Fact]
+    public async Task SendToAsync_ShouldStampBoundActorAsAuthenticatedOrigin()
+    {
+        var streams = new RecordingStreamProvider();
+        var publisher = CreatePublisher(actorId: "bound-orleans-actor", streams: streams);
+
+        await publisher.SendToAsync(
+            "receiver",
+            new StringValue { Value = "stream" },
+            CancellationToken.None);
+
+        var delivered = streams.GetProduced("receiver").Should().ContainSingle().Subject;
+        delivered.Runtime!.DeliveryProvenance!.AuthenticatedActorId
+            .Should().Be("bound-orleans-actor");
+    }
+
+    [Fact]
     public async Task PublishAsync_WhenDirectionIsDown_ShouldRouteByForwardingRegistry()
     {
         var registry = new InMemoryStreamForwardingRegistry();

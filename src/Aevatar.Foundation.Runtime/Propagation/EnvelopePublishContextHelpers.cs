@@ -27,6 +27,7 @@ public static class EnvelopePublishContextHelpers
         var runtime = envelope.EnsureRuntime();
         if (!string.IsNullOrWhiteSpace(sourceActorId) && string.IsNullOrWhiteSpace(runtime.SourceActorId))
             runtime.SourceActorId = sourceActorId;
+        EnvelopeDeliveryProvenanceSemantics.StampAuthenticatedActorOrigin(envelope, sourceActorId);
 
         if (routeTargetCount.HasValue)
             runtime.RouteTargetCount = routeTargetCount.Value;
