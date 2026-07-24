@@ -508,9 +508,89 @@ TOKEN_MODE="$(stat -f '%Lp' "$STUDIO_TOKEN_FILE" 2>/dev/null \
 test "$TOKEN_MODE" = "600"
 test "$(awk 'END {print NR}' "$STUDIO_TOKEN_FILE")" = "1"
 
-CANARY_STATE_DIR="${CANARY_STATE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/aevatar-agent-key-canary.XXXXXX")}"
-mkdir -p "$CANARY_STATE_DIR"
-chmod 700 "$CANARY_STATE_DIR"
+CANARY_STATE_CONTRACT_VERSION="aevatar-agent-key-canary-state-v1"
+CANARY_STATE_SENTINEL_NAME=".aevatar-agent-key-canary-state.json"
+
+canary_path_owner_id() {
+  stat -f '%u' "$1" 2>/dev/null || stat -c '%u' "$1"
+}
+
+canary_path_mode() {
+  stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+}
+
+canonicalize_canary_state_dir() {
+  local requested="${1:?canary state directory required}"
+  test -d "$requested" || return 1
+  test ! -L "$requested" || return 1
+  (cd -P -- "$requested" >/dev/null 2>&1 && pwd -P)
+}
+
+validate_canary_state_dir() {
+  local requested="${1:?canary state directory required}"
+  local canonical sentinel current_uid
+  canonical="$(canonicalize_canary_state_dir "$requested")" || return 1
+  test "$requested" = "$canonical" || return 1
+  current_uid="$(id -u)"
+  test "$(canary_path_owner_id "$canonical")" = "$current_uid" || return 1
+  test "$(canary_path_mode "$canonical")" = "700" || return 1
+
+  sentinel="$canonical/$CANARY_STATE_SENTINEL_NAME"
+  test -f "$sentinel" || return 1
+  test ! -L "$sentinel" || return 1
+  test "$(canary_path_owner_id "$sentinel")" = "$current_uid" || return 1
+  test "$(canary_path_mode "$sentinel")" = "600" || return 1
+  jq -e \
+    --arg contractVersion "$CANARY_STATE_CONTRACT_VERSION" \
+    --arg canonicalPath "$canonical" '
+    type == "object"
+    and (keys == ["canonicalPath", "contractVersion"])
+    and .contractVersion == $contractVersion
+    and .canonicalPath == $canonicalPath
+  ' "$sentinel" >/dev/null 2>&1 || return 1
+  printf '%s\n' "$canonical"
+}
+
+create_or_resume_canary_state_dir() {
+  local requested="${1:-}"
+  local created canonical sentinel current_uid
+  if test -n "$requested"; then
+    validate_canary_state_dir "$requested"
+    return
+  fi
+
+  created="$(mktemp -d "${TMPDIR:-/tmp}/aevatar-agent-key-canary.XXXXXX")" || return 1
+  canonical="$(canonicalize_canary_state_dir "$created")" || return 1
+  current_uid="$(id -u)"
+  test "$(canary_path_owner_id "$canonical")" = "$current_uid" || return 1
+  chmod 700 "$canonical" || return 1
+  sentinel="$canonical/$CANARY_STATE_SENTINEL_NAME"
+  (umask 077; jq -n \
+    --arg contractVersion "$CANARY_STATE_CONTRACT_VERSION" \
+    --arg canonicalPath "$canonical" \
+    '{contractVersion: $contractVersion, canonicalPath: $canonicalPath}' \
+    > "$sentinel") || return 1
+  chmod 600 "$sentinel" || return 1
+  validate_canary_state_dir "$canonical"
+}
+
+remove_canary_state_dir() {
+  local requested="${1:?canary state directory required}"
+  local canonical
+  canonical="$(validate_canary_state_dir "$requested")" || return 1
+  test "$canonical" = "$requested" || return 1
+  rm -rf -- "$canonical" || return 1
+  test ! -e "$canonical"
+}
+
+if ! VALIDATED_CANARY_STATE_DIR="$(
+    create_or_resume_canary_state_dir "${CANARY_STATE_DIR:-}"
+  )"; then
+  printf 'STOP: canary state directory ownership validation failed\n' >&2
+  exit 1
+fi
+CANARY_STATE_DIR="$VALIDATED_CANARY_STATE_DIR"
+unset VALIDATED_CANARY_STATE_DIR
 LEDGER="$CANARY_STATE_DIR/ledger.json"
 if ! test -f "$LEDGER"; then
   printf '{}\n' > "$LEDGER"
@@ -571,8 +651,11 @@ read_bearer
 ```
 
 The state directory may contain authenticated response bodies and owner PII.
-Keep it mode `0700`, do not attach it wholesale to a ticket, and remove it after
-extracting the non-secret evidence checklist at the end.
+An unset `CANARY_STATE_DIR` creates it and its versioned path-binding sentinel;
+a set value is resume-only and must pass the same canonical-path, ownership,
+mode, and sentinel validation before any write. Keep the directory mode `0700`,
+do not attach it wholesale to a ticket, and remove it after extracting the
+non-secret evidence checklist at the end.
 
 ### 4. Require One Authenticated Owner In The Exact Scope
 
@@ -624,86 +707,11 @@ jq -e \
 `serviceSlug` and the proxy route are integrity/display data. The UUID above is
 the only service identity admitted into the authorization plan.
 
-### 6. Reselect And Observe The Exact Typed UserConfig
-
-This protected request is also the second authentication gate. Capture the
-original typed selection, then perform the approved post-deploy reselection.
-`202 Accepted` is only dispatch evidence; the canary remains blocked until the
-typed GET observes the committed exact selection.
-
-```bash
-: "${USER_CONFIG_RESELECTION_APPROVED:?set only after owner-wide change approval}"
-: "${USER_CONFIG_DISPOSITION:?set to leave_selected}"
-: "${USER_CONFIG_LEAVE_SELECTED_APPROVED:?set only after leave-selected approval}"
-test "$USER_CONFIG_RESELECTION_APPROVED" = "yes"
-test "$USER_CONFIG_DISPOSITION" = "leave_selected"
-test "$USER_CONFIG_LEAVE_SELECTED_APPROVED" = "yes"
-
-STATUS="$(api_request GET /api/user-config/llm \
-  "$CANARY_STATE_DIR/user-config-before.json")"
-expect_status 200 "$STATUS" user-config-llm
-
-jq -e '
-  (.savedRouteKind == "unspecified"
-   or .savedRouteKind == "gateway"
-   or .savedRouteKind == "nyx_id_user_service")
-  and (.savedRoute | type == "string")
-  and (.defaultModel | type == "string")
-' "$CANARY_STATE_DIR/user-config-before.json" >/dev/null
-jq '{
-  savedRouteKind,
-  savedRoute,
-  savedUserServiceId,
-  savedServiceSlug,
-  defaultModel
-}' "$CANARY_STATE_DIR/user-config-before.json" \
-  > "$CANARY_STATE_DIR/user-config-original-allowlist.json"
-
-jq -n \
-  --arg userServiceId "$NYXID_USER_SERVICE_ID" \
-  --arg model "$EXPECTED_MODEL" '
-  {userServiceId: $userServiceId, model: $model}
-' > "$CANARY_STATE_DIR/user-config-select.json"
-
-STATUS="$(api_request PUT /api/user-config/llm \
-  "$CANARY_STATE_DIR/user-config-select-response.json" \
-  "$CANARY_STATE_DIR/user-config-select.json")"
-expect_status 202 "$STATUS" select-exact-owner-llm
-jq -e '.accepted == true and .ackStage == "accepted"' \
-  "$CANARY_STATE_DIR/user-config-select-response.json" >/dev/null
-
-USER_CONFIG_OBSERVED=false
-for _ in $(seq 1 60); do
-  STATUS="$(api_request GET /api/user-config/llm \
-    "$CANARY_STATE_DIR/user-config-selected.json")"
-  expect_status 200 "$STATUS" observe-exact-owner-llm
-  if jq -e \
-      --arg id "$NYXID_USER_SERVICE_ID" \
-      --arg slug "$NYXID_SERVICE_SLUG" \
-      --arg route "$NYXID_PROXY_ROUTE" \
-      --arg model "$EXPECTED_MODEL" '
-      .savedRouteKind == "nyx_id_user_service"
-      and .savedUserServiceId == $id
-      and .savedServiceSlug == $slug
-      and .savedRoute == $route
-      and .defaultModel == $model
-    ' "$CANARY_STATE_DIR/user-config-selected.json" >/dev/null; then
-    USER_CONFIG_OBSERVED=true
-    break
-  fi
-  sleep 2
-done
-test "$USER_CONFIG_OBSERVED" = "true"
-ledger_set userConfigDisposition "$USER_CONFIG_DISPOSITION"
-```
-
-The exact selected owner-wide UserConfig remains in place after the canary.
-Never use only `savedRoute` to infer `savedUserServiceId`.
-
 ## Mutation Boundary
 
-Everything above is read-only. Everything below creates, binds, invokes,
-revokes, retires, deletes, or archives temporary production resources.
+The preflight checks above are read-only. The first production mutation below
+is the approved owner-wide UserConfig reselection. Later steps create, bind,
+invoke, revoke, retire, delete, or archive temporary production resources.
 
 Before continuing, record a change ticket, the release provenance evidence,
 the canary owner, and explicit approval for temporary production mutations.
@@ -816,6 +824,90 @@ once while preserving its original status. It records only the
 allowlisted IDs, lifecycle/completion status, stable code, authoritative
 version, and UTC timestamp. Do not add exception text, request/response bodies,
 headers, caller subjects, or log messages to failure evidence.
+
+### 6. Reselect And Observe The Exact Typed UserConfig
+
+This protected request is also the second authentication gate and the first
+production mutation. Capture the original typed selection, then perform the
+approved post-deploy reselection. `202 Accepted` is only dispatch evidence; the
+canary remains blocked until the typed GET observes the committed exact
+selection.
+
+```bash
+: "${USER_CONFIG_RESELECTION_APPROVED:?set only after owner-wide change approval}"
+: "${USER_CONFIG_DISPOSITION:?set to leave_selected}"
+: "${USER_CONFIG_LEAVE_SELECTED_APPROVED:?set only after leave-selected approval}"
+test "$USER_CONFIG_RESELECTION_APPROVED" = "yes"
+test "$USER_CONFIG_DISPOSITION" = "leave_selected"
+test "$USER_CONFIG_LEAVE_SELECTED_APPROVED" = "yes"
+
+set_failure_context "user_config_baseline" "" "not_observed" "user_config_baseline_failed" "0"
+STATUS="$(api_request GET /api/user-config/llm \
+  "$CANARY_STATE_DIR/user-config-before.json")"
+set_failure_context "user_config_baseline" "" "http_$STATUS" "user_config_baseline_failed" "0"
+expect_status 200 "$STATUS" user-config-llm
+
+jq -e '
+  (.savedRouteKind == "unspecified"
+   or .savedRouteKind == "gateway"
+   or .savedRouteKind == "nyx_id_user_service")
+  and (.savedRoute | type == "string")
+  and (.defaultModel | type == "string")
+' "$CANARY_STATE_DIR/user-config-before.json" >/dev/null
+jq '{
+  savedRouteKind,
+  savedRoute,
+  savedUserServiceId,
+  savedServiceSlug,
+  defaultModel
+}' "$CANARY_STATE_DIR/user-config-before.json" \
+  > "$CANARY_STATE_DIR/user-config-original-allowlist.json"
+
+jq -n \
+  --arg userServiceId "$NYXID_USER_SERVICE_ID" \
+  --arg model "$EXPECTED_MODEL" '
+  {userServiceId: $userServiceId, model: $model}
+' > "$CANARY_STATE_DIR/user-config-select.json"
+
+set_failure_context "user_config_reselection" "" "not_dispatched" "user_config_reselection_failed" "0"
+STATUS="$(api_request PUT /api/user-config/llm \
+  "$CANARY_STATE_DIR/user-config-select-response.json" \
+  "$CANARY_STATE_DIR/user-config-select.json")"
+set_failure_context "user_config_reselection" "" "http_$STATUS" "user_config_reselection_failed" "0"
+expect_status 202 "$STATUS" select-exact-owner-llm
+jq -e '.accepted == true and .ackStage == "accepted"' \
+  "$CANARY_STATE_DIR/user-config-select-response.json" >/dev/null
+
+USER_CONFIG_OBSERVED=false
+set_failure_context "user_config_observation" "" "not_observed" "user_config_observation_failed" "0"
+for _ in $(seq 1 60); do
+  STATUS="$(api_request GET /api/user-config/llm \
+    "$CANARY_STATE_DIR/user-config-selected.json")"
+  set_failure_context "user_config_observation" "" "http_$STATUS" "user_config_observation_failed" "0"
+  expect_status 200 "$STATUS" observe-exact-owner-llm
+  if jq -e \
+      --arg id "$NYXID_USER_SERVICE_ID" \
+      --arg slug "$NYXID_SERVICE_SLUG" \
+      --arg route "$NYXID_PROXY_ROUTE" \
+      --arg model "$EXPECTED_MODEL" '
+      .savedRouteKind == "nyx_id_user_service"
+      and .savedUserServiceId == $id
+      and .savedServiceSlug == $slug
+      and .savedRoute == $route
+      and .defaultModel == $model
+    ' "$CANARY_STATE_DIR/user-config-selected.json" >/dev/null; then
+    USER_CONFIG_OBSERVED=true
+    set_failure_context "user_config_observation" "" "observed" "user_config_observation_failed" "0"
+    break
+  fi
+  sleep 2
+done
+test "$USER_CONFIG_OBSERVED" = "true"
+ledger_set userConfigDisposition "$USER_CONFIG_DISPOSITION"
+```
+
+The exact selected owner-wide UserConfig remains in place after the canary.
+Never use only `savedRoute` to infer `savedUserServiceId`.
 
 ### 7. Capture A Fresh Collision Baseline
 
@@ -1906,9 +1998,11 @@ member still existed.
 ### Resume From The Non-Secret Ledger
 
 If the shell exits after a mutation, do not start a new canary. Point
-`CANARY_STATE_DIR` at the existing mode-`0700` directory, recreate the helper
-functions above, refresh the bearer, and restore identities without printing
-them:
+`CANARY_STATE_DIR` at the exact canonical path originally returned by this
+runbook, recreate the helper functions above, and let initialization validate
+the mode-`0700` directory and its owner-only sentinel before refreshing the
+bearer or restoring identities. Never move or copy a sentinel to authorize a
+different path. Restore identities without printing them:
 
 ```bash
 LEDGER="$CANARY_STATE_DIR/ledger.json"
@@ -2014,7 +2108,9 @@ refresh token, auth profile, complete NyxID inventory, or backend logs.
 ### Extract The Allowlisted Bundle And Remove Local State
 
 Write the explicit non-secret bundle to an approved path outside
-`CANARY_STATE_DIR`, validate it, then destroy the entire state directory. Do not
+`CANARY_STATE_DIR`, validate it, then destroy the entire state directory. The
+cleanup helper revalidates the canonical path and owner-only sentinel
+immediately before recursive deletion and fails closed on any mismatch. Do not
 copy any other file out of that directory.
 
 ```bash
@@ -2147,7 +2243,8 @@ jq -e \
 ' "$CANARY_EVIDENCE_FILE" >/dev/null
 
 unset STUDIO_BEARER
-rm -rf -- "$CANARY_STATE_DIR"
+set_failure_context "local_state_cleanup" "" "not_removed" "local_state_cleanup_failed" "0"
+remove_canary_state_dir "$CANARY_STATE_DIR"
 test ! -e "$CANARY_STATE_DIR"
 unset CANARY_STATE_DIR LEDGER
 ```

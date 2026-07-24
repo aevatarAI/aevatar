@@ -567,8 +567,12 @@ public sealed class ScheduledDispatchGAgentTests
         eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task HandleEnsureAsync_WhenCurrentSessionCredentialHeaderIsPresent_ShouldRejectWithoutStateMutation()
+    [Theory]
+    [InlineData("connector.http.authorization")]
+    [InlineData("Connector.Http.Authorization")]
+    [InlineData("CONNECTOR.HTTP.AUTHORIZATION")]
+    public async Task HandleEnsureAsync_WhenCurrentSessionCredentialHeaderIsPresent_ShouldRejectWithoutStateMutation(
+        string authorizationHeader)
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
@@ -578,8 +582,7 @@ public sealed class ScheduledDispatchGAgentTests
         var command = CreateEnsureCommand(
             scheduleKind: ScheduledDispatchScheduleKindState.Workflow,
             target: CreateWorkflowServiceInvocationTarget(CreateSenderNyxIdAuth()));
-        command.Headers[ScheduledDispatchCredentialRequirementRequests.LegacyConnectorHttpAuthorizationHeader] =
-            "Bearer current-session-token";
+        command.Headers[authorizationHeader] = "redacted";
 
         var rejected = () => agent.HandleEnsureAsync(command);
 
@@ -2494,6 +2497,53 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task TeamAutomationCredentialOperation_WithWrongSecretPurpose_ShouldRejectBegin()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var command = CreateTeamBeginCommand();
+        command.CredentialEffectLocator.SecretPurpose = CredentialSecretPurposes.ScheduledNyxApiKey;
+
+        var act = () => agent.HandleBeginTeamAutomationCredentialOperationAsync(command);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_credential_effect_locator_purpose_invalid");
+        agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Unspecified);
+        eventStore.GetEvents(ScheduleActorId).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TeamAutomationCredentialCandidate_WithWrongSecretPurpose_ShouldRejectBeforeCommit()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand());
+        agent.State.TeamCredentialEffectLocator!.SecretPurpose = CredentialSecretPurposes.ScheduledNyxApiKey;
+        var credential = CreateTeamCredential("key-alpha");
+        credential.SecretReference.Purpose = CredentialSecretPurposes.ScheduledNyxApiKey;
+
+        var act = () => agent.HandleRecordTeamAutomationCredentialCandidateAsync(
+            new RecordTeamAutomationCredentialCandidateCommand
+            {
+                Owner = CreateTeamOwner(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential,
+                CredentialOwner = CreateCredentialOwner(),
+                EffectAttemptId = agent.State.TeamAutomationEffectAttemptId,
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_credential_purpose_invalid");
+        agent.State.CandidateTeamCredential.Should().BeNull();
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x =>
+                x.EventType == TeamAutomationCredentialCandidateRecordedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
     public async Task TeamAutomationCredentialOperation_ShouldReplayExactlyAndRejectConflictingDigest()
     {
         var eventStore = new TestEventStore();
@@ -2885,13 +2935,25 @@ public sealed class ScheduledDispatchGAgentTests
     [Fact]
     public async Task TeamAutomationCredential_ShouldBindCandidateAndCompleteToActorOwnedReference()
     {
-        var locatorSubstitutions = new (string Name, Action<SecretReference> Mutate)[]
+        var locatorSubstitutions = new (
+            string Name,
+            Action<SecretReference> Mutate,
+            string ExpectedError)[]
         {
-            ("reference", reference => reference.Ref = "secret-substituted"),
-            ("purpose", reference => reference.Purpose = "purpose-substituted"),
-            ("owner-scope", reference => reference.OwnerScopeKey = "scope-substituted"),
+            (
+                "reference",
+                reference => reference.Ref = "secret-substituted",
+                "team_automation_candidate_credential_locator_mismatch"),
+            (
+                "purpose",
+                reference => reference.Purpose = "purpose-substituted",
+                "team_automation_credential_purpose_invalid"),
+            (
+                "owner-scope",
+                reference => reference.OwnerScopeKey = "scope-substituted",
+                "team_automation_candidate_credential_locator_mismatch"),
         };
-        foreach (var (name, mutate) in locatorSubstitutions)
+        foreach (var (name, mutate, expectedError) in locatorSubstitutions)
         {
             var agent = CreateAgent(new TestEventStore(), new RecordingActorDispatchPort());
             await agent.ActivateAsync();
@@ -2907,7 +2969,7 @@ public sealed class ScheduledDispatchGAgentTests
                 credential);
 
             await action.Should().ThrowAsync<InvalidOperationException>(name)
-                .WithMessage("team_automation_candidate_credential_locator_mismatch");
+                .WithMessage(expectedError);
             agent.State.CandidateTeamCredential.Should().BeNull(name);
         }
 

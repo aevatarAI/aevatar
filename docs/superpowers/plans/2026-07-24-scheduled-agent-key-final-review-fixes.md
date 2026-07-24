@@ -232,7 +232,7 @@ Expose nullable `defaultModel` on `UserLlmRouteOption` and its JSON wire respons
 
 Do not clear a pending target because a transient catalog omits it. Render a stable disabled retained option from the target or committed saved identity until observation resolves; save remains disabled until a live exact option returns. Never replace the last good relay catalog with null on transient GET failure.
 
-Observe sequentially at exactly `[0, 250, 500, 1000, 2000, 3000, 5000]` milliseconds, at most seven GETs and 11.75 seconds. Check `saveToken` before applying every response or error. Exhaustion becomes `accepted_unobserved` with manual retry, not write failure. Use Jest fake timers; do not require unrelated user activity and do not add backend polling tests.
+Observe sequentially at exactly `[0, 250, 500, 1000, 2000, 3000, 5000]` milliseconds, launching at cumulative times `[0, 250, 750, 1750, 3750, 6750, 11750]`. Give the seventh GET a bounded 5-second settle window, so final exhaustion is at 16.75 seconds. Check `saveToken` before applying every response or error. Exhaustion becomes `accepted_unobserved` with manual retry, not write failure. Use Jest fake timers; do not require unrelated user activity and do not add backend polling tests.
 
 - [ ] **Step 4: Verify the exact wire contract and product semantics**
 

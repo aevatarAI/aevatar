@@ -90,6 +90,7 @@ type SettingsDraftState = {
   readonly baseline: SettingsDraft;
   readonly pendingSave: PendingSettingsSave | null;
   readonly draftRevision: number;
+  readonly saveError: string | null;
   readonly value: SettingsDraft;
 };
 
@@ -471,12 +472,13 @@ const SettingsPage: React.FC = () => {
     baseline: loadedDraft,
     pendingSave: null,
     draftRevision: 0,
+    saveError: null,
     value: loadedDraft,
   }));
   const saveTokenRef = React.useRef(0);
   const draft = draftState.value;
   const pendingSave = draftState.pendingSave;
-  const [saveError, setSaveError] = React.useState<string | null>(null);
+  const saveError = draftState.saveError;
   const draftDirty = React.useMemo(
     () => !draftsEqual(draft, draftState.baseline),
     [draft, draftState.baseline],
@@ -664,10 +666,9 @@ const SettingsPage: React.FC = () => {
         ...target,
         phase: "accepted",
       };
-      setSaveError(null);
       setDraftState((current) =>
         current.pendingSave?.saveToken === target.saveToken
-          ? { ...current, pendingSave: acceptedTarget }
+          ? { ...current, pendingSave: acceptedTarget, saveError: null }
           : current,
       );
       startPendingObservation(acceptedTarget);
@@ -678,12 +679,22 @@ const SettingsPage: React.FC = () => {
         return;
       }
 
-      setDraftState((current) =>
-        current.pendingSave?.saveToken === target.saveToken
-          ? { ...current, pendingSave: null }
-          : current,
-      );
-      setSaveError(describeError(error, "Failed to save settings."));
+      setDraftState((current) => {
+        if (current.pendingSave?.saveToken !== target.saveToken) {
+          return current;
+        }
+
+        const submittedDraftIsVisible =
+          current.draftRevision === target.submittedRevision &&
+          draftsEqual(current.value, target.submittedDraft);
+        return {
+          ...current,
+          pendingSave: null,
+          saveError: submittedDraftIsVisible
+            ? describeError(error, "Failed to save settings.")
+            : null,
+        };
+      });
     },
   });
   const retainedSelectionOptions = React.useMemo(() => {
@@ -1068,8 +1079,11 @@ const SettingsPage: React.FC = () => {
       selectionLabel: exactOption.label,
       phase: "saving",
     };
-    setSaveError(null);
-    setDraftState((current) => ({ ...current, pendingSave: target }));
+    setDraftState((current) => ({
+      ...current,
+      pendingSave: target,
+      saveError: null,
+    }));
     saveMutation.mutate({ pendingSave: target });
   }, [draft, draftState.draftRevision, liveSelectionOptions, saveMutation]);
 
@@ -1101,9 +1115,9 @@ const SettingsPage: React.FC = () => {
       baseline: loadedDraft,
       draftRevision: current.draftRevision + 1,
       pendingSave: null,
+      saveError: null,
       value: loadedDraft,
     }));
-    setSaveError(null);
   }, [loadedDraft]);
 
   const handlePreferredServiceChange = React.useCallback(

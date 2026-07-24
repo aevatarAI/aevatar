@@ -244,10 +244,12 @@ function selectedDefaultModelElement(): Element {
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 describe("SettingsPage", () => {
@@ -894,6 +896,48 @@ describe("SettingsPage", () => {
     expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
   });
 
+  it("does not apply an in-flight PUT failure to a newer edited draft", async () => {
+    const saveReceipt = createDeferred<{
+      accepted: boolean;
+      commandId: string;
+      ackStage: string;
+      actorId: string;
+      correlationId: string;
+      ackedAtUtc: string;
+    }>();
+    mockStudioApi.saveUserLlmSettings.mockReturnValueOnce(saveReceipt.promise);
+    mockStudioApi.getUserLlmSettings.mockResolvedValue(
+      createExactServiceSettings("us-alpha"),
+    );
+    renderWithQueryClient(React.createElement(SettingsPage));
+
+    await waitFor(() =>
+      expect(selectedLlmServiceElement()).toHaveTextContent(
+        "Shared OpenAI alpha",
+      ),
+    );
+    await selectLlmService("Shared OpenAI beta");
+    fireEvent.click(screen.getByRole("button", { name: "Save config" }));
+    await waitFor(() =>
+      expect(mockStudioApi.saveUserLlmSettings).toHaveBeenCalledTimes(1),
+    );
+    await selectLlmService("Shared OpenAI gamma");
+
+    await act(async () => {
+      saveReceipt.reject(new Error("obsolete write failed"));
+      try {
+        await saveReceipt.promise;
+      } catch {
+        // The component owns the rejected mutation.
+      }
+    });
+
+    expect(selectedLlmServiceElement()).toHaveTextContent("Shared OpenAI gamma");
+    expect(screen.getByRole("button", { name: "Save config" })).toBeEnabled();
+    expect(screen.queryByText("Save failed")).toBeNull();
+    expect(screen.queryByText("obsolete write failed")).toBeNull();
+  });
+
   it("uses the current inventory route for an exact saved ID and its model group", async () => {
     const oldRoute = "/api/v1/proxy/s/shared-openai-old";
     const currentRoute = "/api/v1/proxy/s/shared-openai-current";
@@ -1181,6 +1225,18 @@ describe("SettingsPage", () => {
     }
 
     expect(mockStudioApi.getUserLlmSettings).toHaveBeenCalledTimes(8);
+    expect(screen.getByText(
+      "Save accepted for Shared OpenAI beta. Waiting for the exact service and model to be observed.",
+    )).toBeTruthy();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(4_999);
+    });
+    expect(screen.getByText(
+      "Save accepted for Shared OpenAI beta. Waiting for the exact service and model to be observed.",
+    )).toBeTruthy();
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(1);
+    });
     expect(screen.getByText(
       "Save accepted for Shared OpenAI beta, but it has not been observed yet.",
     )).toBeTruthy();

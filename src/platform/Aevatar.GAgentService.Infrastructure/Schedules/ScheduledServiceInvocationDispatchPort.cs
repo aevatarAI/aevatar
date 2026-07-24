@@ -17,8 +17,6 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
 {
     private static readonly TimeSpan DurableCredentialProjectionTtl = TimeSpan.FromHours(24);
     private static readonly TimeSpan ProjectedCredentialCleanupTimeout = TimeSpan.FromSeconds(5);
-    private const string LegacyConnectorHttpAuthorizationBlockedKey =
-        ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey;
 
     private readonly IServiceInvocationPort _serviceInvocationPort;
     private readonly IScheduledServiceInvocationCredentialExchangePort _credentialExchangePort;
@@ -349,10 +347,13 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing,
                 "Scheduled invocation agent key secret reference is missing.");
-        if (string.IsNullOrWhiteSpace(reference.Purpose))
+        if (!string.Equals(
+                reference.Purpose,
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                StringComparison.Ordinal))
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
-                "Scheduled invocation agent key secret reference purpose is missing.");
+                "Scheduled invocation agent key secret reference purpose is invalid.");
         if (string.IsNullOrWhiteSpace(reference.OwnerScopeKey))
             throw new ScheduledServiceInvocationAuthorizationException(
                 ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid,
@@ -744,7 +745,7 @@ public sealed class ScheduledServiceInvocationDispatchPort : IScheduledServiceIn
         {
             foreach (var (key, value) in headers)
             {
-                if (string.Equals(key, LegacyConnectorHttpAuthorizationBlockedKey, StringComparison.Ordinal))
+                if (ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(key))
                     continue;
 
                 chatRequest.Metadata[key] = value;

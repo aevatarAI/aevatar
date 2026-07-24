@@ -385,6 +385,7 @@ const USER_LLM_GATEWAY_ROUTE = "/api/v1/llm/gateway/v1";
 const USER_LLM_GATEWAY_SELECTION = "gateway";
 const USER_LLM_SERVICE_SELECTION_PREFIX = "user-service:";
 const USER_LLM_SAVE_OBSERVATION_DELAYS_MS = [0,250,500,1000,2000,3000,5000];
+const USER_LLM_SAVE_FINAL_ATTEMPT_SETTLE_MS = 5000;
 
 function llmServiceSelectionValue(userServiceId){
   return USER_LLM_SERVICE_SELECTION_PREFIX + encodeURIComponent(userServiceId);
@@ -1045,7 +1046,7 @@ function startLlmObservation(target){
       state.llmSaveState="accepted_unobserved";
       state.llmSaved=false;
       render();
-    },elapsedMilliseconds);
+    },elapsedMilliseconds+USER_LLM_SAVE_FINAL_ATTEMPT_SETTLE_MS);
   });
 }
 function retryLlmObservation(){

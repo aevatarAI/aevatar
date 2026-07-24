@@ -758,6 +758,8 @@ describe("NyxID relay owner LLM selection", () => {
       await jest.advanceTimersByTimeAsync(delay);
     }
     await saving;
+    expect(hooks.state.llmSaveState).toBe("accepted");
+    await jest.advanceTimersByTimeAsync(5_000);
     renderStep(hooks);
 
     expect(getTimes).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
@@ -766,6 +768,34 @@ describe("NyxID relay owner LLM selection", () => {
     expect(document.body).toHaveTextContent("Shared OpenAI beta");
     expect(screen.getByRole("button", { name: "重新检查" })).toBeEnabled();
     expect(document.body).not.toHaveTextContent("保存失败");
+  });
+
+  it("allows the seventh relay observation attempt to succeed during its settle window", async () => {
+    jest.useFakeTimers({ now: 0 });
+    const hooks = loadRelayHooks();
+    configureDraft(hooks);
+    const reads: Array<ReturnType<typeof createDeferred<Response>>> = [];
+    global.fetch = jest.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return Promise.resolve(fetchResponse(202, { accepted: true }));
+      }
+      const read = createDeferred<Response>();
+      reads.push(read);
+      return read.promise;
+    }) as typeof global.fetch;
+
+    const saving = hooks.saveLlm();
+    for (const delay of [0, 250, 500, 1000, 2000, 3000, 5000]) {
+      await jest.advanceTimersByTimeAsync(delay);
+    }
+    expect(reads).toHaveLength(7);
+    expect(hooks.state.llmSaveState).toBe("accepted");
+
+    reads[6]?.resolve(fetchResponse(200, relaySettings("us-beta")));
+    await saving;
+
+    expect(hooks.state.llmSaveState).toBe("observed");
+    expect(hooks.state.llmSaved).toBe(true);
   });
 
   it("reaches the fixed deadline when observation GETs hang", async () => {
@@ -786,7 +816,10 @@ describe("NyxID relay owner LLM selection", () => {
       return read.promise;
     }) as typeof global.fetch;
 
-    const saving = hooks.saveLlm();
+    let savingSettled = false;
+    const saving = hooks.saveLlm().then(() => {
+      savingSettled = true;
+    });
     await jest.advanceTimersByTimeAsync(0);
     expect(signals).toHaveLength(1);
     expect(signals[0]?.aborted).toBe(false);
@@ -799,6 +832,17 @@ describe("NyxID relay owner LLM selection", () => {
     await jest.advanceTimersByTimeAsync(11_500);
 
     expect(getTimes).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
+    expect(savingSettled).toBe(false);
+    expect(hooks.state.llmSaveState).toBe("accepted");
+    expect(signals).toHaveLength(7);
+    expect(signals.slice(0, 6).every((signal) => signal.aborted)).toBe(true);
+    expect(signals[6]?.aborted).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(4_999);
+    expect(savingSettled).toBe(false);
+    expect(signals[6]?.aborted).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+
     await saving;
     expect(hooks.state.llmSaveState).toBe("accepted_unobserved");
     expect(signals).toHaveLength(7);

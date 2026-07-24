@@ -142,6 +142,8 @@ public sealed class ScheduledDispatchCurrentStateProjector
         document.CompletedAt = state.CompletedAt;
         document.CredentialExpiresAt = state.TeamCredentialExpiresAt?.ToDateTimeOffset();
         document.Headers = state.Headers
+            .Where(static item =>
+                !ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(item.Key))
             .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
         document.FireRecords.Add(CreateFireRecords(state));
         return document;

@@ -188,6 +188,180 @@ if rg -q 'APPROVED_(CREATE|REVOCATION)_AUDIT_QUERY' "$CANARY_DOC"; then
   fail "runbook still depends on unspecified audit executables"
 fi
 
+STATE_HELPERS_FILE="$TMP_DIR/canary-state-helpers.sh"
+if ! awk '
+  /^CANARY_STATE_CONTRACT_VERSION=/ {copy = 1}
+  copy {print}
+  /^remove_canary_state_dir\(\) \{/ {in_remove = 1}
+  copy && in_remove && /^}/ {found = 1; exit}
+  END {if (!found) exit 1}
+' "$CANARY_DOC" > "$STATE_HELPERS_FILE"; then
+  fail "runbook does not define owned canary state helpers"
+fi
+
+STATE_INITIALIZATION_FILE="$TMP_DIR/canary-state-initialization.sh"
+if ! awk '
+  /^if ! VALIDATED_CANARY_STATE_DIR=/ {copy = 1}
+  copy {print}
+  copy && /^chmod 600 "\$LEDGER"$/ {found = 1; exit}
+  END {if (!found) exit 1}
+' "$CANARY_DOC" > "$STATE_INITIALIZATION_FILE"; then
+  fail "runbook does not explicitly guard canary state initialization"
+fi
+
+if ! (
+  set -euo pipefail
+  source "$STATE_HELPERS_FILE"
+
+  STATE_FIXTURE_ROOT="$TMP_DIR/canary-state"
+  mkdir -p "$STATE_FIXTURE_ROOT/tmp"
+  export TMPDIR="$STATE_FIXTURE_ROOT/tmp"
+
+  HOME="$STATE_FIXTURE_ROOT/home"
+  mkdir -m 700 "$HOME"
+  : > "$HOME/must-survive"
+  if remove_canary_state_dir "$HOME" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$HOME/must-survive"
+
+  ARBITRARY_DIR="$STATE_FIXTURE_ROOT/arbitrary"
+  mkdir -m 700 "$ARBITRARY_DIR"
+  : > "$ARBITRARY_DIR/must-survive"
+  if create_or_resume_canary_state_dir "$ARBITRARY_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  if remove_canary_state_dir "$ARBITRARY_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$ARBITRARY_DIR/must-survive"
+  test ! -e "$ARBITRARY_DIR/$CANARY_STATE_SENTINEL_NAME"
+
+  COPIED_SOURCE="$(create_or_resume_canary_state_dir "")"
+  COPIED_DIR="$STATE_FIXTURE_ROOT/copied-sentinel"
+  mkdir -m 700 "$COPIED_DIR"
+  cp "$COPIED_SOURCE/$CANARY_STATE_SENTINEL_NAME" \
+    "$COPIED_DIR/$CANARY_STATE_SENTINEL_NAME"
+  chmod 600 "$COPIED_DIR/$CANARY_STATE_SENTINEL_NAME"
+  : > "$COPIED_DIR/must-survive"
+  if create_or_resume_canary_state_dir "$COPIED_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  if remove_canary_state_dir "$COPIED_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$COPIED_DIR/must-survive"
+  remove_canary_state_dir "$COPIED_SOURCE"
+
+  MOVED_SOURCE="$(create_or_resume_canary_state_dir "")"
+  MOVED_DIR="$STATE_FIXTURE_ROOT/moved-state"
+  mv "$MOVED_SOURCE" "$MOVED_DIR"
+  : > "$MOVED_DIR/must-survive"
+  if create_or_resume_canary_state_dir "$MOVED_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  if remove_canary_state_dir "$MOVED_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$MOVED_DIR/must-survive"
+
+  SYMLINK_DIR="$(create_or_resume_canary_state_dir "")"
+  rm "$SYMLINK_DIR/$CANARY_STATE_SENTINEL_NAME"
+  ln -s "$ARBITRARY_DIR/must-survive" \
+    "$SYMLINK_DIR/$CANARY_STATE_SENTINEL_NAME"
+  : > "$SYMLINK_DIR/must-survive"
+  if remove_canary_state_dir "$SYMLINK_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$SYMLINK_DIR/must-survive"
+
+  WRONG_MODE_DIR="$(create_or_resume_canary_state_dir "")"
+  chmod 755 "$WRONG_MODE_DIR"
+  : > "$WRONG_MODE_DIR/must-survive"
+  if remove_canary_state_dir "$WRONG_MODE_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$WRONG_MODE_DIR/must-survive"
+
+  WRONG_SENTINEL_MODE_DIR="$(create_or_resume_canary_state_dir "")"
+  chmod 644 "$WRONG_SENTINEL_MODE_DIR/$CANARY_STATE_SENTINEL_NAME"
+  : > "$WRONG_SENTINEL_MODE_DIR/must-survive"
+  if remove_canary_state_dir "$WRONG_SENTINEL_MODE_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$WRONG_SENTINEL_MODE_DIR/must-survive"
+
+  WRONG_OWNER_DIR="$(create_or_resume_canary_state_dir "")"
+  : > "$WRONG_OWNER_DIR/must-survive"
+  bash -c '
+    set -euo pipefail
+    source "$1"
+    WRONG_OWNER_ID="$(( $(id -u) + 1 ))"
+    canary_path_owner_id() {
+      printf "%s\n" "$WRONG_OWNER_ID"
+    }
+    if remove_canary_state_dir "$2" >/dev/null 2>&1; then
+      exit 1
+    fi
+    test -f "$2/must-survive"
+  ' _ "$STATE_HELPERS_FILE" "$WRONG_OWNER_DIR"
+  remove_canary_state_dir "$WRONG_OWNER_DIR"
+
+  MALFORMED_DIR="$(create_or_resume_canary_state_dir "")"
+  printf '{}\n' > "$MALFORMED_DIR/$CANARY_STATE_SENTINEL_NAME"
+  chmod 600 "$MALFORMED_DIR/$CANARY_STATE_SENTINEL_NAME"
+  : > "$MALFORMED_DIR/must-survive"
+  if remove_canary_state_dir "$MALFORMED_DIR" >/dev/null 2>&1; then
+    exit 1
+  fi
+  test -f "$MALFORMED_DIR/must-survive"
+
+  OWNED_DIR="$(create_or_resume_canary_state_dir "")"
+  test "$(create_or_resume_canary_state_dir "$OWNED_DIR")" = "$OWNED_DIR"
+  test "$(validate_canary_state_dir "$OWNED_DIR")" = "$OWNED_DIR"
+  remove_canary_state_dir "$OWNED_DIR"
+  test ! -e "$OWNED_DIR"
+); then
+  fail "runbook canary state ownership safety check failed"
+fi
+
+NO_WRITE_DIR="$TMP_DIR/canary-state-no-write"
+mkdir -m 700 "$NO_WRITE_DIR"
+: > "$NO_WRITE_DIR/must-survive"
+set +e
+bash -c '
+  set -u
+  source "$1"
+  CANARY_STATE_DIR="$2"
+  source "$3"
+  : > "$4"
+' _ \
+  "$STATE_HELPERS_FILE" \
+  "$NO_WRITE_DIR" \
+  "$STATE_INITIALIZATION_FILE" \
+  "$TMP_DIR/invalid-state-initialization-continued" \
+  > "$TMP_DIR/invalid-state-initialization.out" \
+  2> "$TMP_DIR/invalid-state-initialization.err"
+INVALID_STATE_STATUS=$?
+set -e
+test "$INVALID_STATE_STATUS" -ne 0 \
+  || fail "invalid canary state initialization unexpectedly succeeded"
+test ! -e "$TMP_DIR/invalid-state-initialization-continued" \
+  || fail "invalid canary state initialization continued after validation"
+test -f "$NO_WRITE_DIR/must-survive" \
+  || fail "invalid canary state initialization mutated caller content"
+test ! -e "$NO_WRITE_DIR/ledger.json" \
+  || fail "invalid canary state initialization wrote a ledger"
+test ! -s "$TMP_DIR/invalid-state-initialization.out" \
+  || fail "invalid canary state initialization emitted stdout"
+rg -Fx 'STOP: canary state directory ownership validation failed' \
+  "$TMP_DIR/invalid-state-initialization.err" >/dev/null \
+  || fail "invalid canary state initialization lacks generic failure context"
+if rg -F "$NO_WRITE_DIR" \
+    "$TMP_DIR/invalid-state-initialization.err" >/dev/null; then
+  fail "invalid canary state initialization exposed the rejected path"
+fi
+
 FAILURE_CONTEXT_FILE="$TMP_DIR/failure-context.sh"
 awk '
   /^set_failure_context\(\) \{/ {copy = 1}
@@ -402,6 +576,34 @@ assert_context_order \
   '--output "$CANARY_STATE_DIR/final-ready.json" --write-out' \
   'set_failure_context "final_readiness" "" "http_$HTTP_STATUS" "final_readiness_failed" "0"' \
   2
+
+CHANGE_TICKET_GATE_LINE="$(line_of_unique ': "${CHANGE_TICKET:?set the approved production change ticket}"')"
+MUTATION_APPROVAL_LINE="$(line_of_unique ': "${PRODUCTION_CANARY_APPROVED:?set only after approval}"')"
+EXIT_TRAP_LINE="$(line_of_unique "trap 'handle_canary_exit \"\$?\"' EXIT")"
+USER_CONFIG_PUT_LINE="$(line_of_unique 'STATUS="$(api_request PUT /api/user-config/llm \')"
+test "$CHANGE_TICKET_GATE_LINE" -lt "$USER_CONFIG_PUT_LINE" \
+  && test "$MUTATION_APPROVAL_LINE" -lt "$USER_CONFIG_PUT_LINE" \
+  && test "$EXIT_TRAP_LINE" -lt "$USER_CONFIG_PUT_LINE" \
+  || fail "UserConfig PUT precedes the mutation gate or EXIT trap"
+if rg -F 'Everything above is read-only.' "$CANARY_DOC" >/dev/null; then
+  fail "runbook still claims the pre-gate UserConfig mutation is read-only"
+fi
+
+assert_context_order \
+  "UserConfig baseline observation" \
+  'set_failure_context "user_config_baseline" "" "not_observed" "user_config_baseline_failed" "0"' \
+  '"$CANARY_STATE_DIR/user-config-before.json")"' \
+  'set_failure_context "user_config_baseline" "" "http_$STATUS" "user_config_baseline_failed" "0"'
+assert_context_order \
+  "UserConfig reselection" \
+  'set_failure_context "user_config_reselection" "" "not_dispatched" "user_config_reselection_failed" "0"' \
+  '"$CANARY_STATE_DIR/user-config-select.json")"' \
+  'set_failure_context "user_config_reselection" "" "http_$STATUS" "user_config_reselection_failed" "0"'
+assert_context_order \
+  "UserConfig selection observation" \
+  'set_failure_context "user_config_observation" "" "not_observed" "user_config_observation_failed" "0"' \
+  '"$CANARY_STATE_DIR/user-config-selected.json")"' \
+  'set_failure_context "user_config_observation" "" "http_$STATUS" "user_config_observation_failed" "0"'
 
 FINAL_KEY_CONTEXT='set_failure_context "final_key" "" "not_observed" "final_key_observe_failed" "0"'
 FINAL_KEY_POST='set_failure_context "final_key" "" "observed" "final_key_observe_failed" "0"'

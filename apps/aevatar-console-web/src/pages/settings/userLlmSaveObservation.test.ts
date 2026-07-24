@@ -32,6 +32,7 @@ describe("userLlmSaveObservation", () => {
 
   it("observes at the fixed sequential delays and exhausts as accepted_unobserved", async () => {
     const observedAt: number[] = [];
+    let settled: { readonly attempts: number; readonly phase: string } | undefined;
     const observation = observeUserLlmSave({
       saveToken: 7,
       isCurrent: (saveToken) => saveToken === 7,
@@ -41,17 +42,49 @@ describe("userLlmSaveObservation", () => {
       },
       isObserved: (sample) => sample.observed,
     });
+    void observation.then((result) => {
+      settled = result;
+    });
 
-    await jest.runAllTimersAsync();
+    await jest.advanceTimersByTimeAsync(11_750);
+    expect(USER_LLM_SAVE_OBSERVATION_DELAYS_MS).toEqual([
+      0, 250, 500, 1000, 2000, 3000, 5000,
+    ]);
+    expect(observedAt).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
+    expect(settled).toBeUndefined();
+
+    await jest.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBeUndefined();
+    await jest.advanceTimersByTimeAsync(1);
 
     await expect(observation).resolves.toEqual({
       attempts: 7,
       phase: "accepted_unobserved",
     });
-    expect(USER_LLM_SAVE_OBSERVATION_DELAYS_MS).toEqual([
-      0, 250, 500, 1000, 2000, 3000, 5000,
-    ]);
-    expect(observedAt).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
+  });
+
+  it("allows the seventh observation attempt to succeed during its settle window", async () => {
+    let finalResolve!: (value: { observed: boolean }) => void;
+    let attempt = 0;
+    const observation = observeUserLlmSave({
+      saveToken: 17,
+      isCurrent: (saveToken) => saveToken === 17,
+      read: () => {
+        attempt += 1;
+        if (attempt < 7) {
+          return Promise.resolve({ observed: false });
+        }
+        return new Promise<{ observed: boolean }>((resolve) => {
+          finalResolve = resolve;
+        });
+      },
+      isObserved: (sample) => sample.observed,
+    });
+
+    await jest.advanceTimersByTimeAsync(11_750);
+    finalResolve({ observed: true });
+
+    await expect(observation).resolves.toEqual({ attempts: 7, phase: "observed" });
   });
 
   it("continues after transient reads and reaches observed without unrelated activity", async () => {
@@ -138,11 +171,21 @@ describe("userLlmSaveObservation", () => {
     await jest.advanceTimersByTimeAsync(11_500);
 
     expect(observedAt).toEqual([0, 250, 750, 1750, 3750, 6750, 11750]);
-    expect(settled).toEqual({ attempts: 7, phase: "accepted_unobserved" });
+    expect(settled).toBeUndefined();
     expect(signals).toHaveLength(7);
+    expect(signals.slice(0, 6).every((signal) => signal.aborted)).toBe(true);
+    expect(signals[6]?.aborted).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBeUndefined();
+    expect(signals[6]?.aborted).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+
+    expect(settled).toEqual({ attempts: 7, phase: "accepted_unobserved" });
     expect(signals.every((signal) => signal.aborted)).toBe(true);
     resolvers[0]?.({ observed: true });
     rejecters[1]?.(new Error("late failure"));
+    resolvers[6]?.({ observed: true });
     await Promise.resolve();
     expect(onResponse).not.toHaveBeenCalled();
     expect(onTransientError).not.toHaveBeenCalled();

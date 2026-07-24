@@ -509,6 +509,35 @@ public sealed class ScheduledDispatchApplicationServiceTests
         actorPort.Created.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("Connector.Http.Authorization")]
+    [InlineData("CONNECTOR.HTTP.AUTHORIZATION")]
+    public async Task CreateAsync_WithCaseVariantConnectorAuthorizationHeader_ShouldRejectBeforeActorDispatch(
+        string authorizationHeader)
+    {
+        var actorPort = new RecordingScheduledDispatchActorPort { ResolveUnknownAsMissing = true };
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+        var configuration = CreateEnvelopeConfiguration("schedule-header-case-variant") with
+        {
+            CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
+            Headers = new Dictionary<string, string>
+            {
+                [authorizationHeader] = "redacted",
+                ["trace"] = "kept",
+            },
+        };
+
+        var act = () => service.CreateAsync(configuration);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*current-session credentials*");
+        actorPort.Created.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task UpdateAsync_ShouldNormalizeServiceInvocationAndDispatchUpdate()
     {

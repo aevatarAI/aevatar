@@ -168,6 +168,42 @@ public sealed class ScheduledDispatchServiceInvocationTests
         descriptorChat.ToolContext.Routing.ModelOverride.Should().Be("tool-model");
     }
 
+    [Theory]
+    [InlineData("Connector.Http.Authorization")]
+    [InlineData("CONNECTOR.HTTP.AUTHORIZATION")]
+    public async Task PrepareAsync_ShouldStripCaseVariantConnectorAuthorizationKeys(string authorizationKey)
+    {
+        var service = new ScheduledDispatchTargetPreparationService();
+        var payload = new ChatRequestEvent { Prompt = "hello" };
+        payload.Headers[authorizationKey] = "redacted";
+        payload.Headers["trace"] = "kept";
+        payload.Metadata[authorizationKey] = "redacted";
+        payload.Metadata["annotation"] = "kept";
+        var configuration = new ScheduledDispatchConfiguration(
+            "schedule-case-variant",
+            "Case variant",
+            new ScheduledDispatchTargetDescriptor(
+                ScheduledDispatchTargetKind.ServiceInvocation,
+                ServiceInvocation: new ScheduledServiceInvocationTargetDescriptor(
+                    new ServiceIdentity { ServiceId = "svc" },
+                    "chat",
+                    Any.Pack(payload))),
+            "0 9 * * *",
+            "UTC",
+            true,
+            new Dictionary<string, string>());
+
+        var prepared = await service.PrepareAsync(configuration, "cmd-case-variant", "corr-case-variant");
+
+        var preparedChat = prepared.Descriptor.ServiceInvocation!.Payload.Unpack<ChatRequestEvent>();
+        preparedChat.Headers.Keys.Should().NotContain(key =>
+            string.Equals(key, authorizationKey, StringComparison.OrdinalIgnoreCase));
+        preparedChat.Metadata.Keys.Should().NotContain(key =>
+            string.Equals(key, authorizationKey, StringComparison.OrdinalIgnoreCase));
+        preparedChat.Headers.Should().Contain("trace", "kept");
+        preparedChat.Metadata.Should().Contain("annotation", "kept");
+    }
+
     [Fact]
     public async Task PrepareAsync_ShouldStripToolContextCredentialsWhenLlmControlIsMissing()
     {
@@ -788,6 +824,34 @@ public sealed class ScheduledDispatchServiceInvocationTests
         invokedChat.ConnectorHttpAuthorization.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ScheduledServiceInvocationDispatchPort_WithWrongPurposeWorkflowAgentKey_ShouldRejectBeforeDispatch()
+    {
+        var now = new DateTimeOffset(2026, 7, 15, 8, 0, 0, TimeSpan.Zero);
+        var invocationPort = new RecordingServiceInvocationPort();
+        var credentialExchange = new RecordingScheduledServiceInvocationCredentialExchangePort("unused");
+        var vault = new RecordingSecretVault("must-not-resolve");
+        var port = new ScheduledServiceInvocationDispatchPort(
+            invocationPort,
+            credentialExchange,
+            vault,
+            timeProvider: new FixedTimeProvider(now));
+        var dispatch = CreateAuthorizationFactDispatch(now);
+        dispatch.Auth!.ScheduledInvocationAgentKey!.SecretReference.Purpose =
+            CredentialSecretPurposes.ScheduledNyxApiKey;
+
+        var act = () => port.DispatchAsync(dispatch);
+
+        var failure = await act.Should().ThrowAsync<ScheduledServiceInvocationAuthorizationException>();
+        failure.WithMessage("Scheduled invocation agent key secret reference purpose is invalid.");
+        failure.Which.Code.Should()
+            .Be(ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid);
+        invocationPort.Requests.Should().BeEmpty();
+        credentialExchange.Sources.Should().BeEmpty();
+        vault.ResolveRequests.Should().BeEmpty();
+        vault.StoreRequests.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("platform")]
@@ -876,7 +940,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
     [Theory]
     [InlineData("ref", "Scheduled invocation agent key secret reference is missing.",
         ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceMissing)]
-    [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is missing.",
+    [InlineData("purpose", "Scheduled invocation agent key secret reference purpose is invalid.",
         ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid)]
     [InlineData("ownerScopeKey", "Scheduled invocation agent key owner scope is missing.",
         ScheduledServiceInvocationAuthorizationFailureCode.CredentialReferenceInvalid)]
@@ -1947,7 +2011,7 @@ public sealed class ScheduledDispatchServiceInvocationTests
             new SecretReference
             {
                 Ref = "secret-alpha",
-                Purpose = CredentialSecretPurposes.ScheduledNyxApiKey,
+                Purpose = CredentialSecretPurposes.ScheduledInvocationAgentKey,
                 OwnerScopeKey = "owner-alpha",
                 ExpiresAtUnixMs = expiresAt.ToUnixTimeMilliseconds(),
             },

@@ -52,6 +52,46 @@ public sealed class ScheduledDispatchCurrentStateProjectorTests
         document.LastEventId.Should().Be("evt-9");
     }
 
+    [Theory]
+    [InlineData("Connector.Http.Authorization")]
+    [InlineData("CONNECTOR.HTTP.AUTHORIZATION")]
+    public async Task ProjectAsync_ShouldNotProjectCaseVariantConnectorAuthorizationHeader(
+        string authorizationHeader)
+    {
+        var store = new RecordingDocumentStore<ScheduledDispatchDocument>(x => x.Id);
+        var projector = new ScheduledDispatchCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-06-18T00:00:00+00:00")));
+        var state = CreateServiceInvocationState(
+            "schedule-header-case-variant",
+            new ServiceIdentity
+            {
+                TenantId = "tenant",
+                AppId = "app",
+                Namespace = "default",
+                ServiceId = "svc",
+            });
+        state.Headers[authorizationHeader] = "redacted";
+        state.Headers["trace"] = "kept";
+
+        await projector.ProjectAsync(
+            CreateContext("scheduled-dispatch:schedule-header-case-variant"),
+            WrapCommitted(
+                state,
+                version: 10,
+                eventId: "evt-header-case-variant",
+                observedAt: DateTimeOffset.Parse("2026-06-18T01:15:00+00:00")));
+
+        var document = await store.GetAsync("schedule-header-case-variant");
+        document.Should().NotBeNull();
+        document!.Headers.Keys.Should().NotContain(key =>
+            string.Equals(
+                key,
+                ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey,
+                StringComparison.OrdinalIgnoreCase));
+        document.Headers.Should().Contain("trace", "kept");
+    }
+
     [Fact]
     public async Task ProjectAsync_ShouldMaterializePromptFromTriggerEnvelope_WhenTargetPayloadIsMissing()
     {

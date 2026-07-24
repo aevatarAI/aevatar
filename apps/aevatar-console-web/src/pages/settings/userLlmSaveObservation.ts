@@ -1,6 +1,7 @@
 export const USER_LLM_SAVE_OBSERVATION_DELAYS_MS = [
   0, 250, 500, 1000, 2000, 3000, 5000,
 ] as const;
+export const USER_LLM_SAVE_FINAL_ATTEMPT_SETTLE_MS = 5000;
 
 export type UserLlmSaveObservationPhase =
   | "observed"
@@ -149,7 +150,7 @@ export async function observeUserLlmSave<TSample>(
             ? "accepted_unobserved"
             : "superseded",
         );
-      }, elapsedMilliseconds),
+      }, elapsedMilliseconds + USER_LLM_SAVE_FINAL_ATTEMPT_SETTLE_MS),
     );
   });
 }

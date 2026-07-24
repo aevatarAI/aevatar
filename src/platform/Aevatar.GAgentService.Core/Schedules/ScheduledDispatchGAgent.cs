@@ -2009,13 +2009,23 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         if (locator == null)
             throw new InvalidOperationException("team_automation_credential_effect_locator_required");
 
+        var secretPurpose = NormalizeRequired(locator.SecretPurpose, nameof(locator.SecretPurpose));
+        if (!string.Equals(
+                secretPurpose,
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                StringComparison.Ordinal))
+        {
+            throw TeamAutomationCommandRejectedException.InvalidRequest(
+                "team_automation_credential_effect_locator_purpose_invalid");
+        }
+
         return new ScheduledCredentialEffectLocatorState
         {
             CredentialName = NormalizeRequired(locator.CredentialName, nameof(locator.CredentialName)),
             RequestedSecretReference = NormalizeRequired(
                 locator.RequestedSecretReference,
                 nameof(locator.RequestedSecretReference)),
-            SecretPurpose = NormalizeRequired(locator.SecretPurpose, nameof(locator.SecretPurpose)),
+            SecretPurpose = secretPurpose,
             SecretOwnerScopeKey = NormalizeRequired(locator.SecretOwnerScopeKey, nameof(locator.SecretOwnerScopeKey)),
             CredentialOwner = NormalizeCredentialAuthorizationOwner(locator.CredentialOwner),
         };
@@ -2182,6 +2192,15 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             credential.KeyExpiresAtUnixMs <= _timeProvider.GetUtcNow().ToUnixTimeMilliseconds())
         {
             throw new InvalidOperationException("team_automation_credential_invalid_or_expired");
+        }
+
+        if (!string.Equals(
+                credential.SecretReference.Purpose,
+                CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                StringComparison.Ordinal))
+        {
+            throw TeamAutomationCommandRejectedException.InvalidRequest(
+                "team_automation_credential_purpose_invalid");
         }
 
         return NormalizeScheduledInvocationAgentKey(credential);
@@ -3637,10 +3656,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             var normalizedValue = NormalizeOptional(value);
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
                 continue;
-            if (string.Equals(
-                    normalizedKey,
-                    ScheduledServiceInvocationPayloadPolicy.ConnectorHttpAuthorizationKey,
-                    StringComparison.Ordinal))
+            if (ScheduledServiceInvocationPayloadPolicy.IsConnectorHttpAuthorizationKey(normalizedKey))
             {
                 continue;
             }
