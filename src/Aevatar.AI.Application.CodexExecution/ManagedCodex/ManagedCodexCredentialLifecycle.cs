@@ -99,7 +99,7 @@ public sealed class ManagedCodexCredentialLifecycle(
                 bearerToken,
                 owner,
                 activeKeys[0],
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility,
                 mutationCt).ConfigureAwait(false);
             if (recovered is not null)
                 return recovered;
@@ -108,16 +108,16 @@ public sealed class ManagedCodexCredentialLifecycle(
         var requestedExpiresAt = _timeProvider.GetUtcNow().AddDays(_options.CredentialLifetimeDays);
         var issued = await _nyxIdPort.CreateApiKeyAsync(
             bearerToken,
-            IssueRequest(eligibility.ChronoSandboxUserServiceId, requestedExpiresAt),
+            IssueRequest(eligibility, requestedExpiresAt),
             mutationCt).ConfigureAwait(false);
         ManagedCodexNyxIdApiKey persistedKey;
         try
         {
-            ValidateIssuedKey(issued.Key, eligibility.ChronoSandboxUserServiceId);
+            ValidateIssuedKey(issued.Key, eligibility);
             persistedKey = await RequirePersistedIssuedKeyAsync(
                 bearerToken,
                 issued.Key.Id,
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility,
                 requestedExpiresAt,
                 mutationCt).ConfigureAwait(false);
         }
@@ -197,6 +197,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             persistedKey.Id,
             reference,
             eligibility.ChronoSandboxUserServiceId,
+            eligibility.ChronoLlmUserServiceId,
             expiresAt);
         DispatchAdmission admission;
         try
@@ -257,7 +258,7 @@ public sealed class ManagedCodexCredentialLifecycle(
                 owner,
                 current.Credential,
                 activeKeys[0],
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility,
                 mutationCt).ConfigureAwait(false);
             if (recovered is not null)
                 return recovered;
@@ -270,7 +271,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         {
             ValidatePersistedKey(
                 activeKeys[0],
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility,
                 expiresAt);
             issued = await _nyxIdPort.RotateApiKeyAsync(
                 bearerToken,
@@ -281,18 +282,18 @@ public sealed class ManagedCodexCredentialLifecycle(
         {
             issued = await _nyxIdPort.CreateApiKeyAsync(
                 bearerToken,
-                IssueRequest(eligibility.ChronoSandboxUserServiceId, expiresAt),
+                IssueRequest(eligibility, expiresAt),
                 mutationCt).ConfigureAwait(false);
         }
 
         ManagedCodexNyxIdApiKey persistedKey;
         try
         {
-            ValidateIssuedKey(issued.Key, eligibility.ChronoSandboxUserServiceId);
+            ValidateIssuedKey(issued.Key, eligibility);
             persistedKey = await RequirePersistedIssuedKeyAsync(
                 bearerToken,
                 issued.Key.Id,
-                eligibility.ChronoSandboxUserServiceId,
+                eligibility,
                 expiresAt,
                 mutationCt).ConfigureAwait(false);
         }
@@ -358,6 +359,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             persistedKey.Id,
             newReference,
             eligibility.ChronoSandboxUserServiceId,
+            eligibility.ChronoLlmUserServiceId,
             expiresAt);
         DispatchAdmission admission;
         try
@@ -499,7 +501,7 @@ public sealed class ManagedCodexCredentialLifecycle(
     }
 
     private static ManagedCodexNyxIdApiKeyIssueRequest IssueRequest(
-        string serviceId,
+        ManagedCodexNyxIdEligibility eligibility,
         DateTimeOffset expiresAt) =>
         new(
             CredentialName,
@@ -507,10 +509,26 @@ public sealed class ManagedCodexCredentialLifecycle(
             "proxy",
             "codex",
             false,
-            [serviceId],
+            [
+                eligibility.ChronoSandboxUserServiceId,
+                eligibility.ChronoLlmUserServiceId,
+            ],
             false,
             [],
             expiresAt);
+
+    private static ManagedCodexNyxIdApiKeyPolicyUpdateRequest PolicyUpdateRequest(
+        ManagedCodexNyxIdEligibility eligibility) =>
+        new(
+            "proxy",
+            "codex",
+            false,
+            [
+                eligibility.ChronoSandboxUserServiceId,
+                eligibility.ChronoLlmUserServiceId,
+            ],
+            false,
+            []);
 
     private async Task<IReadOnlyList<ManagedCodexNyxIdApiKey>> GetActiveManagedKeysAsync(
         string bearerToken,
@@ -539,12 +557,12 @@ public sealed class ManagedCodexCredentialLifecycle(
         string bearerToken,
         ExternalSubjectRef owner,
         ManagedCodexNyxIdApiKey activeKey,
-        string serviceId,
+        ManagedCodexNyxIdEligibility eligibility,
         CancellationToken ct)
     {
         try
         {
-            ValidatePersistedKey(activeKey, serviceId, expectedExpiresAt: null);
+            ValidatePersistedKey(activeKey, eligibility, expectedExpiresAt: null);
         }
         catch (ManagedCodexCredentialLifecycleException)
         {
@@ -577,7 +595,8 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             activeKey.Id,
             reference,
-            serviceId,
+            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ChronoLlmUserServiceId,
             activeKey.ExpiresAt!.Value);
         var admission = await CommitProvisionedForReconciliationAsync(descriptor, ct)
             .ConfigureAwait(false);
@@ -594,12 +613,12 @@ public sealed class ManagedCodexCredentialLifecycle(
         ExternalSubjectRef owner,
         ManagedCodexCredentialDescriptor current,
         ManagedCodexNyxIdApiKey activeKey,
-        string serviceId,
+        ManagedCodexNyxIdEligibility eligibility,
         CancellationToken ct)
     {
         try
         {
-            ValidatePersistedKey(activeKey, serviceId, expectedExpiresAt: null);
+            ValidatePersistedKey(activeKey, eligibility, expectedExpiresAt: null);
         }
         catch (ManagedCodexCredentialLifecycleException)
         {
@@ -632,7 +651,8 @@ public sealed class ManagedCodexCredentialLifecycle(
             owner,
             activeKey.Id,
             reference,
-            serviceId,
+            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ChronoLlmUserServiceId,
             activeKey.ExpiresAt!.Value);
         var admission = await CommitRotatedForReconciliationAsync(
             current.ApiKeyId,
@@ -646,6 +666,67 @@ public sealed class ManagedCodexCredentialLifecycle(
             activeKey.Id,
             activeKey.ExpiresAt.Value,
             admission);
+    }
+
+    private async Task<ManagedCodexCredentialDescriptor> ReconcilePolicyAsync(
+        string bearerToken,
+        ExternalSubjectRef owner,
+        ManagedCodexCredentialDescriptor current,
+        ManagedCodexNyxIdApiKey remote,
+        ManagedCodexNyxIdEligibility eligibility,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(remote);
+        ArgumentNullException.ThrowIfNull(eligibility);
+        ValidateActiveDescriptor(current, owner, _timeProvider.GetUtcNow());
+        var currentApiKeyId = current.ApiKeyId.Trim();
+        if (!string.Equals(currentApiKeyId, remote.Id?.Trim(), StringComparison.Ordinal))
+        {
+            throw Failure(
+                "managed_api_key_update_invalid",
+                "The managed Codex key selected for policy repair does not match the current credential.");
+        }
+
+        if (!HasExactApiKeyPolicy(remote, eligibility))
+        {
+            await _nyxIdPort.UpdateApiKeyPolicyAsync(
+                bearerToken,
+                currentApiKeyId,
+                PolicyUpdateRequest(eligibility),
+                ct).ConfigureAwait(false);
+        }
+
+        var keys = await _nyxIdPort.ListApiKeysAsync(bearerToken, ct).ConfigureAwait(false);
+        var matches = keys
+            .Where(key => string.Equals(key.Id, currentApiKeyId, StringComparison.Ordinal))
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            throw Failure(
+                "managed_api_key_update_invalid",
+                "NyxID did not persist the repaired managed Codex key.");
+        }
+
+        var persisted = matches[0];
+        ValidatePersistedKey(persisted, eligibility, expectedExpiresAt: null);
+        var reference = await RequireCurrentVaultReferenceAsync(
+            owner,
+            current,
+            persisted,
+            ct).ConfigureAwait(false);
+        var descriptor = BuildDescriptor(
+            owner,
+            currentApiKeyId,
+            reference,
+            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ChronoLlmUserServiceId,
+            persisted.ExpiresAt!.Value);
+        await CommitPolicyReconciledForReconciliationAsync(
+            currentApiKeyId,
+            descriptor,
+            ct).ConfigureAwait(false);
+        return descriptor;
     }
 
     private async Task<DispatchAdmission> CommitProvisionedForReconciliationAsync(
@@ -695,10 +776,35 @@ public sealed class ManagedCodexCredentialLifecycle(
         }
     }
 
+    private async Task<DispatchAdmission> CommitPolicyReconciledForReconciliationAsync(
+        string expectedApiKeyId,
+        ManagedCodexCredentialDescriptor descriptor,
+        CancellationToken ct)
+    {
+        try
+        {
+            var admission = await _commandPort.CommitPolicyReconciledAsync(
+                expectedApiKeyId,
+                descriptor,
+                ct).ConfigureAwait(false);
+            return admission.Accepted
+                ? admission
+                : throw PersistencePending();
+        }
+        catch (ManagedCodexCredentialLifecycleException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            throw PersistencePending();
+        }
+    }
+
     private async Task<ManagedCodexNyxIdApiKey> RequirePersistedIssuedKeyAsync(
         string bearerToken,
         string apiKeyId,
-        string serviceId,
+        ManagedCodexNyxIdEligibility eligibility,
         DateTimeOffset expectedExpiresAt,
         CancellationToken ct)
     {
@@ -713,16 +819,16 @@ public sealed class ManagedCodexCredentialLifecycle(
                 "NyxID did not persist the issued managed Codex key.");
         }
 
-        ValidatePersistedKey(matches[0], serviceId, expectedExpiresAt);
+        ValidatePersistedKey(matches[0], eligibility, expectedExpiresAt);
         return matches[0];
     }
 
     private void ValidatePersistedKey(
         ManagedCodexNyxIdApiKey key,
-        string expectedServiceId,
+        ManagedCodexNyxIdEligibility eligibility,
         DateTimeOffset? expectedExpiresAt)
     {
-        ValidateIssuedKey(key, expectedServiceId);
+        ValidateIssuedKey(key, eligibility);
         if (!key.IsActive ||
             key.ExpiresAt is null ||
             key.ExpiresAt.Value <= _timeProvider.GetUtcNow() ||
@@ -774,6 +880,80 @@ public sealed class ManagedCodexCredentialLifecycle(
         {
             _logger.LogWarning(
                 "Managed Codex Vault reference resolution failed for API key {ApiKeyId}; reconciliation stopped.",
+                key.Id);
+            throw Failure(
+                "managed_credential_vault_unavailable",
+                "The managed Codex credential Vault is unavailable; retry reconciliation later.");
+        }
+    }
+
+    private async Task<SecretReference> RequireCurrentVaultReferenceAsync(
+        ExternalSubjectRef owner,
+        ManagedCodexCredentialDescriptor current,
+        ManagedCodexNyxIdApiKey key,
+        CancellationToken ct)
+    {
+        var ownerScopeKey = ManagedCodexCredentialActorIdentity.From(owner);
+        var currentReference = current.SecretReference;
+        var expiresAt = key.ExpiresAt!.Value;
+        if (currentReference is null ||
+            string.IsNullOrWhiteSpace(currentReference.Ref) ||
+            current.ExpiresAt is null ||
+            current.ExpiresAt.ToDateTimeOffset().ToUnixTimeMilliseconds() !=
+            expiresAt.ToUnixTimeMilliseconds() ||
+            !ReferenceMatches(
+                currentReference,
+                currentReference.Ref,
+                ownerScopeKey,
+                expiresAt))
+        {
+            throw Failure(
+                "managed_credential_vault_reference_invalid",
+                "The current managed Codex credential has an invalid Vault reference.");
+        }
+
+        try
+        {
+            var resolved = await _secretVault.ResolveAsync(
+                new ResolveSecretRequest(
+                    currentReference.Ref,
+                    CredentialSecretPurposes.ManagedCodexInvocationAgentKey,
+                    ownerScopeKey,
+                    ManagedCodexCredentialActorIdentity.SecretSubjectId,
+                    "managed-codex-policy-reconcile"),
+                ct).ConfigureAwait(false);
+            if (!resolved.Resolved ||
+                string.IsNullOrWhiteSpace(resolved.Secret) ||
+                resolved.Reference is null ||
+                !ReferenceMatches(
+                    resolved.Reference,
+                    currentReference.Ref,
+                    ownerScopeKey,
+                    expiresAt) ||
+                resolved.Reference.Version != currentReference.Version ||
+                !string.Equals(
+                    resolved.Reference.Fingerprint,
+                    currentReference.Fingerprint,
+                    StringComparison.Ordinal))
+            {
+                throw Failure(
+                    "managed_credential_vault_reference_invalid",
+                    "The current managed Codex credential Vault reference could not be validated.");
+            }
+            return currentReference.Clone();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ManagedCodexCredentialLifecycleException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            _logger.LogWarning(
+                "Managed Codex Vault reference validation failed for API key {ApiKeyId}; policy reconciliation stopped.",
                 key.Id);
             throw Failure(
                 "managed_credential_vault_unavailable",
@@ -1050,14 +1230,16 @@ public sealed class ManagedCodexCredentialLifecycle(
         ExternalSubjectRef owner,
         string apiKeyId,
         SecretReference reference,
-        string userServiceId,
+        string chronoSandboxUserServiceId,
+        string chronoLlmUserServiceId,
         DateTimeOffset expiresAt) =>
         new()
         {
             Owner = owner.Clone(),
             ApiKeyId = apiKeyId,
             SecretReference = reference.Clone(),
-            ChronoSandboxUserServiceId = userServiceId,
+            ChronoSandboxUserServiceId = chronoSandboxUserServiceId,
+            ChronoLlmUserServiceId = chronoLlmUserServiceId,
             ChronoSandboxServiceSlug = ManagedCodexOptions.ChronoSandboxServiceSlug,
             ExpiresAt = Timestamp.FromDateTimeOffset(expiresAt.ToUniversalTime()),
             Status = ManagedCodexCredentialStatus.Active,
@@ -1107,21 +1289,43 @@ public sealed class ManagedCodexCredentialLifecycle(
 
     private static void ValidateIssuedKey(
         ManagedCodexNyxIdApiKey key,
-        string expectedServiceId)
+        ManagedCodexNyxIdEligibility eligibility)
     {
         ArgumentNullException.ThrowIfNull(key);
         if (string.IsNullOrWhiteSpace(key.Id) ||
             !string.Equals(key.Name, CredentialName, StringComparison.Ordinal) ||
-            !string.Equals(key.Scopes, "proxy", StringComparison.Ordinal) ||
-            !string.Equals(key.Platform, "codex", StringComparison.Ordinal) ||
-            key.AllowAllServices ||
-            key.AllowAllNodes ||
-            key.AllowedServiceIds.Count != 1 ||
-            !string.Equals(key.AllowedServiceIds[0], expectedServiceId, StringComparison.Ordinal) ||
-            key.AllowedNodeIds.Count != 0)
+            !HasExactApiKeyPolicy(key, eligibility))
         {
             throw Failure("managed_api_key_issue_invalid", "NyxID returned an invalid or over-broad managed Codex key.");
         }
+    }
+
+    private static bool HasExactApiKeyPolicy(
+        ManagedCodexNyxIdApiKey key,
+        ManagedCodexNyxIdEligibility eligibility) =>
+        string.Equals(key.Scopes, "proxy", StringComparison.Ordinal) &&
+        string.Equals(key.Platform, "codex", StringComparison.Ordinal) &&
+        !key.AllowAllServices &&
+        HasExactServiceIds(
+            key.AllowedServiceIds,
+            eligibility.ChronoSandboxUserServiceId,
+            eligibility.ChronoLlmUserServiceId) &&
+        !key.AllowAllNodes &&
+        key.AllowedNodeIds is { Count: 0 };
+
+    private static bool HasExactServiceIds(
+        IReadOnlyList<string> actual,
+        string sandboxId,
+        string llmId)
+    {
+        var expected = new HashSet<string>(
+            [sandboxId, llmId],
+            StringComparer.Ordinal);
+        return expected.Count == 2 &&
+               actual is not null &&
+               actual.Count == expected.Count &&
+               actual.All(expected.Contains) &&
+               actual.Distinct(StringComparer.Ordinal).Count() == expected.Count;
     }
 
     private static ManagedCodexCredentialMutationResult Result(

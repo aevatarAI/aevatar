@@ -33,6 +33,14 @@ public sealed record ManagedCodexNyxIdApiKeyIssueRequest(
     IReadOnlyList<string> AllowedNodeIds,
     DateTimeOffset ExpiresAt);
 
+public sealed record ManagedCodexNyxIdApiKeyPolicyUpdateRequest(
+    string Scopes,
+    string Platform,
+    bool AllowAllServices,
+    IReadOnlyList<string> AllowedServiceIds,
+    bool AllowAllNodes,
+    IReadOnlyList<string> AllowedNodeIds);
+
 public sealed record ManagedCodexNyxIdIssuedApiKey(
     ManagedCodexNyxIdApiKey Key,
     ManagedCodexOpaqueSecret Secret);
@@ -54,6 +62,12 @@ public interface IManagedCodexNyxIdCredentialPort
     Task<ManagedCodexNyxIdIssuedApiKey> CreateApiKeyAsync(
         string bearerToken,
         ManagedCodexNyxIdApiKeyIssueRequest request,
+        CancellationToken ct = default);
+
+    Task UpdateApiKeyPolicyAsync(
+        string bearerToken,
+        string apiKeyId,
+        ManagedCodexNyxIdApiKeyPolicyUpdateRequest request,
         CancellationToken ct = default);
 
     Task<ManagedCodexNyxIdIssuedApiKey> RotateApiKeyAsync(
