@@ -1698,7 +1698,11 @@ public sealed class AevatarInvocationToolSourceTests
         receipt.ErrorCode.Should().Be(
             AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable);
         receipt.ErrorMessage.Should().Contain("Repair workflow replies");
-        receipt.ErrorMessage.Should().Contain("No Lark developer-console changes are required");
+        receipt.ErrorMessage.Should().Contain("provider webhook settings usually do not need changes");
+        receipt.ErrorMessage.Should().NotContain("Lark");
+        receipt.ErrorMessage.Should().NotContain("lark");
+        receipt.ErrorMessage.Should().NotContain("developer-console");
+        receipt.ErrorMessage.Should().NotContain("developer console");
         receipt.ResultJson.Should().Be(output);
         receipt.ResultJson.Should().NotContain("secrets://");
         harness.ServiceInvocationDispatcher.Calls.Should().BeEmpty();

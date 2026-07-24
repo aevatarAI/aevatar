@@ -802,6 +802,61 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithoutChannelResourceDownloader_AddsProviderNeutralVisibilityWarning()
+    {
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-no-downloader",
+                "describe it",
+                "om_no_downloader",
+                "img_no_downloader",
+                token: "user-token"),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("channel resource download is not available in this runtime");
+        systemMessage.Content.Should().NotContain("Lark");
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithoutChannelUserCredential_AddsProviderNeutralVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+
+        await generator.GenerateReplyAsync(
+            CreateLarkImageActivity(
+                "msg-image-no-token",
+                "describe it",
+                "om_no_token",
+                "img_no_token",
+                token: null),
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var systemMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.First(message => message.Role == "system");
+        systemMessage.Content.Should().Contain("channel user credential needed to download the attachment is unavailable");
+        systemMessage.Content.Should().NotContain("Lark");
+        lark.Downloads.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithNonImageAttachment_AddsHonestVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(
@@ -998,7 +1053,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkApprovalOperatorUserIdInSystemPrompt()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_RendersOperatorIdsWithProviderNeutralLabels()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
@@ -1020,8 +1075,20 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkOperatorUserId] = "lark-user-1",
-                [ChannelMetadataKeys.LarkOperatorOpenId] = "ou_operator_1",
+            },
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Channel = AgentToolChannelContext.Empty with
+                {
+                    IdentityHints =
+                    [
+                        new AgentToolChannelIdentityHint("sender", "global", "on_sender_1"),
+                        new AgentToolChannelIdentityHint("conversation", "platform", "oc_provider_1"),
+                        new AgentToolChannelIdentityHint("operator", "account", "provider-user-1"),
+                        new AgentToolChannelIdentityHint("operator", "platform", "provider-operator-1"),
+                    ],
+                },
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1029,8 +1096,16 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("operator_user_id: \"lark-user-1\"");
-        systemPrompt.Should().Contain("operator_open_id: \"ou_operator_1\"");
+        systemPrompt.Should().Contain("identity_hints:");
+        systemPrompt.Should().Contain("- subject: \"sender\", kind: \"global\", value: \"on_sender_1\"");
+        systemPrompt.Should().Contain("- subject: \"conversation\", kind: \"platform\", value: \"oc_provider_1\"");
+        systemPrompt.Should().Contain("- subject: \"operator\", kind: \"account\", value: \"provider-user-1\"");
+        systemPrompt.Should().Contain("- subject: \"operator\", kind: \"platform\", value: \"provider-operator-1\"");
+        systemPrompt.Should().NotContain("operator_user_id:");
+        systemPrompt.Should().NotContain("operator_open_id:");
+        systemPrompt.Should().NotContain("operator_union_id:");
+        systemPrompt.Should().NotContain("lark_union_id:");
+        systemPrompt.Should().NotContain("lark_chat_id:");
     }
 
     [Fact]
@@ -1191,7 +1266,7 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithChannelContextMiddleware_IncludesLarkSubjectIdsSeparatelyFromOperatorIds()
+    public async Task GenerateReplyAsync_WithChannelContextMiddleware_RendersSubjectIdsSeparatelyFromOperatorIds()
     {
         var providerFactory = new RecordingProviderFactory();
         var generator = new NyxIdConversationReplyGenerator(
@@ -1213,8 +1288,18 @@ public sealed class ConversationReplyGeneratorTests
                 [ChannelMetadataKeys.ChatType] = "group",
                 [ChannelMetadataKeys.SenderId] = "ou_sender_1",
                 [ChannelMetadataKeys.ConversationId] = "oc_1",
-                [ChannelMetadataKeys.LarkSubjectUserId] = "lark-subject-user-1",
-                [ChannelMetadataKeys.LarkSubjectEmployeeId] = "employee-1",
+            },
+            llmControl: null,
+            toolContext: AgentToolExecutionContext.Empty with
+            {
+                Channel = AgentToolChannelContext.Empty with
+                {
+                    IdentityHints =
+                    [
+                        new AgentToolChannelIdentityHint("subject", "account", "provider-subject-user-1"),
+                        new AgentToolChannelIdentityHint("subject", "directory", "directory-1"),
+                    ],
+                },
             },
             streamingSink: null,
             CancellationToken.None);
@@ -1222,10 +1307,13 @@ public sealed class ConversationReplyGeneratorTests
         reply.Text.Should().Be("ok");
         var systemPrompt = providerFactory.Requests.Should().ContainSingle().Subject
             .Messages.First(message => message.Role == "system").Content;
-        systemPrompt.Should().Contain("subject_user_id: \"lark-subject-user-1\"");
-        systemPrompt.Should().Contain("subject_employee_id: \"employee-1\"");
-        systemPrompt.Should().Contain("operator_user_id: \"\"");
-        systemPrompt.Should().Contain("operator_open_id: \"\"");
+        systemPrompt.Should().Contain("identity_hints:");
+        systemPrompt.Should().Contain("- subject: \"subject\", kind: \"account\", value: \"provider-subject-user-1\"");
+        systemPrompt.Should().Contain("- subject: \"subject\", kind: \"directory\", value: \"directory-1\"");
+        systemPrompt.Should().NotContain("operator_account_id:");
+        systemPrompt.Should().NotContain("operator_platform_id:");
+        systemPrompt.Should().NotContain("subject_user_id:");
+        systemPrompt.Should().NotContain("subject_employee_id:");
         systemPrompt.Should().NotContain("operator_user_id: \"lark-subject-user-1\"");
     }
 

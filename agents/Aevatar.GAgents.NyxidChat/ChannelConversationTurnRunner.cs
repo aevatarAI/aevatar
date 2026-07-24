@@ -70,6 +70,10 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     private sealed record LarkSubjectContactIds(string? UserId, string? EmployeeId);
 
+    private sealed record ReplyChannelContext(
+        IReadOnlyDictionary<string, string> Metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint> IdentityHints);
+
     private readonly IServiceProvider _toolServiceProvider;
     private readonly IChannelBotRegistrationQueryPort _registrationQueryPort;
     private readonly IChannelBotRegistrationQueryByNyxIdentityPort? _registrationQueryByNyxIdentityPort;
@@ -1480,7 +1484,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         var replyContent = decision.ReplyContent ?? new MessageContent { Text = decision.ReplyPayload };
         if (decision.RequiresToolExecution)
         {
-            var metadata = await BuildAgentBuilderMetadataAsync(
+            var channelContext = await BuildAgentBuilderChannelContextAsync(
                     activity,
                     inboundEvent,
                     runtimeContext,
@@ -1491,7 +1495,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                        registration,
                        ResolveUserAccessToken(activity, runtimeContext),
                        senderBinding,
-                       metadata)))
+                       channelContext.Metadata,
+                       channelContext.IdentityHints)))
             {
                 var tool = ActivatorUtilities.CreateInstance<AgentBuilderTool>(_toolServiceProvider);
                 var toolResult = await tool.ExecuteAsync(decision.ToolArgumentsJson!, ct);
@@ -1941,7 +1946,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             .ConfigureAwait(false);
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> BuildReplyMetadataAsync(
+    private async Task<ReplyChannelContext> BuildReplyChannelContextAsync(
         ChannelInboundEvent inboundEvent,
         ChatActivity? activity,
         ConversationTurnRuntimeContext runtimeContext,
@@ -1956,6 +1961,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             [ChannelMetadataKeys.MessageId] = inboundEvent.MessageId,
             [ChannelMetadataKeys.ChatType] = inboundEvent.ChatType,
         };
+        var identityHints = new List<AgentToolChannelIdentityHint>();
 
         // Inbound channel-bot's NyxID provider slug. Scheduled workflow creation captures this
         // as the failure-notification provider so a failed outbound delivery
@@ -1982,11 +1988,17 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // not surface as `code:99992361 open_id cross app` rejections at send time.
         var larkUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkUnionId);
         if (!string.IsNullOrWhiteSpace(larkUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkUnionId] = larkUnionId;
+            AddIdentityHint(identityHints, "sender", "global", larkUnionId);
+        }
 
         var larkChatId = NormalizeOptional(activity?.TransportExtras?.NyxLarkChatId);
         if (!string.IsNullOrWhiteSpace(larkChatId))
+        {
             metadata[ChannelMetadataKeys.LarkChatId] = larkChatId;
+            AddIdentityHint(identityHints, "conversation", "platform", larkChatId);
+        }
 
         var deliveryAddressId = NormalizeOptional(activity?.TransportExtras?.DeliveryAddressId);
         if (!string.IsNullOrWhiteSpace(deliveryAddressId))
@@ -2006,23 +2018,39 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
         var larkOperatorUserId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUserId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUserId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUserId] = larkOperatorUserId;
+            AddIdentityHint(identityHints, "operator", "account", larkOperatorUserId);
+        }
 
         var larkOperatorOpenId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorOpenId);
         if (!string.IsNullOrWhiteSpace(larkOperatorOpenId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorOpenId] = larkOperatorOpenId;
+            AddIdentityHint(identityHints, "operator", "platform", larkOperatorOpenId);
+        }
 
         var larkOperatorUnionId = NormalizeOptional(activity?.TransportExtras?.NyxLarkOperatorUnionId);
         if (!string.IsNullOrWhiteSpace(larkOperatorUnionId))
+        {
             metadata[ChannelMetadataKeys.LarkOperatorUnionId] = larkOperatorUnionId;
+            AddIdentityHint(identityHints, "operator", "global", larkOperatorUnionId);
+        }
 
         if (await TryResolveLarkSubjectContactIdsAsync(inboundEvent, activity, runtimeContext, larkUnionId, ct)
                 .ConfigureAwait(false) is { } subjectContactIds)
         {
             if (!string.IsNullOrWhiteSpace(subjectContactIds.UserId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectUserId] = subjectContactIds.UserId;
+                AddIdentityHint(identityHints, "subject", "account", subjectContactIds.UserId);
+            }
+
             if (!string.IsNullOrWhiteSpace(subjectContactIds.EmployeeId))
+            {
                 metadata[ChannelMetadataKeys.LarkSubjectEmployeeId] = subjectContactIds.EmployeeId;
+                AddIdentityHint(identityHints, "subject", "directory", subjectContactIds.EmployeeId);
+            }
         }
 
         // Surface resolved @-mentions (canonical id + name) so the agent can target a third party by a
@@ -2041,8 +2069,15 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 metadata[ChannelMetadataKeys.Mentions] = formattedMentions;
         }
 
-        return metadata;
+        return new ReplyChannelContext(metadata, identityHints);
     }
+
+    private static void AddIdentityHint(
+        ICollection<AgentToolChannelIdentityHint> identityHints,
+        string subject,
+        string kind,
+        string value) =>
+        identityHints.Add(new AgentToolChannelIdentityHint(subject, kind, value));
 
     private async Task<LarkSubjectContactIds?> TryResolveLarkSubjectContactIdsAsync(
         ChannelInboundEvent inboundEvent,
@@ -2166,7 +2201,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ChannelBotRegistrationEntry registration,
         string? userAccessToken,
         ResolvedSenderBinding? senderBinding,
-        IReadOnlyDictionary<string, string> metadata)
+        IReadOnlyDictionary<string, string> metadata,
+        IReadOnlyList<AgentToolChannelIdentityHint> identityHints)
     {
         var token = NormalizeOptional(userAccessToken);
         return AgentToolExecutionContext.Empty with
@@ -2186,7 +2222,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
-                NormalizeOptional(registration.Id)),
+                NormalizeOptional(registration.Id),
+                identityHints),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         };
     }
@@ -2212,19 +2249,18 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         };
     }
 
-    private async Task<IReadOnlyDictionary<string, string>> BuildAgentBuilderMetadataAsync(
+    private async Task<ReplyChannelContext> BuildAgentBuilderChannelContextAsync(
         ChatActivity activity,
         ChannelInboundEvent inboundEvent,
         ConversationTurnRuntimeContext runtimeContext,
         CancellationToken ct)
     {
-        var metadata = new Dictionary<string, string>(
-            await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct),
-            StringComparer.Ordinal)
+        var replyChannelContext = await BuildReplyChannelContextAsync(inboundEvent, activity, runtimeContext, ct);
+        var metadata = new Dictionary<string, string>(replyChannelContext.Metadata, StringComparer.Ordinal)
         {
             [ChannelMetadataKeys.ChatType] = ResolveConversationChatType(activity.Conversation),
         };
-        return metadata;
+        return new ReplyChannelContext(metadata, replyChannelContext.IdentityHints);
     }
 
     internal static InboundMessage ToInboundMessage(ChatActivity activity)
@@ -2422,7 +2458,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
             request.ReplyTokenExpiresAtUnixMs = token.ExpiresAtUtc.ToUnixTimeMilliseconds();
         }
 
-        var replyMetadata = await BuildReplyMetadataAsync(inboundEvent, activity, runtimeContext, ct);
+        var replyChannelContext = await BuildReplyChannelContextAsync(inboundEvent, activity, runtimeContext, ct);
+        var replyMetadata = replyChannelContext.Metadata;
         foreach (var pair in replyMetadata)
             request.Metadata[pair.Key] = pair.Value;
 
@@ -2446,7 +2483,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
                 NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
                 null,
                 BuildWorkflowResultDeliveryCredential(registration),
-                NormalizeOptional(registration.Id)),
+                NormalizeOptional(registration.Id),
+                replyChannelContext.IdentityHints),
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyMetadata),
         }).ToPayload();
 
