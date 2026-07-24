@@ -43,7 +43,7 @@ internal sealed class ManagedCodexNyxIdCatalogResolver
         if (!IsUsable(sandbox) ||
             sandbox.ForwardAccessToken != false ||
             sandbox.InjectDelegationToken != true ||
-            !string.Equals(sandbox.DelegationTokenScope, "llm:proxy", StringComparison.Ordinal))
+            !string.Equals(sandbox.DelegationTokenScope, "proxy:*", StringComparison.Ordinal))
         {
             throw Failure(
                 "chrono_sandbox_delegation_misconfigured",
