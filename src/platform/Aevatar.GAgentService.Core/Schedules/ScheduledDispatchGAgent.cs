@@ -2590,7 +2590,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             !AnyPayloadEquals(prepared.Payload, target.Payload) ||
             !string.Equals(prepared.RevisionId, target.RevisionId, StringComparison.Ordinal) ||
             !Equals(prepared.Caller, target.Caller) ||
-            !string.Equals(prepared.ScheduleId, configuration.ScheduleId, StringComparison.Ordinal))
+            !string.Equals(prepared.ScheduleId, configuration.ScheduleId, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(prepared.RunOrigin) ||
+            !string.IsNullOrEmpty(prepared.RequestedRunId) ||
+            prepared.WorkflowCompletionNotificationTarget != null ||
+            prepared.ServiceRunCompletionNotificationTarget != null)
         {
             throw new InvalidOperationException("team_automation_configuration_not_applied");
         }

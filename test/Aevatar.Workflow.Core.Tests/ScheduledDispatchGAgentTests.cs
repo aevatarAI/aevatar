@@ -2990,6 +2990,78 @@ public sealed class ScheduledDispatchGAgentTests
             stored => stored.EventType == TeamAutomationCredentialActivatedEvent.Descriptor.FullName);
     }
 
+    [Theory]
+    [InlineData("run-origin")]
+    [InlineData("requested-run-id")]
+    [InlineData("workflow-completion-target")]
+    [InlineData("service-run-completion-target")]
+    public async Task TeamAutomationComplete_ShouldRejectNonCanonicalPreparedServiceInvocationControlField(
+        string field)
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        var owner = CreateTeamOwner();
+        var credential = CreateTeamCredential($"key-{field}");
+        var configuration = CreateTeamActivationConfiguration(owner, credential);
+        await agent.HandleBeginTeamAutomationCredentialOperationAsync(CreateTeamBeginCommand(configuration));
+        var effectAttemptId = await RecordTeamCredentialCandidateAsync(
+            agent,
+            owner,
+            "operation-alpha",
+            "idempotency-alpha",
+            credential);
+        var completed = ToConfiguredEvent(configuration);
+        var prepared = completed.TriggerEnvelope.Payload.Unpack<ServiceInvocationRequest>();
+        switch (field)
+        {
+            case "run-origin":
+                prepared.RunOrigin = "work-order";
+                break;
+            case "requested-run-id":
+                prepared.RequestedRunId = "run-substituted";
+                break;
+            case "workflow-completion-target":
+                prepared.WorkflowCompletionNotificationTarget = new WorkflowServiceCompletionNotificationTarget
+                {
+                    ActorId = "workflow-delivery-substituted",
+                    DeliveryId = "workflow-delivery-id-substituted",
+                    ExpiresAtUnixMs = long.MaxValue,
+                };
+                break;
+            case "service-run-completion-target":
+                prepared.ServiceRunCompletionNotificationTarget = new ServiceRunCompletionNotificationTarget
+                {
+                    ActorId = "service-run-delivery-substituted",
+                    DeliveryId = "service-run-delivery-id-substituted",
+                    ExpiresAtUnixMs = long.MaxValue,
+                };
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(field), field, null);
+        }
+        completed.TriggerEnvelope.Payload = Any.Pack(prepared);
+
+        var action = () => agent.HandleCompleteTeamAutomationCredentialOperationAsync(
+            new CompleteTeamAutomationCredentialOperationCommand
+            {
+                Owner = owner.Clone(),
+                OperationId = "operation-alpha",
+                IdempotencyKey = "idempotency-alpha",
+                Credential = credential.Clone(),
+                Configuration = completed,
+                EffectAttemptId = effectAttemptId,
+            });
+
+        await action.Should().ThrowAsync<InvalidOperationException>(field)
+            .WithMessage("team_automation_configuration_not_applied");
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.ProvisioningPending, field);
+        eventStore.GetEvents(ScheduleActorId).Should().NotContain(
+            stored => stored.EventType == TeamAutomationCredentialActivatedEvent.Descriptor.FullName,
+            field);
+    }
+
     [Fact]
     public async Task TeamAutomationComplete_LegacyPendingWithoutDecisionShouldFailMissingBeforeLeaseOrCandidate()
     {
