@@ -29,7 +29,7 @@ separate:
 | `profileId` | Opaque immutable Profile identity. | Stable resource and Profile Actor identity input. Callers do not derive it from a route or prefix. |
 | `AgentProfileOwnerIdentity.user` | Stable authenticated user identity. | Authorizes an ordinary owner Profile together with its separate `owningScopeId`. |
 | `AgentProfileOwnerIdentity.system` | Platform-owned system identity. | Reserved for built-in Profiles. Ordinary principals cannot claim `system/*`. |
-| `owningScopeId` | Scope boundary for an ordinary Profile. | Compared independently from owner identity. It is empty for system Profiles. |
+| `owningScopeId` | Scope boundary for an ordinary Profile. | Compared independently from owner identity. It is empty for system Profiles and cannot equal the shared reserved platform scope. |
 
 `AgentProfileNamespaceGAgent` is the single authority for owner-handle and
 reference uniqueness, provisioning status, and published discovery summaries.
@@ -143,6 +143,16 @@ The completion sequence is:
 5. Clients reread the canonical management or discovery surface until the
    expected operation, version, revision, or digest is visible.
 
+Every committed Profile mutation outcome carries one typed
+`AgentProfileCommittedStateTransition`. Its `before` and `after` messages contain
+the authoritative draft revision/digest and published revision/snapshot digest
+captured by the Profile Actor before commit. Applied outcomes change the relevant
+facts; no-change and rejected outcomes carry equal `before` and `after` facts.
+The legacy current fields on `AgentProfileMutationOutcome` are aliases populated
+from `transition.after`, never a second fact source. Initialization uses the same
+transition contract with no `before` message and an `after` message containing
+draft revision one plus the explicit unpublished state.
+
 Queries never create actors, activate or prime projections, replay the event
 store, or synchronously wait for a command reply. Eventual visibility is stated
 honestly through authority state versions and committed digests.
@@ -162,10 +172,13 @@ read an older same-kind model before writing.
 
 Committed-fact audit translators use exact event TypeUrls and record only safe
 identity, operation, reference, exact-reference, revision, digest, outcome, and
-stable failure-code facts. Audit materialization is attached to namespace and
-owner contexts only. The execution fan-out does not create duplicate audit
-records. Draft instructions, sealed instructions/assets, owner subject ids,
-credentials, and raw dependency errors are structurally omitted.
+stable failure-code facts. Mutation audit annotations expose explicit
+`old_draft_*`, `new_draft_*`, `old_published_*`, and `new_published_*` facts from
+the committed transition. They do not replay events, query another model, or
+infer a previous value. Audit materialization is attached to namespace and owner
+contexts only. The execution fan-out does not create duplicate audit records.
+Draft instructions, sealed instructions/assets, owner subject ids, credentials,
+and raw dependency errors are structurally omitted.
 
 Audit partitioning does not rewrite domain identity. A valid user Profile keeps
 its `owningScopeId` as the audit scope. The fully valid canonical
@@ -175,9 +188,15 @@ in that same reserved audit scope so the governance fact is retained; quarantine
 does not grant system authority or repair the invalid domain identity. A
 quarantine record uses a stable non-input-derived target and omits every
 unvalidated identity/reference field while retaining the stable failure code.
-`platform:aevatar` is never an ordinary Profile `owningScopeId`. Query and export
-access to it always requires platform-admin authorization, even when a caller's
-`scope_id` claim has the same literal value.
+`PlatformScopeSemantics.ReservedPlatformScopeId` in Foundation Abstractions is
+the single owner of the `platform:aevatar` literal;
+`AuditContractSemantics.PlatformAuditScopeId` is the audit-facing alias. The
+reserved value is never an ordinary Profile `owningScopeId`: contract validation,
+Application admission, and the Namespace Actor reject it with
+`RESERVED_OWNING_SCOPE_ID`. Rejected committed facts are quarantined without
+retaining an unvalidated user identity. Query and export access to the partition
+always requires platform-admin authorization, even when a caller's `scope_id`
+claim has the same literal value.
 
 ## 8. System Profile Bootstrap And Health
 

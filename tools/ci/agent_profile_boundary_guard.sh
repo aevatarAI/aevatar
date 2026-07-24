@@ -183,20 +183,48 @@ extract_csharp_method_body() {
   '
 }
 
-extract_csharp_top_level_code() {
+extract_csharp_executable_code() {
   perl -0777 -ne '
+    s{^[ \t]*(?:async[ \t]+)?[A-Za-z_][A-Za-z0-9_.?]*(?:[ \t]*<[^;\r\n{}]+>)?[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\([^;\r\n{}]*\)[ \t]*=>[^;\r\n]*;}{}gm;
     my $depth = 0;
+    my @live_try = ();
+    my $statement_prefix = "";
+    my $terminated = 0;
     for (my $index = 0; $index < length($_); $index++) {
       my $character = substr($_, $index, 1);
       if ($character eq "{") {
+        my $is_live_try = 0;
+        if ($depth == 0) {
+          my $prefix = substr($_, 0, $index);
+          $is_live_try = 1 if $prefix =~ /(?:\A|[;}\r\n])\s*try\s*\z/s;
+        }
+        push @live_try, $is_live_try;
         $depth++;
-        print "\n" if $depth == 1;
+        $statement_prefix = "";
+        print "\n" unless $terminated;
       } elsif ($character eq "}") {
         exit 1 if $depth == 0;
         $depth--;
-        print "\n" if $depth == 0;
-      } elsif ($depth == 0 || $character eq "\n") {
+        pop @live_try;
+        $statement_prefix = "";
+        print "\n" unless $terminated;
+      } elsif (!$terminated &&
+               ($depth == 0 || ($depth == 1 && $live_try[0]) || $character eq "\n")) {
+        my $is_executable = $depth == 0 || ($depth == 1 && $live_try[0]);
+        if ($is_executable &&
+            $statement_prefix !~ /\S/ &&
+            substr($_, $index) =~ /\Areturn\b/) {
+          $terminated = 1;
+          next;
+        }
         print $character;
+        if ($is_executable) {
+          $statement_prefix = $character eq ";"
+            ? ""
+            : $statement_prefix . $character;
+        } elsif ($character eq "\n") {
+          $statement_prefix .= $character;
+        }
       }
     }
     exit($depth == 0 ? 0 : 1);
@@ -285,6 +313,7 @@ run_guard() (
       hits+="${file}:${line_number}:${content}"$'\n'
     done < <(
       strip_csharp_comments_and_inactive_code < "${file}" \
+        | strip_csharp_strings \
         | rg -n '\b(Metadata|Headers|Items|AsyncLocal)\b' \
         || true
     )
@@ -310,8 +339,8 @@ run_guard() (
     "Static typed Agent Profile state is forbidden. Profile authority must remain actor/read-model owned."
 
   hits="$(
-    scan_prepared_code \
-      '(?i)\bprivate\s+(?:static\s+)?(?:readonly\s+)?(?=[^();\n]*(?:(?:Concurrent|Immutable|Sorted|Frozen)?Dictionary|I(?:ReadOnly)?Dictionary|HashSet|Queue)\s*<)(?=[^();\n]*(?:AgentProfile|Profile|Binding))[^();\n]+\s*(?:=|;)' \
+    scan_prepared_multiline_code \
+      '(?is)\bprivate\s+(?:static\s+)?(?:readonly\s+)?(?=[^;={}()]*(?:(?:Concurrent|Immutable|Sorted|Frozen)?Dictionary|I(?:ReadOnly)?Dictionary|HashSet|Queue)\s*<)(?=[^;={}()]*(?:AgentProfile|Profile|Binding))[^;={}()]+\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=|;)' \
       "${profile_surface_roots[@]}"
   )"
   report_violation "${hits}" \
@@ -346,8 +375,9 @@ run_guard() (
   local client_code="" detail_body="" json_body=""
   local detail_signature='(?s)\binternal\s+Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>>\s+GetExactSkillDetailAsync\s*\([^)]*\)\s*(?:=>|\{)'
   local json_signature='(?s)\binternal\s+Task<OrnnExactSkillReadResult<OrnnSkillJson>>\s+GetExactSkillJsonAsync\s*\([^)]*\)\s*(?:=>|\{)'
-  local detail_pattern='(?s)\bGetExactAsync<OrnnExactSkillDetail>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"'
-  local json_pattern='(?s)\bGetExactAsync<OrnnSkillJson>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}/json\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"'
+  local live_client_prefix='(?:(?![^;{}]*(?:\b(?:return|if|else|switch|for|foreach|while|do|goto|throw|try|catch|finally)\b|=>)[^;{}]*;)[^;{}]+;)*'
+  local detail_pattern='(?s)\A'"${live_client_prefix}"'\s*(?:return\s+)?GetExactAsync<OrnnExactSkillDetail>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"\s*,\s*guid\s*,\s*ct\s*\)\s*;?\s*\z'
+  local json_pattern='(?s)\A'"${live_client_prefix}"'\s*(?:return\s+)?GetExactAsync<OrnnSkillJson>\s*\(\s*accessToken\s*,\s*\$"/api/v1/skills/\{Uri\.EscapeDataString\(guid\)\}/json\?version=\{Uri\.EscapeDataString\(literalVersion\)\}"\s*,\s*guid\s*,\s*ct\s*\)\s*;?\s*\z'
   client_code="$(strip_csharp_comments_and_inactive_code < "${ornn_client_file}")"
   if ! printf '%s\n' "${client_code}" | rg -q -U -P "${detail_signature}" ||
      ! detail_body="$(printf '%s\n' "${client_code}" | extract_csharp_method_body GetExactSkillDetailAsync)" ||
@@ -365,7 +395,7 @@ run_guard() (
   fi
 
   local adapter_code=""
-  local resolver_body="" resolver_structure="" resolver_top_level=""
+  local resolver_body="" resolver_structure="" resolver_executable=""
   local detail_call_count=0 json_call_count=0
   adapter_code="$(strip_csharp_comments_and_inactive_code < "${exact_adapter_file}")"
   if ! resolver_body="$(printf '%s\n' "${adapter_code}" | extract_csharp_method_body ResolveAsync)"; then
@@ -373,24 +403,24 @@ run_guard() (
     echo "The exact Ornn Profile adapter must declare an executable ResolveAsync body."
     violations=$((violations + 1))
   elif ! resolver_structure="$(printf '%s\n' "${resolver_body}" | strip_csharp_strings)" ||
-       ! resolver_top_level="$(printf '%s\n' "${resolver_structure}" | extract_csharp_top_level_code)"; then
+       ! resolver_executable="$(printf '%s\n' "${resolver_structure}" | extract_csharp_executable_code)"; then
     echo "${exact_adapter_file}"
     echo "The exact Ornn Profile adapter must declare a structurally valid ResolveAsync body."
     violations=$((violations + 1))
   else
     detail_call_count="$(
-      printf '%s\n' "${resolver_top_level}" \
+      printf '%s\n' "${resolver_executable}" \
         | count_pattern_matches '\b_client\.GetExactSkillDetailAsync\s*\('
     )"
     json_call_count="$(
-      printf '%s\n' "${resolver_top_level}" \
+      printf '%s\n' "${resolver_executable}" \
         | count_pattern_matches '\b_client\.GetExactSkillJsonAsync\s*\('
     )"
     if (( detail_call_count != 1 )); then
       echo "${exact_adapter_file}"
-      echo "ResolveAsync must execute the exact-version detail read exactly once as a direct top-level call."
+      echo "ResolveAsync must execute the exact-version detail read exactly once as a direct executable call."
       violations=$((violations + 1))
-    elif ! printf '%s\n' "${resolver_top_level}" \
+    elif ! printf '%s\n' "${resolver_executable}" \
       | rg -q -P '\bvar[[:space:]]+detailRead[[:space:]]*=[[:space:]]*await[[:space:]]+_client\.GetExactSkillDetailAsync\('; then
       echo "${exact_adapter_file}"
       echo "ResolveAsync must execute the exact-version detail read."
@@ -398,9 +428,9 @@ run_guard() (
     fi
     if (( json_call_count != 1 )); then
       echo "${exact_adapter_file}"
-      echo "ResolveAsync must execute the exact-version JSON read exactly once as a direct top-level call."
+      echo "ResolveAsync must execute the exact-version JSON read exactly once as a direct executable call."
       violations=$((violations + 1))
-    elif ! printf '%s\n' "${resolver_top_level}" \
+    elif ! printf '%s\n' "${resolver_executable}" \
       | rg -q -P '\bvar[[:space:]]+jsonRead[[:space:]]*=[[:space:]]*await[[:space:]]+_client\.GetExactSkillJsonAsync\('; then
       echo "${exact_adapter_file}"
       echo "ResolveAsync must execute the exact-version JSON read."
@@ -415,6 +445,7 @@ run_guard() (
 
   hits="$(
     printf '%s\n' "${adapter_code}" \
+      | strip_csharp_strings \
       | rg -n -P '\b(GetSkillJsonAsync|SearchSkillsAsync|GetSkillSetAsync|IRemoteSkillFetcher)\b' \
       || true
   )"
@@ -598,6 +629,12 @@ run_self_tests() {
 
   expect_pass "legal metadata, unrelated collections, and harmless semantic strings" "${base}"
 
+  fresh_case "semantic-identifier-strings"
+  printf '%s\n' \
+    'public string DescribeContextBags() => "Metadata Headers Items AsyncLocal";' \
+    >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
+  expect_pass "semantic identifiers inside C# strings" "${case_root}"
+
   fresh_case "typed-static-profile-state"
   printf '%s\n' 'private static AgentProfileIdentity? _current;' \
     >> "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs"
@@ -631,6 +668,15 @@ readonly-dictionary|private readonly IReadOnlyDictionary<string, AgentProfileIde
 immutable-dictionary|private readonly ImmutableDictionary<string, string> _profileFacts;
 nested-generic|private readonly Dictionary<string, IReadOnlyList<AgentProfileIdentity>> _index = new();
 CASES
+
+  fresh_case "profile-fact-collection-wrapped-nested-generic"
+  write_lines "${case_root}/src/platform/Aevatar.GAgentService.Application/AgentProfiles/AgentProfileService.cs" \
+    'public sealed class AgentProfileService {' \
+    '  private readonly Dictionary<string,' \
+    '    IReadOnlyList<AgentProfileIdentity>> _index = new();' \
+    '}'
+  expect_fail "Profile fact collection wrapped nested generic" "${case_root}" \
+    "Private service-level collections"
 
   local provider_file="src/platform/Aevatar.GAgentService.Projection/AgentProfiles/AgentProfileDocumentMetadataProviders.cs"
   local provider_probe="" provider_label=""
@@ -686,6 +732,55 @@ CASES
     '      $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}", guid, ct); } }'
   expect_pass "block-bodied exact client methods" "${case_root}"
 
+  fresh_case "client-preliminary-live-statements"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs" \
+    'public sealed class OrnnSkillClient {' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) {' \
+    '    ct.ThrowIfCancellationRequested();' \
+    '    RecordExactRead(guid, literalVersion);' \
+    '    return GetExactAsync<OrnnExactSkillDetail>(accessToken,' \
+    '      $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}", guid, ct); }' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) {' \
+    '    ct.ThrowIfCancellationRequested();' \
+    '    RecordExactRead(guid, literalVersion);' \
+    '    return GetExactAsync<OrnnSkillJson>(accessToken,' \
+    '      $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}", guid, ct); } }'
+  expect_pass "exact client preliminary live statements" "${case_root}"
+
+  fresh_case "client-local-function-return-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs" \
+    'public sealed class OrnnSkillClient {' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) {' \
+    '    Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> ExactDecoy() =>' \
+    '      GetExactAsync<OrnnExactSkillDetail>(accessToken, $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}", guid, ct);' \
+    '    return GetExactAsync<OrnnExactSkillDetail>(accessToken, "/api/v1/skills/live", guid, ct); }' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) =>' \
+    '    GetExactAsync<OrnnSkillJson>(accessToken, $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}", guid, ct); }'
+  expect_fail "exact client local-function return decoy" "${case_root}" \
+    "executable exact Ornn Profile detail read"
+
+  fresh_case "client-dead-conditional-return-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs" \
+    'public sealed class OrnnSkillClient {' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) {' \
+    '    if (false) return GetExactAsync<OrnnExactSkillDetail>(accessToken, $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}", guid, ct);' \
+    '    return GetExactAsync<OrnnExactSkillDetail>(accessToken, "/api/v1/skills/live", guid, ct); }' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) =>' \
+    '    GetExactAsync<OrnnSkillJson>(accessToken, $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}", guid, ct); }'
+  expect_fail "exact client dead-conditional return decoy" "${case_root}" \
+    "executable exact Ornn Profile detail read"
+
+  fresh_case "client-unreachable-tail-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs" \
+    'public sealed class OrnnSkillClient {' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnExactSkillDetail>> GetExactSkillDetailAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) {' \
+    '    return GetExactAsync<OrnnExactSkillDetail>(accessToken, "/api/v1/skills/live", guid, ct);' \
+    '    GetExactAsync<OrnnExactSkillDetail>(accessToken, $"/api/v1/skills/{Uri.EscapeDataString(guid)}?version={Uri.EscapeDataString(literalVersion)}", guid, ct); }' \
+    '  internal Task<OrnnExactSkillReadResult<OrnnSkillJson>> GetExactSkillJsonAsync(string accessToken, string guid, string literalVersion, CancellationToken ct = default) =>' \
+    '    GetExactAsync<OrnnSkillJson>(accessToken, $"/api/v1/skills/{Uri.EscapeDataString(guid)}/json?version={Uri.EscapeDataString(literalVersion)}", guid, ct); }'
+  expect_fail "exact client unreachable-tail decoy" "${case_root}" \
+    "executable exact Ornn Profile detail read"
+
   fresh_case "client-comment-decoy"
   write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/OrnnSkillClient.cs" \
     'public sealed class OrnnSkillClient {' \
@@ -711,6 +806,30 @@ CASES
     '    // var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
     '    return default!; } }'
   expect_fail "exact adapter comment decoys" "${case_root}" "ResolveAsync must execute"
+
+  fresh_case "adapter-live-try"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    try {' \
+    '      var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '      var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
+    '      return Combine(detailRead, jsonRead);' \
+    '    } catch {' \
+    '      return default!;' \
+    '    } } }'
+  expect_pass "exact adapter reads inside live try" "${case_root}"
+
+  fresh_case "adapter-unreachable-tail-decoy"
+  write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
+    'public sealed class OrnnExactAgentProfileSkillResolver {' \
+    '  public async Task<ExactOrnnSkillResolutionResult> ResolveAsync(CancellationToken ct = default) {' \
+    '    return default!;' \
+    '    var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
+    '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
+    '  } }'
+  expect_fail "exact adapter unreachable tail decoys" "${case_root}" \
+    "ResolveAsync must execute"
 
   fresh_case "adapter-dead-helper-decoy"
   write_lines "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs" \
@@ -745,6 +864,12 @@ CASES
   printf '%s\n' 'private Task GetSkillJsonAsync() => _client.GetSkillJsonAsync("name");' \
     >> "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs"
   expect_fail "exact adapter name-capable fetch" "${case_root}" "must not call name-capable"
+
+  fresh_case "adapter-banned-method-strings"
+  printf '%s\n' \
+    'private const string Diagnostic = "GetSkillJsonAsync SearchSkillsAsync GetSkillSetAsync IRemoteSkillFetcher";' \
+    >> "${case_root}/src/Aevatar.AI.ToolProviders.Ornn/AgentProfiles/OrnnExactAgentProfileSkillResolver.cs"
+  expect_pass "exact adapter banned method names inside C# strings" "${case_root}"
 
   local ingress_label="" ingress_file="" ingress_probe=""
   while IFS='|' read -r ingress_label ingress_file ingress_probe; do

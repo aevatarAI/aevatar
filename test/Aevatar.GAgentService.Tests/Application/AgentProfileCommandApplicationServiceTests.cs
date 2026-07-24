@@ -184,6 +184,21 @@ public sealed class AgentProfileCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task CreateAsync_ShouldRejectReservedPlatformScopeBeforeTargetAllocationOrDispatch()
+    {
+        var actorPort = new RecordingActorPort();
+        var service = CreateService(actorPort: actorPort);
+        var caller = Caller() with { ScopeId = PlatformScopeSemantics.ReservedPlatformScopeId };
+
+        var act = () => service.CreateAsync(caller, CreateRequest(), "reserved-scope-create");
+
+        var exception = await act.Should().ThrowAsync<AgentProfileRequestException>();
+        exception.Which.Code.Should().Be("RESERVED_OWNING_SCOPE_ID");
+        actorPort.EnsuredProfileIds.Should().BeEmpty();
+        actorPort.DispatchCount.Should().Be(0);
+    }
+
+    [Fact]
     public void RequestContracts_ShouldNotExposeAuthorityVersionDigestOrOutcomeInputs()
     {
         var forbidden = new HashSet<string>(StringComparer.OrdinalIgnoreCase)

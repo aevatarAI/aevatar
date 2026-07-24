@@ -87,6 +87,9 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             DraftSha256 = Digest(0x11),
             NamespaceActorId = AgentProfileActorIds.Namespace,
             ProfileActorId = AgentProfileActorIds.Profile("prof-alpha"),
+            Transition = Transition(
+                before: null,
+                after: RevisionDigestFacts(1, Digest(0x11), 0, ByteString.Empty)),
         };
 
         var translator = new AgentProfileInitializedAuditTranslator();
@@ -97,6 +100,11 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         AssertCommon(record, "agent_profile.created", "applied");
         record.Annotations.Should().Contain("draft_revision", "1");
         record.Annotations.Should().Contain("draft_sha256", Hex(Digest(0x11)));
+        record.Annotations.Should().Contain("new_draft_revision", "1");
+        record.Annotations.Should().Contain("new_draft_sha256", Hex(Digest(0x11)));
+        record.Annotations.Should().Contain("new_published_revision", "0");
+        record.Annotations.Should().Contain("new_published_snapshot_sha256", string.Empty);
+        record.Annotations.Keys.Should().NotContain(key => key.StartsWith("old_", StringComparison.Ordinal));
         AssertSensitiveValuesOmitted(record);
     }
 
@@ -116,7 +124,11 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
                 draftRevision: 2,
                 draftSha256: Digest(0x22),
                 publishedRevision: 1,
-                publishedSnapshotSha256: Digest(0x19)),
+                publishedSnapshotSha256: Digest(0x19),
+                oldDraftRevision: 1,
+                oldDraftSha256: Digest(0x11),
+                oldPublishedRevision: 1,
+                oldPublishedSnapshotSha256: Digest(0x19)),
         };
 
         var record = Translate(new AgentProfileDraftUpdatedAuditTranslator(), evt);
@@ -126,7 +138,16 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         record.Annotations.Should().Contain("draft_sha256", Hex(Digest(0x22)));
         record.Annotations.Should().Contain("published_revision", "1");
         record.Annotations.Should().Contain("published_snapshot_sha256", Hex(Digest(0x19)));
-        record.Annotations.Keys.Should().NotContain(key => key.StartsWith("old_", StringComparison.Ordinal));
+        AssertTransitionAnnotations(
+            record,
+            oldDraftRevision: 1,
+            oldDraftSha256: Digest(0x11),
+            oldPublishedRevision: 1,
+            oldPublishedSnapshotSha256: Digest(0x19),
+            newDraftRevision: 2,
+            newDraftSha256: Digest(0x22),
+            newPublishedRevision: 1,
+            newPublishedSnapshotSha256: Digest(0x19));
         AssertSensitiveValuesOmitted(record);
     }
 
@@ -145,7 +166,13 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
                 "upsert",
                 AgentProfileMutationStatus.Applied,
                 draftRevision: 3,
-                draftSha256: Digest(0x33)),
+                draftSha256: Digest(0x33),
+                publishedRevision: 1,
+                publishedSnapshotSha256: Digest(0x51),
+                oldDraftRevision: 2,
+                oldDraftSha256: Digest(0x22),
+                oldPublishedRevision: 1,
+                oldPublishedSnapshotSha256: Digest(0x51)),
         };
         var removed = new AgentProfileSkillBindingRemovedEvent
         {
@@ -159,7 +186,13 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
                 "remove",
                 AgentProfileMutationStatus.Applied,
                 draftRevision: 4,
-                draftSha256: Digest(0x44)),
+                draftSha256: Digest(0x44),
+                publishedRevision: 1,
+                publishedSnapshotSha256: Digest(0x51),
+                oldDraftRevision: 3,
+                oldDraftSha256: Digest(0x33),
+                oldPublishedRevision: 1,
+                oldPublishedSnapshotSha256: Digest(0x51)),
         };
 
         var upsertRecord = Translate(new AgentProfileSkillBindingUpsertedAuditTranslator(), upserted);
@@ -172,9 +205,29 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         upsertRecord.Annotations.Should().Contain("literal_version", "1.2");
         upsertRecord.Annotations.Should().Contain("expected_name", "calendar");
         upsertRecord.Annotations.Should().Contain("expected_publisher_id", "publisher-alpha");
+        AssertTransitionAnnotations(
+            upsertRecord,
+            oldDraftRevision: 2,
+            oldDraftSha256: Digest(0x22),
+            oldPublishedRevision: 1,
+            oldPublishedSnapshotSha256: Digest(0x51),
+            newDraftRevision: 3,
+            newDraftSha256: Digest(0x33),
+            newPublishedRevision: 1,
+            newPublishedSnapshotSha256: Digest(0x51));
         AssertCommon(removedRecord, "agent_profile.skill_binding.removed", "applied");
         removedRecord.Annotations.Should().Contain("binding_id", "binding-alpha");
         removedRecord.Annotations.Should().Contain("draft_revision", "4");
+        AssertTransitionAnnotations(
+            removedRecord,
+            oldDraftRevision: 3,
+            oldDraftSha256: Digest(0x33),
+            oldPublishedRevision: 1,
+            oldPublishedSnapshotSha256: Digest(0x51),
+            newDraftRevision: 4,
+            newDraftSha256: Digest(0x44),
+            newPublishedRevision: 1,
+            newPublishedSnapshotSha256: Digest(0x51));
         AssertSensitiveValuesOmitted(upsertRecord);
         AssertSensitiveValuesOmitted(removedRecord);
     }
@@ -194,7 +247,11 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
                 draftRevision: 4,
                 draftSha256: published.SourceDraftSha256,
                 publishedRevision: 2,
-                publishedSnapshotSha256: published.SnapshotSha256),
+                publishedSnapshotSha256: published.SnapshotSha256,
+                oldDraftRevision: 4,
+                oldDraftSha256: published.SourceDraftSha256,
+                oldPublishedRevision: 1,
+                oldPublishedSnapshotSha256: Digest(0x54)),
         };
         var noChange = new AgentProfilePublishNoChangeEvent
         {
@@ -228,11 +285,31 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         appliedRecord.Annotations.Should().Contain(
             "published_snapshot_sha256",
             Hex(published.SnapshotSha256));
+        AssertTransitionAnnotations(
+            appliedRecord,
+            oldDraftRevision: 4,
+            oldDraftSha256: published.SourceDraftSha256,
+            oldPublishedRevision: 1,
+            oldPublishedSnapshotSha256: Digest(0x54),
+            newDraftRevision: 4,
+            newDraftSha256: published.SourceDraftSha256,
+            newPublishedRevision: 2,
+            newPublishedSnapshotSha256: published.SnapshotSha256);
         AssertCommon(noChangeRecord, "agent_profile.publish.no_change", "no_change");
         noChangeRecord.Annotations.Should().Contain("published_revision", "2");
         noChangeRecord.Annotations.Should().Contain(
             "published_snapshot_sha256",
             Hex(published.SnapshotSha256));
+        AssertTransitionAnnotations(
+            noChangeRecord,
+            oldDraftRevision: 4,
+            oldDraftSha256: published.SourceDraftSha256,
+            oldPublishedRevision: 2,
+            oldPublishedSnapshotSha256: published.SnapshotSha256,
+            newDraftRevision: 4,
+            newDraftSha256: published.SourceDraftSha256,
+            newPublishedRevision: 2,
+            newPublishedSnapshotSha256: published.SnapshotSha256);
         AssertSensitiveValuesOmitted(appliedRecord);
         AssertSensitiveValuesOmitted(noChangeRecord);
     }
@@ -267,6 +344,16 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         record.Failure.Code.Should().Be("DRAFT_VERSION_CONFLICT");
         record.Failure.SanitizedMessage.Should().Be("DRAFT_VERSION_CONFLICT");
         record.Annotations.Should().Contain("failure_code", "DRAFT_VERSION_CONFLICT");
+        AssertTransitionAnnotations(
+            record,
+            oldDraftRevision: 4,
+            oldDraftSha256: Digest(0x44),
+            oldPublishedRevision: 2,
+            oldPublishedSnapshotSha256: Digest(0x55),
+            newDraftRevision: 4,
+            newDraftSha256: Digest(0x44),
+            newPublishedRevision: 2,
+            newPublishedSnapshotSha256: Digest(0x55));
         AssertSensitiveValuesOmitted(record);
     }
 
@@ -419,6 +506,53 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
     }
 
     [Fact]
+    public async Task ReservedUserScopeCreateFailure_ShouldEnterOnlyPlatformAuditQuarantine()
+    {
+        var store = new InMemoryEventStore();
+        var publisher = new RecordingProfileEventPublisher();
+        var agent = GAgentServiceTestKit
+            .CreateStatefulAgent<AgentProfileNamespaceGAgent, AgentProfileNamespaceState>(
+                store,
+                AgentProfileActorIds.Namespace,
+                static () => new AgentProfileNamespaceGAgent());
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        var command = CreateCommand();
+        command.Identity.OwningScopeId = PlatformScopeSemantics.ReservedPlatformScopeId;
+
+        await agent.HandleCreateAsync(command);
+
+        agent.State.Profiles.Should().BeEmpty();
+        publisher.Sends.Should().BeEmpty();
+        var committed = (await store.GetEventsAsync(agent.Id)).Should().ContainSingle().Which;
+        committed.EventData.Is(AgentProfileProvisioningFailedEvent.Descriptor).Should().BeTrue();
+        var failure = committed.EventData.Unpack<AgentProfileProvisioningFailedEvent>();
+        failure.Diagnostic.Code.Should().Be("RESERVED_OWNING_SCOPE_ID");
+        failure.Identity.Should().BeEquivalentTo(new AgentProfileIdentity());
+
+        var document = await MaterializeAsync(
+            new AgentProfileNamespaceCurrentStateProjectionContext
+            {
+                RootActorId = AgentProfileActorIds.Namespace,
+                ProjectionKind = "agent_profile_namespace",
+            },
+            new AgentProfileProvisioningFailedAuditTranslator(),
+            failure,
+            committed.EventId,
+            AgentProfileActorIds.Namespace);
+
+        document.Should().NotBeNull();
+        document!.ScopeId.Should().Be(PlatformScopeSemantics.ReservedPlatformScopeId);
+        document.Record.Target.Id.Should().Be("invalid-profile-identity");
+        document.Record.Failure.Code.Should().Be("RESERVED_OWNING_SCOPE_ID");
+        document.Record.Failure.Category.Should().Be(AuditFailureCategory.Validation);
+        document.Record.Annotations.Should().NotContainKey("profile_id");
+        document.Record.Annotations.Should().NotContainKey("owner_kind");
+        document.Record.Annotations.Should().NotContainKey("owner_handle");
+        document.Record.Annotations.Should().NotContainKey("profile_slug");
+    }
+
+    [Fact]
     public async Task HostileDiagnosticCode_ShouldPersistOnlyEventFallbackThroughRealAuditPipeline()
     {
         var evt = new AgentProfileMutationRejectedEvent
@@ -534,6 +668,31 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         record.CommittedFactRef.StateVersion.Should().Be(17);
     }
 
+    private static void AssertTransitionAnnotations(
+        AuditRecord record,
+        long oldDraftRevision,
+        ByteString oldDraftSha256,
+        long oldPublishedRevision,
+        ByteString oldPublishedSnapshotSha256,
+        long newDraftRevision,
+        ByteString newDraftSha256,
+        long newPublishedRevision,
+        ByteString newPublishedSnapshotSha256)
+    {
+        record.Annotations.Should().Contain("old_draft_revision", oldDraftRevision.ToString());
+        record.Annotations.Should().Contain("old_draft_sha256", Hex(oldDraftSha256));
+        record.Annotations.Should().Contain("old_published_revision", oldPublishedRevision.ToString());
+        record.Annotations.Should().Contain(
+            "old_published_snapshot_sha256",
+            Hex(oldPublishedSnapshotSha256));
+        record.Annotations.Should().Contain("new_draft_revision", newDraftRevision.ToString());
+        record.Annotations.Should().Contain("new_draft_sha256", Hex(newDraftSha256));
+        record.Annotations.Should().Contain("new_published_revision", newPublishedRevision.ToString());
+        record.Annotations.Should().Contain(
+            "new_published_snapshot_sha256",
+            Hex(newPublishedSnapshotSha256));
+    }
+
     private static void AssertSensitiveValuesOmitted(AuditRecord record)
     {
         var serialized = record.ToString();
@@ -622,16 +781,57 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         ByteString draftSha256,
         long publishedRevision = 0,
         ByteString? publishedSnapshotSha256 = null,
-        AgentProfileSafeDiagnostic? diagnostic = null) =>
-        new()
+        AgentProfileSafeDiagnostic? diagnostic = null,
+        long? oldDraftRevision = null,
+        ByteString? oldDraftSha256 = null,
+        long? oldPublishedRevision = null,
+        ByteString? oldPublishedSnapshotSha256 = null)
+    {
+        var after = RevisionDigestFacts(
+            draftRevision,
+            draftSha256,
+            publishedRevision,
+            publishedSnapshotSha256 ?? ByteString.Empty);
+        return new AgentProfileMutationOutcome
         {
             Operation = Operation(suffix),
             Status = status,
             Diagnostic = diagnostic,
+            DraftRevision = after.DraftRevision,
+            DraftSha256 = after.DraftSha256,
+            PublishedRevision = after.PublishedRevision,
+            PublishedSnapshotSha256 = after.PublishedSnapshotSha256,
+            Transition = Transition(
+                RevisionDigestFacts(
+                    oldDraftRevision ?? after.DraftRevision,
+                    oldDraftSha256 ?? after.DraftSha256,
+                    oldPublishedRevision ?? after.PublishedRevision,
+                    oldPublishedSnapshotSha256 ?? after.PublishedSnapshotSha256),
+                after),
+        };
+    }
+
+    private static AgentProfileCommittedStateTransition Transition(
+        AgentProfileRevisionDigestFacts? before,
+        AgentProfileRevisionDigestFacts after)
+    {
+        var transition = new AgentProfileCommittedStateTransition { After = after };
+        if (before is not null)
+            transition.Before = before;
+        return transition;
+    }
+
+    private static AgentProfileRevisionDigestFacts RevisionDigestFacts(
+        long draftRevision,
+        ByteString draftSha256,
+        long publishedRevision,
+        ByteString publishedSnapshotSha256) =>
+        new()
+        {
             DraftRevision = draftRevision,
             DraftSha256 = draftSha256,
             PublishedRevision = publishedRevision,
-            PublishedSnapshotSha256 = publishedSnapshotSha256 ?? ByteString.Empty,
+            PublishedSnapshotSha256 = publishedSnapshotSha256,
         };
 
     private static AgentProfileContent SensitiveContent() =>

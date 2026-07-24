@@ -1,11 +1,19 @@
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Foundation.Abstractions;
 using Shouldly;
 
 namespace Aevatar.Audit.Abstractions.Tests;
 
 public sealed class AuditContractSemanticsTests
 {
+    [Fact]
+    public void PlatformAuditScope_ShouldReferenceSharedReservedScopeContract()
+    {
+        AuditContractSemantics.PlatformAuditScopeId.ShouldBe(
+            PlatformScopeSemantics.ReservedPlatformScopeId);
+    }
+
     [Theory]
     [InlineData(AuditOutcome.Accepted, AuditLifecyclePhase.Accepted, AuditTerminalOutcome.Unspecified)]
     [InlineData(AuditOutcome.Success, AuditLifecyclePhase.Terminal, AuditTerminalOutcome.Succeeded)]

@@ -99,7 +99,7 @@ public sealed class AgentProfileInitializedAuditTranslator
         AgentProfileInitializedEvent evt)
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
-        AddDraftFacts(annotations, evt.DraftRevision, evt.DraftSha256);
+        AddTransitionFacts(annotations, evt.Transition);
         return ProfileSeed(
             "agent_profile.created",
             evt.Identity,
@@ -139,7 +139,6 @@ public sealed class AgentProfileDraftUpdatedAuditTranslator
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
         AddOutcomeFacts(annotations, evt.Outcome);
-        AddDraftFacts(annotations, evt.DraftRevision, evt.DraftSha256);
         return ProfileSeed(
             "agent_profile.draft.updated",
             evt.Identity,
@@ -161,7 +160,6 @@ public sealed class AgentProfileSkillBindingUpsertedAuditTranslator
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
         AddOutcomeFacts(annotations, evt.Outcome);
-        AddDraftFacts(annotations, evt.DraftRevision, evt.DraftSha256);
         AddBindingFacts(annotations, evt.Binding);
         return ProfileSeed(
             "agent_profile.skill_binding.upserted",
@@ -187,7 +185,6 @@ public sealed class AgentProfileSkillBindingRemovedAuditTranslator
             ["binding_id"] = evt.BindingId ?? string.Empty,
         };
         AddOutcomeFacts(annotations, evt.Outcome);
-        AddDraftFacts(annotations, evt.DraftRevision, evt.DraftSha256);
         return ProfileSeed(
             "agent_profile.skill_binding.removed",
             evt.Identity,
@@ -210,7 +207,10 @@ public sealed class AgentProfilePublishedAuditTranslator
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
         AddOutcomeFacts(annotations, evt.Outcome);
-        AddPublishedSnapshotFacts(annotations, evt.Snapshot);
+        AddDigest(
+            annotations,
+            "published_source_draft_sha256",
+            evt.Snapshot?.SourceDraftSha256);
         return ProfileSeed(
             "agent_profile.published",
             evt.Identity,
@@ -232,7 +232,6 @@ public sealed class AgentProfilePublishNoChangeAuditTranslator
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
         AddOutcomeFacts(annotations, evt.Outcome);
-        AddPublishedSummaryFacts(annotations, evt.Summary);
         return ProfileSeed(
             "agent_profile.publish.no_change",
             evt.Identity,
@@ -377,16 +376,46 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         if (outcome is null)
             return;
 
-        AddDraftFacts(annotations, outcome.DraftRevision, outcome.DraftSha256);
-        if (outcome.PublishedRevision > 0)
+        AddTransitionFacts(annotations, outcome.Transition);
+    }
+
+    protected static void AddTransitionFacts(
+        IDictionary<string, string> annotations,
+        AgentProfileCommittedStateTransition? transition)
+    {
+        if (transition?.Before is not null)
+            AddRevisionDigestFacts(annotations, "old_", transition.Before);
+        if (transition?.After is null)
+            return;
+
+        AddRevisionDigestFacts(annotations, "new_", transition.After);
+        AddDraftFacts(
+            annotations,
+            transition.After.DraftRevision,
+            transition.After.DraftSha256);
+        if (transition.After.PublishedRevision > 0)
         {
             annotations["published_revision"] =
-                outcome.PublishedRevision.ToString(CultureInfo.InvariantCulture);
+                transition.After.PublishedRevision.ToString(CultureInfo.InvariantCulture);
         }
         AddDigest(
             annotations,
             "published_snapshot_sha256",
-            outcome.PublishedSnapshotSha256);
+            transition.After.PublishedSnapshotSha256);
+    }
+
+    private static void AddRevisionDigestFacts(
+        IDictionary<string, string> annotations,
+        string prefix,
+        AgentProfileRevisionDigestFacts facts)
+    {
+        annotations[$"{prefix}draft_revision"] =
+            facts.DraftRevision.ToString(CultureInfo.InvariantCulture);
+        annotations[$"{prefix}draft_sha256"] = Digest(facts.DraftSha256);
+        annotations[$"{prefix}published_revision"] =
+            facts.PublishedRevision.ToString(CultureInfo.InvariantCulture);
+        annotations[$"{prefix}published_snapshot_sha256"] =
+            Digest(facts.PublishedSnapshotSha256);
     }
 
     protected static void AddBindingFacts(
@@ -420,25 +449,6 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
                 summary.PublishedRevision.ToString(CultureInfo.InvariantCulture);
         }
         AddDigest(annotations, "published_snapshot_sha256", summary.SnapshotSha256);
-    }
-
-    protected static void AddPublishedSnapshotFacts(
-        IDictionary<string, string> annotations,
-        AgentProfilePublishedSnapshot? snapshot)
-    {
-        if (snapshot is null)
-            return;
-
-        if (snapshot.PublishedRevision > 0)
-        {
-            annotations["published_revision"] =
-                snapshot.PublishedRevision.ToString(CultureInfo.InvariantCulture);
-        }
-        AddDigest(
-            annotations,
-            "published_source_draft_sha256",
-            snapshot.SourceDraftSha256);
-        AddDigest(annotations, "published_snapshot_sha256", snapshot.SnapshotSha256);
     }
 
     private static Dictionary<string, string> IdentityAnnotations(AgentProfileIdentity? identity)
@@ -571,6 +581,7 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
             "PUBLISHED_SNAPSHOT_SHA256_MISMATCH" or
             "PUBLISHED_SNAPSHOT_TOO_LARGE" or
             "PUBLISH_SOURCE_CHANGED" or
+            "RESERVED_OWNING_SCOPE_ID" or
             "RESERVED_OWNER_HANDLE" or
             "SEALED_SKILL_CANONICAL_NAME_MISMATCH" or
             "SEALED_SKILL_CONTENT_SHA256_MISMATCH" or
@@ -612,7 +623,8 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
             return AuditFailureCategory.Dependency;
         if (code.Contains("INVALID", StringComparison.Ordinal) ||
             code.Contains("MISSING", StringComparison.Ordinal) ||
-            code.Contains("REQUIRED", StringComparison.Ordinal))
+            code.Contains("REQUIRED", StringComparison.Ordinal) ||
+            code.StartsWith("RESERVED_", StringComparison.Ordinal))
         {
             return AuditFailureCategory.Validation;
         }
@@ -620,7 +632,7 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         return AuditFailureCategory.Execution;
     }
 
-    private static void AddDigest(
+    protected static void AddDigest(
         IDictionary<string, string> annotations,
         string key,
         ByteString? digest)
@@ -630,4 +642,7 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
 
         annotations[key] = Convert.ToHexString(digest.Span).ToLowerInvariant();
     }
+
+    private static string Digest(ByteString? digest) =>
+        Convert.ToHexString((digest ?? ByteString.Empty).Span).ToLowerInvariant();
 }

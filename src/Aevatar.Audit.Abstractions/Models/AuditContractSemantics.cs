@@ -1,4 +1,5 @@
 using Aevatar.Audit;
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.Audit.Abstractions.Models;
 
@@ -6,7 +7,7 @@ public static class AuditContractSemantics
 {
     public const string CurrentSchemaVersion = "1.0";
     public const string LegacySchemaVersion = "legacy-v0";
-    public const string PlatformAuditScopeId = "platform:aevatar";
+    public const string PlatformAuditScopeId = PlatformScopeSemantics.ReservedPlatformScopeId;
 
     public static AuditLifecyclePhase ResolveLifecyclePhase(AuditRecord record)
     {

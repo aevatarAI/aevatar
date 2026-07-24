@@ -173,6 +173,18 @@ enum AgentProfileMutationStatus {
   AGENT_PROFILE_MUTATION_STATUS_REJECTED = 3;
 }
 
+message AgentProfileRevisionDigestFacts {
+  int64 draft_revision = 1;
+  bytes draft_sha256 = 2;
+  int64 published_revision = 3;
+  bytes published_snapshot_sha256 = 4;
+}
+
+message AgentProfileCommittedStateTransition {
+  AgentProfileRevisionDigestFacts before = 1;
+  AgentProfileRevisionDigestFacts after = 2;
+}
+
 message AgentProfileMutationOutcome {
   AgentProfileOperationFact operation = 1;
   AgentProfileMutationStatus status = 2;
@@ -181,6 +193,7 @@ message AgentProfileMutationOutcome {
   bytes draft_sha256 = 5;
   int64 published_revision = 6;
   bytes published_snapshot_sha256 = 7;
+  AgentProfileCommittedStateTransition transition = 8;
 }
 
 enum AgentProfileProvisioningStatus {
@@ -309,6 +322,7 @@ message AgentProfileInitializedEvent {
   string namespace_actor_id = 6;
   string profile_actor_id = 7;
   AgentProfileOperationReplayAuthority replay_authority = 8;
+  AgentProfileCommittedStateTransition transition = 9;
 }
 
 message AgentProfileInitializationRejectedEvent {

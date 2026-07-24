@@ -1,4 +1,5 @@
 using System.Text;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using FluentAssertions;
 using Google.Protobuf;
@@ -59,6 +60,46 @@ public sealed class AgentProfileContractsTests
     {
         AgentProfilePolicies.ValidateUserOwnerHandle("system")
             .Should().ContainSingle(x => x.Code == "RESERVED_OWNER_HANDLE");
+    }
+
+    [Fact]
+    public void ValidateIdentity_ShouldRejectReservedPlatformScopeForUserOwner()
+    {
+        var identity = ProfileIdentity();
+        identity.OwningScopeId = PlatformScopeSemantics.ReservedPlatformScopeId;
+
+        AgentProfilePolicies.ValidateIdentity(identity)
+            .Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "RESERVED_OWNING_SCOPE_ID" &&
+                diagnostic.Path == "owning_scope_id");
+    }
+
+    [Fact]
+    public void CommittedMutationContracts_ShouldShareTypedBeforeAfterTransitionFacts()
+    {
+        var outcomeTransition = AgentProfileMutationOutcome.Descriptor.FindFieldByName("transition");
+        outcomeTransition.Should().NotBeNull();
+        outcomeTransition!.FieldType.Should().Be(FieldType.Message);
+        outcomeTransition.MessageType.Name.Should().Be("AgentProfileCommittedStateTransition");
+
+        var before = outcomeTransition.MessageType.FindFieldByName("before");
+        var after = outcomeTransition.MessageType.FindFieldByName("after");
+        before.Should().NotBeNull();
+        after.Should().NotBeNull();
+        before!.MessageType.Should().BeSameAs(after!.MessageType);
+        before.MessageType.Name.Should().Be("AgentProfileRevisionDigestFacts");
+        before.MessageType.Fields.InDeclarationOrder()
+            .Select(static field => field.Name)
+            .Should()
+            .Equal(
+                "draft_revision",
+                "draft_sha256",
+                "published_revision",
+                "published_snapshot_sha256");
+
+        AgentProfileInitializedEvent.Descriptor.FindFieldByName("transition")
+            .Should().NotBeNull()
+            .And.Match<FieldDescriptor>(field => field.MessageType == outcomeTransition.MessageType);
     }
 
     [Theory]

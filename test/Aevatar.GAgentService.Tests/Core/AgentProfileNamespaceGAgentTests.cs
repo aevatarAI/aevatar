@@ -1,4 +1,5 @@
 using System.Text;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
@@ -279,6 +280,27 @@ public sealed class AgentProfileNamespaceGAgentTests
         agent.State.Operations.Should().ContainSingle()
             .Which.Diagnostic.Code.Should().Be("RESERVED_OWNER_HANDLE");
         publisher.Sends.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_ShouldCommitReservedPlatformScopeFailureWithoutOrdinaryProfileFact()
+    {
+        var (agent, store, publisher) = await CreateActorAsync();
+        var identity = GAgentServiceTestKit.CreateAgentProfileIdentity();
+        identity.OwningScopeId = PlatformScopeSemantics.ReservedPlatformScopeId;
+        var command = CreateCommand(identity, operationId: "op-reserved-platform-scope");
+
+        await agent.HandleCreateAsync(command);
+
+        agent.State.Profiles.Should().BeEmpty();
+        agent.State.HandleClaims.Should().BeEmpty();
+        agent.State.Operations.Should().ContainSingle()
+            .Which.Diagnostic.Code.Should().Be("RESERVED_OWNING_SCOPE_ID");
+        publisher.Sends.Should().BeEmpty();
+        var committed = (await store.GetEventsAsync(agent.Id)).Should().ContainSingle().Which;
+        committed.EventData.Is(AgentProfileProvisioningFailedEvent.Descriptor).Should().BeTrue();
+        committed.EventData.Unpack<AgentProfileProvisioningFailedEvent>()
+            .Identity.Should().BeEquivalentTo(new AgentProfileIdentity());
     }
 
     [Fact]

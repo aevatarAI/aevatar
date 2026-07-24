@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.AgentProfiles;
 
@@ -108,6 +109,37 @@ public static class AgentProfilePolicies
         return diagnostics;
     }
 
+    public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateUserOwningScopeId(
+        string? owningScopeId)
+    {
+        if (string.IsNullOrWhiteSpace(owningScopeId) || HasBoundaryWhitespace(owningScopeId))
+        {
+            return
+            [
+                Diagnostic(
+                    "INVALID_OWNING_SCOPE_ID",
+                    "User Profiles require an owning scope.",
+                    "owning_scope_id"),
+            ];
+        }
+
+        if (string.Equals(
+                owningScopeId,
+                PlatformScopeSemantics.ReservedPlatformScopeId,
+                StringComparison.Ordinal))
+        {
+            return
+            [
+                Diagnostic(
+                    "RESERVED_OWNING_SCOPE_ID",
+                    "The platform scope is reserved for platform-owned and quarantined facts.",
+                    "owning_scope_id"),
+            ];
+        }
+
+        return [];
+    }
+
     public static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateOwnerIdentity(
         AgentProfileOwnerIdentity? owner)
     {
@@ -142,13 +174,7 @@ public static class AgentProfilePolicies
 
         if (identity.Owner?.OwnerCase == AgentProfileOwnerIdentity.OwnerOneofCase.User)
         {
-            if (string.IsNullOrWhiteSpace(identity.OwningScopeId) || HasBoundaryWhitespace(identity.OwningScopeId))
-            {
-                diagnostics.Add(Diagnostic(
-                    "INVALID_OWNING_SCOPE_ID",
-                    "User Profiles require an owning scope.",
-                    "owning_scope_id"));
-            }
+            diagnostics.AddRange(ValidateUserOwningScopeId(identity.OwningScopeId));
 
             if (string.Equals(identity.Reference?.OwnerHandle, SystemOwnerHandle, StringComparison.Ordinal))
             {

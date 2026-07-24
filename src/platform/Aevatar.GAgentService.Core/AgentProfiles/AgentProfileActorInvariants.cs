@@ -170,6 +170,18 @@ internal static class AgentProfileActorInvariants
             ? exception.Diagnostics[0].Clone()
             : Diagnostic("INVALID_AGENT_PROFILE", "Agent Profile validation failed.", string.Empty);
 
+    public static AgentProfileCommittedStateTransition InitializationTransition(
+        long draftRevision,
+        ByteString draftSha256) =>
+        new()
+        {
+            After = RevisionDigestFacts(
+                draftRevision,
+                draftSha256,
+                publishedRevision: 0,
+                publishedSnapshotSha256: ByteString.Empty),
+        };
+
     public static AgentProfileMutationOutcome Outcome(
         AgentProfileState state,
         AgentProfileOperationFact operation,
@@ -180,20 +192,47 @@ internal static class AgentProfileActorInvariants
         long? publishedRevision = null,
         ByteString? publishedSnapshotSha256 = null)
     {
+        var before = RevisionDigestFacts(
+            state.DraftRevision,
+            state.DraftSha256,
+            state.PublishedRevision,
+            state.Published?.SnapshotSha256);
+        var after = RevisionDigestFacts(
+            draftRevision ?? before.DraftRevision,
+            draftSha256 ?? before.DraftSha256,
+            publishedRevision ?? before.PublishedRevision,
+            publishedSnapshotSha256 ?? before.PublishedSnapshotSha256);
         var outcome = new AgentProfileMutationOutcome
         {
             Operation = operation.Clone(),
             Status = status,
-            DraftRevision = draftRevision ?? state.DraftRevision,
-            DraftSha256 = draftSha256 ?? state.DraftSha256,
-            PublishedRevision = publishedRevision ?? state.PublishedRevision,
-            PublishedSnapshotSha256 = publishedSnapshotSha256 ??
-                state.Published?.SnapshotSha256 ?? ByteString.Empty,
+            DraftRevision = after.DraftRevision,
+            DraftSha256 = after.DraftSha256,
+            PublishedRevision = after.PublishedRevision,
+            PublishedSnapshotSha256 = after.PublishedSnapshotSha256,
+            Transition = new AgentProfileCommittedStateTransition
+            {
+                Before = before,
+                After = after,
+            },
         };
         if (diagnostic is not null)
             outcome.Diagnostic = diagnostic.Clone();
         return outcome;
     }
+
+    private static AgentProfileRevisionDigestFacts RevisionDigestFacts(
+        long draftRevision,
+        ByteString? draftSha256,
+        long publishedRevision,
+        ByteString? publishedSnapshotSha256) =>
+        new()
+        {
+            DraftRevision = draftRevision,
+            DraftSha256 = draftSha256 ?? ByteString.Empty,
+            PublishedRevision = publishedRevision,
+            PublishedSnapshotSha256 = publishedSnapshotSha256 ?? ByteString.Empty,
+        };
 
     public static AgentProfilePublishedSummary Summary(AgentProfilePublishedSnapshot snapshot) =>
         new()

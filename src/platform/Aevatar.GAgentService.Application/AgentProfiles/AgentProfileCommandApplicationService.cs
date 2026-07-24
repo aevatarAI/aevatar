@@ -276,6 +276,15 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
     private static (AgentProfileOwnerIdentity Owner, string ScopeId) NormalizeCaller(
         AgentProfileCallerContext? caller)
     {
+        if (caller is not null &&
+            string.Equals(
+                caller.ScopeId,
+                PlatformScopeSemantics.ReservedPlatformScopeId,
+                StringComparison.Ordinal))
+        {
+            ThrowRequestDiagnostics(AgentProfilePolicies.ValidateUserOwningScopeId(caller.ScopeId));
+        }
+
         if (!AgentProfileOwnerSnapshotResolver.TryNormalizeCaller(
                 caller,
                 out var owner,

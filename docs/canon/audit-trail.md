@@ -283,8 +283,11 @@ The `__all__` request token always selects the admin-only wildcard. A caller
 whose `scope_id` claim is also the literal `__all__` does not acquire wildcard
 visibility and must still pass `IPlatformAdminAuthorizer`.
 
-`platform:aevatar` is the reserved platform audit scope used for platform-owned facts
-and quarantined committed facts whose ordinary scope identity is missing or invalid.
+`PlatformScopeSemantics.ReservedPlatformScopeId` in Foundation Abstractions owns
+the `platform:aevatar` literal, while
+`AuditContractSemantics.PlatformAuditScopeId` preserves the audit-facing contract.
+It is the reserved platform audit scope used for platform-owned facts and
+quarantined committed facts whose ordinary scope identity is missing or invalid.
 Reading or exporting that literal always requires `IPlatformAdminAuthorizer`, including
 when the caller's `scope_id` claim is also `platform:aevatar`. A matching claim does not
 turn the reserved partition into an ordinary caller-owned scope. Resolver calls are

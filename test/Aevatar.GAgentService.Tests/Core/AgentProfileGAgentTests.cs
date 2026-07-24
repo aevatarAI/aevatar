@@ -31,7 +31,18 @@ public sealed class AgentProfileGAgentTests
             AgentProfileDeterminism.ComputeDraftSha256(GAgentServiceTestKit.CreateAgentProfileContent()));
         agent.State.Published.Should().BeNull();
         agent.State.PublishedRevision.Should().Be(0);
-        (await store.GetEventsAsync(agent.Id)).Should().ContainSingle();
+        var initialized = (await store.GetEventsAsync(agent.Id)).Should().ContainSingle()
+            .Which.EventData.Unpack<AgentProfileInitializedEvent>();
+        initialized.Transition.Should().NotBeNull();
+        initialized.Transition.Before.Should().BeNull();
+        AssertRevisionDigestFacts(
+            initialized.Transition.After,
+            1,
+            agent.State.DraftSha256,
+            0,
+            ByteString.Empty);
+        initialized.DraftRevision.Should().Be(initialized.Transition.After.DraftRevision);
+        initialized.DraftSha256.Should().Equal(initialized.Transition.After.DraftSha256);
         publisher.Sends.Should().ContainSingle();
         publisher.Sends[0].TargetActorId.Should().Be(AgentProfileActorIds.Namespace);
         var continuation = publisher.Sends[0].Payload.Unpack<AgentProfileInitializedContinuation>();
@@ -486,10 +497,11 @@ public sealed class AgentProfileGAgentTests
     [Fact]
     public async Task UpdateDraft_ShouldIncrementRevisionAndKeepPublishedSnapshotSeparate()
     {
-        var (agent, _, _) = await CreateInitializedActorAsync();
+        var (agent, store, _) = await CreateInitializedActorAsync();
         var firstPublish = PublishCommand(agent, Snapshot(agent.State.Identity, agent.State.Draft), "op-publish-before-update");
         await agent.HandlePublishAsync(firstPublish);
         var published = agent.State.Published.Clone();
+        var oldDraftSha256 = agent.State.DraftSha256;
         var changed = GAgentServiceTestKit.CreateAgentProfileContent(
             displayName: "Changed draft",
             instructions: "New draft instructions.");
@@ -505,6 +517,20 @@ public sealed class AgentProfileGAgentTests
         agent.State.DraftSha256.Should().Equal(AgentProfileDeterminism.ComputeDraftSha256(changed));
         agent.State.Published.Should().BeEquivalentTo(published);
         agent.State.PublishedRevision.Should().Be(1);
+        var committed = (await store.GetEventsAsync(agent.Id))[^1].EventData
+            .Unpack<AgentProfileDraftUpdatedEvent>();
+        AssertTransition(
+            committed.Outcome,
+            oldDraftRevision: 1,
+            oldDraftSha256,
+            oldPublishedRevision: 1,
+            oldPublishedSnapshotSha256: published.SnapshotSha256,
+            newDraftRevision: 2,
+            newDraftSha256: agent.State.DraftSha256,
+            newPublishedRevision: 1,
+            newPublishedSnapshotSha256: published.SnapshotSha256);
+        committed.DraftRevision.Should().Be(committed.Outcome.Transition.After.DraftRevision);
+        committed.DraftSha256.Should().Equal(committed.Outcome.Transition.After.DraftSha256);
     }
 
     [Fact]
@@ -654,13 +680,25 @@ public sealed class AgentProfileGAgentTests
         agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
         agent.State.LastMutation.Diagnostic.Code.Should().Be("DRAFT_VERSION_CONFLICT");
         agent.EventSourcing!.CurrentVersion.Should().Be(2);
-        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Should().HaveCount(2);
+        var rejected = events[^1].EventData.Unpack<AgentProfileMutationRejectedEvent>();
+        AssertTransition(
+            rejected.Outcome,
+            oldDraftRevision: 1,
+            oldDraftSha256: agent.State.DraftSha256,
+            oldPublishedRevision: 0,
+            oldPublishedSnapshotSha256: ByteString.Empty,
+            newDraftRevision: 1,
+            newDraftSha256: agent.State.DraftSha256,
+            newPublishedRevision: 0,
+            newPublishedSnapshotSha256: ByteString.Empty);
     }
 
     [Fact]
     public async Task IdenticalDraftMutation_ShouldCommitNoChangeWithoutAdvancingDraftRevision()
     {
-        var (agent, _, _) = await CreateInitializedActorAsync();
+        var (agent, store, _) = await CreateInitializedActorAsync();
 
         await agent.HandleUpdateDraftAsync(UpdateCommand(
             agent.State.Identity,
@@ -671,6 +709,18 @@ public sealed class AgentProfileGAgentTests
         agent.State.DraftRevision.Should().Be(1);
         agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.NoChange);
         agent.EventSourcing!.CurrentVersion.Should().Be(2);
+        var noChange = (await store.GetEventsAsync(agent.Id))[^1].EventData
+            .Unpack<AgentProfileMutationNoChangeEvent>();
+        AssertTransition(
+            noChange.Outcome,
+            oldDraftRevision: 1,
+            oldDraftSha256: agent.State.DraftSha256,
+            oldPublishedRevision: 0,
+            oldPublishedSnapshotSha256: ByteString.Empty,
+            newDraftRevision: 1,
+            newDraftSha256: agent.State.DraftSha256,
+            newPublishedRevision: 0,
+            newPublishedSnapshotSha256: ByteString.Empty);
     }
 
     [Fact]
@@ -993,7 +1043,23 @@ public sealed class AgentProfileGAgentTests
         agent.State.PublishedRevision.Should().Be(1);
         agent.State.Published.PublishedRevision.Should().Be(1);
         command.Snapshot.PublishedRevision.Should().Be(0);
-        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(eventCount);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Should().HaveCount(eventCount);
+        var published = events[^1].EventData.Unpack<AgentProfilePublishedEvent>();
+        AssertTransition(
+            published.Outcome,
+            oldDraftRevision: 1,
+            oldDraftSha256: agent.State.DraftSha256,
+            oldPublishedRevision: 0,
+            oldPublishedSnapshotSha256: ByteString.Empty,
+            newDraftRevision: 1,
+            newDraftSha256: agent.State.DraftSha256,
+            newPublishedRevision: 1,
+            newPublishedSnapshotSha256: agent.State.Published.SnapshotSha256);
+        published.Snapshot.PublishedRevision.Should().Be(
+            published.Outcome.Transition.After.PublishedRevision);
+        published.Snapshot.SnapshotSha256.Should().Equal(
+            published.Outcome.Transition.After.PublishedSnapshotSha256);
         publisher.Sends.Should().HaveCount(3); // initialize, publish, healing replay
         var summaries = publisher.Sends.Skip(1)
             .Select(static send => send.Payload.Unpack<ObserveAgentProfilePublishedSummaryCommand>())
@@ -1674,6 +1740,51 @@ public sealed class AgentProfileGAgentTests
             ActivationMode = binding.ActivationMode,
             Skill = skill,
         };
+    }
+
+    private static void AssertTransition(
+        AgentProfileMutationOutcome outcome,
+        long oldDraftRevision,
+        ByteString oldDraftSha256,
+        long oldPublishedRevision,
+        ByteString oldPublishedSnapshotSha256,
+        long newDraftRevision,
+        ByteString newDraftSha256,
+        long newPublishedRevision,
+        ByteString newPublishedSnapshotSha256)
+    {
+        outcome.Transition.Should().NotBeNull();
+        AssertRevisionDigestFacts(
+            outcome.Transition.Before,
+            oldDraftRevision,
+            oldDraftSha256,
+            oldPublishedRevision,
+            oldPublishedSnapshotSha256);
+        AssertRevisionDigestFacts(
+            outcome.Transition.After,
+            newDraftRevision,
+            newDraftSha256,
+            newPublishedRevision,
+            newPublishedSnapshotSha256);
+        outcome.DraftRevision.Should().Be(outcome.Transition.After.DraftRevision);
+        outcome.DraftSha256.Should().Equal(outcome.Transition.After.DraftSha256);
+        outcome.PublishedRevision.Should().Be(outcome.Transition.After.PublishedRevision);
+        outcome.PublishedSnapshotSha256.Should().Equal(
+            outcome.Transition.After.PublishedSnapshotSha256);
+    }
+
+    private static void AssertRevisionDigestFacts(
+        AgentProfileRevisionDigestFacts facts,
+        long draftRevision,
+        ByteString draftSha256,
+        long publishedRevision,
+        ByteString publishedSnapshotSha256)
+    {
+        facts.Should().NotBeNull();
+        facts.DraftRevision.Should().Be(draftRevision);
+        facts.DraftSha256.Should().Equal(draftSha256);
+        facts.PublishedRevision.Should().Be(publishedRevision);
+        facts.PublishedSnapshotSha256.Should().Equal(publishedSnapshotSha256);
     }
 
     private static AgentProfileSkillBinding Binding(

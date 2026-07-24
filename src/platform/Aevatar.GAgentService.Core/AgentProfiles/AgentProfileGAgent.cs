@@ -156,6 +156,7 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
             NamespaceActorId = namespaceActorId,
             ProfileActorId = Id,
             ReplayAuthority = replayAuthority.Clone(),
+            Transition = AgentProfileActorInvariants.InitializationTransition(1, draftSha256),
         });
         await SendInitializedAsync(namespaceActorId, operation);
     }
