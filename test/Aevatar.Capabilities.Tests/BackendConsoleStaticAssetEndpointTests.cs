@@ -145,9 +145,45 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope)");
         html.Should().Contain("return base+(p.toString()?'?'+p.toString():'')");
         html.Should().Contain("function obsPinnedRun()");
+        html.Should().Contain("return obsRunsFiltered().some(function(r){return r.id===OBS_STATE.selectedId;})");
         html.Should().Contain("data-obs-pinned=\"true\"");
         html.Should().Contain("不在当前筛选结果中");
         html.Should().NotContain("obsUpsertRunFromDetail(OBS_STATE.selectedId");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryNavigation_ShouldNotTreatEveryRunAttributeAsFleetLink()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("t.closest('[data-run][data-scope]')");
+        html.Should().Contain("obsNavigate({run:or.getAttribute('data-run'),scope:'mine'})");
+        html.Should().Contain("obsNavigate({run:act.getAttribute('data-run'),scope:'mine'})");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryStatus_ShouldPresentStoppedRunsHonestly()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("stopped:'stopped'");
+        html.Should().Contain("stopped:['tag-idle','已停止','■']");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryEmptyState_ShouldDistinguishFiltersAndLocalSearch()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function obsEmptyList()");
+        html.Should().Contain("当前加载结果中没有匹配运行");
+        html.Should().Contain("当前服务端筛选下没有运行");
+        html.Should().Contain("当前 scope 暂无运行记录");
+        html.Should().Contain("data-act=\"obsLocalSearchClear\"");
+        html.Should().NotContain("该员工还没有执行记录。',null]");
     }
 
     [Fact]
@@ -163,6 +199,20 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("data-act=\"obsLocalSearch\"");
         html.Should().Contain("显示 '+visible+' / 已加载 '+loaded");
         html.Should().NotContain("class=\"obs-adminbar\"");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryMobileFilters_ShouldOverlayInsteadOfCompressingDetail()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain(".obs-filterbar{position:relative;z-index:40;");
+        html.Should().Contain(
+            ".filter-body{position:absolute;top:100%;left:8px;right:8px;max-height:min(56vh,430px);overflow:auto;");
+        html.Should().Contain(".obs-filter-search input{height:100%;");
+        html.Should().Contain(".obs-scope-notice button{min-height:24px;");
+        html.Should().Contain(".obs-clear-all{height:24px;");
     }
 
     [Fact]
