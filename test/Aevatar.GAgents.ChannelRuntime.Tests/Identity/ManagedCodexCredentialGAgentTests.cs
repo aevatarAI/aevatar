@@ -75,6 +75,22 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleProvisioned_WithDuplicateCommand_CommitsReadinessConfirmed()
+    {
+        var descriptor = Descriptor("key-1", "sec-1", version: 1);
+        var command = new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        };
+
+        await _agent.HandleProvisioned(command);
+        await _agent.HandleProvisioned(command);
+
+        var readiness = await ReadLastReadinessConfirmedAsync();
+        readiness.ApiKeyId.Should().Be("key-1");
+    }
+
+    [Fact]
     public async Task HandleProvisioned_WithMismatchedVaultAuthority_RejectsTheDescriptor()
     {
         var descriptor = Descriptor("key-1", "sec-1", version: 1);
@@ -127,6 +143,98 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandlePolicyReconciled_WithDifferentApiKeyId_DoesNotReplaceCurrentKey()
+    {
+        var current = Descriptor("key-current", "sec-current", 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+        var incoming = current.Clone();
+        incoming.ApiKeyId = "key-incoming";
+
+        await _agent.HandlePolicyReconciled(
+            new CommitManagedCodexCredentialPolicyReconciledCommand
+            {
+                ExpectedApiKeyId = "key-current",
+                Credential = incoming,
+            });
+
+        _agent.State.Credential.ApiKeyId.Should().Be("key-current");
+        _agent.State.Credential.SecretReference.Ref.Should().Be("sec-current");
+        _agent.State.PendingRevocations.Should().ContainSingle();
+        _agent.State.PendingRevocations[0].ApiKeyId.Should().Be("key-incoming");
+        _agent.State.PendingRevocations[0].VaultPending.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandlePolicyReconciled_WithStaleExpectedApiKeyId_DoesNotQueueActiveKey()
+    {
+        var current = Descriptor("key-current", "sec-current", 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+
+        await _agent.HandlePolicyReconciled(
+            new CommitManagedCodexCredentialPolicyReconciledCommand
+            {
+                ExpectedApiKeyId = "key-stale",
+                Credential = current.Clone(),
+            });
+
+        _agent.State.Credential.ApiKeyId.Should().Be("key-current");
+        _agent.State.PendingRevocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandlePolicyReconciled_WithDifferentVaultReference_DoesNotQueueActiveKey()
+    {
+        var current = Descriptor("key-current", "sec-current", 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+        var drifted = current.Clone();
+        drifted.SecretReference.Ref = "sec-drifted";
+
+        await _agent.HandlePolicyReconciled(
+            new CommitManagedCodexCredentialPolicyReconciledCommand
+            {
+                ExpectedApiKeyId = "key-current",
+                Credential = drifted,
+            });
+
+        _agent.State.Credential.ApiKeyId.Should().Be("key-current");
+        _agent.State.Credential.SecretReference.Ref.Should().Be("sec-current");
+        _agent.State.PendingRevocations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandlePolicyReconciled_WithDuplicateCommand_CommitsReadinessConfirmed()
+    {
+        var current = Descriptor("key-current", "sec-current", 1);
+        current.ChronoLlmUserServiceId = "user-service-llm-old";
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+        var reconciled = current.Clone();
+        reconciled.ChronoLlmUserServiceId = "user-service-llm";
+        var command = new CommitManagedCodexCredentialPolicyReconciledCommand
+        {
+            ExpectedApiKeyId = "key-current",
+            Credential = reconciled,
+        };
+
+        await _agent.HandlePolicyReconciled(command);
+        await _agent.HandlePolicyReconciled(command);
+
+        var readiness = await ReadLastReadinessConfirmedAsync();
+        readiness.ApiKeyId.Should().Be("key-current");
+    }
+
+    [Fact]
     public async Task HandleRotated_WithStaleExpectedKey_QueuesIncomingKeyForCleanup()
     {
         await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
@@ -148,7 +256,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRotated_WithDuplicateDistinctReferenceCommand_IsIdempotent()
+    public async Task HandleRotated_WithDuplicateDistinctReferenceCommand_CommitsReadinessConfirmed()
     {
         await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
         {
@@ -166,6 +274,8 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
 
         _agent.State.Credential.Should().BeEquivalentTo(rotated);
         _agent.State.PendingRevocations.Should().BeEmpty();
+        var readiness = await ReadLastReadinessConfirmedAsync();
+        readiness.ApiKeyId.Should().Be("key-rotated");
     }
 
     [Fact]
@@ -194,6 +304,16 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
         _agent.State.Credential.SecretReference.Ref.Should().Be("sec-1");
         _agent.State.PendingRevocations.Should().ContainSingle();
         _agent.State.PendingRevocations[0].ApiKeyId.Should().Be("key-1");
+    }
+
+    private async Task<ManagedCodexCredentialReadinessConfirmedEvent> ReadLastReadinessConfirmedAsync()
+    {
+        var store = _services.GetRequiredService<IEventStore>();
+        var events = await store.GetEventsAsync(_agent.Id);
+        events.Should().NotBeEmpty();
+        events[^1].EventData.Is(ManagedCodexCredentialReadinessConfirmedEvent.Descriptor)
+            .Should().BeTrue();
+        return events[^1].EventData.Unpack<ManagedCodexCredentialReadinessConfirmedEvent>();
     }
 
     private static ManagedCodexCredentialDescriptor Descriptor(

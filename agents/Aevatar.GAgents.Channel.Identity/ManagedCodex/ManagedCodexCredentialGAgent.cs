@@ -108,6 +108,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         if (current is null ||
             current.Status != ManagedCodexCredentialStatus.Active ||
             !string.Equals(current.ApiKeyId, command.ExpectedApiKeyId?.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(current.ApiKeyId, credential.ApiKeyId, StringComparison.Ordinal) ||
             !string.Equals(
                 current.SecretReference?.Ref,
                 credential.SecretReference?.Ref,
@@ -205,6 +206,14 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
 
     private async Task QueueIncomingCredentialCleanupAsync(ManagedCodexCredentialDescriptor credential)
     {
+        if (State.Credential is { Status: ManagedCodexCredentialStatus.Active } current &&
+            string.Equals(current.ApiKeyId, credential.ApiKeyId, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "Managed Codex cleanup rejected because the incoming descriptor identifies the active API key.");
+            return;
+        }
+
         var sameVaultRef = string.Equals(
             State.Credential?.SecretReference?.Ref,
             credential.SecretReference?.Ref,
