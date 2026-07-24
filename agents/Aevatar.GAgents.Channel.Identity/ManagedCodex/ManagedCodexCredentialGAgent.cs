@@ -109,10 +109,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             current.Status != ManagedCodexCredentialStatus.Active ||
             !string.Equals(current.ApiKeyId, command.ExpectedApiKeyId?.Trim(), StringComparison.Ordinal) ||
             !string.Equals(current.ApiKeyId, credential.ApiKeyId, StringComparison.Ordinal) ||
-            !string.Equals(
-                current.SecretReference?.Ref,
-                credential.SecretReference?.Ref,
-                StringComparison.Ordinal))
+            !Equals(current.SecretReference, credential.SecretReference))
         {
             await QueueIncomingCredentialCleanupAsync(credential);
             return;

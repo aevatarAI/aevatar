@@ -206,6 +206,50 @@ public sealed class ManagedCodexCredentialLifecycleTests
     }
 
     [Fact]
+    public async Task ReconcilePolicyAsync_WhenRemotePolicyIsAlreadyExact_SkipsUpdateRelistsAndCommits()
+    {
+        var expiresAt = Now.AddDays(30);
+        var handler = new RoutingHandler(
+            ApiKeyListResponse(
+                "key-a",
+                expiresAt,
+                allowedServiceIds: ["us-llm", "us-sandbox"]));
+        var current = Descriptor("key-a", "sec-a", version: 1);
+        current.ChronoLlmUserServiceId = "us-llm-old";
+        var vault = Substitute.For<ISecretVault>();
+        vault.ResolveAsync(
+                Arg.Any<ResolveSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ResolveSecretResult(current.SecretReference.Clone(), RawKey));
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        commands.CommitPolicyReconciledAsync(
+                "key-a",
+                Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Admission());
+        var lifecycle = CreateLifecycle(handler, vault, commands);
+
+        var reconciled = await InvokeReconcilePolicyAsync(
+            lifecycle,
+            current,
+            RemoteKey("key-a", expiresAt, ["us-sandbox", "us-llm"]));
+
+        handler.Methods.Should().Equal(HttpMethod.Get);
+        handler.Paths.Should().Equal("/api/v1/api-keys");
+        handler.RequestBodies.Should().BeEmpty();
+        reconciled.ApiKeyId.Should().Be("key-a");
+        reconciled.SecretReference.Should().BeEquivalentTo(current.SecretReference);
+        reconciled.ChronoLlmUserServiceId.Should().Be("us-llm");
+        await commands.Received(1).CommitPolicyReconciledAsync(
+            "key-a",
+            Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
+                descriptor.ApiKeyId == "key-a" &&
+                descriptor.SecretReference.Equals(current.SecretReference) &&
+                descriptor.ChronoLlmUserServiceId == "us-llm"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ReconcilePolicyAsync_WhenVaultReferenceVersionDrifts_RejectsBeforeCommit()
     {
         var expiresAt = Now.AddDays(30);

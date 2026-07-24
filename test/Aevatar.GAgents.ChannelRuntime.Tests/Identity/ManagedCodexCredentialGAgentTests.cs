@@ -210,6 +210,52 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
         _agent.State.PendingRevocations.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("version")]
+    [InlineData("fingerprint")]
+    [InlineData("created_at")]
+    [InlineData("expires_at")]
+    public async Task HandlePolicyReconciled_WithSameRefButDriftedStableReference_DoesNotChangeStateOrQueueCurrentKey(
+        string drift)
+    {
+        var current = Descriptor("key-current", "sec-current", 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+        var drifted = current.Clone();
+        drifted.ChronoLlmUserServiceId = "user-service-llm-reconciled";
+        switch (drift)
+        {
+            case "version":
+                drifted.SecretReference.Version++;
+                break;
+            case "fingerprint":
+                drifted.SecretReference.Fingerprint = "drifted-fingerprint";
+                break;
+            case "created_at":
+                drifted.SecretReference.CreatedAtUnixMs++;
+                break;
+            case "expires_at":
+                var driftedExpiry = ExpiresAt.AddDays(1);
+                drifted.SecretReference.ExpiresAtUnixMs = driftedExpiry.ToUnixTimeMilliseconds();
+                drifted.ExpiresAt = Timestamp.FromDateTimeOffset(driftedExpiry);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(drift));
+        }
+
+        await _agent.HandlePolicyReconciled(
+            new CommitManagedCodexCredentialPolicyReconciledCommand
+            {
+                ExpectedApiKeyId = "key-current",
+                Credential = drifted,
+            });
+
+        _agent.State.Credential.Should().Be(current);
+        _agent.State.PendingRevocations.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task HandlePolicyReconciled_WithDuplicateCommand_CommitsReadinessConfirmed()
     {
