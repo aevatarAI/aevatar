@@ -20,7 +20,7 @@ NyxID connected-service 工具以 `user_service_id` 为实例身份。Aevatar �
 - catalog service ID 或 custom service slug 组成的单一 route constraint；
 - 从 `openapi_url` 提取的 proxy spec service ID、endpoint 和 node 绑定事实；当前 NyxID `/keys` wire contract 中，proxy spec service ID 是 exact `user_service_id`，不等于 catalog route ID。
 
-同一个 `user_service_id` 若在 user/org 结果中指向不同权限、token 或路由事实，该身份整项删除。inactive、credential forbidden、缺 spec 身份的实例不会进入工具。不同 `user_service_id` 即使显示 slug 相同也保持为不同实例，不合并、不按前缀或相等关系推断。
+同一个 `user_service_id` 若在 user/org 结果中指向不同权限、token 或路由事实，该身份整项删除。inactive 或 credential forbidden 的实例不会进入工具；缺 spec 身份的 active 连接仍可进入只读 inventory，但不会进入 update、route、delete、request 或动态 operation 工具。不同 `user_service_id` 即使显示 slug 相同也保持为不同实例，不合并、不按前缀或相等关系推断。
 
 ## 2. 固定工具与 operation 工具
 
@@ -84,7 +84,9 @@ proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 
 
 ## 5. 请求期能力边界
 
-动态工具位于独立 tool set `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`），默认不并入 `workspace.default`。chat route policy 必须显式引用该 tool set 或包含它的组合 tool set。
+完整动态工具集位于独立 tool set `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`）。其中 update、route、delete、request 与 OpenAPI operation 工具默认不并入通用 chat surface，chat route policy 必须显式引用该 tool set 或包含它的组合 tool set。
+
+只读 `nyxid_service_inventory` 另由窄的 `NyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator，使已绑定的 Lark sender 可以直接查询自己的 exact connected-service 实例，而不开放任何变更或通用调用能力。它不注册到全局 `IAgentToolSource` 集合，也不并入 `workspace.default`，避免污染 actor/voice 工具面，或与显式 `nyxid.connected_services` tool set 中的同名 inventory 发生对象身份碰撞。它与完整 tool set 使用同一 `/keys` live discovery、同一 exact instance 契约和同一 request-local user token；不得回退到 Host/sandbox 中 `nyxid service list` 的 CLI 登录态。inventory 查询不以 OpenAPI spec 是否可用作为“已连接”判据，并在连接清单为空时返回空的 typed result；动态 operation 工具仍要求有效 proxy spec。
 
 `ToolSetResponsesToolProvider` 通过 `AgentToolContextScope` 提供当前请求的 typed token context，`NyxIdConnectedServiceToolSource` 在该作用域内 live 发现。未配置 NyxID base URL、没有 user token、发现失败或身份冲突时，不暴露相关工具。发现结果随 profile turn catalog 和最终 `LLMRequest.Tools` 冻结；执行路径不能再按名称回查 actor-level `ToolManager`。
 
@@ -113,5 +115,6 @@ Voice realtime attach 也遵循同一边界。带 `voice-tool:` credential ref �
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/ConnectedServiceOperationTool.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceInstanceClient.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceToolSource.cs`
+- `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceInventoryToolSource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiClient.cs`
 - `src/Aevatar.AI.ToolProviders.ToolSetRegistry/ToolSetNames.cs`
