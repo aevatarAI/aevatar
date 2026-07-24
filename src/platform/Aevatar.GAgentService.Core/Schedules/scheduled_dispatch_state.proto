@@ -79,6 +79,7 @@ message ScheduledDispatchState
   ScheduledDispatchRuntimeCallbackLeaseState team_credential_expiry_lease = 61;
   google.protobuf.Timestamp pending_team_credential_expiry_at = 62;
   int64 pending_team_credential_expiry_generation = 63;
+  TeamAutomationActivationDecisionState team_automation_activation_decision = 64;
 }
 
 message TeamMemberAutomationOwnerState
@@ -280,6 +281,28 @@ message ScheduledCredentialEffectLocatorState
   ScheduledInvocationAuthorizationOwnerState credential_owner = 5;
 }
 
+message TeamAutomationActivationDecisionState
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  TeamMemberAutomationOwnerState owner = 3;
+  aevatar.gagentservice.ServiceIdentity service_identity = 4;
+  string endpoint_id = 5;
+  google.protobuf.Any payload = 6;
+  aevatar.credentials.ScheduledCallerNyxIdAuthority caller_authority = 7;
+  ScheduledInvocationAuthorizationFactState authorization_fact = 8;
+  string cron_expression = 9;
+  string timezone = 10;
+  bool enabled = 11;
+  ScheduledDispatchScheduleKindState schedule_kind = 12;
+  map<string, string> headers = 13;
+  ScheduledDispatchScheduleModeState schedule_mode = 14;
+  google.protobuf.Timestamp one_shot_fire_at = 15;
+  ScheduledDispatchCredentialRequirementTargetKindState credential_requirement_target_kind = 16;
+  string revision_id = 17;
+  aevatar.gagentservice.ServiceInvocationCaller caller = 18;
+}
+
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
 {
   string scope = 1;
@@ -468,6 +491,7 @@ message BeginTeamAutomationCredentialOperationCommand
   ScheduledCredentialEffectLocatorState credential_effect_locator = 8;
   string mutation_digest = 9;
   string observation_request_id = 10;
+  TeamAutomationActivationDecisionState activation_decision = 11;
 }
 
 message TeamAutomationCredentialOperationBeganEvent
@@ -482,6 +506,7 @@ message TeamAutomationCredentialOperationBeganEvent
   string schedule_id = 8;
   ScheduledCredentialEffectLocatorState credential_effect_locator = 9;
   string mutation_digest = 10;
+  TeamAutomationActivationDecisionState activation_decision = 11;
 }
 
 message RecordTeamAutomationCredentialCandidateCommand

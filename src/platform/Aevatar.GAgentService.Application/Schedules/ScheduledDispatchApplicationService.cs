@@ -840,7 +840,93 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(operation.PolicyVersion, nameof(operation.PolicyVersion)),
             kind,
             NormalizeCredentialEffectLocator(operation.CredentialEffectLocator),
+            NormalizeTeamActivationDecision(operation.ActivationDecision),
             NormalizeRequired(operation.MutationDigest, nameof(operation.MutationDigest)));
+    }
+
+    private static TeamAutomationActivationDecision NormalizeTeamActivationDecision(
+        TeamAutomationActivationDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        var mode = NormalizeScheduleMode(decision.ScheduleMode);
+        var callerAuthority = NormalizeCallerAuthority(decision.CallerAuthority) ??
+            throw new ArgumentException("Team automation caller authority is required.", nameof(decision));
+        return new TeamAutomationActivationDecision(
+            NormalizeScheduleId(decision.ScheduleId),
+            NormalizeOptional(decision.DisplayName),
+            NormalizeTeamOwner(decision.Owner),
+            NormalizeServiceInvocationIdentity(decision.ServiceIdentity),
+            NormalizeRequired(decision.EndpointId, nameof(decision.EndpointId)),
+            decision.Payload?.Clone() ??
+                throw new ArgumentException("Team automation payload is required.", nameof(decision)),
+            callerAuthority,
+            NormalizeAuthorizationFact(decision.AuthorizationFact),
+            mode == ScheduledDispatchScheduleMode.RecurringCron
+                ? NormalizeRequired(decision.CronExpression, nameof(decision.CronExpression))
+                : string.Empty,
+            ScheduledDispatchCalculator.NormalizeTimezone(decision.Timezone),
+            decision.Enabled,
+            decision.ScheduleKind,
+            NormalizeHeaders(decision.Headers),
+            mode,
+            NormalizeOneShotFireAt(mode, decision.OneShotFireAt),
+            decision.CredentialRequirementTargetKind,
+            NormalizeOptional(decision.RevisionId),
+            decision.Caller == null
+                ? null
+                : new ServiceInvocationCaller
+                {
+                    ServiceKey = NormalizeOptional(decision.Caller.ServiceKey),
+                    TenantId = NormalizeOptional(decision.Caller.TenantId),
+                    AppId = NormalizeOptional(decision.Caller.AppId),
+                });
+    }
+
+    private static ScheduledInvocationAuthorizationFact NormalizeAuthorizationFact(
+        ScheduledInvocationAuthorizationFact fact)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        ArgumentNullException.ThrowIfNull(fact.Disclosure);
+        ArgumentNullException.ThrowIfNull(fact.Authority);
+        var grants = (fact.ServiceGrants ?? [])
+            .Select(static grant => new ScheduledInvocationAuthorizationServiceGrant(
+                NormalizeRequired(grant.ServiceId, nameof(grant.ServiceId)),
+                (grant.NodeIds ?? [])
+                    .Select(static nodeId => NormalizeRequired(nodeId, nameof(nodeId)))
+                    .Order(StringComparer.Ordinal)
+                    .ToArray(),
+                grant.NodeGrantsNotRequired))
+            .OrderBy(static grant => grant.ServiceId, StringComparer.Ordinal)
+            .ThenBy(static grant => grant.NodeGrantsNotRequired)
+            .ThenBy(static grant => string.Join('\n', grant.NodeIds), StringComparer.Ordinal)
+            .ToArray();
+        return new ScheduledInvocationAuthorizationFact(
+            NormalizeRequired(fact.PermissionDigest, nameof(fact.PermissionDigest)),
+            NormalizeRequired(fact.PolicyVersion, nameof(fact.PolicyVersion)),
+            NormalizeAuthorizationOwner(fact.Owner),
+            grants,
+            NormalizeOptional(fact.Scopes),
+            fact.ExpiresAt.ToUniversalTime(),
+            fact.ServiceGrantsNotRequired,
+            new ScheduledInvocationAuthorizationDisclosure(
+                fact.Disclosure.DedicatedToSchedule,
+                fact.Disclosure.SecretManagedByAevatar,
+                fact.Disclosure.BrowserReceivesRawKey,
+                fact.Disclosure.DeleteRevokesCredential,
+                fact.Disclosure.PauseResumeRevokesCredential),
+            new ScheduledInvocationAuthorizationAuthority(
+                fact.Authority.MemberStateVersion,
+                fact.Authority.WorkflowStateVersion,
+                fact.Authority.ConnectorStateVersion,
+                fact.Authority.OwnerLlmStateVersion,
+                fact.Authority.CatalogStateVersion,
+                fact.Authority.CatalogObservedAt.ToUniversalTime(),
+                fact.Authority.CatalogFreshUntil.ToUniversalTime(),
+                NormalizeOptional(fact.Authority.CatalogContentDigest),
+                NormalizeOptional(fact.Authority.CatalogContractVersion),
+                NormalizeOptional(fact.Authority.CatalogPolicyVersion),
+                fact.Authority.CatalogEvaluatedAt.ToUniversalTime()),
+            fact.OwnerLLMSelection?.Clone());
     }
 
     private static ScheduledCredentialEffectLocator NormalizeCredentialEffectLocator(

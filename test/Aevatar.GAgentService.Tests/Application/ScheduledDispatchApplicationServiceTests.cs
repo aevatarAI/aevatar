@@ -1295,6 +1295,77 @@ public sealed class ScheduledDispatchApplicationServiceTests
         stateFact.Authority.CatalogEvaluatedAt.ToDateTimeOffset().Should().Be(now.AddMinutes(-2));
         stateFact.OwnerLlmSelection.Should().BeEquivalentTo(ownerLLMSelection);
         stateFact.OwnerLlmSelection.Should().NotBeSameAs(ownerLLMSelection);
+
+        dispatchPort.Envelopes.Clear();
+        var callerAuthority = new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "nyxid",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "owner-alpha",
+            Scope = "proxy",
+            BindingId = "binding-alpha",
+        };
+        var decision = new TeamAutomationActivationDecision(
+            configuration.ScheduleId,
+            "Authorization fact schedule",
+            new TeamMemberAutomationOwner("scope-alpha", "member-alpha"),
+            configuration.Target.ServiceInvocation!.Identity.Clone(),
+            configuration.Target.ServiceInvocation.EndpointId,
+            configuration.Target.ServiceInvocation.Payload.Clone(),
+            callerAuthority,
+            authorizationFact,
+            configuration.CronExpression,
+            configuration.Timezone,
+            configuration.Enabled,
+            configuration.ScheduleKind,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["trace"] = "scheduled",
+            },
+            configuration.ScheduleMode,
+            configuration.OneShotFireAt,
+            configuration.CredentialRequirementTargetKind,
+            "revision-alpha",
+            new ServiceInvocationCaller
+            {
+                ServiceKey = "tenant-alpha:app-alpha:default:caller-alpha",
+                TenantId = "tenant-alpha",
+                AppId = "app-alpha",
+            });
+        await port.DispatchBeginTeamAutomationCredentialOperationAsync(
+            actorId,
+            new TeamAutomationCredentialOperation(
+                configuration.ScheduleId,
+                decision.Owner,
+                "operation-alpha",
+                "idempotency-alpha",
+                authorizationFact.PermissionDigest,
+                authorizationFact.PolicyVersion,
+                TeamAutomationOperationKind.Create,
+                new ScheduledCredentialEffectLocator(
+                    "credential-alpha",
+                    "secret-alpha",
+                    CredentialSecretPurposes.ScheduledInvocationAgentKey,
+                    "schedule:schedule-authorization-fact",
+                    authorizationFact.Owner),
+                decision,
+                "mutation-alpha"),
+            "observation-alpha");
+
+        var begin = dispatchPort.Envelopes.Should().ContainSingle().Which.Payload
+            .Unpack<BeginTeamAutomationCredentialOperationCommand>();
+        begin.ActivationDecision.ScheduleId.Should().Be(decision.ScheduleId);
+        begin.ActivationDecision.Owner.ScopeId.Should().Be(decision.Owner.ScopeId);
+        begin.ActivationDecision.ServiceIdentity.Should().BeEquivalentTo(decision.ServiceIdentity);
+        begin.ActivationDecision.Payload.Should().Be(decision.Payload);
+        begin.ActivationDecision.CallerAuthority.Should().BeEquivalentTo(callerAuthority);
+        begin.ActivationDecision.AuthorizationFact.Should().BeEquivalentTo(stateFact);
+        begin.ActivationDecision.AuthorizationFact.OwnerLlmSelection.Should().NotBeSameAs(ownerLLMSelection);
+        begin.ActivationDecision.Headers.Should().Contain("trace", "scheduled");
+        begin.ActivationDecision.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKindState.WorkflowService);
+        begin.ActivationDecision.RevisionId.Should().Be("revision-alpha");
+        begin.ActivationDecision.Caller.ServiceKey.Should().Be(decision.Caller!.ServiceKey);
     }
 
     [Fact]

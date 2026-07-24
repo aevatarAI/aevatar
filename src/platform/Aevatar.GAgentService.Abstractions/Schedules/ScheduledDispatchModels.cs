@@ -28,6 +28,26 @@ public sealed record TeamMemberAutomationOwner(
     string MemberId,
     string TeamId = "");
 
+public sealed record TeamAutomationActivationDecision(
+    string ScheduleId,
+    string DisplayName,
+    TeamMemberAutomationOwner Owner,
+    ServiceIdentity ServiceIdentity,
+    string EndpointId,
+    Google.Protobuf.WellKnownTypes.Any Payload,
+    ScheduledCallerNyxIdAuthority CallerAuthority,
+    ScheduledInvocationAuthorizationFact AuthorizationFact,
+    string CronExpression,
+    string Timezone,
+    bool Enabled,
+    ScheduledDispatchScheduleKind ScheduleKind,
+    IReadOnlyDictionary<string, string> Headers,
+    ScheduledDispatchScheduleMode ScheduleMode,
+    DateTimeOffset? OneShotFireAt,
+    ScheduledDispatchCredentialRequirementTargetKind CredentialRequirementTargetKind,
+    string RevisionId,
+    ServiceInvocationCaller? Caller);
+
 public enum TeamAutomationLifecycleStatus
 {
     Unspecified = 0,
@@ -56,6 +76,7 @@ public sealed record TeamAutomationCredentialOperation(
     string PolicyVersion,
     TeamAutomationOperationKind Kind,
     ScheduledCredentialEffectLocator CredentialEffectLocator,
+    TeamAutomationActivationDecision ActivationDecision,
     string MutationDigest);
 
 public sealed record ScheduledCredentialEffectLocator(

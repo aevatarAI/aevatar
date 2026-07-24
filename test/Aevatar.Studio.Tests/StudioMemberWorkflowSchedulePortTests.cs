@@ -82,6 +82,34 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             "scope-plan-contract/v1",
             "scope-plan-policy/v1",
             DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
+        configuration.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+        var decision = scheduleService.BeginOperation!.ActivationDecision;
+        decision.ScheduleId.Should().Be(configuration.ScheduleId);
+        decision.DisplayName.Should().Be(configuration.DisplayName);
+        decision.Owner.Should().Be(configuration.TeamAutomationOwner);
+        decision.ServiceIdentity.Should().BeEquivalentTo(invocation.Identity);
+        decision.ServiceIdentity.Should().NotBeSameAs(invocation.Identity);
+        decision.EndpointId.Should().Be(invocation.EndpointId);
+        decision.Payload.Should().Be(invocation.Payload);
+        decision.Payload.Should().NotBeSameAs(invocation.Payload);
+        decision.CallerAuthority.Should().BeEquivalentTo(invocation.Auth!.CallerAuthority);
+        decision.CallerAuthority.Should().NotBeSameAs(invocation.Auth.CallerAuthority);
+        decision.AuthorizationFact.Should().BeEquivalentTo(fact);
+        decision.AuthorizationFact.Should().NotBeSameAs(fact);
+        decision.AuthorizationFact.OwnerLLMSelection.Should().NotBeSameAs(fact.OwnerLLMSelection);
+        decision.CronExpression.Should().Be(configuration.CronExpression);
+        decision.Timezone.Should().Be(configuration.Timezone);
+        decision.Enabled.Should().Be(configuration.Enabled);
+        decision.ScheduleKind.Should().Be(configuration.ScheduleKind);
+        decision.Headers.Should().Equal(configuration.Headers);
+        decision.Headers.Should().NotBeSameAs(configuration.Headers);
+        decision.ScheduleMode.Should().Be(configuration.ScheduleMode);
+        decision.OneShotFireAt.Should().Be(configuration.OneShotFireAt);
+        decision.CredentialRequirementTargetKind.Should()
+            .Be(configuration.CredentialRequirementTargetKind);
+        scheduleService.BeginOperation.PermissionDigest.Should().Be(decision.AuthorizationFact.PermissionDigest);
+        scheduleService.BeginOperation.PolicyVersion.Should().Be(decision.AuthorizationFact.PolicyVersion);
     }
 
     [Fact]

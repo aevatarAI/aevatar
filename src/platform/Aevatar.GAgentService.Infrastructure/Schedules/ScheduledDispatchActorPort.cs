@@ -151,9 +151,42 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 CredentialOwner = CreateAuthorizationOwnerState(
                     operation.CredentialEffectLocator.CredentialOwner),
             },
+            ActivationDecision = CreateActivationDecisionState(operation.ActivationDecision),
             MutationDigest = operation.MutationDigest,
             ObservationRequestId = observationRequestId,
         }, ct);
+    }
+
+    private static TeamAutomationActivationDecisionState CreateActivationDecisionState(
+        TeamAutomationActivationDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        var state = new TeamAutomationActivationDecisionState
+        {
+            ScheduleId = decision.ScheduleId,
+            DisplayName = decision.DisplayName,
+            Owner = CreateTeamOwnerState(decision.Owner),
+            ServiceIdentity = decision.ServiceIdentity.Clone(),
+            EndpointId = decision.EndpointId,
+            Payload = decision.Payload.Clone(),
+            CallerAuthority = decision.CallerAuthority.Clone(),
+            AuthorizationFact = CreateAuthorizationFactState(decision.AuthorizationFact),
+            CronExpression = decision.CronExpression,
+            Timezone = decision.Timezone,
+            Enabled = decision.Enabled,
+            ScheduleKind = ToStateScheduleKind(decision.ScheduleKind),
+            ScheduleMode = ToStateScheduleMode(decision.ScheduleMode),
+            OneShotFireAt = decision.OneShotFireAt.HasValue
+                ? Timestamp.FromDateTimeOffset(decision.OneShotFireAt.Value.ToUniversalTime())
+                : null,
+            CredentialRequirementTargetKind =
+                ToStateCredentialRequirementTargetKind(decision.CredentialRequirementTargetKind),
+            RevisionId = decision.RevisionId,
+            Caller = decision.Caller?.Clone(),
+        };
+        foreach (var (key, value) in decision.Headers)
+            state.Headers[key] = value;
+        return state;
     }
 
     public Task<DispatchAdmission> DispatchRecordTeamAutomationCredentialCandidateAsync(
