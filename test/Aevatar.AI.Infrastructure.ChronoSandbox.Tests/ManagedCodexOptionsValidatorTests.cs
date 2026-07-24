@@ -13,34 +13,77 @@ public sealed class ManagedCodexOptionsValidatorTests
     }
 
     [Fact]
-    public void Validate_WhenEnabledForExplicitInternalUsers_Succeeds()
-    {
-        _validator.Validate(null, ValidOptions()).Succeeded.Should().BeTrue();
-    }
-
-    [Fact]
-    public void Validate_WhenEnabledWithoutExplicitEligibility_FailsClosed()
+    public void Validate_WhenAllowlistContainsNormalizedUsers_Succeeds()
     {
         var options = ValidOptions();
-        options.ProvisioningAllowedNyxIdUserIds = [];
+        options.Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = ["user-a", "user-b"],
+        };
 
-        var result = _validator.Validate(null, options);
-
-        result.Failed.Should().BeTrue();
-        result.Failures.Should().Contain(message =>
-            message.Contains("ProvisioningAllowedNyxIdUserIds", StringComparison.Ordinal));
+        _validator.Validate(null, options).Succeeded.Should().BeTrue();
+        options.IsEligible("user-a").Should().BeTrue();
+        options.IsEligible("user-c").Should().BeFalse();
     }
 
     [Fact]
-    public void Options_DoNotExposeAnAllowAllAdmissionBypassForTheTemporaryCredentialModel()
+    public void Validate_WhenAllModeHasNoAllowlist_SucceedsForEveryNormalizedUser()
     {
-        typeof(ManagedCodexOptions).GetProperty("AllowAllAuthenticatedUsers").Should().BeNull();
+        var options = ValidOptions();
+        options.Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.All,
+            AllowedNyxIdUserIds = [],
+        };
+
+        _validator.Validate(null, options).Succeeded.Should().BeTrue();
+        options.IsEligible("user-a").Should().BeTrue();
+        options.IsEligible("user-b").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_WhenAllowlistIsEmpty_Fails()
+    {
+        var options = ValidOptions();
+        options.Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = [],
+        };
+
+        _validator.Validate(null, options).Failed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_WhenAllModeAlsoHasUsers_Fails()
+    {
+        var options = ValidOptions();
+        options.Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.All,
+            AllowedNyxIdUserIds = ["user-a"],
+        };
+
+        _validator.Validate(null, options).Failed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Options_DoNotRetainTheProvisioningNamedAllowlist()
+    {
+        typeof(ManagedCodexOptions)
+            .GetProperty("ProvisioningAllowedNyxIdUserIds")
+            .Should().BeNull();
     }
 
     internal static ManagedCodexOptions ValidOptions() => new()
     {
         Enabled = true,
-        ProvisioningAllowedNyxIdUserIds = ["user-a"],
+        Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = ["user-a"],
+        },
         CredentialLifetimeDays = 30,
         MaxResponseBytes = 1_048_576,
     };

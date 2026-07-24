@@ -221,7 +221,11 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     private static ManagedCodexOptions ManagedOptions(bool enabled) => new()
     {
         Enabled = enabled,
-        ProvisioningAllowedNyxIdUserIds = ["user-a"],
+        Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = ["user-a"],
+        },
     };
 
     private static ManagedCodexCredentialDescriptor Descriptor() => new()

@@ -458,7 +458,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             .ConfigureAwait(false);
         if (!string.Equals(currentUserId, authenticatedUserId.Trim(), StringComparison.Ordinal))
             throw Failure("nyxid_identity_mismatch", "The authenticated identity does not own the supplied NyxID bearer.");
-        if (requireEligibility && !_options.IsProvisioningAllowed(currentUserId))
+        if (requireEligibility && !_options.IsEligible(currentUserId))
             throw Failure("managed_feature_not_enabled", "Managed Codex is not enabled for this user.");
 
         return new ExternalSubjectRef

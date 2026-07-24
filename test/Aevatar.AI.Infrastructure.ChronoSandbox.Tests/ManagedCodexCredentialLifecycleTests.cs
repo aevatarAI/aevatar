@@ -124,7 +124,11 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var options = ManagedCodexOptionsValidatorTests.ValidOptions();
-        options.ProvisioningAllowedNyxIdUserIds = ["user-a", "user-b"];
+        options.Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = ["user-a", "user-b"],
+        };
         var lifecycleA = CreateLifecycle(handlerA, vault, commands, options: options);
         var lifecycleB = CreateLifecycle(handlerB, vault, commands, options: options);
 
