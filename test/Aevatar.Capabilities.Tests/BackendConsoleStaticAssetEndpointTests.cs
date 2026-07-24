@@ -95,6 +95,34 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ObservatoryRouteState_ShouldDefaultToMineAndBuildSupportedFilters()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:''");
+        html.Should().Contain("if(OBS_STATE.scope==='all') p.set('scope','__all__')");
+        html.Should().Contain("['status','origin','definition','schedule','from','to'].forEach");
+        html.Should().Contain("p.set('take','100')");
+        html.Should().Contain("if((key==='from'||key==='to')&&value&&!obsValidTimestamp(value)) return");
+        html.Should().NotContain("scope:'__all__'");
+        html.Should().NotContain("statusFilter:[]");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryRouteState_ShouldUseCanonicalHashKeys()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain(
+            "var OBS_QUERY_KEYS=['scope','status','origin','definition','schedule','from','to','run','tab']");
+        html.Should().Contain("OBS_STATUS_VALUES.indexOf(q.status)>=0");
+        html.Should().Contain("OBS_TAB_VALUES.indexOf(q.tab)>=0");
+        html.Should().Contain("selectedId:q.run||null");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();

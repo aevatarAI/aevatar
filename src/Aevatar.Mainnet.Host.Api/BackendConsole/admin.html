@@ -1472,6 +1472,9 @@ var OBS_RUNS=[];                 /* 已映射的 summary 行：{id,name,status,o
 var OBS_RUNS_LOADED=false, OBS_RUNS_ERR=null, OBS_RUNS_LOADING=false;
 var OBS_RUNS_REQUEST=0, OBS_POLL_TIMER=null;
 var OBS_DETAIL={};               /* runId -> {loading,err,detail}；detail 为 obsDetail 渲染所需结构 */
+var OBS_QUERY_KEYS=['scope','status','origin','definition','schedule','from','to','run','tab'];
+var OBS_STATUS_VALUES=['running','completed','failed','stopped'];
+var OBS_TAB_VALUES=['timeline','steps','diagnostics','logs','artifacts','graph'];
 /* 真实 status 枚举 -> 渲染内部枚举 running|success|failed|stuck */
 function obsMapStatus(s){
   return ({ running:'running', completed:'success', failed:'failed', timed_out:'failed',
@@ -1604,13 +1607,24 @@ function obsNodeIo(n,graph){
   return 'in '+inc+' / out '+out;
 }
 function obsBytes(s){ var n=(s==null?'':String(s)).length; if(n<1024) return n+' B'; return (Math.round(n/102.4)/10)+' KB'; }
-/* 加载 summary 列表（admin 跨 scope 用 OBS_SCOPE：'__all__' 或具体 id） */
+function obsValidTimestamp(value){ return !value||!isNaN(new Date(value).getTime()); }
+function obsListRequestUrl(){
+  var p=new URLSearchParams();
+  if(OBS_STATE.scope==='all') p.set('scope','__all__');
+  else if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope);
+  ['status','origin','definition','schedule','from','to'].forEach(function(key){
+    var value=OBS_STATE[key];
+    if((key==='from'||key==='to')&&value&&!obsValidTimestamp(value)) return;
+    if(value) p.set(key,value);
+  });
+  p.set('take','100');
+  return '/api/workflow/observatory/runs?'+p.toString();
+}
+/* 加载 summary 列表；mine 省略 scope，all 映射到后端 __all__ sentinel。 */
 function loadObsRuns(rerender){
   var requestId=++OBS_RUNS_REQUEST;
   OBS_RUNS_LOADING=true; if(rerender) rerender();
-  var scope=(ACCOUNT&&ACCOUNT.admin)?((OBS_STATE&&OBS_STATE.scope)||'__all__'):'__self__';
-  var q=scope&&scope!=='__self__'?('?scope='+encodeURIComponent(scope)):'';
-  return adminJson('/api/workflow/observatory/runs'+q).then(function(j){
+  return adminJson(obsListRequestUrl()).then(function(j){
     if(requestId!==OBS_RUNS_REQUEST) return;
     if(j&&j.forbidden){ OBS_RUNS=[]; OBS_RUNS_ERR='需要平台管理员权限才能跨 scope 观测'; }
     else { OBS_RUNS=mapObsRuns(Array.isArray(j)?j:(j&&j.items)||[]); OBS_RUNS_ERR=null;
@@ -1619,7 +1633,7 @@ function loadObsRuns(rerender){
       }
       if(OBS_RUNS.length && !OBS_STATE.selectedId){
         OBS_STATE.selectedId=OBS_RUNS[0].id; } }
-  }).catch(function(e){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; } })
+  }).catch(function(e){ if(requestId===OBS_RUNS_REQUEST){ if(!OBS_RUNS_LOADED) OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; } })
   .then(function(){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS_LOADED=true; OBS_RUNS_LOADING=false; if(rerender) rerender(); } });
 }
 function obsOpenDirectRun(runId,rerenderList,rerenderDetail){
@@ -2962,7 +2976,31 @@ function viewStatus(){
 }
 
 /* ================= ③ 运行观测台 Run Observatory ================= */
-var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,statusFilter:[],scope:'__all__'};
+var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,localSearch:'',railCollapsed:false,immersive:false,
+  scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:''};
+function obsSyncStateFromUrl(){
+  var q=parseHash().q||{};
+  var scope=q.scope||'mine';
+  if(scope==='__all__') scope='all';
+  if((scope==='all'||scope!=='mine')&&!(ACCOUNT&&ACCOUNT.admin)) scope='mine';
+  Object.assign(OBS_STATE,{scope:scope,status:OBS_STATUS_VALUES.indexOf(q.status)>=0?q.status:'',
+    origin:q.origin||'',definition:q.definition||'',schedule:q.schedule||'',from:q.from||'',to:q.to||'',
+    selectedId:q.run||null,tab:OBS_TAB_VALUES.indexOf(q.tab)>=0?q.tab:'timeline'});
+}
+function obsCanonicalQuery(overrides){
+  var values={scope:OBS_STATE.scope,status:OBS_STATE.status,origin:OBS_STATE.origin,definition:OBS_STATE.definition,
+    schedule:OBS_STATE.schedule,from:OBS_STATE.from,to:OBS_STATE.to,run:OBS_STATE.selectedId,tab:OBS_STATE.tab};
+  Object.keys(overrides||{}).forEach(function(key){ values[key]=overrides[key]; });
+  var q={};
+  OBS_QUERY_KEYS.forEach(function(key){
+    var value=values[key];
+    if(key==='scope'&&(!value||value==='mine')) return;
+    if(key==='tab'&&(!value||value==='timeline')) return;
+    if(value!=null&&value!=='') q[key]=value;
+  });
+  return q;
+}
+function obsNavigate(overrides){ navigate(['observatory'],obsCanonicalQuery(overrides||{})); }
 function obsSyntheticRun(id){
   var d=OBS_DETAIL[id]&&OBS_DETAIL[id].detail;
   return d?{id:d.id||id,name:d.name||id,status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion}
@@ -2983,8 +3021,9 @@ function obsUpsertRunFromDetail(runId,d){
 }
 function originPill(o){ var lbl={schedule:'排班',manual:'手动',api:'API',channel:'通道'}[o]||o; return '<span class="origin-pill">'+esc(lbl)+'</span>'; }
 function obsRunsFiltered(){
-  if(!OBS_STATE.statusFilter.length) return OBS_RUNS;
-  return OBS_RUNS.filter(function(r){return OBS_STATE.statusFilter.indexOf(r.status)>=0;});
+  var q=(OBS_STATE.localSearch||'').trim().toLowerCase();
+  if(!q) return OBS_RUNS;
+  return OBS_RUNS.filter(function(r){ return String(r.name||'').toLowerCase().indexOf(q)>=0||String(r.id||'').toLowerCase().indexOf(q)>=0; });
 }
 function obsList(){
   if(OBS_RUNS_LOADING&&!OBS_RUNS_LOADED) return '<div class="obs-loading">正在加载运行记录…</div>';
@@ -3090,18 +3129,20 @@ function usageCell(k,v){
   return '<div class="usage-cell"><span class="uc-l">'+lbl+'</span><span class="uc-v num">'+esc(v)+'</span></div>';
 }
 function obsFilterBar(){
-  var statuses=['running','success','failed','stuck'];
-  var active=OBS_STATE.statusFilter.length;
-  var chips=statuses.map(function(s){
-    return '<button class="chip'+(OBS_STATE.statusFilter.indexOf(s)>=0?' on':'')+'" data-obsfilter="'+s+'">'+RUN_CN[s]+'</button>';
+  var active=['status','origin','definition','schedule','from','to'].filter(function(key){return !!OBS_STATE[key];}).length;
+  var statusOptions=[['','全部状态'],['running','运行中'],['completed','已完成'],['failed','失败'],['stopped','已停止']].map(function(x){
+    return '<option value="'+x[0]+'"'+(OBS_STATE.status===x[0]?' selected':'')+'>'+x[1]+'</option>';
   }).join('');
+  var fromInvalid=OBS_STATE.from&&!obsValidTimestamp(OBS_STATE.from),toInvalid=OBS_STATE.to&&!obsValidTimestamp(OBS_STATE.to);
   return '<div class="obs-filterbar'+(OBS_STATE.filterOpen?' open':'')+'">'+
     '<button class="filter-toggle" data-act="obsFilterToggle"><span>过滤</span>'+(active?'<span class="filter-badge num">'+active+'</span>':'')+'<span class="ft-caret">'+(OBS_STATE.filterOpen?'▾':'▸')+'</span></button>'+
     '<div class="filter-body">'+
-      '<div class="filter-row"><span class="fr-l">状态</span><div class="chip-row" data-act="obsStatusFilter">'+chips+'</div></div>'+
-      '<div class="filter-row"><span class="fr-l">origin</span><input class="ab-input" placeholder="schedule,manual,api,channel"></div>'+
-      '<div class="filter-row"><span class="fr-l">definition</span><input class="ab-input" placeholder="CSV"></div>'+
-      '<div class="filter-row"><span class="fr-l">时间</span><input class="ab-input" type="text" placeholder="from"> <input class="ab-input" type="text" placeholder="to"></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-status">状态</label><select class="ab-input" id="obs-status" data-obs-field="status">'+statusOptions+'</select></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-origin">origin</label><input class="ab-input" id="obs-origin" data-obs-field="origin" placeholder="schedule,manual,api,channel" value="'+esc(OBS_STATE.origin)+'"></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-definition">definition</label><input class="ab-input" id="obs-definition" data-obs-field="definition" placeholder="definition-a,definition-b" value="'+esc(OBS_STATE.definition)+'"></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-schedule">schedule</label><input class="ab-input" id="obs-schedule" data-obs-field="schedule" placeholder="schedule-a,schedule-b" value="'+esc(OBS_STATE.schedule)+'"></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-from">时间</label><input class="ab-input" id="obs-from" data-obs-field="from" type="text" aria-invalid="'+!!fromInvalid+'" placeholder="from · ISO-8601" value="'+esc(OBS_STATE.from)+'"> <input class="ab-input" data-obs-field="to" type="text" aria-invalid="'+!!toInvalid+'" placeholder="to · ISO-8601" value="'+esc(OBS_STATE.to)+'"></div>'+
+      ((fromInvalid||toInvalid)?'<div class="filter-row"><span class="fr-l"></span><span class="ab-hint" style="color:var(--failed)">时间格式无效，未发送到 API</span></div>':'')+
       '<div class="filter-row"><button class="btn" data-act="obsFilterReset">重置</button></div>'+
     '</div></div>';
 }
@@ -3123,7 +3164,7 @@ function bindObservatory(root){
     d.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; } }
   function reBar(){ var b=root.querySelector('.obs-filterbar'); if(b) b.outerHTML=obsFilterBar(); }
   function reAdminBar(){ var b=root.querySelector('.obs-adminbar'); if(b){ var v=viewObservatory(); /* 仅用其 adminBar 片段刷新提示 */ } }
-  function selectRun(id){ OBS_STATE.selectedId=id; reList(); reDetail(true); loadObsDetail(id,function(){ if(OBS_STATE.selectedId===id) reDetail(true); }); }
+  function selectRun(id){ obsNavigate({run:id}); }
   /* 首屏拉取真实运行列表，到达后选中首行并预取其详情 */
   loadObsRuns(function(){ reList(); reDetail(); var sel=obsSelected(); if(sel) loadObsDetail(sel.id,reDetail); });
   if(OBS_POLL_TIMER) clearInterval(OBS_POLL_TIMER);
@@ -3140,13 +3181,11 @@ function bindObservatory(root){
   },3000);
   root.addEventListener('click',function(ev){
     var row=ev.target.closest('[data-obsrun]'); if(row){ selectRun(row.getAttribute('data-obsrun')); return; }
-    var tab=ev.target.closest('[data-obstab]'); if(tab){ OBS_STATE.tab=tab.getAttribute('data-obstab'); reDetail(); return; }
-    var fl=ev.target.closest('[data-obsfilter]'); if(fl){ var s=fl.getAttribute('data-obsfilter'),i=OBS_STATE.statusFilter.indexOf(s);
-      if(i>=0)OBS_STATE.statusFilter.splice(i,1); else OBS_STATE.statusFilter.push(s); reBar(); reList(); return; }
+    var tab=ev.target.closest('[data-obstab]'); if(tab){ obsNavigate({tab:tab.getAttribute('data-obstab')}); return; }
     var act=ev.target.closest('[data-act]'); if(!act) return;
     var a=act.getAttribute('data-act');
     if(a==='obsFilterToggle'){ OBS_STATE.filterOpen=!OBS_STATE.filterOpen; reBar(); }
-    else if(a==='obsFilterReset'){ OBS_STATE.statusFilter=[]; reBar(); reList(); }
+    else if(a==='obsFilterReset'){ obsNavigate({status:null,origin:null,definition:null,schedule:null,from:null,to:null}); }
     else if(a==='obsReload'){ loadObsRuns(function(){ reList(); reDetail(); }); }
     else if(a==='obsReloadDetail'){ var rid=act.getAttribute('data-run'); if(rid){ delete OBS_DETAIL[rid]; loadObsDetail(rid,reDetail); } }
     else if(a==='obsCopy'){ var cv=act.getAttribute('data-copy');
@@ -3159,25 +3198,18 @@ function bindObservatory(root){
           var a2=document.createElement('a'); a2.href=u; a2.download=art.name||'output.txt'; document.body.appendChild(a2); a2.click(); document.body.removeChild(a2); setTimeout(function(){ URL.revokeObjectURL(u); },0); toast('已下载 '+art.name); }
         catch(e){ toast('下载失败'); } }
       else { toast('本次 Run 无产出可下载'); } }
-    else if(a==='obsScopeAll'){ OBS_STATE.scope='__all__'; OBS_DETAIL={}; OBS_STATE.selectedId=null; reBar();
-      var nb=root.querySelector('.obs-adminbar'); if(nb){ nb.outerHTML=viewObsAdminBar(); }
-      loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); }); }
+    else if(a==='obsScopeAll'){ obsNavigate({scope:'all',run:null}); }
     else if(a==='obsResolve'){
       var v=(root.querySelector('#obs-scope-in')||{}).value||'', hint=root.querySelector('#obs-resolve-hint');
       v=v.trim();
       if(!v){ hint.textContent='请输入 email 或 scope id'; hint.style.color='var(--waiting)'; return; }
-      if(v.indexOf('@')<0){ /* 直接当作 scope id 切换 */ OBS_STATE.scope=v; OBS_DETAIL={}; OBS_STATE.selectedId=null;
-        hint.innerHTML='已切换观测 scope：<b class="tnum">'+esc(v)+'</b>'; hint.style.color='var(--success)';
-        loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); }); return; }
+      if(v.indexOf('@')<0){ obsNavigate({scope:v,run:null}); return; }
       hint.textContent='正在解析…'; hint.style.color='var(--idle)';
       loadObsResolveScope(v).then(function(j){
         if(j&&j.forbidden){ hint.innerHTML='⚠ 需要平台管理员权限（403），不展示数据'; hint.style.color='var(--failed)'; return; }
         var cands=(j&&j.candidates)||[];
         if(!cands.length){ hint.innerHTML='未找到该 email 对应的 scope'; hint.style.color='var(--waiting)'; return; }
-        var c=cands[0]; OBS_STATE.scope=c.scopeId; OBS_DETAIL={}; OBS_STATE.selectedId=null;
-        hint.innerHTML='✓ 已解析到 <b class="tnum">'+esc(c.scopeId)+'</b>'+(c.role?'（'+esc(c.role)+'）':'')+'，已切换观测范围';
-        hint.style.color='var(--success)';
-        loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); });
+        var c=cands[0]; obsNavigate({scope:c.scopeId,run:null});
       }).catch(function(e){ hint.innerHTML='解析失败：'+esc((e&&(e.body||e.message))||'未知错误'); hint.style.color='var(--failed)'; });
     } else if(a==='obsOpenRun'){
       var runId=(root.querySelector('#obs-run-in')||{}).value||'', runHint=root.querySelector('#obs-resolve-hint');
@@ -3186,6 +3218,11 @@ function bindObservatory(root){
       runHint.innerHTML='正在打开 run：<b class="tnum">'+esc(obsShortRunId(runId))+'</b>'; runHint.style.color='var(--idle)';
       obsOpenDirectRun(runId,reList,reDetail);
     }
+  });
+  root.addEventListener('change',function(ev){
+    var field=ev.target&&ev.target.getAttribute&&ev.target.getAttribute('data-obs-field');
+    if(!field) return;
+    var patch={}; patch[field]=(ev.target.value||'').trim()||null; obsNavigate(patch);
   });
 }
 /* 复用 viewObservatory 的 adminBar 片段（用于 scope 切换后局部刷新） */
@@ -4463,6 +4500,7 @@ function render(){
     else if(rest[0]==='c') v=viewL1(rest[1]);
     else v=viewL0();
   } else {
+    if(module==='observatory') obsSyncStateFromUrl();
     v=opsView(module);
     if(!v){ module='fleet'; rest=[]; v=viewL0(); }
   }
