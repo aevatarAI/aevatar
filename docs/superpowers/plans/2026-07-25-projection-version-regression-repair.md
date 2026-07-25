@@ -4,7 +4,7 @@
 
 **Goal:** Add a platform-admin, code-only repair path that conditionally removes the exact regressed Workspace or NyxID catalog Elasticsearch replica and rebuilds it from an authoritative source.
 
-**Architecture:** Elasticsearch exposes an opt-in repair lease only for explicitly registered read-model types. Studio and GAgentService Application services own repair ordering through narrow Infrastructure ports. The Mainnet Host only authorizes, validates, and maps typed results.
+**Architecture:** A separate internal Elasticsearch repair adapter exposes an opt-in repair lease only for explicitly registered read-model types. Studio and GAgentService Application services own repair ordering through narrow Infrastructure ports. The Mainnet Host only authorizes, validates, and maps typed results.
 
 **Tech Stack:** .NET 10, C#, Protobuf, ASP.NET Core minimal APIs, Elasticsearch HTTP optimistic concurrency, xUnit, FluentAssertions, NSubstitute.
 
@@ -19,6 +19,35 @@
 - Workspace repair returns dispatch acceptance only; it must not claim read-model visibility.
 - Catalog repair can use the caller bearer only for the same verified caller subject.
 - No bearer, Agent Key, API key, refresh token, Vault reference, or catalog contents may be logged or returned.
+
+## Review Hardening Semantics
+
+- The ordinary Elasticsearch projection store does not implement the repair
+  interface. A separate internal adapter is registered only by the explicit
+  repair opt-in, and the in-memory provider exposes no repair capability.
+- Workspace and Catalog stores read the authoritative EventStore version again
+  immediately before deletion, after the document fingerprint has matched.
+- A transport-ambiguous Elasticsearch delete is reconciled by one bounded exact
+  reinspection of the leased index, document ID, sequence number, and primary
+  term. `AlreadyAbsent` is returned only when that exact revision is proven
+  absent.
+- Workspace repair carries the inspected source version as a minimum. The actor
+  republishes its actual latest committed state at a version greater than or
+  equal to that minimum.
+- Catalog repair uses separate repair command/refresh adapters. The actor checks
+  the minimum source version and uses its own lifecycle state; the repair path
+  never queries the deleted read model for a lifecycle fence.
+- After `Deleted` or `AlreadyAbsent`, Workspace dispatch and Catalog refresh use
+  a cancellation token independent of the HTTP request, so client disconnect
+  cannot cancel authoritative recovery.
+- Unexpected downstream inspection/apply exceptions map to a bodyless,
+  sanitized HTTP `503`. Cancellation propagates only when the supplied request
+  token is actually canceled; authorization remains fail-closed as `403`.
+- The existing already-absent continuation remains an operator/audit rule. A
+  signed inspection token or durable repair-request-ID record is explicitly
+  deferred.
+- This review hardening adds no secret, configuration setting, infrastructure
+  operation, or operator step.
 
 ---
 
@@ -156,10 +185,14 @@ dotnet test test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core
 
 Expected: compilation fails because the repair interface and registration do not exist.
 
-- [ ] **Step 3: Implement the opaque lease and OCC deletion**
+- [ ] **Step 3: Implement the separate opaque lease adapter and OCC deletion**
 
-Make `ElasticsearchProjectionDocumentStore<TReadModel,TKey>` implement the repair interface.
-Add a private read method that parses `_index`, `_seq_no`, `_primary_term`, and `_source`.
+Keep `ElasticsearchProjectionDocumentStore<TReadModel,TKey>` on the ordinary
+projection-store contract. Add a separate internal
+`ElasticsearchProjectionDocumentRepairStore<TReadModel,TKey>` adapter that
+implements the repair interface by using internal store operations. Add a
+private read method that parses `_index`, `_seq_no`, `_primary_term`, and
+`_source`.
 Deletion must be:
 
 ```csharp
@@ -185,13 +218,22 @@ return ElasticsearchProjectionDocumentRepairDeleteDisposition.Deleted;
 
 Keep the lease revision properties `internal`; callers may compare the typed document but cannot manufacture an Elasticsearch revision.
 
+If delete transport fails or times out after the request may have reached
+Elasticsearch, perform one timeout-bounded exact reinspection of the leased
+revision. Return `AlreadyAbsent` only when the exact index, document ID,
+sequence number, and primary term are proven absent; otherwise preserve the
+ambiguous failure.
+
 - [ ] **Step 4: Add explicit opt-in DI**
 
-The new extension must map an already registered concrete store:
+The new extension must construct the separate adapter over an already
+registered concrete store:
 
 ```csharp
 services.AddSingleton<IElasticsearchProjectionDocumentRepairStore<TReadModel, TKey>>(provider =>
-    provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
+    new ElasticsearchProjectionDocumentRepairStore<TReadModel, TKey>(
+        provider.GetRequiredService<
+            ElasticsearchProjectionDocumentStore<TReadModel, TKey>>()));
 ```
 
 It must not be called by the ordinary store registration.
@@ -238,7 +280,7 @@ git commit -m "Add guarded Elasticsearch projection repair lease"
 message RepairStudioWorkspaceProjectionCommand {
   string workspace_id = 1;
   string scope_id = 2;
-  int64 expected_state_version = 3;
+  int64 minimum_state_version = 3;
   string repair_request_id = 4;
 }
 ```
@@ -272,7 +314,7 @@ public interface IStudioWorkspaceProjectionRepublishPort
 {
     Task<StudioWorkspaceProjectionRepublishReceipt> DispatchAsync(
         string scopeId,
-        long expectedStateVersion,
+        long minimumStateVersion,
         string repairRequestId,
         CancellationToken ct = default);
 }
@@ -304,19 +346,23 @@ public sealed record StudioWorkspaceVersionRegressionInspection(
 
 - [ ] **Step 1: Write failing actor re-publication tests**
 
-Build an actor with an in-memory event store, commit one draft event, capture committed-fact publications, clear the capture, and dispatch the repair command.
+Build an actor with an in-memory event store, commit an inspected version and
+then a later draft event, capture committed-fact publications, clear the
+capture, and dispatch the repair command with the earlier version as its
+minimum.
 
 Assert:
 
 ```csharp
 eventsAfter.Should().HaveCount(eventsBefore);
-publication.StateEvent.Version.Should().Be(1);
-publication.StateEvent.EventId.Should().Be($"rebuild:{actor.Id}:1");
+publication.StateEvent.Version.Should().Be(2);
+publication.StateEvent.EventId.Should().Be($"rebuild:{actor.Id}:2");
 publication.StateRoot.Unpack<StudioWorkspaceState>()
     .Drafts.Should().ContainKey("wf-alpha");
 ```
 
-Add a second test asserting an expected version mismatch publishes nothing and throws.
+Add a second test asserting a minimum version above the actor's current version
+publishes nothing and throws.
 
 - [ ] **Step 2: Run actor tests and verify RED**
 
@@ -342,7 +388,8 @@ public async Task HandleProjectionRepairAsync(RepairStudioWorkspaceProjectionCom
     ValidateWorkspace(command.WorkspaceId, command.ScopeId);
     var currentVersion = EventSourcing?.CurrentVersion
         ?? throw new InvalidOperationException("Workspace event sourcing is unavailable.");
-    if (currentVersion <= 0 || currentVersion != command.ExpectedStateVersion)
+    if (command.MinimumStateVersion <= 0 ||
+        currentVersion < command.MinimumStateVersion)
         throw new InvalidOperationException("Workspace projection repair source version changed.");
     if (string.IsNullOrWhiteSpace(State.WorkspaceId) ||
         !string.Equals(State.WorkspaceId, command.WorkspaceId, StringComparison.Ordinal) ||
@@ -419,11 +466,18 @@ if (lease is null)
     return StudioWorkspaceReplicaDeleteDisposition.AlreadyAbsent;
 if (!FingerprintMatches(lease.Document, request))
     return StudioWorkspaceReplicaDeleteDisposition.DocumentChanged;
+sourceVersion = await _eventStore.GetVersionAsync(actorId, ct);
+if (sourceVersion != request.ExpectedSourceStateVersion)
+    return StudioWorkspaceReplicaDeleteDisposition.SourceChanged;
 ```
 
 Then map the provider delete disposition.
 
 The republish adapter uses `IStudioActorBootstrap` and `StudioActorCommandDispatch` to send `RepairStudioWorkspaceProjectionCommand`. Do not extend the ordinary `IStudioWorkspaceCommandPort`.
+Once deletion returns `Deleted` or `AlreadyAbsent`, dispatch with
+`CancellationToken.None`; a client disconnect must not strand the document
+after deletion. The actor treats the inspected source version as a minimum and
+republishes its actual latest committed version.
 
 - [ ] **Step 8: Opt in only the Workspace ES read model**
 
@@ -520,11 +574,12 @@ public sealed record NyxIdAuthorizationCatalogVersionRegressionRepairRequest(
 
 - [ ] **Step 1: Write failing catalog repair service tests**
 
-Use fake store, refresh, and visibility ports. Cover:
+Use fake store, repair-refresh, and visibility ports. Cover:
 
 - repairable classification requires `documentVersion > sourceVersion > 0`;
 - source/document mismatch does not delete or refresh;
-- `Deleted` and `AlreadyAbsent` invoke `RefreshPersonalAsync` exactly once;
+- `Deleted` and `AlreadyAbsent` invoke the repair-specific
+  `RefreshPersonalAsync` exactly once;
 - refresh receives the exact verified owner subject and bearer;
 - refresh failure returns `Failed` without fabricating visibility;
 - observed refresh calls visibility with the committed refresh version;
@@ -545,13 +600,17 @@ Expected: compilation fails because the repair contracts and service do not exis
 
 - [ ] **Step 3: Implement Application repair flow**
 
-After guarded delete:
+After guarded delete, call the repair-specific refresh port with the inspected
+source version as a minimum and detach authoritative recovery from request
+cancellation:
 
 ```csharp
 var refresh = await _refreshPort.RefreshPersonalAsync(
     request.VerifiedOwnerSubject,
     request.BearerToken,
-    ct);
+    request.ExpectedSourceStateVersion,
+    request.RepairRequestId,
+    CancellationToken.None);
 if (!refresh.Success)
     return NyxIdAuthorizationCatalogVersionRegressionRepairResult.Failed(inspection, refresh);
 
@@ -565,6 +624,9 @@ var visibility = await _visibilityPort.ResolveAsync(owner, refresh.StateVersion,
 ```
 
 Never pass document services, lifecycle fence, digest, or timestamps into the actor.
+The repair begin command must be admitted against the Catalog actor's current
+version and must use the actor-owned `State.LifecycleFence`; it must not query
+the deleted read model for lifecycle state.
 
 - [ ] **Step 4: Implement the catalog Infrastructure store adapter**
 
@@ -582,7 +644,8 @@ var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
 
 Use `IEventStore.GetVersionAsync(actorId)` and the opt-in repair store for
 `NyxIdAuthorizationCatalogDocument`. Enforce the same exact source/document
-fingerprint as Workspace.
+fingerprint as Workspace. After the fingerprint matches, read the authoritative
+EventStore version again immediately before deletion and reject any drift.
 
 - [ ] **Step 5: Add opt-in registration only in the ES provider branch**
 
@@ -592,6 +655,7 @@ After registering `NyxIdAuthorizationCatalogDocument` with Elasticsearch:
 services.AddElasticsearchDocumentProjectionRepairStore<
     NyxIdAuthorizationCatalogDocument,
     string>();
+services.AddNyxIdAuthorizationCatalogVersionRegressionRepairPorts();
 services.TryAddSingleton<
     INyxIdAuthorizationCatalogVersionRegressionStorePort,
     ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStorePort>();
@@ -601,6 +665,8 @@ services.TryAddSingleton<
 ```
 
 Do not register it for the in-memory provider.
+The ordinary Catalog command and refresh concrete types must not implement the
+repair interfaces; the Elasticsearch branch resolves distinct repair adapters.
 
 - [ ] **Step 6: Add composition tests**
 
@@ -673,7 +739,12 @@ Cover both endpoints:
 - missing authorizer returns `503`;
 - missing bearer returns `403`;
 - identity-resolution failure returns `403`;
-- cancellation propagates;
+- cancellation propagates only when the supplied request token is actually
+  canceled;
+- an uncanceled authorization `OperationCanceledException` remains a fail-closed
+  `403`;
+- an uncanceled downstream `OperationCanceledException` returns sanitized
+  `503`;
 - non-elevated caller returns `403`;
 - missing repair service returns `503`;
 - invalid apply manifest returns `400`;
@@ -733,6 +804,8 @@ There is no catalog owner field in the HTTP DTO.
 - Catalog projection pending: `202`.
 - Changed source/document: `409`.
 - Missing provider or downstream unavailable: `503`.
+- Unexpected inspection/apply exceptions: bodyless sanitized `503`, without
+  exception text, bearer/credential values, or catalog contents.
 
 Responses may include actor ID, versions, last event ID, request ID, command ID, refresh status, and visibility versions. They must not include bearer or catalog contents.
 

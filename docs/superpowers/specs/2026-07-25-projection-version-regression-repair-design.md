@@ -42,8 +42,11 @@ exact orphaned replica and then rebuild from an authoritative source.
 
 ### Exact conditional replica deletion
 
-Add a narrow, Elasticsearch-specific repair lease beside the existing projection
-store implementation. It accepts an exact semantic fingerprint:
+Add a narrow, Elasticsearch-specific repair lease through a separate internal
+repair adapter that wraps the ordinary projection store. The ordinary store
+does not implement the repair interface, and normal projection-store
+registration does not expose the adapter. The repair lease accepts an exact
+semantic fingerprint:
 
 - document ID;
 - actor ID;
@@ -53,13 +56,19 @@ store implementation. It accepts an exact semantic fingerprint:
 The repair lease reads the current document, verifies the full fingerprint,
 captures `_index`, `_seq_no`, and `_primary_term`, and deletes from the concrete
 index with optimistic concurrency. A changed document returns a typed conflict
-and is never deleted.
+and is never deleted. If the delete response is ambiguous because of a
+transport failure or timeout, the adapter performs one bounded, exact
+reinspection of the same concrete index, document ID, sequence number, and
+primary term. It reports `AlreadyAbsent` only when that reinspection proves the
+leased revision is absent; otherwise it preserves the failure.
 
 Repair-store registration is explicit and opt-in. It is enabled only for
 `StudioWorkspaceCurrentStateDocument` and
 `NyxIdAuthorizationCatalogDocument`. The ordinary projection writer contract is
 unchanged, the in-memory provider receives no repair capability, and other
-Elasticsearch read models cannot resolve this maintenance interface.
+Elasticsearch read models cannot resolve this maintenance interface. Catalog
+repair command and refresh adapters are likewise separate from the ordinary
+Catalog ports and are composed only in the Elasticsearch repair branch.
 
 This capability is not a general reset API. It cannot delete by actor ID alone,
 cannot accept a version range, and cannot bypass fingerprint matching.
@@ -96,18 +105,21 @@ raw actor ID. The actor ID is derived through `StudioWorkspaceConventions`.
 Apply requires the exact source version, replica version, and replica last event
 ID returned by dry-run. The Application service re-inspects all values, requires
 `replicaVersion > sourceVersion > 0`, conditionally deletes the replica, and
-dispatches `RepairStudioWorkspaceProjectionCommand`.
+dispatches `RepairStudioWorkspaceProjectionCommand`. After matching the
+document fingerprint, the store reads the authoritative EventStore version
+again immediately before deletion and rejects any change.
 
 The workspace actor verifies:
 
 - command workspace and scope identities match its current state;
-- its current committed EventStore version still equals the expected source
-  version;
+- its current committed EventStore version is at least the inspected source
+  version carried as the command's minimum;
 - it has an initialized workspace state.
 
 It then calls `RepublishCommittedStateAsync` with a typed workspace event used
-only for projection routing. It appends no domain event and does not change the
-workspace version.
+only for projection routing. It republishes the actor's actual latest committed
+state and version, which can be greater than the inspected minimum. It appends
+no domain event and does not change the workspace version.
 
 The HTTP response is `202 Accepted`. Read-model visibility is verified
 separately; the command ACK does not claim projection completion.
@@ -120,13 +132,16 @@ caller's bearer cannot be used to refresh a different user's catalog.
 
 Apply re-inspects the source and replica versions, conditionally deletes the
 exact stale catalog document, then invokes the existing authenticated NyxID
-catalog refresh.
+catalog refresh through repair-specific command and refresh adapters. After
+matching the document fingerprint, the store reads the authoritative EventStore
+version again immediately before deletion and rejects any change.
 
-Once the document is missing, the refresh planner uses lifecycle fence `0`.
-That matches the empty current actor state, allowing the actor to commit a new
-activation, refresh begin, and observed catalog built from current NyxID facts.
-The repair never copies services, lifecycle fence, freshness, or digest from
-Elasticsearch into the actor.
+The repair-specific begin command carries the inspected source version as a
+minimum. The Catalog actor admits the command only when its actor-owned current
+version is at least that minimum and starts refresh with its own authoritative
+`State.LifecycleFence`. The repair path does not query the deleted read model to
+recover a lifecycle fence or any other fact. It never copies services,
+lifecycle fence, freshness, or digest from Elasticsearch into the actor.
 
 The response is:
 
@@ -134,6 +149,13 @@ The response is:
 - `202` when the refresh committed but replica visibility is pending;
 - `409` when the source or replica fingerprint changed;
 - `503` when the authenticated refresh fails.
+
+Once either guarded delete returns `Deleted` or `AlreadyAbsent`, authoritative
+Workspace republish dispatch and Catalog refresh run independently of the HTTP
+request cancellation token. A client disconnect cannot cancel that post-delete
+recovery. Catalog visibility lookup may still end with the disconnected
+request, so operators must establish completion through the normal read
+surfaces described by the runbook.
 
 ## Operator API
 
@@ -158,6 +180,13 @@ Bearer tokens are used only for platform-admin authorization and the existing
 NyxID refresh call. Tokens, Agent Keys, service credentials, and catalog
 contents are never logged or returned.
 
+Unexpected inspection or apply exceptions are mapped to a bodyless, sanitized
+HTTP `503`; exception messages, credentials, bearer text, and catalog contents
+are not serialized. An `OperationCanceledException` propagates only when the
+supplied request cancellation token is actually canceled. Authorization
+failures, including an uncanceled authorization exception, remain fail-closed
+as `403`.
+
 ## Safety and Idempotency
 
 - A healthy document is never deleted.
@@ -166,14 +195,30 @@ contents are never logged or returned.
 - Any source-version or fingerprint change between dry-run and apply is a
   conflict.
 - Elasticsearch deletion is guarded by `_seq_no` and `_primary_term`.
+- The authoritative EventStore version is read again immediately before
+  deletion.
+- An ambiguous delete outcome is reconciled only by one bounded exact
+  reinspection of the leased Elasticsearch revision.
 - Retrying after a successful delete but before downstream recovery is allowed:
   a missing replica plus an unchanged expected source version continues with
   workspace republish or catalog refresh.
 - Workspace republish uses the deterministic
-  `rebuild:{actorId}:{sourceVersion}` event ID and appends no event.
+  `rebuild:{actorId}:{latestVersion}` event ID, republishes a version greater
+  than or equal to the inspected minimum, and appends no event.
 - Catalog recovery always fetches fresh typed NyxID facts.
+- Post-delete Workspace dispatch and Catalog refresh are not canceled by client
+  disconnect.
+- Downstream endpoint failures return sanitized `503` responses.
 - No query path primes, replays, deletes, or rebuilds a projection.
 - No generic background scan or startup auto-delete is introduced.
+
+The already-absent continuation remains an operator/audit rule: code can verify
+the current actor identity, unchanged positive source version, and strict
+`expectedDocumentVersion > expectedSourceVersion`, but it cannot reconstruct
+the deleted document's prior fingerprint. A signed inspection token or durable
+repair-request-ID record that would make that provenance code-verifiable is
+explicitly deferred. This hardening introduces no new secret, configuration
+setting, infrastructure operation, or operator step.
 
 ## Rejected Alternatives
 

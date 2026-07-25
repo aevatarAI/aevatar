@@ -35,9 +35,37 @@ documents. Do not hydrate actor state from Elasticsearch, replay events in a
 request path, or add projection priming to a normal query. The application
 performs an exact actor/version/event fingerprint check and an Elasticsearch
 optimistic-concurrency delete before starting the authoritative rebuild when
-the document exists. Once a prior guarded delete has made it absent, the code
-cannot re-verify that deleted fingerprint; the narrower operator/audit retry
-rule is documented below.
+the document exists. It reads the authoritative EventStore version again
+immediately before deletion. If the delete result is transport-ambiguous, the
+repair adapter performs one bounded exact reinspection of the leased
+index/document/revision and treats it as absent only when that exact revision is
+proven absent. Once a prior guarded delete has made it absent, the code cannot
+re-verify that deleted fingerprint; the narrower operator/audit retry rule is
+documented below.
+
+The repair capability is a separate Elasticsearch-only opt-in adapter. It is
+not exposed by the ordinary projection store, other read models, or the
+in-memory provider. Catalog repair command and refresh adapters are also
+separate and are composed only with the Elasticsearch repair path.
+
+After a guarded delete returns `Deleted` or `AlreadyAbsent`, Workspace
+republish dispatch and Catalog refresh continue independently of the HTTP
+request cancellation token. Closing the client connection does not cancel that
+authoritative recovery. A disconnected client may miss the response or the
+Catalog visibility follow-up, so establish completion through the normal read
+surfaces below; do not assume disconnect means the repair stopped.
+
+Unexpected downstream inspection or apply exceptions return a bodyless,
+sanitized HTTP `503`. The response never serializes exception text, bearer or
+credential values, or catalog contents. A cancellation exception propagates
+only when the request token is actually canceled; authorization failures remain
+fail-closed as `403`.
+
+This hardening requires no new secret, configuration setting, infrastructure
+operation, or operator step. A signed inspection token or durable
+repair-request-ID record that could make already-absent provenance
+code-verifiable is explicitly deferred; the existing operator/audit rule in
+“Conflict And Retry Rules” remains authoritative.
 
 Examples below use only synthetic identities:
 
@@ -311,8 +339,10 @@ dispatch. `command_id` is correlation evidence, not visibility evidence.
 
 Workspace republish is valid because the Workspace actor still owns a positive
 committed version and its current state is the authoritative source. The actor
-re-emits that committed current state through the existing committed-fact
-Projection Pipeline without appending a synthetic repair event.
+accepts the inspected source version as a minimum and re-emits its actual latest
+committed current state through the existing committed-fact Projection
+Pipeline. The republished version is greater than or equal to the inspected
+minimum, and no synthetic repair event is appended.
 
 ### 3. Establish Workspace Visibility Through The Normal API
 
@@ -460,7 +490,10 @@ owner's bearer. It must not republish an empty or older catalog actor state:
 after lineage loss, the surviving actor state may not contain the authorization
 evidence represented by the ahead replica, and Elasticsearch is never an
 authority from which to hydrate it. Fresh refresh reconstructs typed catalog
-facts through the normal actor-owned command/event path.
+facts through the normal actor-owned command/event path. The repair command
+checks that the Catalog actor's current version is at least the inspected
+minimum and starts refresh with the actor's own lifecycle fence. It never
+queries the deleted read model for lifecycle state.
 
 Interpret completion fields separately:
 
@@ -472,7 +505,10 @@ Interpret completion fields separately:
   but the read model has not yet reached `required_state_version`.
   `observed` is not the same as `ready`.
 - HTTP `503` means refresh or visibility failed or is unavailable. Stop and
-  investigate; do not fabricate readiness from pending or stale evidence.
+  investigate; the body is intentionally sanitized, so use server-side
+  correlation and non-secret diagnostics rather than expecting exception
+  details in the response. Do not fabricate readiness from pending or stale
+  evidence.
 
 Mutation, automation creation, Agent Key creation, and canary execution must
 remain stopped while catalog visibility is pending. The canonical Team
@@ -625,7 +661,9 @@ continues. A fresh inspection that merely says the document is absent does not
 authorize inventing a document version or event ID. If the authoritative source
 version or actor identity has changed, stop and escalate instead of reusing the
 prior manifest. Enforceable prior-document provenance would require a future
-signed or leased inspection token carried from inspection into apply/retry.
+signed or leased inspection token carried from inspection into apply/retry, or
+a durable repair-request-ID record. Both are explicitly deferred; do not invent
+an ad hoc local record or new operator step.
 
 ## Completion Evidence
 
