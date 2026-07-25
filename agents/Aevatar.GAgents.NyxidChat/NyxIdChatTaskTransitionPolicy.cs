@@ -32,6 +32,14 @@ public static class NyxIdChatTaskTransitionPolicy
     public const string StepNotFound = "NYXID_CHAT_STEP_NOT_FOUND";
     public const string StepKindMismatch = "NYXID_CHAT_STEP_KIND_MISMATCH";
     public const string ResultMissing = "NYXID_CHAT_OPERATION_RESULT_MISSING";
+    public const string OperationInterrupted = "NYXID_CHAT_OPERATION_INTERRUPTED";
+    public const string OperationOutcomeUncertain =
+        "NYXID_CHAT_OPERATION_OUTCOME_UNCERTAIN";
+
+    private const string OperationInterruptedMessage =
+        "The operation was interrupted and was not replayed automatically.";
+    private const string OperationOutcomeUncertainMessage =
+        "The external operation may have changed state before recovery.";
 
     public static NyxIdChatTransitionDecision StartOperation(
         NyxIdChatConversationGAgentState state,
@@ -178,6 +186,42 @@ public static class NyxIdChatTaskTransitionPolicy
                 NyxIdChatStepStatus.Planned or
                 NyxIdChatStepStatus.Waiting or
                 NyxIdChatStepStatus.Running,
+        };
+    }
+
+    public static NyxIdChatOperationResultSignal? BuildInterruptedRecoveryResult(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey key)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(key);
+
+        if (!TryResolveStep(state, key, out var step, out _) ||
+            step.Operation?.Key is null ||
+            !KeysEqual(step.Operation.Key, key) ||
+            !IsInFlight(step.Operation.Phase) ||
+            step.Kind is not (NyxIdChatStepKind.Llm or NyxIdChatStepKind.Tool))
+        {
+            return null;
+        }
+
+        var mayHaveChanged = step.MayChangeExternalState ||
+                             step.Operation.MayChangeExternalState;
+        return new NyxIdChatOperationResultSignal
+        {
+            Key = key.Clone(),
+            Failure = new NyxIdChatOperationFailure
+            {
+                FailureCode = mayHaveChanged
+                    ? OperationOutcomeUncertain
+                    : OperationInterrupted,
+                SafeMessage = mayHaveChanged
+                    ? OperationOutcomeUncertainMessage
+                    : OperationInterruptedMessage,
+                ExternalEffect = mayHaveChanged
+                    ? NyxIdChatEffectEvidence.MayHaveChanged
+                    : NyxIdChatEffectEvidence.NotApplied,
+            },
         };
     }
 

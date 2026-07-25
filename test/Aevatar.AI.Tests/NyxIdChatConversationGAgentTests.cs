@@ -1105,17 +1105,28 @@ public sealed class NyxIdChatConversationGAgentTests
 
         reactivated.State.ContinuationAdmission.Status.Should().Be(
             NyxIdChatContinuationAdmissionStatus.Accepted);
-        dispatch.Calls.Should().ContainSingle();
-        var firstSelfMessage = dispatch.Calls.Single().Envelope.Clone();
-        firstSelfMessage.Payload.Is(NyxIdChatStartTurnCommand.Descriptor).Should().BeTrue();
+        dispatch.Calls.Should().HaveCount(2,
+            "activation first queues typed recovery for the requested LLM waterline, then steering queues its continuation");
+        var activationRecovery = dispatch.Calls.Single(call =>
+            call.Envelope.Payload.Is(NyxIdChatRecoveryRequestedSignal.Descriptor)).Envelope.Clone();
+        var firstSelfMessage = dispatch.Calls.Single(call =>
+            call.Envelope.Payload.Is(NyxIdChatStartTurnCommand.Descriptor)).Envelope.Clone();
         var beforeReplay = await eventStore.GetEventsAsync(conversationActorId);
+
+        await reactivated.HandleEventAsync(activationRecovery);
+
+        (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(
+            beforeReplay.Count,
+            "the steering commits advance the version and make the earlier activation recovery stale");
+        dispatch.Calls.Should().HaveCount(2,
+            "stale recovery cannot replay the old LLM or create a turn actor");
 
         await reactivated.HandleEventAsync(CreateEnvelope(conversationActorId, steering.Clone()));
 
         (await eventStore.GetEventsAsync(conversationActorId)).Should().HaveCount(
             beforeReplay.Count,
             "an exact replay must not commit the admission twice");
-        dispatch.Calls.Should().HaveCount(2,
+        dispatch.Calls.Should().HaveCount(3,
             "an accepted but unhandled self continuation must be safely redeliverable");
         dispatch.Calls[^1].Envelope.Id.Should().Be(firstSelfMessage.Id);
         dispatch.Calls[^1].Envelope.Payload.ToByteString().Should().Equal(

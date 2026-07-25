@@ -730,6 +730,54 @@ public static class NyxIdChatBrowserActions
                 step.Operation.Key);
     }
 
+    internal static NyxIdChatOperationDispatchCommand? TryBuildRecoveryDispatch(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatOperationKey key)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(key);
+
+        if (state.ActiveTurn?.Status != NyxIdChatTurnStatus.Active ||
+            state.ActiveTask?.Status != NyxIdChatTaskStatus.Active ||
+            state.ContinuationAdmission is not
+            {
+                Kind: NyxIdChatContinuationKind.Action,
+                Status: NyxIdChatContinuationAdmissionStatus.Accepted,
+                OwnerSubject.Length: > 0,
+            } admission)
+        {
+            return null;
+        }
+
+        var step = state.ActiveTask.Steps.FirstOrDefault(candidate =>
+            candidate.Kind == NyxIdChatStepKind.Postcondition &&
+            candidate.Status == NyxIdChatStepStatus.Running &&
+            candidate.Operation?.Phase == NyxIdChatOperationPhase.Requested &&
+            KeysEqual(candidate.Operation.Key, key));
+        if (step is null ||
+            !string.Equals(state.ActiveTurn.TurnId, key.TurnId, StringComparison.Ordinal) ||
+            !string.Equals(state.ActiveTask.TaskId, key.TaskId, StringComparison.Ordinal) ||
+            !string.Equals(admission.ContinuationTurnId, key.TurnId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var request = state.PendingActions.FirstOrDefault(candidate => string.Equals(
+            candidate.ActionRequestId,
+            step.ActionRequestId,
+            StringComparison.Ordinal));
+        var report = request?.Reports.LastOrDefault(candidate =>
+            candidate.Disposition == NyxIdChatActionDisposition.Completed);
+        return request is null || report is null
+            ? null
+            : BuildPostconditionCommand(
+                state.ScopeId,
+                admission.OwnerSubject,
+                request,
+                report,
+                key);
+    }
+
     private static bool RequestMatchesState(
         NyxIdChatConversationGAgentState state,
         NyxIdChatActionRequestState request) =>

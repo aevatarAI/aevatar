@@ -52,6 +52,41 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatActionRequestedEvent>(ApplyActionRequested)
             .OrCurrent();
 
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct).ConfigureAwait(false);
+
+        var operation = ResolveOutstandingRecoveryOperation(State);
+        if (operation?.Key is null)
+            return;
+
+        var version = CurrentCommittedVersion();
+        var kind = operation.Kind == NyxIdChatStepKind.Postcondition &&
+                   operation.Phase == NyxIdChatOperationPhase.Requested
+            ? NyxIdChatRecoveryKind.PostconditionRedispatch
+            : NyxIdChatRecoveryKind.InterruptedOperationReconciliation;
+        var signal = new NyxIdChatRecoveryRequestedSignal
+        {
+            Key = operation.Key.Clone(),
+            ExpectedStateVersion = version,
+            Kind = kind,
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = $"{operation.Key.OperationId}:recovery:{version}",
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            Payload = Any.Pack(signal),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                Id,
+                TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = operation.Key.OperationId,
+            },
+        };
+        await _actorDispatchPort.DispatchAsync(Id, envelope, ct).ConfigureAwait(false);
+    }
+
     [EventHandler(AllowSelfHandling = true)]
     public async Task HandleCreateConversationAsync(
         NyxIdChatConversationCreateCommand command)
@@ -465,6 +500,66 @@ public sealed class NyxIdChatConversationGAgent
                 command.CorrelationId,
                 now)
             .ConfigureAwait(false);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleRecoveryRequestedAsync(NyxIdChatRecoveryRequestedSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (signal.ExpectedStateVersion != CurrentCommittedVersion() ||
+            signal.Key is null ||
+            !TryResolveCurrentOperation(signal.Key, out var operation) ||
+            operation.Phase is not (NyxIdChatOperationPhase.Requested or
+                NyxIdChatOperationPhase.Dispatched or
+                NyxIdChatOperationPhase.Running))
+        {
+            return;
+        }
+
+        if (signal.Kind == NyxIdChatRecoveryKind.PostconditionRedispatch)
+        {
+            var command = NyxIdChatBrowserActions.TryBuildRecoveryDispatch(State, signal.Key);
+            if (command is null)
+                return;
+
+            await EnsureTurnActorAsync(command.Key.TurnId).ConfigureAwait(false);
+            await DispatchAuthorizedOperationAsync(
+                    command,
+                    ActiveInboundEnvelope?.Propagation?.CorrelationId ??
+                    command.Key.OperationId,
+                    Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()))
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (signal.Kind != NyxIdChatRecoveryKind.InterruptedOperationReconciliation)
+            return;
+
+        var recoveryResult = NyxIdChatTaskTransitionPolicy.BuildInterruptedRecoveryResult(
+            State,
+            signal.Key);
+        if (recoveryResult is null)
+            return;
+
+        var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(
+            State,
+            recoveryResult,
+            now);
+        if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
+            return;
+
+        var nextState = decision.State.Clone();
+        nextState.ProgressSequence = State.ProgressSequence + 1;
+        nextState.UpdatedAt = now.Clone();
+        await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
+        {
+            Result = recoveryResult,
+            Task = nextState.ActiveTask.Clone(),
+            Turn = nextState.ActiveTurn.Clone(),
+            ProgressSequence = nextState.ProgressSequence,
+            State = nextState,
+        }, CancellationToken.None).ConfigureAwait(false);
     }
 
     [EventHandler]
@@ -1055,6 +1150,29 @@ public sealed class NyxIdChatConversationGAgent
 
         operation = candidate;
         return true;
+    }
+
+    private static NyxIdChatOperationState? ResolveOutstandingRecoveryOperation(
+        NyxIdChatConversationGAgentState state)
+    {
+        if (state.ActiveTurn?.Status != NyxIdChatTurnStatus.Active ||
+            state.ActiveTask?.Status != NyxIdChatTaskStatus.Active ||
+            string.IsNullOrWhiteSpace(state.ActiveTask.ActiveOperationId))
+        {
+            return null;
+        }
+
+        return state.ActiveTask.Steps
+            .Select(static step => step.Operation)
+            .FirstOrDefault(candidate =>
+                candidate?.Key is not null &&
+                string.Equals(
+                    candidate.Key.OperationId,
+                    state.ActiveTask.ActiveOperationId,
+                    StringComparison.Ordinal) &&
+                candidate.Phase is NyxIdChatOperationPhase.Requested or
+                    NyxIdChatOperationPhase.Dispatched or
+                    NyxIdChatOperationPhase.Running);
     }
 
     private async Task BindAgentProfileAsync(AgentProfileSnapshot? profile)

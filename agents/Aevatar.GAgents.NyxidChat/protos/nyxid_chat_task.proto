@@ -117,6 +117,12 @@ enum NyxIdChatTransitionOutcome {
   NYX_ID_CHAT_TRANSITION_OUTCOME_IDEMPOTENT = 3;
 }
 
+enum NyxIdChatRecoveryKind {
+  NYX_ID_CHAT_RECOVERY_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_RECOVERY_KIND_POSTCONDITION_REDISPATCH = 1;
+  NYX_ID_CHAT_RECOVERY_KIND_INTERRUPTED_OPERATION_RECONCILIATION = 2;
+}
+
 enum NyxIdAssistantActionKind {
   NYX_ID_ASSISTANT_ACTION_KIND_UNSPECIFIED = 0;
   NYX_ID_ASSISTANT_ACTION_KIND_SERVICE_CONNECT = 1;
@@ -572,12 +578,14 @@ message NyxIdChatTurnGAgentState {
   google.protobuf.Timestamp completed_at = 9;
   google.protobuf.Timestamp delivered_at = 10;
   repeated NyxIdChatOperationKey delivered_operations = 11;
+  bool may_change_external_state = 12;
 }
 
 message NyxIdChatTurnOperationAdmittedEvent {
   NyxIdChatOperationKey key = 1;
   NyxIdChatStepKind operation_kind = 2;
   google.protobuf.Timestamp admitted_at = 3;
+  bool may_change_external_state = 4;
 }
 
 message NyxIdChatTurnOperationCompletedEvent {
@@ -685,6 +693,15 @@ message NyxIdChatOperationResultSignal {
     NyxIdChatActionPostconditionResult action_postcondition = 12;
     NyxIdChatOperationFailure failure = 13;
   }
+}
+
+// Activation never executes a continuation inline. It publishes this typed
+// self signal, and the normal actor handler revalidates both the complete
+// operation identity and the committed version before taking any action.
+message NyxIdChatRecoveryRequestedSignal {
+  NyxIdChatOperationKey key = 1;
+  int64 expected_state_version = 2;
+  NyxIdChatRecoveryKind kind = 3;
 }
 
 message NyxIdChatTextProgress {

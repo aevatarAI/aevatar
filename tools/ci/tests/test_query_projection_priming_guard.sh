@@ -7,6 +7,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 GUARD="${REPO_ROOT}/tools/ci/query_projection_priming_guard.sh"
 TMP_DIR="$(mktemp -d)"
 OWNER_ROOT="${TMP_DIR}/owner-root"
+NYXID_ROOT="${TMP_DIR}/nyxid-root"
 GUARD_OUTPUT=""
 GUARD_STATUS=0
 
@@ -18,8 +19,20 @@ planner_file="${OWNER_ROOT}/src/platform/Aevatar.GAgentService.Application/Sched
 planner_dir="$(dirname -- "${planner_file}")"
 contracts_file="${OWNER_ROOT}/src/platform/Aevatar.GAgentService.Abstractions/Schedules/Authorization/ScheduledInvocationAuthorizationContracts.cs"
 contracts_dir="$(dirname -- "${contracts_file}")"
+nyxid_endpoint_file="${NYXID_ROOT}/agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.State.cs"
+nyxid_endpoint_dir="$(dirname -- "${nyxid_endpoint_file}")"
+nyxid_query_file="${NYXID_ROOT}/src/Aevatar.Studio.Infrastructure/ActorBacked/ProjectionNyxIdChatConversationStateQueryPort.cs"
+nyxid_query_dir="$(dirname -- "${nyxid_query_file}")"
+nyxid_contract_file="${NYXID_ROOT}/src/Aevatar.Studio.Application.Abstractions/Studio/Abstractions/INyxIdChatConversationStateQueryPort.cs"
+nyxid_contract_dir="$(dirname -- "${nyxid_contract_file}")"
 
-mkdir -p "${owner_query_dir}" "${planner_dir}" "${contracts_dir}"
+mkdir -p \
+  "${owner_query_dir}" \
+  "${planner_dir}" \
+  "${contracts_dir}" \
+  "${nyxid_endpoint_dir}" \
+  "${nyxid_query_dir}" \
+  "${nyxid_contract_dir}"
 
 write_owner_query_anchor() {
   printf '%s\n' \
@@ -39,12 +52,39 @@ printf '%s\n' \
   'public interface IScheduledInvocationOwnerLLMEvidenceQueryPort { }' \
   > "${contracts_file}"
 
+write_nyxid_query_anchors() {
+  printf '%s\n' \
+    'public static partial class NyxIdChatEndpoints' \
+    '{' \
+    '    private static async Task<IResult> HandleGetStateAsync(' \
+    '        INyxIdChatConversationStateQueryPort stateQueryPort) =>' \
+    '        Results.Ok(await stateQueryPort.GetAsync(default!));' \
+    '}' \
+    > "${nyxid_endpoint_file}"
+  printf '%s\n' \
+    'internal sealed class ProjectionNyxIdChatConversationStateQueryPort' \
+    '    : INyxIdChatConversationStateQueryPort' \
+    '{' \
+    '    private readonly IProjectionDocumentReader<NyxIdChatConversationCurrentStateDocument, string> _documentReader;' \
+    '}' \
+    > "${nyxid_query_file}"
+  printf '%s\n' \
+    'public interface INyxIdChatConversationStateQueryPort' \
+    '{' \
+    '    Task<object> GetAsync(object query);' \
+    '}' \
+    > "${nyxid_contract_file}"
+}
+
+write_nyxid_query_anchors
+
 run_guard() {
   local path_value="${1:-${PATH}}"
   set +e
   GUARD_OUTPUT="$(
     PATH="${path_value}" \
     AEVATAR_QUERY_PROJECTION_OWNER_ROOT="${OWNER_ROOT}" \
+    AEVATAR_QUERY_PROJECTION_NYXID_ROOT="${NYXID_ROOT}" \
       bash "${GUARD}" 2>&1
   )"
   GUARD_STATUS=$?
@@ -70,6 +110,32 @@ if [[ ${GUARD_STATUS} -ne 0 ]]; then
   printf '%s\n' "${GUARD_OUTPUT}" >&2
   exit 1
 fi
+
+printf '%s\n' \
+  'internal sealed class ProjectionNyxIdChatConversationStateQueryPort' \
+  '    : INyxIdChatConversationStateQueryPort' \
+  '{' \
+  '    private readonly IActorRuntime _runtime;' \
+  '    private readonly IEventStore _eventStore;' \
+  '}' \
+  > "${nyxid_query_file}"
+run_guard
+require_failure "ProjectionNyxIdChatConversationStateQueryPort.cs"
+write_nyxid_query_anchors
+
+printf '%s\n' \
+  'public static partial class NyxIdChatEndpoints' \
+  '{' \
+  '    private static async Task<IResult> HandleGetStateAsync(IProjectionPort projection)' \
+  '    {' \
+  '        await projection.PrimeAsync();' \
+  '        return Results.Ok();' \
+  '    }' \
+  '}' \
+  > "${nyxid_endpoint_file}"
+run_guard
+require_failure "NyxIdChatEndpoints.State.cs"
+write_nyxid_query_anchors
 
 rm "${owner_query_file}"
 run_guard

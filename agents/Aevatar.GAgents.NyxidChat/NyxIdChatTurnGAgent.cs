@@ -17,6 +17,16 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
     private const string ExecutionFailedMessage = "The operation could not be completed.";
     private const string ResultKeyMismatchCode = "NYXID_CHAT_OPERATION_RESULT_KEY_MISMATCH";
     private const string ResultKeyMismatchMessage = "The operation result identity did not match the admitted operation.";
+    private const string InterruptedCode = "NYXID_CHAT_OPERATION_INTERRUPTED";
+    private const string InterruptedMessage =
+        "The operation was interrupted and was not replayed automatically.";
+    private const string OutcomeUncertainCode = "NYXID_CHAT_OPERATION_OUTCOME_UNCERTAIN";
+    private const string OutcomeUncertainMessage =
+        "The external operation may have changed state before recovery.";
+    private const string ResultDeliveryLostCode =
+        "NYXID_CHAT_OPERATION_RESULT_DELIVERY_LOST";
+    private const string ResultDeliveryLostMessage =
+        "The operation completed, but its original result could not be recovered for delivery.";
 
     private readonly INyxIdChatTurnOperationExecutor _operationExecutor;
     private readonly IActorDispatchPort _actorDispatchPort;
@@ -43,6 +53,35 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
             .On<NyxIdChatTurnOperationDeliveredEvent>(ApplyDelivered)
             .OrCurrent();
 
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        await base.OnActivateAsync(ct).ConfigureAwait(false);
+        if (State.AdmittedOperation is null || State.ResultDelivered)
+            return;
+
+        var version = CurrentCommittedVersion();
+        var signal = new NyxIdChatRecoveryRequestedSignal
+        {
+            Key = State.AdmittedOperation.Clone(),
+            ExpectedStateVersion = version,
+            Kind = NyxIdChatRecoveryKind.InterruptedOperationReconciliation,
+        };
+        var envelope = new EventEnvelope
+        {
+            Id = $"{State.AdmittedOperation.OperationId}:turn-recovery:{version}",
+            Timestamp = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+            Payload = Any.Pack(signal),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                Id,
+                TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = State.AdmittedOperation.OperationId,
+            },
+        };
+        await _actorDispatchPort.DispatchAsync(Id, envelope, ct).ConfigureAwait(false);
+    }
+
     [EventHandler]
     public async Task HandleOperationAsync(NyxIdChatOperationDispatchCommand command)
     {
@@ -56,6 +95,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         {
             Key = command.Key.Clone(),
             OperationKind = kind,
+            MayChangeExternalState = command.Tool?.MayChangeExternalState == true,
             AdmittedAt = admittedAt,
         }, CancellationToken.None).ConfigureAwait(false);
 
@@ -107,6 +147,66 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
         {
             Key = command.Key.Clone(),
+            DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleRecoveryRequestedAsync(NyxIdChatRecoveryRequestedSignal signal)
+    {
+        ArgumentNullException.ThrowIfNull(signal);
+        if (signal.Kind != NyxIdChatRecoveryKind.InterruptedOperationReconciliation ||
+            signal.ExpectedStateVersion != CurrentCommittedVersion() ||
+            signal.Key is null ||
+            State.AdmittedOperation is null ||
+            State.ResultDelivered ||
+            !KeysEqual(State.AdmittedOperation, signal.Key))
+        {
+            return;
+        }
+
+        var completedUndelivered = State.CompletedAt is not null && IsTerminal(State.Phase);
+        var effect = completedUndelivered
+            ? NormalizeEffect(
+                State.ExternalEffect,
+                State.MayChangeExternalState
+                    ? NyxIdChatEffectEvidence.MayHaveChanged
+                    : NyxIdChatEffectEvidence.NotApplied)
+            : State.MayChangeExternalState
+                ? NyxIdChatEffectEvidence.MayHaveChanged
+                : NyxIdChatEffectEvidence.NotApplied;
+        var result = new NyxIdChatOperationResultSignal
+        {
+            Key = signal.Key.Clone(),
+            Failure = new NyxIdChatOperationFailure
+            {
+                FailureCode = completedUndelivered
+                    ? ResultDeliveryLostCode
+                    : effect == NyxIdChatEffectEvidence.MayHaveChanged
+                    ? OutcomeUncertainCode
+                    : InterruptedCode,
+                SafeMessage = completedUndelivered
+                    ? ResultDeliveryLostMessage
+                    : effect == NyxIdChatEffectEvidence.MayHaveChanged
+                    ? OutcomeUncertainMessage
+                    : InterruptedMessage,
+                ExternalEffect = effect,
+            },
+        };
+        var completion = ClassifyCompletion(result);
+        await PersistDomainEventAsync(new NyxIdChatTurnOperationCompletedEvent
+        {
+            Key = signal.Key.Clone(),
+            Phase = completion.Phase,
+            TerminalCode = completion.TerminalCode,
+            SafeMessage = completion.SafeMessage,
+            ExternalEffect = completion.ExternalEffect,
+            CompletedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        }, CancellationToken.None).ConfigureAwait(false);
+        await DispatchResultAsync(signal.Key.ConversationActorId, result).ConfigureAwait(false);
+        await PersistDomainEventAsync(new NyxIdChatTurnOperationDeliveredEvent
+        {
+            Key = signal.Key.Clone(),
             DeliveredAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         }, CancellationToken.None).ConfigureAwait(false);
     }
@@ -267,6 +367,7 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         next.TerminalCode = string.Empty;
         next.SafeMessage = string.Empty;
         next.ExternalEffect = NyxIdChatEffectEvidence.NotStarted;
+        next.MayChangeExternalState = evt.MayChangeExternalState;
         next.ResultDelivered = false;
         next.AdmittedAt = evt.AdmittedAt?.Clone();
         next.CompletedAt = null;
@@ -352,6 +453,11 @@ public sealed class NyxIdChatTurnGAgent : GAgentBase<NyxIdChatTurnGAgentState>
         NyxIdChatEffectEvidence value,
         NyxIdChatEffectEvidence fallback) =>
         value == NyxIdChatEffectEvidence.Unspecified ? fallback : value;
+
+    private long CurrentCommittedVersion() =>
+        (EventSourcing ?? throw new InvalidOperationException(
+            "Event sourcing must be configured before recovery."))
+        .CurrentVersion;
 
     private sealed record OperationCompletion(
         NyxIdChatOperationPhase Phase,
