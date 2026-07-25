@@ -20,6 +20,43 @@ namespace Aevatar.AI.Tests;
 public sealed class NyxIdChatServiceCollectionExtensionsTests
 {
     [Fact]
+    public void AddNyxIdChat_Default_ShouldDisableAssistantActionsWithoutStartupFetch()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(new ConfigurationBuilder().Build());
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetServices<IHostedService>()
+            .Should().NotContain(service =>
+                service is NyxIdAssistantActionRegistryStartupService);
+        var registry = provider.GetRequiredService<NyxIdAssistantActionRegistry>();
+        registry.TryGetDefinition("service.connect", out _).Should().BeFalse();
+        Action resolve = () => registry.ResolveCatalogServiceConnect("api-github");
+        resolve.Should().Throw<NyxIdAssistantActionRegistryException>()
+            .Which.Code.Should().Be("NYXID_ACTION_UNSUPPORTED");
+    }
+
+    [Fact]
+    public void AddNyxIdChat_WhenAssistantActionsEnabled_ShouldRegisterStrictStartupFetcher()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:AssistantActions:Enabled"] = "true",
+            })
+            .Build();
+        var services = new ServiceCollection();
+
+        services.AddNyxIdChat(configuration);
+
+        services.Should().ContainSingle(descriptor =>
+            descriptor.ServiceType == typeof(IHostedService) &&
+            descriptor.ImplementationType ==
+            typeof(NyxIdAssistantActionRegistryStartupService));
+    }
+
+    [Fact]
     public void AddNyxIdChat_ShouldRegisterDefaultDisabledAgentProfileSource()
     {
         var services = new ServiceCollection();
@@ -129,7 +166,7 @@ public sealed class NyxIdChatServiceCollectionExtensionsTests
         result.Verified.Should().BeFalse();
         result.FailureCode.Should().Be(NyxIdActionPostconditionPort.UnavailableCode);
         provider.GetServices<IHostedService>()
-            .Should().ContainSingle(service =>
+            .Should().NotContain(service =>
                 service is NyxIdAssistantActionRegistryStartupService);
     }
 

@@ -59,13 +59,22 @@ public static class ServiceCollectionExtensions
             services.AddNyxIdApiAccess();
         else
             services.AddNyxIdApiAccess(configuration);
-        services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
-        services.TryAddSingleton<INyxIdAssistantActionRegistrySource,
-            NyxIdAssistantActionRegistryHttpSource>();
-        services.TryAddSingleton<NyxIdAssistantActionRegistry>(sp =>
-            sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>().GetRequired());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
-            NyxIdAssistantActionRegistryStartupService>());
+        var assistantActionsOptions = BindAssistantActionsOptions(configuration);
+        services.TryAddSingleton(assistantActionsOptions);
+        if (assistantActionsOptions.Enabled)
+        {
+            services.TryAddSingleton<NyxIdAssistantActionRegistrySnapshot>();
+            services.TryAddSingleton<INyxIdAssistantActionRegistrySource,
+                NyxIdAssistantActionRegistryHttpSource>();
+            services.TryAddSingleton<NyxIdAssistantActionRegistry>(sp =>
+                sp.GetRequiredService<NyxIdAssistantActionRegistrySnapshot>().GetRequired());
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService,
+                NyxIdAssistantActionRegistryStartupService>());
+        }
+        else
+        {
+            services.TryAddSingleton(NyxIdAssistantActionRegistry.CreateDisabled());
+        }
         services.TryAddSingleton(provider => BindRelayOptions(configuration));
         services.TryAddSingleton<Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions>(
             provider => provider.GetRequiredService<NyxIdRelayOptions>());
@@ -347,6 +356,14 @@ public static class ServiceCollectionExtensions
     {
         var options = new NyxIdRelayOptions();
         configuration?.GetSection("Aevatar:NyxId:Relay").Bind(options);
+        return options;
+    }
+
+    private static NyxIdAssistantActionsOptions BindAssistantActionsOptions(
+        IConfiguration? configuration)
+    {
+        var options = new NyxIdAssistantActionsOptions();
+        configuration?.GetSection(NyxIdAssistantActionsOptions.ConfigSection).Bind(options);
         return options;
     }
 }

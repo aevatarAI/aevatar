@@ -104,6 +104,12 @@ public sealed class NyxIdAssistantActionRegistry
     public int SchemaVersion { get; }
     public string RegistryRevision { get; }
 
+    internal static NyxIdAssistantActionRegistry CreateDisabled() =>
+        new(
+            SupportedSchemaVersion,
+            SupportedRegistryRevision,
+            new Dictionary<string, RegistryEntry>(StringComparer.Ordinal));
+
     public static NyxIdAssistantActionRegistry Load(string registryJson)
     {
         try
