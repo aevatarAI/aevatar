@@ -276,6 +276,16 @@ public interface IStudioWorkspaceProjectionRepublishPort
         string repairRequestId,
         CancellationToken ct = default);
 }
+
+public sealed record StudioWorkspaceVersionRegressionRepairRequest(
+    string ScopeId,
+    string ExpectedActorId,
+    long ExpectedSourceStateVersion,
+    long ExpectedDocumentStateVersion,
+    string ExpectedDocumentLastEventId,
+    string RepairRequestId,
+    string RepairReason,
+    string RequestedBySubjectId);
 ```
 
 - The inspection includes:
@@ -498,6 +508,7 @@ public interface INyxIdAuthorizationCatalogVersionRegressionStorePort
 
 public sealed record NyxIdAuthorizationCatalogVersionRegressionRepairRequest(
     string VerifiedOwnerSubject,
+    string ExpectedActorId,
     string BearerToken,
     long ExpectedSourceStateVersion,
     long ExpectedDocumentStateVersion,
@@ -638,6 +649,7 @@ Requests:
 internal sealed record WorkspaceRepairRequest(
     [property: JsonPropertyName("scope_id")] string ScopeId,
     [property: JsonPropertyName("apply")] bool Apply,
+    [property: JsonPropertyName("expected_actor_id")] string ExpectedActorId,
     [property: JsonPropertyName("expected_source_state_version")] long ExpectedSourceStateVersion,
     [property: JsonPropertyName("expected_document_state_version")] long ExpectedDocumentStateVersion,
     [property: JsonPropertyName("expected_document_last_event_id")] string ExpectedDocumentLastEventId,
@@ -646,6 +658,7 @@ internal sealed record WorkspaceRepairRequest(
 
 internal sealed record CatalogRepairRequest(
     [property: JsonPropertyName("apply")] bool Apply,
+    [property: JsonPropertyName("expected_actor_id")] string ExpectedActorId,
     [property: JsonPropertyName("expected_source_state_version")] long ExpectedSourceStateVersion,
     [property: JsonPropertyName("expected_document_state_version")] long ExpectedDocumentStateVersion,
     [property: JsonPropertyName("expected_document_last_event_id")] string ExpectedDocumentLastEventId,
