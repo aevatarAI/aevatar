@@ -272,11 +272,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         };
 
         AgentRunAuthorizedToolStep? authorizedToolStep = null;
+        IReadOnlyList<AgentRunAuthorizedToolCallSafety> authorizedToolCallSafeties = [];
         if (effectiveToolCalls is { Count: > 0 })
         {
             var capturedToolCalls = effectiveToolCalls.ToArray();
             var capturedTools = llmResult.AuthorizedTools.ToArray();
             var capturedToolContext = llmResult.AuthorizedToolContext;
+            authorizedToolCallSafeties = BuildAuthorizedToolCallSafeties(
+                capturedToolCalls,
+                capturedTools);
             authorizedToolStep = new AgentRunAuthorizedToolStep(
                 workItem.RunId,
                 request.CorrelationId,
@@ -299,7 +303,33 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                 });
         }
 
-        return new AgentRunLlmStepExecution(continuation, authorizedToolStep);
+        return new AgentRunLlmStepExecution(
+            continuation,
+            authorizedToolStep,
+            authorizedToolCallSafeties);
+    }
+
+    private static IReadOnlyList<AgentRunAuthorizedToolCallSafety> BuildAuthorizedToolCallSafeties(
+        IReadOnlyList<ToolCall> toolCalls,
+        IReadOnlyList<IAgentTool> authorizedTools)
+    {
+        var snapshots = new List<AgentRunAuthorizedToolCallSafety>(toolCalls.Count);
+        foreach (var call in toolCalls)
+        {
+            var tool = authorizedTools.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, call.Name, StringComparison.OrdinalIgnoreCase));
+            if (tool is null)
+                continue;
+
+            snapshots.Add(new AgentRunAuthorizedToolCallSafety(
+                call.Id ?? string.Empty,
+                call.Name ?? string.Empty,
+                call.ArgumentsJson ?? string.Empty,
+                tool.GetCallSafety(call.ArgumentsJson ?? string.Empty),
+                tool.SideEffectKind ?? string.Empty));
+        }
+
+        return snapshots;
     }
 
     private async Task<LLMRequest> MaterializeFileRefMessagesAsync(LLMRequest request, CancellationToken ct)

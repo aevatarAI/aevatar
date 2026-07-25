@@ -1339,17 +1339,18 @@ public partial class NyxIdChatEndpointsCoverageTests
         projectionPort.AttachCount.Should().Be(1);
         projectionPort.DetachCount.Should().Be(1);
         projectionPort.ReleaseCount.Should().Be(1);
-        var envelope = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort);
+        var envelope = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort);
         envelope.Route?.Direct?.TargetActorId.Should().Be(actor.Id);
         envelope.Propagation?.CorrelationId.Should().Be(result.Receipt.CorrelationId);
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+        var request = envelope.Payload.Unpack<NyxIdChatStartTurnCommand>();
         request.Prompt.Should().Be("hello");
-        request.SessionId.Should().Be("session-1");
-        request.CommandAttemptId.Should().Be(result.Receipt.CommandId);
+        request.TurnId.Should().Be("session-1");
+        request.CommandId.Should().Be(result.Receipt.CommandId);
+        request.CorrelationId.Should().Be(result.Receipt.CorrelationId);
         request.ScopeId.Should().Be("scope-a");
-        request.Metadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
-        request.Metadata.Should().NotContainKey("scope_id");
-        request.Metadata["custom"].Should().Be("value");
+        request.ToolContext.ExternalMetadata.Should().NotContainKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        request.ToolContext.ExternalMetadata.Should().NotContainKey("scope_id");
+        request.ToolContext.ExternalMetadata["custom"].Should().Be("value");
         LLMControlContextMapper.FromPayload(request.LlmControl)
             .NyxIdAccessToken.Should().Be("access-token");
         emitted.Select(x => x.EventCase).Should().ContainInOrder(
@@ -1393,7 +1394,8 @@ public partial class NyxIdChatEndpointsCoverageTests
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
-        var request = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort).Payload.Unpack<ChatRequestEvent>();
+        var request = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort)
+            .Payload.Unpack<NyxIdChatStartTurnCommand>();
         request.Prompt.Should().Be("::Goal ship today");
         var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
@@ -1441,7 +1443,8 @@ public partial class NyxIdChatEndpointsCoverageTests
             (_, _) => ValueTask.CompletedTask);
 
         result.Succeeded.Should().BeTrue();
-        var request = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort).Payload.Unpack<ChatRequestEvent>();
+        var request = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort)
+            .Payload.Unpack<NyxIdChatStartTurnCommand>();
         request.Prompt.Should().Be("::");
         var recovery = AgentToolExecutionContextMapper.FromPayload(request.ToolContext).SkillRecovery;
         recovery.RequireInitialOrnnSearch.Should().BeTrue();
@@ -1499,10 +1502,12 @@ public partial class NyxIdChatEndpointsCoverageTests
         projectionPort.AttachExistingCalls.Should().ContainSingle(x =>
             x.ActorId == actor.Id &&
             x.SessionId == "session-1");
-        var envelope = RequireDispatchedPayload<ChatRequestEvent>(dispatchPort);
+        var envelope = RequireDispatchedPayload<NyxIdChatStartTurnCommand>(dispatchPort);
         envelope.Propagation?.CorrelationId.Should().Be("correlation-explicit");
-        var request = envelope.Payload.Unpack<ChatRequestEvent>();
-        request.SessionId.Should().Be("session-1");
+        var request = envelope.Payload.Unpack<NyxIdChatStartTurnCommand>();
+        request.TurnId.Should().Be("session-1");
+        request.CommandId.Should().Be("command-explicit");
+        request.CorrelationId.Should().Be("correlation-explicit");
     }
 
     [Fact]
@@ -3439,7 +3444,7 @@ public partial class NyxIdChatEndpointsCoverageTests
         {
             ct.ThrowIfCancellationRequested();
             Dispatches.Add((actorId, envelope));
-            if (envelope.Payload?.Is(ChatRequestEvent.Descriptor) == true ||
+            if (envelope.Payload?.Is(NyxIdChatStartTurnCommand.Descriptor) == true ||
                 envelope.Payload?.Is(ToolApprovalDecisionEvent.Descriptor) == true)
             {
                 return Task.FromException<DispatchAdmission>(exception);

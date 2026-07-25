@@ -54,6 +54,12 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
         if (eventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
             return eventData.Unpack<NyxIdChatOperationReconciledEvent>().Result?.Key?.TurnId;
 
+        if (eventData.Is(NyxIdChatControlFenceCommittedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatControlFenceCommittedEvent>().Fence?.TurnId;
+
+        if (eventData.Is(NyxIdChatActionRequestedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatActionRequestedEvent>().Request?.OriginTurnId;
+
         return null;
     }
 }

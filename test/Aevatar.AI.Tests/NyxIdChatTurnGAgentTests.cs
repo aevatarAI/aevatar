@@ -1,6 +1,7 @@
 using System.Reflection;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -311,13 +312,15 @@ public sealed class NyxIdChatTurnGAgentTests
         execution.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
         execution.Result.Llm.Content.Should().Be("visible text");
         execution.Result.Llm.ReasoningContent.Should().Be("private reasoning");
-        execution.Result.Llm.ToolCalls.Should().ContainSingle().Which.Should().BeEquivalentTo(
-            new NyxIdChatToolCall
-            {
-                CallId = "call-alpha",
-                ToolName = "tool-alpha",
-                ArgumentsJson = "{\"value\":1}",
-            });
+        var toolCall = execution.Result.Llm.ToolCalls.Should().ContainSingle().Which;
+        toolCall.CallId.Should().Be("call-alpha");
+        toolCall.ToolName.Should().Be("tool-alpha");
+        toolCall.ArgumentsJson.Should().Be("{\"value\":1}");
+        toolCall.Safety.Should().NotBeNull();
+        toolCall.Safety.IsReadOnly.Should().BeFalse();
+        toolCall.Safety.IsDestructive.Should().BeFalse();
+        toolCall.Safety.SideEffectKind.Should().Be("tool-alpha.update");
+        toolCall.Safety.MayChangeExternalState.Should().BeTrue();
     }
 
     [Fact]
@@ -376,6 +379,73 @@ public sealed class NyxIdChatTurnGAgentTests
         duplicate.Result.ResultCase.Should().Be(NyxIdChatOperationResultSignal.ResultOneofCase.Failure);
         duplicate.Result.Failure.FailureCode.Should().Be("NYXID_CHAT_TOOL_CAPABILITY_LOST");
         duplicate.Result.Failure.ExternalEffect.Should().Be(NyxIdChatEffectEvidence.NotStarted);
+    }
+
+    [Fact]
+    public async Task OperationExecutor_ContinuationLlm_ShouldReuseToolUpdatedTransientSession()
+    {
+        var generationExecutor = new StreamingCapabilityReplyExecutor();
+        var executor = new NyxIdChatTurnOperationExecutor(generationExecutor);
+        var session = new NyxIdChatTransientExecutionSession();
+        var initial = new NyxIdChatOperationDispatchCommand
+        {
+            Key = CreateKey(),
+            Llm = new NyxIdChatLLMOperationInput
+            {
+                Request = new ChatRequestEvent
+                {
+                    Prompt = "authorize then continue",
+                    SessionId = "turn-alpha",
+                },
+            },
+        };
+        await executor.ExecuteAsync(
+            initial,
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+        await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-tool-alpha", "operation-tool-alpha", 1),
+                Tool = new NyxIdChatToolOperationInput
+                {
+                    CallId = "call-alpha",
+                    ToolName = "tool-alpha",
+                    ArgumentsJson = "{\"value\":1}",
+                    MayChangeExternalState = true,
+                },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        var continuation = await executor.ExecuteAsync(
+            new NyxIdChatOperationDispatchCommand
+            {
+                Key = CreateKey("step-llm-continuation", "operation-llm-continuation", 1),
+                Llm = new NyxIdChatLLMOperationInput { ContinueSession = true },
+            },
+            session,
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        generationExecutor.InitialStateBuilds.Should().Be(1);
+        generationExecutor.LlmStepStates.Should().HaveCount(2);
+        var continuedState = generationExecutor.LlmStepStates[1];
+        continuedState.Round.Should().Be(1);
+        continuedState.PendingToolCalls.Should().BeEmpty();
+        continuedState.Messages.Should().ContainSingle(message =>
+            message.Role == "tool" &&
+            message.ToolCallId == "call-alpha" &&
+            message.Content == "{\"ok\":true}");
+        continuedState.ToolReceipts.Should().ContainSingle(receipt =>
+            receipt.CallId == "call-alpha" &&
+            receipt.Status == AgentToolReceiptStatus.Success);
+        continuation.Result.ResultCase.Should().Be(
+            NyxIdChatOperationResultSignal.ResultOneofCase.Llm);
+        continuation.Result.Llm.Content.Should().Be("final response");
+        continuation.Result.Llm.ToolCalls.Should().BeEmpty();
     }
 
     private static NyxIdChatTurnGAgent CreateAgent(
@@ -552,11 +622,16 @@ public sealed class NyxIdChatTurnGAgentTests
 
         public int ToolExecutions { get; private set; }
 
+        public int InitialStateBuilds { get; private set; }
+
+        public List<AgentRunReplyStepState> LlmStepStates { get; } = [];
+
         public Task<AgentRunReplyStepState> BuildInitialStepStateAsync(
             AgentRunReplyGenerationExecutionRequest request,
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            InitialStateBuilds++;
             return Task.FromResult(new AgentRunReplyStepState
             {
                 RunId = request.RunId,
@@ -573,6 +648,30 @@ public sealed class NyxIdChatTurnGAgentTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            LlmStepStates.Add(request.StepState.Clone());
+            if (request.StepState.Round > 0)
+            {
+                var finalResult = new AgentRunLlmStepResult
+                {
+                    Content = "final response",
+                    AccumulatedText = "final response",
+                    FinishReason = "stop",
+                    HasStreamedTextContent = true,
+                };
+                return new AgentRunLlmStepExecution(
+                    new AgentRunNextLlmStepRequestedEvent
+                    {
+                        RunId = request.RunId,
+                        CorrelationId = request.Request.CorrelationId,
+                        TargetActorId = request.Request.TargetActorId,
+                        Attempt = request.Attempt,
+                        StepIndex = request.StepIndex + 1,
+                        Request = request.Request.Clone(),
+                        LlmStepResult = finalResult,
+                    },
+                    AuthorizedToolStep: null);
+            }
+
             request.ReportChunkAsync.Should().NotBeNull();
             await request.ReportChunkAsync!(new LLMStreamChunk
             {
@@ -654,7 +753,20 @@ public sealed class NyxIdChatTurnGAgentTests
                         },
                     });
                 });
-            return new AgentRunLlmStepExecution(continuation, capability);
+            return new AgentRunLlmStepExecution(
+                continuation,
+                capability,
+                [
+                    new AgentRunAuthorizedToolCallSafety(
+                        AuthorizedToolCall.Id,
+                        AuthorizedToolCall.Name,
+                        AuthorizedToolCall.ArgumentsJson,
+                        new AgentToolCallSafety(
+                            RequiresApproval: false,
+                            IsReadOnly: false,
+                            IsDestructive: false),
+                        SideEffectKind: "tool-alpha.update"),
+                ]);
         }
 
         public async Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(

@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Runtime;
 
@@ -84,21 +85,41 @@ public sealed class NyxIdChatTurnOperationExecutor
         Func<NyxIdChatOperationProgressSignal, CancellationToken, Task> reportProgressAsync,
         CancellationToken ct)
     {
-        var request = BuildReplyRequest(command);
-        var runId = command.Key.TaskId;
-        var attempt = checked((int)Math.Clamp(command.Key.OperationGeneration, 1, int.MaxValue));
+        var isContinuation = command.Llm.ContinueSession;
+        if (isContinuation && (session.StepState is null || session.Request is null))
+        {
+            ClearAuthorization(session);
+            return Failure(
+                command.Key,
+                ToolCapabilityLostCode,
+                ToolCapabilityLostMessage,
+                NyxIdChatEffectEvidence.NotStarted);
+        }
+
+        var request = isContinuation
+            ? session.Request!.Clone()
+            : BuildReplyRequest(command);
+        var runId = isContinuation
+            ? session.StepState!.RunId
+            : command.Key.TaskId;
+        var attempt = isContinuation
+            ? session.StepState!.Attempt
+            : checked((int)Math.Clamp(command.Key.OperationGeneration, 1, int.MaxValue));
         var runActorId = NyxIdChatTurnActorIds.ForTurn(
             command.Key.ConversationActorId,
             command.Key.TurnId);
-        var stepState = await _generationExecutor.BuildInitialStepStateAsync(
-                new AgentRunReplyGenerationExecutionRequest(
-                    runId,
-                    runActorId,
-                    attempt,
-                    request.Clone()),
-                ct)
-            .ConfigureAwait(false);
-        OverlayDirectInputParts(stepState, command.Llm.Request);
+        var stepState = isContinuation
+            ? session.StepState!.Clone()
+            : await _generationExecutor.BuildInitialStepStateAsync(
+                    new AgentRunReplyGenerationExecutionRequest(
+                        runId,
+                        runActorId,
+                        attempt,
+                        request.Clone()),
+                    ct)
+                .ConfigureAwait(false);
+        if (!isContinuation)
+            OverlayDirectInputParts(stepState, command.Llm.Request);
 
         var outputParts = new List<ChatContentPart>();
         var execution = await _generationExecutor.BuildLlmStepExecutionAsync(
@@ -144,12 +165,8 @@ public sealed class NyxIdChatTurnOperationExecutor
             FinishReason = facts.FinishReason,
         };
         result.ContentParts.AddRange(outputParts.Select(static part => part.Clone()));
-        result.ToolCalls.AddRange(facts.ToolCalls.Select(static call => new NyxIdChatToolCall
-        {
-            CallId = call.Id,
-            ToolName = call.Name,
-            ArgumentsJson = call.ArgumentsJson,
-        }));
+        result.ToolCalls.AddRange(facts.ToolCalls.Select(call =>
+            BuildToolCall(call, execution.AuthorizedToolCallSafeties)));
         if (facts.Usage is not null)
         {
             result.Usage = new TokenUsagePayload
@@ -283,6 +300,11 @@ public sealed class NyxIdChatTurnOperationExecutor
         if (string.IsNullOrWhiteSpace(receipt.ResultJson))
             receipt.ResultJson = resultJson;
 
+        session.StepState = ApplyToolFacts(
+            session.StepState,
+            toolResult,
+            continuation.StepIndex);
+
         return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
         {
             Key = command.Key.Clone(),
@@ -293,6 +315,36 @@ public sealed class NyxIdChatTurnOperationExecutor
                 ExternalEffect = ResolveExternalEffect(command.Tool, receipt),
             },
         });
+    }
+
+    private static NyxIdChatToolCall BuildToolCall(
+        AgentRunToolCall call,
+        IReadOnlyList<AgentRunAuthorizedToolCallSafety>? safetySnapshots)
+    {
+        var result = new NyxIdChatToolCall
+        {
+            CallId = call.Id,
+            ToolName = call.Name,
+            ArgumentsJson = call.ArgumentsJson,
+        };
+        var snapshot = safetySnapshots?.FirstOrDefault(candidate =>
+            string.Equals(candidate.CallId, call.Id, StringComparison.Ordinal) &&
+            string.Equals(candidate.ToolName, call.Name, StringComparison.Ordinal) &&
+            string.Equals(candidate.ArgumentsJson, call.ArgumentsJson, StringComparison.Ordinal));
+        if (snapshot is null)
+            return result;
+
+        var callSafety = snapshot.CallSafety;
+        result.Safety = new NyxIdChatToolCallSafety
+        {
+            IsReadOnly = callSafety.IsReadOnly,
+            IsDestructive = callSafety.IsDestructive,
+            SideEffectKind = snapshot.SideEffectKind,
+            MayChangeExternalState = !callSafety.IsReadOnly ||
+                                     callSafety.IsDestructive ||
+                                     !string.IsNullOrWhiteSpace(snapshot.SideEffectKind),
+        };
+        return result;
     }
 
     private static NeedsLlmReplyEvent BuildReplyRequest(NyxIdChatOperationDispatchCommand command)
@@ -390,6 +442,25 @@ public sealed class NyxIdChatTurnOperationExecutor
             next.Messages.Add(assistant);
         }
 
+        return next;
+    }
+
+    private static AgentRunReplyStepState ApplyToolFacts(
+        AgentRunReplyStepState current,
+        AgentRunToolStepResult result,
+        int completedStepIndex)
+    {
+        var next = current.Clone();
+        next.NextStepIndex = completedStepIndex;
+        next.PendingToolCalls.Clear();
+        next.Messages.AddRange(result.ResultMessages.Select(static message => message.Clone()));
+        next.AppendedHistory.AddRange(result.ResultMessages.Select(
+            AgentRunReplyStepMappers.ToConversationHistoryEntry));
+        next.ToolReceipts.AddRange(result.ToolReceipts.Select(static receipt => receipt.Clone()));
+        if (result.OutboundIntent is not null)
+            next.OutboundIntent = result.OutboundIntent.Clone();
+        if (result.AdvanceRound)
+            next.Round++;
         return next;
     }
 

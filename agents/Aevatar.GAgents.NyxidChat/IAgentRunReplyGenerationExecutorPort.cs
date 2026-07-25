@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -19,7 +20,20 @@ public interface IAgentRunReplyGenerationExecutorPort
 
 public sealed record AgentRunLlmStepExecution(
     AgentRunNextLlmStepRequestedEvent Continuation,
-    AgentRunAuthorizedToolStep? AuthorizedToolStep);
+    AgentRunAuthorizedToolStep? AuthorizedToolStep,
+    IReadOnlyList<AgentRunAuthorizedToolCallSafety>? AuthorizedToolCallSafeties = null);
+
+/// <summary>
+/// Transient, provider-owned classification for one exact authorized call.
+/// This snapshot stays beside the runtime capability and is never persisted as
+/// actor state; NyxIdChat copies only its closed safe fields into its result.
+/// </summary>
+public sealed record AgentRunAuthorizedToolCallSafety(
+    string CallId,
+    string ToolName,
+    string ArgumentsJson,
+    AgentToolCallSafety CallSafety,
+    string SideEffectKind);
 
 public sealed class AgentRunAuthorizedToolStep
 {

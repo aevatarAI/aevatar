@@ -201,6 +201,24 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
                 },
             },
         ];
+        yield return
+        [
+            new NyxIdChatControlFenceCommittedEvent
+            {
+                Fence = new NyxIdChatControlFenceState { TurnId = "turn-1" },
+            },
+        ];
+        yield return
+        [
+            new NyxIdChatActionRequestedEvent
+            {
+                Request = new NyxIdChatActionRequestState
+                {
+                    ConversationActorId = "conv-a",
+                    OriginTurnId = "turn-1",
+                },
+            },
+        ];
     }
 
     public static IEnumerable<object[]> SessionlessStateEvents()
@@ -209,6 +227,8 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         yield return [new NyxIdChatOperationDispatchedEvent()];
         yield return [new NyxIdChatOperationProgressedEvent()];
         yield return [new NyxIdChatOperationReconciledEvent()];
+        yield return [new NyxIdChatControlFenceCommittedEvent()];
+        yield return [new NyxIdChatActionRequestedEvent()];
         yield return
         [
             new NyxIdChatConversationCreationStartedEvent

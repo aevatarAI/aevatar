@@ -167,6 +167,72 @@ public class NyxIdChatAguiSseEventWriterTests
     }
 
     [Fact]
+    public async Task WriteAsync_ShouldMapTypedTaskSnapshotCustomEventToStableJson()
+    {
+        var sink = new SseFrameSink();
+        var task = new NyxIdChatTaskState
+        {
+            TaskId = "task-alpha",
+            TurnId = "turn-alpha",
+            Status = NyxIdChatTaskStatus.Active,
+            ActiveStepId = "step-alpha",
+            ActiveOperationId = "operation-alpha",
+            Steps =
+            {
+                new NyxIdChatTaskStepState
+                {
+                    StepId = "step-alpha",
+                    Order = 1,
+                    Kind = NyxIdChatStepKind.Tool,
+                    Status = NyxIdChatStepStatus.Running,
+                    Required = true,
+                    ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                    Operation = new NyxIdChatOperationState
+                    {
+                        Key = new NyxIdChatOperationKey
+                        {
+                            ConversationActorId = "conversation-alpha",
+                            TurnId = "turn-alpha",
+                            TaskId = "task-alpha",
+                            StepId = "step-alpha",
+                            OperationId = "operation-alpha",
+                            OperationGeneration = 1,
+                        },
+                        Kind = NyxIdChatStepKind.Tool,
+                        Phase = NyxIdChatOperationPhase.Requested,
+                    },
+                },
+            },
+        };
+
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 17,
+            Custom = new CustomEvent
+            {
+                Name = "nyxid.task.snapshot",
+                Payload = Any.Pack(task),
+            },
+        }, "turn-alpha");
+
+        var frame = sink.ReadFrames().Should().ContainSingle().Which;
+        frame.GetProperty("type").GetString().Should().Be("CUSTOM");
+        frame.GetProperty("sequence").GetInt64().Should().Be(17);
+        var custom = frame.GetProperty("custom");
+        custom.GetProperty("name").GetString().Should().Be("nyxid.task.snapshot");
+        var payload = custom.GetProperty("payload");
+        payload.GetProperty("taskId").GetString().Should().Be("task-alpha");
+        payload.GetProperty("turnId").GetString().Should().Be("turn-alpha");
+        payload.GetProperty("status").GetString().Should().Be("active");
+        var step = payload.GetProperty("steps")[0];
+        step.GetProperty("kind").GetString().Should().Be("tool");
+        step.GetProperty("status").GetString().Should().Be("running");
+        step.GetProperty("externalEffect").GetString().Should().Be("not_started");
+        step.GetProperty("operation").GetProperty("phase").GetString().Should().Be("requested");
+        frame.GetRawText().Should().NotContain("@type");
+    }
+
+    [Fact]
     public async Task WriteAsync_ShouldMapRunErrorAndReturnTerminalStatus()
     {
         var sink = new SseFrameSink();

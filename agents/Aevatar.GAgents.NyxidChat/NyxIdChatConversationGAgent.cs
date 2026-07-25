@@ -339,27 +339,121 @@ public sealed class NyxIdChatConversationGAgent
         if (!TryResolveCurrentOperation(signal.Key, out _))
             return;
 
-        var decision = NyxIdChatTaskTransitionPolicy.ReconcileOperation(State, signal);
+        var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var decision = NyxIdChatTaskLifecycle.ApplyOperationResult(State, signal, now);
         if (decision.Outcome != NyxIdChatTransitionOutcome.Accepted)
             return;
 
-        var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
-        var task = decision.State.ActiveTask.Clone();
-        var turn = decision.State.ActiveTurn.Clone();
-        var step = task.Steps.First(candidate => KeysEqual(candidate.Operation?.Key, signal.Key));
-        step.Operation.CompletedAt = now.Clone();
-        step.UpdatedAt = now.Clone();
-        task.UpdatedAt = now.Clone();
-        if (turn.Status != NyxIdChatTurnStatus.Active)
-            turn.TerminalAt = now.Clone();
+        var nextState = decision.State.Clone();
+        nextState.ProgressSequence = State.ProgressSequence + 1;
+        nextState.UpdatedAt = now.Clone();
 
         await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
         {
-            Result = signal.Clone(),
-            Task = task,
-            Turn = turn,
-            ProgressSequence = State.ProgressSequence + 1,
+            Result = BuildDurableResultEvidence(signal),
+            Task = nextState.ActiveTask.Clone(),
+            Turn = nextState.ActiveTurn.Clone(),
+            ProgressSequence = nextState.ProgressSequence,
+            State = nextState,
         }, CancellationToken.None).ConfigureAwait(false);
+
+        if (decision.NextCommand is null)
+            return;
+
+        var turnActorId = NyxIdChatTurnActorIds.ForTurn(Id, signal.Key.TurnId);
+        var envelope = new EventEnvelope
+        {
+            Id = decision.NextCommand.Key.OperationId,
+            Timestamp = now.Clone(),
+            Payload = Any.Pack(decision.NextCommand),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = turnActorId },
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = ActiveInboundEnvelope?.Propagation?.CorrelationId
+                    ?? signal.Key.OperationId,
+            },
+        };
+        await _actorDispatchPort
+            .DispatchAsync(turnActorId, envelope, CancellationToken.None)
+            .ConfigureAwait(false);
+
+        await PersistDomainEventAsync(new NyxIdChatOperationDispatchedEvent
+        {
+            Key = decision.NextCommand.Key.Clone(),
+            DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private static NyxIdChatOperationResultSignal BuildDurableResultEvidence(
+        NyxIdChatOperationResultSignal signal)
+    {
+        var durable = new NyxIdChatOperationResultSignal { Key = signal.Key?.Clone() };
+        switch (signal.ResultCase)
+        {
+            case NyxIdChatOperationResultSignal.ResultOneofCase.Llm:
+                durable.Llm = new NyxIdChatLLMOperationResult
+                {
+                    FinishReason = signal.Llm.FinishReason,
+                    Usage = signal.Llm.Usage?.Clone(),
+                };
+                durable.Llm.ToolCalls.AddRange(signal.Llm.ToolCalls.Select(static call =>
+                    new NyxIdChatToolCall
+                    {
+                        CallId = call.CallId,
+                        ToolName = call.ToolName,
+                        Safety = call.Safety?.Clone(),
+                    }));
+                break;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.Tool:
+                durable.Tool = new NyxIdChatToolOperationResult
+                {
+                    ExternalEffect = signal.Tool.ExternalEffect,
+                };
+                if (BuildDurableReceiptEvidence(signal.Tool.Receipt) is { } receipt)
+                    durable.Tool.Receipt = receipt;
+                break;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition:
+                durable.ActionPostcondition = signal.ActionPostcondition.Clone();
+                break;
+            case NyxIdChatOperationResultSignal.ResultOneofCase.Failure:
+                durable.Failure = signal.Failure.Clone();
+                break;
+        }
+
+        return durable;
+    }
+
+    private static AgentToolReceipt? BuildDurableReceiptEvidence(AgentToolReceipt? receipt)
+    {
+        if (receipt is null)
+            return null;
+
+        var durable = new AgentToolReceipt
+        {
+            CallId = receipt.CallId,
+            ToolName = receipt.ToolName,
+            Status = receipt.Status,
+            ApprovalMode = receipt.ApprovalMode,
+            IsDestructive = receipt.IsDestructive,
+            SideEffectKind = receipt.SideEffectKind,
+            SubjectKind = receipt.SubjectKind,
+            SubjectId = receipt.SubjectId,
+            SubjectVersion = receipt.SubjectVersion,
+            SubjectHash = receipt.SubjectHash,
+            ApprovalRequestId = receipt.ApprovalRequestId,
+            ErrorCode = receipt.ErrorCode,
+            ErrorMessage = receipt.ErrorMessage,
+        };
+        if (receipt.ManagedWorkflowHandoff is not null)
+            durable.ManagedWorkflowHandoff = receipt.ManagedWorkflowHandoff.Clone();
+        if (receipt.WorkflowRunDelivery is not null)
+            durable.WorkflowRunDelivery = receipt.WorkflowRunDelivery.Clone();
+        if (receipt.AuthorizationRequired is not null)
+            durable.AuthorizationRequired = receipt.AuthorizationRequired.Clone();
+        return durable;
     }
 
     private NyxIdChatConversationGAgentState BuildStartedState(
@@ -549,6 +643,31 @@ public sealed class NyxIdChatConversationGAgent
             .FirstOrDefault(candidate => KeysEqual(candidate?.Key, evt.Result.Key));
         if (currentOperation is null || reconciledOperation is null)
             return current;
+
+        if (evt.State is not null)
+        {
+            if (!string.Equals(
+                    evt.State.ConversationActorId,
+                    current.ConversationActorId,
+                    StringComparison.Ordinal) ||
+                !string.Equals(evt.State.ScopeId, current.ScopeId, StringComparison.Ordinal) ||
+                evt.State.ProgressSequence != evt.ProgressSequence ||
+                evt.State.ActiveTask is null ||
+                evt.State.ActiveTurn is null ||
+                !string.Equals(
+                    evt.State.ActiveTask.TaskId,
+                    evt.Result.Key.TaskId,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    evt.State.ActiveTurn.TurnId,
+                    evt.Result.Key.TurnId,
+                    StringComparison.Ordinal))
+            {
+                return current;
+            }
+
+            return evt.State.Clone();
+        }
 
         var next = current.Clone();
         next.ActiveTask = evt.Task.Clone();

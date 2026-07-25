@@ -216,6 +216,95 @@ public sealed class NyxIdChatConversationGAgentTests
     }
 
     [Fact]
+    public async Task LlmToolResult_ShouldCommitSuccessorRequestedWaterlineBeforeDispatch()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        NyxIdChatConversationGAgent? agent = null;
+        NyxIdChatConversationGAgentState? stateObservedAtSuccessorDispatch = null;
+        IReadOnlyList<StateEvent>? eventsObservedAtSuccessorDispatch = null;
+        var dispatchCount = 0;
+        var operations = new List<string>();
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            async (_, envelope) =>
+            {
+                dispatchCount++;
+                if (dispatchCount != 2)
+                    return;
+
+                var command = envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>();
+                command.InputCase.Should().Be(
+                    NyxIdChatOperationDispatchCommand.InputOneofCase.Tool);
+                stateObservedAtSuccessorDispatch = agent!.State.Clone();
+                eventsObservedAtSuccessorDispatch = await eventStore.GetEventsAsync(
+                    conversationActorId);
+            });
+        using var services = BuildEventSourcingServices(eventStore);
+        agent = new NyxIdChatConversationGAgent(
+            new RecordingActorRuntime(operations),
+            dispatch,
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, conversationActorId);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, CreateStartTurnCommand()));
+        var llmKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        var llmResult = new NyxIdChatOperationResultSignal
+        {
+            Key = llmKey,
+            Llm = new NyxIdChatLLMOperationResult
+            {
+                ToolCalls =
+                {
+                    new NyxIdChatToolCall
+                    {
+                        CallId = "call-alpha",
+                        ToolName = "repository_update",
+                        ArgumentsJson = "{\"repositoryId\":\"repo-alpha\"}",
+                        Safety = new NyxIdChatToolCallSafety
+                        {
+                            SideEffectKind = "repository.update",
+                            MayChangeExternalState = true,
+                        },
+                    },
+                },
+            },
+        };
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, llmResult));
+
+        dispatch.Calls.Should().HaveCount(2);
+        stateObservedAtSuccessorDispatch.Should().NotBeNull();
+        var toolStep = stateObservedAtSuccessorDispatch!.ActiveTask.Steps.Last();
+        toolStep.Kind.Should().Be(NyxIdChatStepKind.Tool);
+        toolStep.Status.Should().Be(NyxIdChatStepStatus.Running);
+        toolStep.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
+        eventsObservedAtSuccessorDispatch.Should().NotBeNull();
+        eventsObservedAtSuccessorDispatch![^1].EventData.Is(
+            NyxIdChatOperationReconciledEvent.Descriptor).Should().BeTrue();
+        var committedReconciliation = eventsObservedAtSuccessorDispatch[^1].EventData
+            .Unpack<NyxIdChatOperationReconciledEvent>();
+        committedReconciliation.Result.Llm.ToolCalls.Should().ContainSingle()
+            .Which.ArgumentsJson.Should().BeEmpty(
+                "tool arguments are transient dispatch input, not durable product facts");
+        dispatch.Calls[^1].Envelope.Payload.Unpack<NyxIdChatOperationDispatchCommand>()
+            .Tool.ArgumentsJson.Should().Be("{\"repositoryId\":\"repo-alpha\"}");
+        eventsObservedAtSuccessorDispatch.Should().HaveCount(3,
+            "the successor dispatched waterline is committed only after dispatch admission");
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().HaveCount(4);
+        committed[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor).Should().BeTrue();
+        agent.State.ActiveTask.Steps.Last().Operation.Phase.Should().Be(
+            NyxIdChatOperationPhase.Dispatched);
+    }
+
+    [Fact]
     public async Task ChildProgress_ShouldCommitMatchingMonotonicSequenceAndIgnoreDuplicateOrWrongKey()
     {
         const string conversationActorId = "conversation-alpha";

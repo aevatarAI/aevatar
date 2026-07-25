@@ -520,6 +520,9 @@ message NyxIdChatTurnOperationDeliveredEvent {
 
 message NyxIdChatLLMOperationInput {
   aevatar.ai.ChatRequestEvent request = 1;
+  // Continuations reuse only the turn actor's transient provider session.
+  // No credential or authorized-tool capability is persisted in actor state.
+  bool continue_session = 2;
 }
 
 message NyxIdChatToolOperationInput {
@@ -547,10 +550,20 @@ message NyxIdChatOperationDispatchCommand {
   }
 }
 
+message NyxIdChatToolCallSafety {
+  bool is_read_only = 1;
+  bool is_destructive = 2;
+  string side_effect_kind = 3;
+  bool may_change_external_state = 4;
+}
+
 message NyxIdChatToolCall {
   string call_id = 1;
   string tool_name = 2;
   string arguments_json = 3;
+  // Exact invocation safety is snapshotted by the authorized tool provider.
+  // Its absence is fail-closed; consumers never infer safety from strings.
+  NyxIdChatToolCallSafety safety = 4;
 }
 
 message NyxIdChatLLMOperationResult {
@@ -712,6 +725,9 @@ message NyxIdChatOperationReconciledEvent {
   NyxIdChatTaskState task = 2;
   NyxIdChatTurnState turn = 3;
   int64 progress_sequence = 4;
+  // Complete actor-derived state, including successor requested waterlines,
+  // pending approval/action state, and bounded terminal summaries.
+  NyxIdChatConversationGAgentState state = 5;
 }
 
 message NyxIdChatControlFenceCommittedEvent {

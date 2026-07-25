@@ -172,6 +172,27 @@ public sealed class AgentRunReplyGenerationExecutorTests
     }
 
     [Fact]
+    public async Task BuildLlmStepContinuation_ShouldSnapshotExactProviderOwnedCallSafety()
+    {
+        var tool = new EffectClassifiedTool("repository_update");
+        var provider = new ToolCallProvider(tool.Name);
+        var executor = CreateToolEnabledExecutor(tool, provider);
+        var workItem = BuildToolEnabledWorkItem();
+
+        var execution = await executor.BuildLlmStepExecutionAsync(workItem, CancellationToken.None);
+
+        tool.ClassifiedArguments.Should().Be("{}");
+        var snapshot = execution.AuthorizedToolCallSafeties.Should().ContainSingle().Which;
+        snapshot.CallId.Should().Be("call-1");
+        snapshot.ToolName.Should().Be(tool.Name);
+        snapshot.ArgumentsJson.Should().Be("{}");
+        snapshot.CallSafety.RequiresApproval.Should().BeFalse();
+        snapshot.CallSafety.IsReadOnly.Should().BeFalse();
+        snapshot.CallSafety.IsDestructive.Should().BeTrue();
+        snapshot.SideEffectKind.Should().Be("repository.update");
+    }
+
+    [Fact]
     public async Task BuildLlmStepContinuation_WhenMiddlewareRemovesTools_ShouldRejectFabricatedToolCall()
     {
         var tool = new CountingTool("use_skill");
@@ -530,6 +551,28 @@ public sealed class AgentRunReplyGenerationExecutorTests
             ExecuteCount++;
             return Task.FromResult("{}");
         }
+    }
+
+    private sealed class EffectClassifiedTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => name;
+        public string ParametersSchema => "{}";
+        public bool IsDestructive => true;
+        public string SideEffectKind => "repository.update";
+        public string? ClassifiedArguments { get; private set; }
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson)
+        {
+            ClassifiedArguments = argumentsJson;
+            return new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: false,
+                IsDestructive: true);
+        }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     public enum AuthorizedToolStepMutation
