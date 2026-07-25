@@ -12,6 +12,12 @@ namespace Aevatar.Capabilities.Tests;
 public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
 {
     private const string BearerSentinel = "BEARER-SENTINEL-DO-NOT-SERIALIZE-7f37c65b";
+    private const string CredentialSentinel =
+        "CREDENTIAL-SENTINEL-DO-NOT-SERIALIZE-1d0fc476";
+    private const string CatalogSentinel =
+        "CATALOG-CONTENTS-SENTINEL-DO-NOT-SERIALIZE-65ad61e8";
+    private const string ExceptionSentinel =
+        $"downstream-failure {BearerSentinel} {CredentialSentinel} {CatalogSentinel}";
 
     [Fact]
     public async Task Workspace_WithoutAuthorizer_ReturnsServiceUnavailable()
@@ -104,8 +110,25 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
     }
 
     [Fact]
-    public async Task Workspace_WhenIdentityResolutionIsCanceled_PropagatesCancellation()
+    public async Task Workspace_WhenIdentityResolutionThrowsUncanceledOperationCanceled_ReturnsForbidden()
     {
+        var authorizer = FailingAuthorizer(new OperationCanceledException("workspace identity canceled"));
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleWorkspaceAsync(
+            Context(BearerSentinel),
+            ValidWorkspaceRequest(),
+            authorizer,
+            Substitute.For<IStudioWorkspaceVersionRegressionRepairService>(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status403Forbidden);
+    }
+
+    [Fact]
+    public async Task Workspace_WhenRequestCancellationIsSignaled_PropagatesIdentityCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
         var authorizer = FailingAuthorizer(new OperationCanceledException("workspace identity canceled"));
 
         var handle = () => ProjectionVersionRegressionRepairAdminEndpoints.HandleWorkspaceAsync(
@@ -113,14 +136,14 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             ValidWorkspaceRequest(),
             authorizer,
             Substitute.For<IStudioWorkspaceVersionRegressionRepairService>(),
-            CancellationToken.None);
+            cancellation.Token);
 
         await handle.Should().ThrowAsync<OperationCanceledException>()
             .WithMessage("workspace identity canceled");
     }
 
     [Fact]
-    public async Task Catalog_WhenServiceIsCanceled_PropagatesCancellation()
+    public async Task Catalog_WhenServiceThrowsUncanceledOperationCanceled_ReturnsServiceUnavailable()
     {
         var service = Substitute.For<INyxIdAuthorizationCatalogVersionRegressionRepairService>();
         service.RepairPersonalAsync(
@@ -129,12 +152,34 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             .Returns<Task<NyxIdAuthorizationCatalogVersionRegressionRepairResult>>(
                 _ => throw new OperationCanceledException("catalog repair canceled"));
 
-        var handle = () => ProjectionVersionRegressionRepairAdminEndpoints.HandleCatalogAsync(
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleCatalogAsync(
             Context(BearerSentinel),
             ValidCatalogRequest(),
             ElevatedAuthorizer(),
             service,
             CancellationToken.None);
+
+        AssertSanitizedServiceUnavailable(result);
+    }
+
+    [Fact]
+    public async Task Catalog_WhenRequestCancellationIsSignaled_PropagatesServiceCancellation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var service = Substitute.For<INyxIdAuthorizationCatalogVersionRegressionRepairService>();
+        service.RepairPersonalAsync(
+                Arg.Any<NyxIdAuthorizationCatalogVersionRegressionRepairRequest>(),
+                cancellation.Token)
+            .Returns<Task<NyxIdAuthorizationCatalogVersionRegressionRepairResult>>(
+                _ => throw new OperationCanceledException("catalog repair canceled"));
+
+        var handle = () => ProjectionVersionRegressionRepairAdminEndpoints.HandleCatalogAsync(
+            Context(BearerSentinel),
+            ValidCatalogRequest(),
+            ElevatedAuthorizer(),
+            service,
+            cancellation.Token);
 
         await handle.Should().ThrowAsync<OperationCanceledException>()
             .WithMessage("catalog repair canceled");
@@ -300,6 +345,86 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
         StatusCode(result).Should().Be(StatusCodes.Status200OK);
         await service.Received(1).InspectPersonalAsync("admin-1", source.Token);
         await service.DidNotReceiveWithAnyArgs().RepairPersonalAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task Workspace_InspectionException_ReturnsSanitizedServiceUnavailable()
+    {
+        var service = Substitute.For<IStudioWorkspaceVersionRegressionRepairService>();
+        service.InspectAsync("scope-1", Arg.Any<CancellationToken>())
+            .Returns<Task<StudioWorkspaceVersionRegressionInspection>>(
+                _ => throw DownstreamException());
+        var request = ValidWorkspaceRequest() with { Apply = false };
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleWorkspaceAsync(
+            Context(BearerSentinel),
+            request,
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        AssertSanitizedServiceUnavailable(result);
+        await service.DidNotReceiveWithAnyArgs().RepairAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task Workspace_ApplyException_ReturnsSanitizedServiceUnavailable()
+    {
+        var service = Substitute.For<IStudioWorkspaceVersionRegressionRepairService>();
+        service.RepairAsync(
+                Arg.Any<StudioWorkspaceVersionRegressionRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<StudioWorkspaceVersionRegressionRepairResult>>(
+                _ => throw DownstreamException());
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleWorkspaceAsync(
+            Context(BearerSentinel),
+            ValidWorkspaceRequest(),
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        AssertSanitizedServiceUnavailable(result);
+    }
+
+    [Fact]
+    public async Task Catalog_InspectionException_ReturnsSanitizedServiceUnavailable()
+    {
+        var service = Substitute.For<INyxIdAuthorizationCatalogVersionRegressionRepairService>();
+        service.InspectPersonalAsync("admin-1", Arg.Any<CancellationToken>())
+            .Returns<Task<NyxIdAuthorizationCatalogVersionRegressionInspection>>(
+                _ => throw DownstreamException());
+        var request = ValidCatalogRequest() with { Apply = false };
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleCatalogAsync(
+            Context(BearerSentinel),
+            request,
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        AssertSanitizedServiceUnavailable(result);
+        await service.DidNotReceiveWithAnyArgs().RepairPersonalAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task Catalog_ApplyException_ReturnsSanitizedServiceUnavailable()
+    {
+        var service = Substitute.For<INyxIdAuthorizationCatalogVersionRegressionRepairService>();
+        service.RepairPersonalAsync(
+                Arg.Any<NyxIdAuthorizationCatalogVersionRegressionRepairRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<NyxIdAuthorizationCatalogVersionRegressionRepairResult>>(
+                _ => throw DownstreamException());
+
+        var result = await ProjectionVersionRegressionRepairAdminEndpoints.HandleCatalogAsync(
+            Context(BearerSentinel),
+            ValidCatalogRequest(),
+            ElevatedAuthorizer(),
+            service,
+            CancellationToken.None);
+
+        AssertSanitizedServiceUnavailable(result);
     }
 
     [Fact]
@@ -479,6 +604,9 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
         return authorizer;
     }
 
+    private static Exception DownstreamException() =>
+        new InvalidOperationException(ExceptionSentinel);
+
     private static ProjectionVersionRegressionRepairAdminEndpoints.WorkspaceRepairRequest ValidWorkspaceRequest() =>
         new(
             "scope-1",
@@ -600,6 +728,21 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
 
     private static string SerializedBody(IResult result) =>
         JsonSerializer.Serialize(((IValueHttpResult)result).Value);
+
+    private static string SerializedBodyOrEmpty(IResult result) =>
+        result is IValueHttpResult value
+            ? JsonSerializer.Serialize(value.Value)
+            : string.Empty;
+
+    private static void AssertSanitizedServiceUnavailable(IResult result)
+    {
+        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
+        SerializedBodyOrEmpty(result).Should()
+            .NotContain(ExceptionSentinel)
+            .And.NotContain(BearerSentinel)
+            .And.NotContain(CredentialSentinel)
+            .And.NotContain(CatalogSentinel);
+    }
 
     private static int StatusCode(IResult result) =>
         result is Microsoft.AspNetCore.Http.HttpResults.ForbidHttpResult

@@ -41,8 +41,13 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
 
         if (!request.Apply)
         {
-            var inspection = await service.InspectAsync(request.ScopeId, ct);
-            return Results.Json(ToInspectionResponse(inspection));
+            return await ExecuteDownstreamAsync(
+                async () =>
+                {
+                    var inspection = await service.InspectAsync(request.ScopeId, ct);
+                    return Results.Json(ToInspectionResponse(inspection));
+                },
+                ct);
         }
 
         if (!IsValidApplyManifest(
@@ -56,28 +61,33 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             return InvalidRequest();
         }
 
-        var result = await service.RepairAsync(
-            new StudioWorkspaceVersionRegressionRepairRequest(
-                request.ScopeId,
-                request.ExpectedActorId,
-                request.ExpectedSourceStateVersion,
-                request.ExpectedDocumentStateVersion,
-                request.ExpectedDocumentLastEventId,
-                request.RepairRequestId,
-                request.RepairReason,
-                authorization.Caller!.UserId),
+        return await ExecuteDownstreamAsync(
+            async () =>
+            {
+                var result = await service.RepairAsync(
+                    new StudioWorkspaceVersionRegressionRepairRequest(
+                        request.ScopeId,
+                        request.ExpectedActorId,
+                        request.ExpectedSourceStateVersion,
+                        request.ExpectedDocumentStateVersion,
+                        request.ExpectedDocumentLastEventId,
+                        request.RepairRequestId,
+                        request.RepairReason,
+                        authorization.Caller!.UserId),
+                    ct);
+                var response = ToWorkspaceRepairResponse(result);
+                return result.Status switch
+                {
+                    StudioWorkspaceVersionRegressionRepairStatus.Accepted =>
+                        Results.Json(response, statusCode: StatusCodes.Status202Accepted),
+                    StudioWorkspaceVersionRegressionRepairStatus.Conflict =>
+                        Results.Json(response, statusCode: StatusCodes.Status409Conflict),
+                    _ => Results.Json(
+                        response,
+                        statusCode: StatusCodes.Status503ServiceUnavailable),
+                };
+            },
             ct);
-        var response = ToWorkspaceRepairResponse(result);
-        return result.Status switch
-        {
-            StudioWorkspaceVersionRegressionRepairStatus.Accepted =>
-                Results.Json(response, statusCode: StatusCodes.Status202Accepted),
-            StudioWorkspaceVersionRegressionRepairStatus.Conflict =>
-                Results.Json(response, statusCode: StatusCodes.Status409Conflict),
-            _ => Results.Json(
-                response,
-                statusCode: StatusCodes.Status503ServiceUnavailable),
-        };
     }
 
     internal static async Task<IResult> HandleCatalogAsync(
@@ -98,8 +108,13 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
         var caller = authorization.Caller!;
         if (!request.Apply)
         {
-            var inspection = await service.InspectPersonalAsync(caller.UserId, ct);
-            return Results.Json(ToInspectionResponse(inspection));
+            return await ExecuteDownstreamAsync(
+                async () =>
+                {
+                    var inspection = await service.InspectPersonalAsync(caller.UserId, ct);
+                    return Results.Json(ToInspectionResponse(inspection));
+                },
+                ct);
         }
 
         if (!IsValidApplyManifest(
@@ -113,31 +128,36 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             return InvalidRequest();
         }
 
-        var result = await service.RepairPersonalAsync(
-            new NyxIdAuthorizationCatalogVersionRegressionRepairRequest(
-                VerifiedOwnerSubject: caller.UserId,
-                request.ExpectedActorId,
-                BearerToken: authorization.BearerToken,
-                request.ExpectedSourceStateVersion,
-                request.ExpectedDocumentStateVersion,
-                request.ExpectedDocumentLastEventId,
-                request.RepairRequestId,
-                request.RepairReason,
-                RequestedBySubjectId: caller.UserId),
+        return await ExecuteDownstreamAsync(
+            async () =>
+            {
+                var result = await service.RepairPersonalAsync(
+                    new NyxIdAuthorizationCatalogVersionRegressionRepairRequest(
+                        VerifiedOwnerSubject: caller.UserId,
+                        request.ExpectedActorId,
+                        BearerToken: authorization.BearerToken,
+                        request.ExpectedSourceStateVersion,
+                        request.ExpectedDocumentStateVersion,
+                        request.ExpectedDocumentLastEventId,
+                        request.RepairRequestId,
+                        request.RepairReason,
+                        RequestedBySubjectId: caller.UserId),
+                    ct);
+                var response = ToCatalogRepairResponse(result);
+                return result.Status switch
+                {
+                    NyxIdAuthorizationCatalogVersionRegressionRepairStatus.Ready =>
+                        Results.Json(response),
+                    NyxIdAuthorizationCatalogVersionRegressionRepairStatus.ProjectionPending =>
+                        Results.Json(response, statusCode: StatusCodes.Status202Accepted),
+                    NyxIdAuthorizationCatalogVersionRegressionRepairStatus.Conflict =>
+                        Results.Json(response, statusCode: StatusCodes.Status409Conflict),
+                    _ => Results.Json(
+                        response,
+                        statusCode: StatusCodes.Status503ServiceUnavailable),
+                };
+            },
             ct);
-        var response = ToCatalogRepairResponse(result);
-        return result.Status switch
-        {
-            NyxIdAuthorizationCatalogVersionRegressionRepairStatus.Ready =>
-                Results.Json(response),
-            NyxIdAuthorizationCatalogVersionRegressionRepairStatus.ProjectionPending =>
-                Results.Json(response, statusCode: StatusCodes.Status202Accepted),
-            NyxIdAuthorizationCatalogVersionRegressionRepairStatus.Conflict =>
-                Results.Json(response, statusCode: StatusCodes.Status409Conflict),
-            _ => Results.Json(
-                response,
-                statusCode: StatusCodes.Status503ServiceUnavailable),
-        };
     }
 
     private static Task<IResult> HandleWorkspaceRouteAsync(
@@ -187,7 +207,7 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
         {
             caller = await authorizer.ResolveCallerAsync(bearer, ct);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;
         }
@@ -200,6 +220,24 @@ internal static class ProjectionVersionRegressionRepairAdminEndpoints
             return new AuthorizationResult(string.Empty, null, Results.Forbid());
 
         return new AuthorizationResult(bearer, caller, null);
+    }
+
+    private static async Task<IResult> ExecuteDownstreamAsync(
+        Func<Task<IResult>> execute,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await execute();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     private static bool IsValidApplyManifest(
