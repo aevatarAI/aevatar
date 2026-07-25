@@ -61,6 +61,36 @@ public sealed class ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStore
         repairStore.DeleteLeases.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData(0, 4)]
+    [InlineData(4, 4)]
+    [InlineData(4, 3)]
+    public async Task DeleteIfMatchesAsync_WhenManifestIsNotARegression_ShouldRejectBeforeStorageAccess(
+        long sourceVersion,
+        long documentVersion)
+    {
+        var eventStore = new RecordingEventStore { Version = 1 };
+        var repairStore = new RecordingRepairStore
+        {
+            Lease = Lease(Document()),
+        };
+        var port = new ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStorePort(
+            eventStore,
+            repairStore);
+        var request = Request() with
+        {
+            ExpectedSourceStateVersion = sourceVersion,
+            ExpectedDocumentStateVersion = documentVersion,
+        };
+
+        var act = () => port.DeleteIfMatchesAsync(request);
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        eventStore.VersionRequests.Should().BeEmpty();
+        repairStore.InspectKeys.Should().BeEmpty();
+        repairStore.DeleteLeases.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task DeleteIfMatchesAsync_WhenSourceVersionChanged_ShouldNotReadElasticsearch()
     {
@@ -178,7 +208,7 @@ public sealed class ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStore
             ExpectedDocumentLastEventId: "event-4",
             RepairRequestId: "repair-alpha",
             RepairReason: "rebuild from NyxID",
-            RequestedBySubjectId: "operator-alpha");
+            RequestedBySubjectId: VerifiedOwnerSubject);
 
     private static AuthorizationOwnerIdentity Owner() => new()
     {

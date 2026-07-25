@@ -131,7 +131,7 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
     }
 
     [Fact]
-    public async Task RepairPersonalAsync_WhenExpectedActorDoesNotMatchPresentDocument_ShouldNotDeleteOrRefresh()
+    public async Task RepairPersonalAsync_WhenExpectedActorDoesNotMatchPresentDocument_ShouldRejectBeforeInspection()
     {
         var store = new FakeStorePort
         {
@@ -144,19 +144,20 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
             refresh,
             visibility);
 
-        var result = await service.RepairPersonalAsync(Request() with
+        var act = () => service.RepairPersonalAsync(Request() with
         {
             ExpectedActorId = "catalog-actor-other",
         });
 
-        result.Status.Should().Be(NyxIdAuthorizationCatalogVersionRegressionRepairStatus.Conflict);
+        await act.Should().ThrowAsync<ArgumentException>();
+        store.InspectedSubjects.Should().BeEmpty();
         store.DeleteRequests.Should().BeEmpty();
         refresh.Calls.Should().BeEmpty();
         visibility.Calls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task RepairPersonalAsync_WhenExpectedActorDoesNotMatchMissingDocument_ShouldNotDeleteOrRefresh()
+    public async Task RepairPersonalAsync_WhenExpectedActorDoesNotMatchMissingDocument_ShouldRejectBeforeInspection()
     {
         var store = new FakeStorePort
         {
@@ -169,12 +170,36 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
             refresh,
             visibility);
 
-        var result = await service.RepairPersonalAsync(Request() with
+        var act = () => service.RepairPersonalAsync(Request() with
         {
             ExpectedActorId = "catalog-actor-other",
         });
 
-        result.Status.Should().Be(NyxIdAuthorizationCatalogVersionRegressionRepairStatus.Conflict);
+        await act.Should().ThrowAsync<ArgumentException>();
+        store.InspectedSubjects.Should().BeEmpty();
+        store.DeleteRequests.Should().BeEmpty();
+        refresh.Calls.Should().BeEmpty();
+        visibility.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RepairPersonalAsync_WhenRequesterDoesNotMatchVerifiedOwner_ShouldRejectBeforeInspection()
+    {
+        var store = new FakeStorePort();
+        var refresh = new FakeRefreshPort();
+        var visibility = new FakeVisibilityPort();
+        var service = new NyxIdAuthorizationCatalogVersionRegressionRepairService(
+            store,
+            refresh,
+            visibility);
+
+        var act = () => service.RepairPersonalAsync(Request() with
+        {
+            RequestedBySubjectId = "operator-alpha",
+        });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        store.InspectedSubjects.Should().BeEmpty();
         store.DeleteRequests.Should().BeEmpty();
         refresh.Calls.Should().BeEmpty();
         visibility.Calls.Should().BeEmpty();
@@ -436,7 +461,7 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
             ExpectedDocumentLastEventId = " event-4 ",
             RepairRequestId = " repair-alpha ",
             RepairReason = " rebuild from NyxID ",
-            RequestedBySubjectId = " operator-alpha ",
+            RequestedBySubjectId = $" {VerifiedOwnerSubject} ",
         };
 
         await service.RepairPersonalAsync(request);
@@ -447,7 +472,7 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
         normalized.ExpectedDocumentLastEventId.Should().Be("event-4");
         normalized.RepairRequestId.Should().Be("repair-alpha");
         normalized.RepairReason.Should().Be("rebuild from NyxID");
-        normalized.RequestedBySubjectId.Should().Be("operator-alpha");
+        normalized.RequestedBySubjectId.Should().Be(VerifiedOwnerSubject);
         normalized.BearerToken.Should().Be(BearerToken);
     }
 
@@ -493,7 +518,7 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
             ExpectedDocumentLastEventId: "event-4",
             RepairRequestId: "repair-alpha",
             RepairReason: "rebuild from NyxID",
-            RequestedBySubjectId: "operator-alpha");
+            RequestedBySubjectId: VerifiedOwnerSubject);
 
     private static AuthorizationOwnerIdentity Owner() => new()
     {

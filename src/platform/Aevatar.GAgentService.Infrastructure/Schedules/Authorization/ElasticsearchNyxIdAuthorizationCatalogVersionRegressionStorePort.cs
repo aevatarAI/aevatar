@@ -48,6 +48,20 @@ public sealed class ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStore
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.ExpectedSourceStateVersion <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "Expected source state version must be positive.");
+        }
+
+        if (request.ExpectedDocumentStateVersion <= request.ExpectedSourceStateVersion)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "Expected document state version must exceed the expected source state version.");
+        }
+
         var normalizedSubject = NormalizeSubject(request.VerifiedOwnerSubject);
         var actorId = BuildActorId(normalizedSubject);
         if (!string.Equals(request.ExpectedActorId, actorId, StringComparison.Ordinal))

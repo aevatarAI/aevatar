@@ -38,6 +38,33 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairService
     {
         ArgumentNullException.ThrowIfNull(request);
         var normalized = Normalize(request);
+        if (!string.Equals(
+                normalized.RequestedBySubjectId,
+                normalized.VerifiedOwnerSubject,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Requested subject must match the verified owner subject.",
+                nameof(request));
+        }
+
+        var owner = new AuthorizationOwnerIdentity
+        {
+            Authority = NyxIdAuthorizationAuthorities.NyxId,
+            OwnerKind = AuthorizationOwnerKind.Personal,
+            OwnerSubject = normalized.VerifiedOwnerSubject,
+        };
+        var canonicalActorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        if (!string.Equals(
+                normalized.ExpectedActorId,
+                canonicalActorId,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Expected actor must match the verified owner's personal NyxID authorization catalog.",
+                nameof(request));
+        }
+
         var inspection = await InspectPersonalAsync(normalized.VerifiedOwnerSubject, ct)
             .ConfigureAwait(false);
 
@@ -109,12 +136,6 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairService
                 deleteDisposition);
         }
 
-        var owner = new AuthorizationOwnerIdentity
-        {
-            Authority = NyxIdAuthorizationAuthorities.NyxId,
-            OwnerKind = AuthorizationOwnerKind.Personal,
-            OwnerSubject = normalized.VerifiedOwnerSubject,
-        };
         var visibility = await _visibilityPort
             .ResolveAsync(owner, refresh.StateVersion, ct)
             .ConfigureAwait(false);

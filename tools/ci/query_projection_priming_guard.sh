@@ -242,7 +242,7 @@ owner_llm_live_authority_hits="$(
     src/Aevatar.Studio.Projection/QueryPorts \
     src/platform/Aevatar.GAgentService.Application/Schedules/Authorization \
     -g '*.cs' \
-    -g '!**/NyxIdAuthorizationCatalogVersionRegressionRepairService.cs' \
+    -g '!src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/NyxIdAuthorizationCatalogVersionRegressionRepairService.cs' \
     -g '!**/bin/**' \
     -g '!**/obj/**'
 )"

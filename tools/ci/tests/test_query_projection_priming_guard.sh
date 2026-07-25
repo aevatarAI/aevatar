@@ -173,6 +173,18 @@ run_guard
 require_failure "ForbiddenScheduledOwnerLLMQuery.cs"
 rm "${forbidden_authorization_file}"
 
+same_basename_query_file="${owner_query_dir}/NyxIdAuthorizationCatalogVersionRegressionRepairService.cs"
+printf '%s\n' \
+  'namespace Aevatar.Studio.Projection.QueryPorts;' \
+  'public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairService' \
+  '{' \
+  '    public string Read(QueryRequest request) => request.BearerToken;' \
+  '}' \
+  > "${same_basename_query_file}"
+run_guard
+require_failure "NyxIdAuthorizationCatalogVersionRegressionRepairService.cs"
+rm "${same_basename_query_file}"
+
 real_rg="$(command -v rg)"
 fake_bin="${TMP_DIR}/bin"
 fake_rg="${fake_bin}/rg"
