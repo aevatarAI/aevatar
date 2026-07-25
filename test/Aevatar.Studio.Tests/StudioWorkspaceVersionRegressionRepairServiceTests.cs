@@ -106,6 +106,66 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
         republish.Dispatches.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task RepairAsync_WhenExpectedActorDoesNotMatchPresentDocument_ShouldNotDeleteOrDispatch()
+    {
+        var store = new FakeStorePort
+        {
+            Inspection = Inspection(sourceVersion: 1, documentVersion: 4),
+        };
+        var republish = new FakeRepublishPort();
+        var service = new StudioWorkspaceVersionRegressionRepairService(store, republish);
+
+        var result = await service.RepairAsync(Request() with
+        {
+            ExpectedActorId = "studio-workspace:scope-other",
+        });
+
+        result.Status.Should().Be(StudioWorkspaceVersionRegressionRepairStatus.Conflict);
+        store.DeleteRequests.Should().BeEmpty();
+        republish.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RepairAsync_WhenExpectedActorDoesNotMatchMissingDocument_ShouldNotDeleteOrDispatch()
+    {
+        var store = new FakeStorePort
+        {
+            Inspection = Inspection(sourceVersion: 1, documentVersion: null),
+        };
+        var republish = new FakeRepublishPort();
+        var service = new StudioWorkspaceVersionRegressionRepairService(store, republish);
+
+        var result = await service.RepairAsync(Request() with
+        {
+            ExpectedActorId = "studio-workspace:scope-other",
+        });
+
+        result.Status.Should().Be(StudioWorkspaceVersionRegressionRepairStatus.Conflict);
+        store.DeleteRequests.Should().BeEmpty();
+        republish.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RepairAsync_WhenExpectedActorIsMissing_ShouldNotDeleteOrDispatch()
+    {
+        var store = new FakeStorePort
+        {
+            Inspection = Inspection(sourceVersion: 1, documentVersion: 4),
+        };
+        var republish = new FakeRepublishPort();
+        var service = new StudioWorkspaceVersionRegressionRepairService(store, republish);
+
+        var result = await service.RepairAsync(Request() with
+        {
+            ExpectedActorId = " ",
+        });
+
+        result.Status.Should().Be(StudioWorkspaceVersionRegressionRepairStatus.Conflict);
+        store.DeleteRequests.Should().BeEmpty();
+        republish.Dispatches.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData(StudioWorkspaceReplicaDeleteDisposition.Deleted)]
     [InlineData(StudioWorkspaceReplicaDeleteDisposition.AlreadyAbsent)]
@@ -184,6 +244,7 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
         var request = Request() with
         {
             ScopeId = $" {ScopeId} ",
+            ExpectedActorId = $" {ActorId} ",
             ExpectedDocumentLastEventId = " event-4 ",
             RepairRequestId = " repair-alpha ",
             RepairReason = " restore authoritative workspace ",
@@ -194,6 +255,7 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
 
         var normalized = store.DeleteRequests.Should().ContainSingle().Subject;
         normalized.ScopeId.Should().Be(ScopeId);
+        normalized.ExpectedActorId.Should().Be(ActorId);
         normalized.ExpectedDocumentLastEventId.Should().Be("event-4");
         normalized.RepairRequestId.Should().Be("repair-alpha");
         normalized.RepairReason.Should().Be("restore authoritative workspace");
@@ -220,6 +282,7 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
     private static StudioWorkspaceVersionRegressionRepairRequest Request() =>
         new(
             ScopeId,
+            ExpectedActorId: ActorId,
             ExpectedSourceStateVersion: 1,
             ExpectedDocumentStateVersion: 4,
             ExpectedDocumentLastEventId: "event-4",

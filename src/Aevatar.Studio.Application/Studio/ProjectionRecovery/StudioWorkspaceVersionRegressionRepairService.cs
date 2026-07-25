@@ -31,6 +31,17 @@ public sealed class StudioWorkspaceVersionRegressionRepairService
         var normalized = Normalize(request);
         var inspection = await InspectAsync(normalized.ScopeId, ct);
 
+        if (!string.Equals(
+                normalized.ExpectedActorId,
+                inspection.ActorId,
+                StringComparison.Ordinal))
+        {
+            return StudioWorkspaceVersionRegressionRepairResult.Conflict(
+                inspection,
+                normalized.RepairRequestId,
+                "Workspace projection repair source actor identity changed.");
+        }
+
         if (inspection.SourceStateVersion <= 0 ||
             inspection.SourceStateVersion != normalized.ExpectedSourceStateVersion)
         {
@@ -43,6 +54,10 @@ public sealed class StudioWorkspaceVersionRegressionRepairService
         if (inspection.DocumentStateVersion.HasValue)
         {
             if (!inspection.Repairable ||
+                !string.Equals(
+                    normalized.ExpectedActorId,
+                    inspection.DocumentActorId,
+                    StringComparison.Ordinal) ||
                 inspection.DocumentStateVersion.Value != normalized.ExpectedDocumentStateVersion ||
                 !string.Equals(
                     inspection.DocumentLastEventId,
@@ -151,6 +166,7 @@ public sealed class StudioWorkspaceVersionRegressionRepairService
         return request with
         {
             ScopeId = NormalizeRequired(request.ScopeId, nameof(request.ScopeId)),
+            ExpectedActorId = request.ExpectedActorId?.Trim() ?? string.Empty,
             ExpectedDocumentLastEventId = NormalizeRequired(
                 request.ExpectedDocumentLastEventId,
                 nameof(request.ExpectedDocumentLastEventId)),

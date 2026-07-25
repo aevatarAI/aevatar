@@ -51,6 +51,9 @@ public sealed class ElasticsearchStudioWorkspaceVersionRegressionStorePort
         ArgumentNullException.ThrowIfNull(request);
         var normalizedScopeId = StudioWorkspaceConventions.NormalizeScopeId(request.ScopeId);
         var actorId = StudioWorkspaceConventions.BuildActorId(normalizedScopeId);
+        if (!string.Equals(request.ExpectedActorId, actorId, StringComparison.Ordinal))
+            return StudioWorkspaceReplicaDeleteDisposition.SourceChanged;
+
         var sourceVersion = await _eventStore.GetVersionAsync(actorId, ct);
         if (sourceVersion != request.ExpectedSourceStateVersion)
             return StudioWorkspaceReplicaDeleteDisposition.SourceChanged;

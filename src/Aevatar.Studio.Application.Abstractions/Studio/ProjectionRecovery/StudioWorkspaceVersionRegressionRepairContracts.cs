@@ -43,6 +43,7 @@ public sealed record StudioWorkspaceVersionRegressionInspection(
 
 public sealed record StudioWorkspaceVersionRegressionRepairRequest(
     string ScopeId,
+    string ExpectedActorId,
     long ExpectedSourceStateVersion,
     long ExpectedDocumentStateVersion,
     string ExpectedDocumentLastEventId,
