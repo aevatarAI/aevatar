@@ -240,7 +240,22 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             $"?if_seq_no={lease.SequenceNumber}&if_primary_term={lease.PrimaryTerm}",
             ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
-            return ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent;
+        {
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            if (IsExactRepairDocumentNotFound(
+                    payload,
+                    lease.ConcreteIndexName,
+                    keyValue,
+                    deleteResponse: true))
+            {
+                return ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent;
+            }
+
+            throw ElasticsearchProjectionDocumentStoreHttpSupport.CreateFailure(
+                response,
+                "repair-delete",
+                payload);
+        }
         if (response.StatusCode == HttpStatusCode.Conflict)
             return ElasticsearchProjectionDocumentRepairDeleteDisposition.RevisionConflict;
 
@@ -385,7 +400,22 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}",
             ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
-            return null;
+        {
+            var notFoundPayload = await response.Content.ReadAsStringAsync(ct);
+            if (IsExactRepairDocumentNotFound(
+                    notFoundPayload,
+                    indexName,
+                    keyValue,
+                    deleteResponse: false))
+            {
+                return null;
+            }
+
+            throw ElasticsearchProjectionDocumentStoreHttpSupport.CreateFailure(
+                response,
+                "repair-inspect",
+                notFoundPayload);
+        }
 
         await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(
             response,
@@ -438,6 +468,52 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
 
         throw new InvalidOperationException(
             $"Elasticsearch repair inspection response is missing required integer property '{propertyName}'.");
+    }
+
+    private static bool IsExactRepairDocumentNotFound(
+        string payload,
+        string expectedIndexName,
+        string expectedDocumentId,
+        bool deleteResponse)
+    {
+        try
+        {
+            using var jsonDoc = JsonDocument.Parse(payload);
+            var root = jsonDoc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("_index", out var indexNode) ||
+                indexNode.ValueKind != JsonValueKind.String ||
+                !string.Equals(
+                    indexNode.GetString(),
+                    expectedIndexName,
+                    StringComparison.Ordinal) ||
+                !root.TryGetProperty("_id", out var idNode) ||
+                idNode.ValueKind != JsonValueKind.String ||
+                !string.Equals(
+                    idNode.GetString(),
+                    expectedDocumentId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (deleteResponse)
+            {
+                return root.TryGetProperty("result", out var resultNode) &&
+                       resultNode.ValueKind == JsonValueKind.String &&
+                       string.Equals(
+                           resultNode.GetString(),
+                           "not_found",
+                           StringComparison.Ordinal);
+            }
+
+            return root.TryGetProperty("found", out var foundNode) &&
+                   foundNode.ValueKind is JsonValueKind.False;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private string ResolveReadModelKey(TReadModel readModel)
