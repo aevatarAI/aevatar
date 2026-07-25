@@ -2089,6 +2089,7 @@ The runbook configuration becomes:
 
 ```text
 Aevatar__CodexExecution__ManagedSandbox__Enabled=true
+Aevatar__CodexExecution__ManagedSandbox__RolloutBoundary=InternalOnly
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=Allowlist
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__AllowedNyxIdUserIds__0=example-nyxid-user-id
 ```
@@ -2098,6 +2099,9 @@ For all ready internal users:
 ```text
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=All
 ```
+
+The enabled configuration remains internal-only until the delegated
+authorization boundary no longer uses `proxy:*`.
 
 Remove manual POST-and-poll provisioning from the normal canary sequence.
 Canary proof starts directly with the public workflow and verifies that the

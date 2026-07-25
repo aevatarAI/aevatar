@@ -172,6 +172,24 @@ public sealed class ManagedCodexCredentialReadinessTests
     }
 
     [Fact]
+    public async Task EnsureReadyAsync_WhenNativeOwnerCarriesTenant_FailsBeforeDependencies()
+    {
+        var owner = Owner("user-a");
+        owner.Tenant = "unattested-tenant";
+
+        var act = () => _lifecycle.EnsureReadyAsync(
+            owner,
+            bearerToken: null,
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        (await act.Should()
+                .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("nyxid_identity_mismatch");
+        await _query.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
+        await _lease.DidNotReceiveWithAnyArgs().TryAcquireAsync(default!, default);
+    }
+
+    [Fact]
     public async Task EnsureReadyAsync_WhenProjectedVaultReferenceIsEmpty_DoesNotTreatItAsReady()
     {
         var invalid = ReadyDescriptor();

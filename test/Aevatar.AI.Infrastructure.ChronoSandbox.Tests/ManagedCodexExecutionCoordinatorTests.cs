@@ -196,6 +196,28 @@ public sealed class ManagedCodexExecutionCoordinatorTests
             default);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenNativeAuthorityCarriesTenant_FailsBeforeDependencies()
+    {
+        var events = await CollectAsync(
+            _coordinator.ExecuteAsync(Request(
+                new CodexExecutionNyxIdAuthority(
+                    OwnerScope.NyxIdPlatform,
+                    "unattested-tenant",
+                    "user-a"))));
+
+        events[^1].Failure!.Code.Should().Be("managed_identity_unavailable");
+        await _lifecycle.DidNotReceiveWithAnyArgs().EnsureReadyAsync(
+            default!,
+            default,
+            default,
+            default);
+        await _transport.DidNotReceiveWithAnyArgs().ExecuteAsync(
+            default!,
+            default!,
+            default);
+    }
+
     private static CodexExecutionRequest Request(string? bearer = "caller-token") =>
         Request(
             new CodexExecutionNyxIdAuthority(

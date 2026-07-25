@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -76,25 +75,39 @@ internal sealed class NyxIdManagedCodexChronoTransport(
             timeout_secs = request.TimeoutSeconds,
             workspace = "empty_git",
         });
-        var executionPath = $"{ManagedCodexOptions.ChronoExecutionPath}?_nyxid_via={Uri.EscapeDataString(credential.ChronoSandboxUserServiceId)}";
-        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestAsync(
-            rawKey,
-            ManagedCodexOptions.ChronoSandboxServiceSlug,
-            executionPath,
-            HttpMethod.Post.Method,
-            body,
-            extraHeaders: null,
-            ct)).ConfigureAwait(false);
-
-        if (Encoding.UTF8.GetByteCount(response) > _options.MaxResponseBytes)
+        var response = await secret.UseAsync(rawKey => _clientFactory.CreateClient().ProxyRequestBoundedAsync(
+                rawKey,
+                ManagedCodexOptions.ChronoSandboxServiceSlug,
+                credential.ChronoSandboxUserServiceId,
+                ManagedCodexOptions.ChronoExecutionPath,
+                HttpMethod.Post.Method,
+                body,
+                extraHeaders: null,
+                _options.MaxResponseBytes,
+                ct))
+            .ConfigureAwait(false);
+        if (!response.Succeeded)
         {
+            if (response.Detail is
+                "content_length_exceeds_max_bytes" or
+                "content_exceeds_max_bytes")
+            {
+                throw Failure(
+                    CodexExecutionFailureKind.MalformedOutput,
+                    "managed_response_too_large",
+                    "Managed Codex returned an oversized response.");
+            }
+
+            if (response.HttpStatus > 0)
+                throw ProxyFailure(response.HttpStatus);
+
             throw Failure(
-                CodexExecutionFailureKind.MalformedOutput,
-                "managed_response_too_large",
-                "Managed Codex returned an oversized response.");
+                CodexExecutionFailureKind.CapacityUnavailable,
+                "managed_proxy_unavailable",
+                "Managed Codex proxy is temporarily unavailable.");
         }
 
-        return secret.Use(rawKey => ParseResponse(response, rawKey));
+        return secret.Use(rawKey => ParseResponse(response.Content, rawKey));
     }
 
     private ExternalSubjectRef ValidateRequest(CodexExecutionRequest? request)
@@ -121,6 +134,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         var authority = request.Caller?.NyxIdAuthority;
         if (authority is null ||
             !string.Equals(authority.Platform?.Trim(), OwnerScope.NyxIdPlatform, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(authority.Tenant) ||
             string.IsNullOrWhiteSpace(authority.ExternalUserId))
         {
             throw Failure(
@@ -132,7 +146,7 @@ internal sealed class NyxIdManagedCodexChronoTransport(
         return new ExternalSubjectRef
         {
             Platform = OwnerScope.NyxIdPlatform,
-            Tenant = authority.Tenant?.Trim() ?? string.Empty,
+            Tenant = string.Empty,
             ExternalUserId = authority.ExternalUserId.Trim(),
         };
     }

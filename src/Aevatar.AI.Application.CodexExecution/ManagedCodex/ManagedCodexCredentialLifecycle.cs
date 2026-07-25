@@ -1766,7 +1766,18 @@ public sealed class ManagedCodexCredentialLifecycle(
         ExternalSubjectRef owner,
         ManagedCodexCredentialReadinessMode mode)
     {
-        _ = ManagedCodexCredentialActorIdentity.From(owner);
+        try
+        {
+            if (owner is null || !string.IsNullOrEmpty(owner.Tenant))
+                throw new ArgumentException("Native NyxID managed Codex owners cannot carry a tenant.");
+            _ = ManagedCodexCredentialActorIdentity.From(owner);
+        }
+        catch (ArgumentException)
+        {
+            throw Failure(
+                "nyxid_identity_mismatch",
+                "Managed Codex requires one canonical native NyxID user identity.");
+        }
         if (!System.Enum.IsDefined(mode))
             throw new ArgumentOutOfRangeException(nameof(mode));
         if (!_options.IsEligible(owner.ExternalUserId))

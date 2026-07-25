@@ -8,6 +8,12 @@ public enum ManagedCodexEligibilityMode
     All = 1,
 }
 
+public enum ManagedCodexRolloutBoundary
+{
+    Unspecified = 0,
+    InternalOnly = 1,
+}
+
 public sealed class ManagedCodexEligibilityOptions
 {
     public ManagedCodexEligibilityMode Mode { get; set; } =
@@ -31,6 +37,7 @@ public sealed class ManagedCodexOptions
         MutationRecordingReserveSeconds;
 
     public bool Enabled { get; set; }
+    public ManagedCodexRolloutBoundary RolloutBoundary { get; set; }
     public ManagedCodexEligibilityOptions Eligibility { get; set; } = new();
     public int CredentialLifetimeDays { get; set; } = 30;
     public int MaxResponseBytes { get; set; } = 1_048_576;
@@ -59,11 +66,18 @@ public sealed class ManagedCodexOptionsValidator : IValidateOptions<ManagedCodex
 
         var failures = new List<string>();
         var users = options.Eligibility?.AllowedNyxIdUserIds ?? [];
+        if (options.RolloutBoundary != ManagedCodexRolloutBoundary.InternalOnly)
+        {
+            failures.Add(
+                "RolloutBoundary must be InternalOnly while managed Codex uses the internal delegation boundary.");
+        }
         if (options.Eligibility is null)
             failures.Add("Eligibility is required.");
         else if (options.Eligibility.Mode == ManagedCodexEligibilityMode.Allowlist &&
                  (users.Length == 0 ||
                   users.Any(string.IsNullOrWhiteSpace) ||
+                  users.Any(static value =>
+                      !string.Equals(value, value.Trim(), StringComparison.Ordinal)) ||
                   users.Select(static value => value.Trim()).Distinct(StringComparer.Ordinal).Count() != users.Length))
             failures.Add("Eligibility.Allowlist requires normalized distinct AllowedNyxIdUserIds.");
         else if (options.Eligibility.Mode == ManagedCodexEligibilityMode.All && users.Length != 0)

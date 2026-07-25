@@ -72,6 +72,7 @@ Managed Codex uses a strongly typed eligibility policy:
     "CodexExecution": {
       "ManagedSandbox": {
         "Enabled": true,
+        "RolloutBoundary": "InternalOnly",
         "Eligibility": {
           "Mode": "Allowlist",
           "AllowedNyxIdUserIds": [
@@ -92,6 +93,10 @@ Managed Codex uses a strongly typed eligibility policy:
 
 - `Allowlist`: `AllowedNyxIdUserIds` must contain normalized, distinct user IDs.
 - `All`: `AllowedNyxIdUserIds` must be empty.
+
+`RolloutBoundary` has one supported enabled value, `InternalOnly`. Startup
+rejects enabled managed Codex when the boundary is unspecified; no public
+boundary is supported while the delegated scope remains `proxy:*`.
 
 The default is `Allowlist`. The existing
 `ProvisioningAllowedNyxIdUserIds` name is removed because eligibility no longer
@@ -123,11 +128,18 @@ NyxIdCodexExecTool
 `ICodexExecutionPort`. It owns eligibility, credential readiness, one bounded
 authorization-repair retry, and terminal event mapping.
 
+The native NyxID authority accepted by the coordinator and lifecycle has an
+empty tenant. The NyxID bearer owner check attests the user ID only, so a
+non-empty unattested tenant is rejected before deriving the per-user actor or
+Vault scope.
+
 `IManagedCodexChronoTransport` is a narrow Application-owned port. Its
 Infrastructure implementation receives an already committed credential
 descriptor, resolves the referenced secret just in time, and performs the fixed
 NyxID proxy request. It does not query credential state, provision keys, select
-eligibility, or retry lifecycle mutations.
+eligibility, or retry lifecycle mutations. The NyxID client reads this response
+with `ResponseHeadersRead`, rejects oversized `Content-Length`, and stops after
+`MaxResponseBytes` before materializing the terminal JSON string.
 
 The Host only binds configuration and composes the Application coordinator with
 Identity and Infrastructure implementations.

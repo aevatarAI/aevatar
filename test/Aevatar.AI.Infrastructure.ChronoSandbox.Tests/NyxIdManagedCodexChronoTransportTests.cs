@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -94,6 +95,31 @@ public sealed class NyxIdManagedCodexChronoTransportTests
         await vault.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenNativeAuthorityCarriesTenant_FailsBeforeVaultOrProxy()
+    {
+        var handler = new RecordingHandler("{}");
+        var descriptor = Descriptor();
+        var request = Request() with
+        {
+            Caller = Request().Caller with
+            {
+                NyxIdAuthority = new CodexExecutionNyxIdAuthority(
+                    OwnerScope.NyxIdPlatform,
+                    "unattested-tenant",
+                    "user-a"),
+            },
+        };
+        var (transport, vault) = CreateTransport(handler);
+
+        var act = () => transport.ExecuteAsync(request, descriptor);
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Code.Should().Be("managed_identity_unavailable");
+        handler.CallCount.Should().Be(0);
+        await vault.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
+    }
+
     [Theory]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -175,6 +201,20 @@ public sealed class NyxIdManagedCodexChronoTransportTests
 
         result.Output.Should().Be("unexpected [REDACTED]");
         result.Output.Should().NotContain(RawKey);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenResponseContentLengthExceedsLimit_FailsWithoutReadingBody()
+    {
+        var content = new ThrowOnReadContent(1_048_577);
+        var (transport, _) = CreateTransport(new StaticContentHandler(content));
+
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
+
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
+        exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.MalformedOutput);
+        exception.Failure.Code.Should().Be("managed_response_too_large");
+        content.ReadAttempted.Should().BeFalse();
     }
 
     [Fact]
@@ -288,6 +328,41 @@ public sealed class NyxIdManagedCodexChronoTransportTests
             {
                 Content = new StringContent(response, Encoding.UTF8, "application/json"),
             };
+        }
+    }
+
+    private sealed class StaticContentHandler(HttpContent content) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = content,
+            });
+    }
+
+    private sealed class ThrowOnReadContent : HttpContent
+    {
+        public ThrowOnReadContent(long contentLength)
+        {
+            Headers.ContentLength = contentLength;
+        }
+
+        public bool ReadAttempted { get; private set; }
+
+        protected override Task SerializeToStreamAsync(
+            Stream stream,
+            TransportContext? context)
+        {
+            ReadAttempted = true;
+            throw new InvalidOperationException("The oversized body must not be read.");
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = Headers.ContentLength!.Value;
+            return true;
         }
     }
 }

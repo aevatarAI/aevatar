@@ -56,6 +56,32 @@ public sealed class ManagedCodexOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_WhenAllowlistEntryIsNotNormalized_Fails()
+    {
+        var options = ValidOptions();
+        options.Eligibility = new ManagedCodexEligibilityOptions
+        {
+            Mode = ManagedCodexEligibilityMode.Allowlist,
+            AllowedNyxIdUserIds = [" user-a "],
+        };
+
+        _validator.Validate(null, options).Failed.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Validate_WhenEnabledWithoutInternalOnlyRolloutBoundary_Fails()
+    {
+        var options = ValidOptions();
+        options.RolloutBoundary = ManagedCodexRolloutBoundary.Unspecified;
+
+        var result = _validator.Validate(null, options);
+
+        result.Failed.Should().BeTrue();
+        result.Failures.Should().Contain(
+            "RolloutBoundary must be InternalOnly while managed Codex uses the internal delegation boundary.");
+    }
+
+    [Fact]
     public void Validate_WhenAllModeAlsoHasUsers_Fails()
     {
         var options = ValidOptions();
@@ -93,6 +119,7 @@ public sealed class ManagedCodexOptionsValidatorTests
     internal static ManagedCodexOptions ValidOptions() => new()
     {
         Enabled = true,
+        RolloutBoundary = ManagedCodexRolloutBoundary.InternalOnly,
         Eligibility = new ManagedCodexEligibilityOptions
         {
             Mode = ManagedCodexEligibilityMode.Allowlist,

@@ -131,6 +131,7 @@ public sealed class ManagedCodexExecutionCoordinator(
                 authority.Platform?.Trim(),
                 OwnerScope.NyxIdPlatform,
                 StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(authority.Tenant) ||
             string.IsNullOrWhiteSpace(authority.ExternalUserId))
         {
             throw RequestFailure(
@@ -142,7 +143,7 @@ public sealed class ManagedCodexExecutionCoordinator(
         return new ExternalSubjectRef
         {
             Platform = OwnerScope.NyxIdPlatform,
-            Tenant = authority.Tenant?.Trim() ?? string.Empty,
+            Tenant = string.Empty,
             ExternalUserId = authority.ExternalUserId.Trim(),
         };
     }

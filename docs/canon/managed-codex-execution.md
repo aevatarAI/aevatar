@@ -70,10 +70,18 @@ background execution resolves the Vault-backed key without requiring a current
 bearer. Request bodies and tool arguments cannot nominate another user or
 provide credential/provisioning controls.
 
+Native NyxID managed-Codex authority is canonicalized as
+`platform=nyxid`, empty tenant, and the exact NyxID user ID. A non-empty tenant
+is rejected before credential lookup or mutation because `/api/v1/users/me`
+attests only the native user ID; an unattested tenant must never create a second
+credential actor or Vault owner scope for the same user.
+
 Eligibility is a typed policy. `Allowlist` admits only configured NyxID user
 IDs. `All` admits native NyxID users whose personal `chrono-sandbox` and usable
 `chrono-llm-public` UserServices already exist; Aevatar does not create missing
-UserServices.
+UserServices. Enabling managed Codex also requires the explicit typed
+`RolloutBoundary=InternalOnly` startup acknowledgement. No public rollout
+boundary is supported while delegation still uses `proxy:*`.
 
 The issued key must have exactly:
 
@@ -120,7 +128,12 @@ The interactive workflow bearer is not used for the chrono request. Under the va
 
 The managed runtime is a gVisor tenant. The runner executes Codex with its inner sandbox disabled; escape isolation is the gVisor boundary, and there is no fail-closed Landlock preflight. Egress scoping is an IP-level Kubernetes NetworkPolicy owned by operations — coarser than an FQDN allow-list because the NyxID gateway sits behind a shared CDN range — with no egress sidecar. The sandbox create call requests no `networkPolicy` and no `credentialProxy`.
 
-Aevatar parses only the fixed terminal response containing success, bounded output, exit code, elapsed milliseconds, and a diagnostic ID. Proxy errors and malformed chrono responses map to stable typed failures. Raw upstream bodies and infrastructure exception text are never returned or logged.
+Aevatar reads the fixed terminal response with `ResponseHeadersRead`, rejects
+an oversized `Content-Length`, and stops the response stream as soon as
+`MaxResponseBytes` is exceeded. Only then does it parse success, bounded output,
+exit code, elapsed milliseconds, and a diagnostic ID. Proxy errors and malformed
+chrono responses map to stable typed failures. Raw upstream bodies and
+infrastructure exception text are never returned or logged.
 
 ## Credential lifecycle
 

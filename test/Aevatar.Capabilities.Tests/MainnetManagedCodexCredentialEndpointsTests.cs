@@ -305,6 +305,7 @@ public sealed class MainnetManagedCodexCredentialEndpointsTests
     private static ManagedCodexOptions ManagedOptions(bool enabled) => new()
     {
         Enabled = enabled,
+        RolloutBoundary = ManagedCodexRolloutBoundary.InternalOnly,
         Eligibility = new ManagedCodexEligibilityOptions
         {
             Mode = ManagedCodexEligibilityMode.Allowlist,

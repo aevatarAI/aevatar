@@ -46,6 +46,7 @@ Start with an explicit NyxID user allowlist:
 
 ```text
 Aevatar__CodexExecution__ManagedSandbox__Enabled=true
+Aevatar__CodexExecution__ManagedSandbox__RolloutBoundary=InternalOnly
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=Allowlist
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__AllowedNyxIdUserIds__0=<canary-nyxid-user-id>
 Aevatar__CodexExecution__ManagedSandbox__CredentialLifetimeDays=30
@@ -63,6 +64,9 @@ Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=All
 Do not set any `AllowedNyxIdUserIds` entry in `All` mode. `All` does not create
 NyxID UserServices: each user must already have a personal active
 `chrono-sandbox` UserService and a usable `chrono-llm-public` route.
+Keep `RolloutBoundary=InternalOnly`; startup rejects any enabled configuration
+without that explicit boundary, and no public boundary is supported while
+delegation scope remains `proxy:*`.
 
 Do not configure an OpenSandbox URL/API key, runner image, model, provider URL,
 or delegation token in Aevatar. Those belong to chrono-sandbox and NyxID.
