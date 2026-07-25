@@ -34,10 +34,25 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         services.Should().NotContain(descriptor =>
             descriptor.ServiceType ==
             typeof(IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>));
+        using var provider = services.BuildServiceProvider();
+        provider.GetService<
+                IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>>()
+            .Should()
+            .BeNull();
     }
 
     [Fact]
-    public void AddElasticsearchDocumentProjectionRepairStore_ShouldRegisterExistingConcreteStore()
+    public void ConcreteStore_ShouldNotImplementRepairStore()
+    {
+        typeof(IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>)
+            .IsAssignableFrom(
+                typeof(ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>))
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public void AddElasticsearchDocumentProjectionRepairStore_ShouldRegisterSeparateRepairAdapter()
     {
         var services = new ServiceCollection();
         RegisterProjectionStore(services);
@@ -45,9 +60,14 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         services.AddElasticsearchDocumentProjectionRepairStore<TestStoreReadModel, string>();
 
         using var provider = services.BuildServiceProvider();
-        provider.GetRequiredService<IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>>()
-            .Should()
-            .BeSameAs(provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>>());
+        var repair = provider.GetRequiredService<
+            IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>>();
+        var concrete = provider.GetRequiredService<
+            ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>>();
+
+        repair.Should().NotBeSameAs(concrete);
+        repair.Should().NotBeAssignableTo<
+            ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>>();
     }
 
     [Fact]
@@ -55,12 +75,11 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
-        using var store = CreateStore(
+        using var provider = CreateRepairProvider(
             new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
             handler);
 
-        var lease = await ((IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>)store)
-            .InspectAsync("doc-1");
+        var lease = await RepairStore(provider).InspectAsync("doc-1");
 
         lease.Should().NotBeNull();
         lease!.Key.Should().Be("doc-1");
@@ -73,12 +92,11 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
-        using var store = CreateStore(
+        using var provider = CreateRepairProvider(
             new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
             handler);
 
-        var lease = await ((IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>)store)
-            .InspectAsync("doc-1");
+        var lease = await RepairStore(provider).InspectAsync("doc-1");
 
         lease.Should().BeNull();
     }
@@ -89,10 +107,10 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, """{"result":"deleted"}"""));
-        using var store = CreateStore(
+        using var provider = CreateRepairProvider(
             new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
             handler);
-        var repair = (IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>)store;
+        var repair = RepairStore(provider);
         var lease = await repair.InspectAsync("doc-1");
 
         var result = await repair.DeleteIfUnchangedAsync(lease!);
@@ -108,10 +126,10 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
         handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
-        using var store = CreateStore(
+        using var provider = CreateRepairProvider(
             new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
             handler);
-        var repair = (IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>)store;
+        var repair = RepairStore(provider);
         var lease = await repair.InspectAsync("doc-1");
 
         var result = await repair.DeleteIfUnchangedAsync(lease!);
@@ -127,15 +145,98 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.Conflict,
             """{"error":{"type":"version_conflict_engine_exception"},"status":409}"""));
-        using var store = CreateStore(
+        using var provider = CreateRepairProvider(
             new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
             handler);
-        var repair = (IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>)store;
+        var repair = RepairStore(provider);
         var lease = await repair.InspectAsync("doc-1");
 
         var result = await repair.DeleteIfUnchangedAsync(lease!);
 
         result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.RevisionConflict);
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDeleteResponseIsLostAndDocumentIsGone_ShouldReturnAlreadyAbsent()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new HttpRequestException("delete response lost"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!);
+
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent);
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+        handler.CapturedRequests[2].PathAndQuery.Should().Be(
+            "/aevatar-mainnet-test-v1/_doc/doc-1");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDeleteTimesOutAndDocumentIsGone_ShouldReturnAlreadyAbsent()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new TimeoutException("delete timed out"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.NotFound, """{"found":false}"""));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var result = await repair.DeleteIfUnchangedAsync(lease!);
+
+        result.Should().Be(ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent);
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenDeleteResponseIsLostAndDocumentRemains_ShouldSurfaceFailure()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        handler.EnqueueResponse(_ => throw new HttpRequestException("delete response lost"));
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+
+        var act = () => repair.DeleteIfUnchangedAsync(lease!);
+
+        await act.Should().ThrowAsync<HttpRequestException>()
+            .WithMessage("delete response lost");
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET", "DELETE", "GET");
+    }
+
+    [Fact]
+    public async Task RepairDeleteIfUnchangedAsync_WhenCallerAlreadyCanceled_ShouldNotIssueDelete()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(HttpStatusCode.OK, ExistingRepairDocumentJson()));
+        using var provider = CreateRepairProvider(
+            new ElasticsearchProjectionDocumentStoreOptions { AutoCreateIndex = true },
+            handler);
+        var repair = RepairStore(provider);
+        var lease = await repair.InspectAsync("doc-1");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var act = () => repair.DeleteIfUnchangedAsync(lease!, cancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.CapturedRequests.Select(static request => request.Method)
+            .Should().Equal("GET");
     }
 
     [Fact]
@@ -1735,6 +1836,21 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             keyFormatter: key => key,
             httpMessageHandler: handler);
     }
+
+    private static ServiceProvider CreateRepairProvider(
+        ElasticsearchProjectionDocumentStoreOptions options,
+        HttpMessageHandler handler)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(CreateStore(options, handler));
+        services.AddElasticsearchDocumentProjectionRepairStore<TestStoreReadModel, string>();
+        return services.BuildServiceProvider();
+    }
+
+    private static IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string> RepairStore(
+        IServiceProvider provider) =>
+        provider.GetRequiredService<
+            IElasticsearchProjectionDocumentRepairStore<TestStoreReadModel, string>>();
 
     private static void RegisterProjectionStore(IServiceCollection services)
     {

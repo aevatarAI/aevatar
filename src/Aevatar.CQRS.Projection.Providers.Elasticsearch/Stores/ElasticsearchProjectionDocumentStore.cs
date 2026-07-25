@@ -17,7 +17,6 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
       IProjectionDocumentWriter<TReadModel>,
       IProjectionIndexConsistencyProbe<TReadModel>,
       IProjectionIndexReconcileTarget,
-      IElasticsearchProjectionDocumentRepairStore<TReadModel, TKey>,
       IDisposable
     where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
@@ -36,6 +35,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private readonly bool _autoCreateIndex;
     private readonly string _defaultSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
+    private readonly TimeSpan _repairRequestTimeout;
     private readonly bool _supportsDynamicIndexing;
     private readonly DocumentIndexMetadata _indexMetadata;
     private readonly Func<TReadModel, string?>? _indexScopeSelector;
@@ -72,7 +72,8 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             ? new HttpClient()
             : new HttpClient(httpMessageHandler, disposeHandler: true);
         _httpClient.BaseAddress = endpoint;
-        _httpClient.Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
+        _repairRequestTimeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
+        _httpClient.Timeout = _repairRequestTimeout;
 
         if (!string.IsNullOrWhiteSpace(options.Username))
         {
@@ -205,7 +206,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         return DeserializeOrNull(sourceNode.GetRawText());
     }
 
-    public async Task<ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>?> InspectAsync(
+    internal async Task<ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>?> InspectRepairAsync(
         TKey key,
         CancellationToken ct = default)
     {
@@ -216,10 +217,11 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         if (keyValue.Length == 0)
             return null;
 
-        return await ReadRepairLeaseAsync(key, keyValue, ct);
+        return await ReadRepairLeaseAsync(key, keyValue, _indexName, ct);
     }
 
-    public async Task<ElasticsearchProjectionDocumentRepairDeleteDisposition> DeleteIfUnchangedAsync(
+    internal async Task<ElasticsearchProjectionDocumentRepairDeleteDisposition>
+        DeleteRepairIfUnchangedCoreAsync(
         ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey> lease,
         CancellationToken ct = default)
     {
@@ -248,6 +250,24 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             ct);
         return ElasticsearchProjectionDocumentRepairDeleteDisposition.Deleted;
     }
+
+    internal Task<ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>?>
+        InspectRepairLeaseRevisionAsync(
+            ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey> lease,
+            CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        var keyValue = FormatKey(lease.Key);
+        if (keyValue.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"ReadModel '{typeof(TReadModel).FullName}' resolved an empty key for Elasticsearch repair inspection.");
+        }
+
+        return ReadRepairLeaseAsync(lease.Key, keyValue, lease.ConcreteIndexName, ct);
+    }
+
+    internal TimeSpan RepairRequestTimeout => _repairRequestTimeout;
 
     public async Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
         ProjectionDocumentQuery query,
@@ -358,10 +378,11 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private async Task<ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>?> ReadRepairLeaseAsync(
         TKey key,
         string keyValue,
+        string indexName,
         CancellationToken ct)
     {
         using var response = await _httpClient.GetAsync(
-            $"{_indexName}/_doc/{Uri.EscapeDataString(keyValue)}",
+            $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}",
             ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
             return null;

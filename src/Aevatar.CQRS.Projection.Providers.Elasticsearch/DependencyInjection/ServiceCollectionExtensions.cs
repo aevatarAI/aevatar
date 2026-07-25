@@ -14,7 +14,9 @@ public static class ElasticsearchProjectionServiceCollectionExtensions
         where TReadModel : class, IProjectionReadModel<TReadModel>, new()
     {
         services.AddSingleton<IElasticsearchProjectionDocumentRepairStore<TReadModel, TKey>>(provider =>
-            provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
+            new ElasticsearchProjectionDocumentRepairStore<TReadModel, TKey>(
+                provider.GetRequiredService<
+                    ElasticsearchProjectionDocumentStore<TReadModel, TKey>>()));
         return services;
     }
 
