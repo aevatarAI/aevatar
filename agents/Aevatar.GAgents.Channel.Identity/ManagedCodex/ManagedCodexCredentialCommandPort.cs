@@ -61,12 +61,13 @@ internal sealed class ManagedCodexCredentialCommandPort(
 
     public Task<DispatchAdmission> ConfirmReadinessAsync(
         ExternalSubjectRef owner,
-        string expectedApiKeyId,
+        ManagedCodexCredentialDescriptor expectedCredential,
         ManagedCodexCredentialReadinessEvidence readinessEvidence,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        ArgumentException.ThrowIfNullOrWhiteSpace(expectedApiKeyId);
+        ArgumentNullException.ThrowIfNull(expectedCredential);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedCredential.ApiKeyId);
         if (readinessEvidence is not
             (ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed or
              ManagedCodexCredentialReadinessEvidence.RemoteValidated))
@@ -78,7 +79,8 @@ internal sealed class ManagedCodexCredentialCommandPort(
             new ConfirmManagedCodexCredentialReadinessCommand
             {
                 Owner = owner.Clone(),
-                ExpectedApiKeyId = expectedApiKeyId.Trim(),
+                ExpectedApiKeyId = expectedCredential.ApiKeyId.Trim(),
+                ExpectedCredential = expectedCredential.Clone(),
                 ReadinessEvidence = readinessEvidence,
             },
             ct);

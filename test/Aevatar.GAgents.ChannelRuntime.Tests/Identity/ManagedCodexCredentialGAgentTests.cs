@@ -106,6 +106,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
             {
                 Owner = descriptor.Owner.Clone(),
                 ExpectedApiKeyId = descriptor.ApiKeyId,
+                ExpectedCredential = descriptor.Clone(),
                 ReadinessEvidence =
                     ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
             });
@@ -131,6 +132,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
             {
                 Owner = descriptor.Owner.Clone(),
                 ExpectedApiKeyId = descriptor.ApiKeyId,
+                ExpectedCredential = descriptor.Clone(),
                 ReadinessEvidence =
                     ManagedCodexCredentialReadinessEvidence.RemoteValidated,
             });
@@ -158,6 +160,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
             {
                 Owner = descriptor.Owner.Clone(),
                 ExpectedApiKeyId = "key-stale",
+                ExpectedCredential = descriptor.Clone(),
                 ReadinessEvidence =
                     ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
             });
@@ -165,6 +168,35 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
         var after = await store.GetEventsAsync(_agent.Id);
         after.Should().HaveCount(before.Count);
         _agent.State.Credential.Should().Be(descriptor);
+    }
+
+    [Fact]
+    public async Task HandleReadinessConfirmation_WithSameKeyButDriftedDescriptor_DoesNotCommit()
+    {
+        var current = Descriptor("key-1", "sec-1", version: 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+        var validated = current.Clone();
+        validated.SecretReference.Version++;
+        validated.SecretReference.Fingerprint = "newer-fingerprint";
+        var store = _services.GetRequiredService<IEventStore>();
+        var before = await store.GetEventsAsync(_agent.Id);
+
+        await _agent.HandleReadinessConfirmation(
+            new ConfirmManagedCodexCredentialReadinessCommand
+            {
+                Owner = current.Owner.Clone(),
+                ExpectedApiKeyId = current.ApiKeyId,
+                ExpectedCredential = validated,
+                ReadinessEvidence =
+                    ManagedCodexCredentialReadinessEvidence.RemoteValidated,
+            });
+
+        var after = await store.GetEventsAsync(_agent.Id);
+        after.Should().HaveCount(before.Count);
+        _agent.State.Credential.Should().Be(current);
     }
 
     [Fact]

@@ -72,6 +72,8 @@ public sealed class ManagedCodexCredentialLifecycle(
     ILogger<ManagedCodexCredentialLifecycle> logger) : IManagedCodexCredentialLifecycle
 {
     internal const string CredentialName = "aevatar-managed-codex";
+    private static readonly TimeSpan ReadyCleanupHandoffReserve =
+        TimeSpan.FromSeconds(10);
 
     private readonly ManagedCodexOptions _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
     private readonly IManagedCodexNyxIdCredentialPort _nyxIdPort =
@@ -105,13 +107,34 @@ public sealed class ManagedCodexCredentialLifecycle(
         bool UpdateRemotePolicy,
         IReadOnlyList<string> ApiKeyIdsToRevoke);
 
+    private sealed record ReadinessRepairOutcome(
+        ManagedCodexCredentialDescriptor ExpectedCredential,
+        ManagedCodexCredentialDescriptor? PreviousCredentialToRetire);
+
     private abstract record ConcurrentReadinessOutcome;
 
     private sealed record ConcurrentCredentialCommitted(
         ManagedCodexCredentialDescriptor Credential) : ConcurrentReadinessOutcome;
 
     private sealed record ConcurrentMutationLeaseAcquired(
-        IManagedCodexCredentialMutationLeaseHandle Lease) : ConcurrentReadinessOutcome;
+        IManagedCodexCredentialMutationLeaseHandle Lease,
+        ManagedCodexCredentialSnapshot Trigger) : ConcurrentReadinessOutcome;
+
+    private sealed class OutcomeDeadline(
+        TimeProvider timeProvider,
+        DateTimeOffset expiresAt)
+    {
+        public CancellationTokenSource Begin(TimeSpan reserve = default)
+        {
+            var remaining = expiresAt - timeProvider.GetUtcNow() - reserve;
+            if (remaining > TimeSpan.Zero)
+                return new CancellationTokenSource(remaining, timeProvider);
+
+            var expired = new CancellationTokenSource();
+            expired.Cancel();
+            return expired;
+        }
+    }
 
     public async Task<ManagedCodexCredentialDescriptor> EnsureReadyAsync(
         ExternalSubjectRef owner,
@@ -135,16 +158,12 @@ public sealed class ManagedCodexCredentialLifecycle(
         var lease = await _mutationLease.TryAcquireAsync(
             ManagedCodexCredentialActorIdentity.From(owner),
             ct).ConfigureAwait(false);
-        using var concurrentTimeout = lease is null
-            ? new CancellationTokenSource(
-                TimeSpan.FromSeconds(_options.MutationCompletionSeconds),
-                _timeProvider)
-            : null;
-        using var concurrentWait = concurrentTimeout is null
-            ? null
-            : CancellationTokenSource.CreateLinkedTokenSource(
-                ct,
-                concurrentTimeout.Token);
+        var outcomeDeadline = BeginOutcomeDeadline();
+        using var preMutationDeadline = outcomeDeadline.Begin();
+        using var preMutationWait = CancellationTokenSource.CreateLinkedTokenSource(
+            ct,
+            preMutationDeadline.Token);
+        ManagedCodexCredentialSnapshot? reacquisitionTrigger = null;
         if (lease is null)
         {
             try
@@ -155,12 +174,14 @@ public sealed class ManagedCodexCredentialLifecycle(
                         projected,
                         bearerToken,
                         mode,
-                        concurrentWait!.Token)
+                        preMutationWait.Token)
                     .ConfigureAwait(false);
                 if (outcome is ConcurrentCredentialCommitted committed)
                     return committed.Credential;
 
-                lease = ((ConcurrentMutationLeaseAcquired)outcome).Lease;
+                var acquired = (ConcurrentMutationLeaseAcquired)outcome;
+                lease = acquired.Lease;
+                reacquisitionTrigger = acquired.Trigger;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
@@ -174,8 +195,9 @@ public sealed class ManagedCodexCredentialLifecycle(
                 bearerToken,
                 mode,
                 lease,
-                concurrentWait?.Token ?? ct,
-                concurrentTimeout,
+                reacquisitionTrigger,
+                outcomeDeadline,
+                preMutationWait.Token,
                 ct)
             .ConfigureAwait(false);
     }
@@ -186,16 +208,20 @@ public sealed class ManagedCodexCredentialLifecycle(
         string? bearerToken,
         ManagedCodexCredentialReadinessMode mode,
         IManagedCodexCredentialMutationLeaseHandle lease,
+        ManagedCodexCredentialSnapshot? reacquisitionTrigger,
+        OutcomeDeadline outcomeDeadline,
         CancellationToken preMutationCt,
-        CancellationTokenSource? concurrentTimeout,
         CancellationToken requestCt)
     {
         IManagedCodexCredentialMutationLeaseHandle? ownedLease = lease;
         CancellationTokenSource? completion = null;
         try
         {
-            var projected = await _queryPort.ResolveAsync(owner, preMutationCt)
+            var queried = await _queryPort.ResolveAsync(owner, preMutationCt)
                 .ConfigureAwait(false);
+            var projected = SelectNewestCommittedSnapshot(
+                queried,
+                reacquisitionTrigger);
             if (CanReturnNormalReady(projected, owner, bearerToken, mode))
                 return projected!.Credential.Clone();
 
@@ -211,22 +237,35 @@ public sealed class ManagedCodexCredentialLifecycle(
                 _timeProvider.GetUtcNow());
             if (mode == ManagedCodexCredentialReadinessMode.Normal && projectedReady)
             {
-                using var cleanupCompletion = BeginMutationCompletion(requestCt);
-                var cleanupCompleted = await TryRetryPendingCleanupAsync(
-                    normalizedBearer,
-                    owner,
-                    projected!.PendingRevocations,
-                    cleanupCompletion.Token).ConfigureAwait(false);
+                requestCt.ThrowIfCancellationRequested();
+                var readySnapshot = projected!;
+                using var cleanupAttempt = outcomeDeadline.Begin(
+                    ReadyCleanupHandoffReserve);
+                bool cleanupCompleted;
+                try
+                {
+                    cleanupCompleted = await TryRetryPendingCleanupAsync(
+                        normalizedBearer,
+                        owner,
+                        readySnapshot.PendingRevocations,
+                        cleanupAttempt.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                    when (cleanupAttempt.IsCancellationRequested)
+                {
+                    cleanupCompleted = false;
+                }
                 if (!cleanupCompleted)
-                    LogPendingCleanup(projected.PendingRevocations);
+                    LogPendingCleanup(readySnapshot.PendingRevocations);
 
                 await ownedLease.DisposeAsync().ConfigureAwait(false);
                 ownedLease = null;
+                using var handoffCompletion = outcomeDeadline.Begin();
                 _ = await ConfirmReadinessForReconciliationAsync(
                         owner,
-                        projected.Credential.ApiKeyId,
+                        readySnapshot.Credential,
                         ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
-                        cleanupCompletion.Token)
+                        handoffCompletion.Token)
                     .ConfigureAwait(false);
                 try
                 {
@@ -234,9 +273,9 @@ public sealed class ManagedCodexCredentialLifecycle(
                             observation,
                             owner,
                             ManagedCodexCredentialReadinessMode.Normal,
-                            cleanupCompletion.Token,
-                            projected.StateVersion,
-                            projected.Credential.ApiKeyId)
+                            handoffCompletion.Token,
+                            readySnapshot.StateVersion,
+                            readySnapshot.Credential)
                         .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
@@ -247,13 +286,8 @@ public sealed class ManagedCodexCredentialLifecycle(
 
             CancellationToken BeginCompletion()
             {
-                if (concurrentTimeout is not null)
-                {
-                    preMutationCt.ThrowIfCancellationRequested();
-                    return concurrentTimeout.Token;
-                }
-
-                completion ??= BeginMutationCompletion(requestCt);
+                requestCt.ThrowIfCancellationRequested();
+                completion ??= outcomeDeadline.Begin();
                 return completion.Token;
             }
 
@@ -277,10 +311,11 @@ public sealed class ManagedCodexCredentialLifecycle(
                 projected?.Credential,
                 repairCt).ConfigureAwait(false);
             var completionCt = BeginCompletion();
-            var expectedApiKeyId = await ExecuteReadinessRepairAsync(
+            var repairOutcome = await ExecuteReadinessRepairAsync(
                 normalizedBearer,
                 owner,
                 repair,
+                outcomeDeadline,
                 completionCt).ConfigureAwait(false);
 
             if (projectedReady && projected?.PendingRevocations.Count > 0)
@@ -296,14 +331,25 @@ public sealed class ManagedCodexCredentialLifecycle(
 
             try
             {
-                return await WaitForReadyAsync(
+                var committed = await WaitForReadyAsync(
                         observation,
                         owner,
                         mode,
                         completionCt,
                         projected?.StateVersion ?? 0,
-                        expectedApiKeyId)
+                        repairOutcome.ExpectedCredential)
                     .ConfigureAwait(false);
+                if (repairOutcome.PreviousCredentialToRetire is not null)
+                {
+                    await RetirePreviousVaultReferenceAsync(
+                            owner,
+                            repairOutcome.PreviousCredentialToRetire,
+                            committed,
+                            completionCt)
+                        .ConfigureAwait(false);
+                }
+
+                return committed;
             }
             catch (OperationCanceledException)
             {
@@ -360,7 +406,9 @@ public sealed class ManagedCodexCredentialLifecycle(
             try
             {
                 _ = RequireBearerToken(bearerToken);
-                return new ConcurrentMutationLeaseAcquired(lease);
+                return new ConcurrentMutationLeaseAcquired(
+                    lease,
+                    snapshot.Clone());
             }
             catch
             {
@@ -370,6 +418,17 @@ public sealed class ManagedCodexCredentialLifecycle(
         }
 
         throw CommitTimeout();
+    }
+
+    private static ManagedCodexCredentialSnapshot? SelectNewestCommittedSnapshot(
+        ManagedCodexCredentialSnapshot? queried,
+        ManagedCodexCredentialSnapshot? trigger)
+    {
+        if (trigger is null)
+            return queried;
+        if (queried is null || queried.StateVersion < trigger.StateVersion)
+            return trigger.Clone();
+        return queried;
     }
 
     private static string RequireBearerToken(string? bearerToken)
@@ -705,7 +764,6 @@ public sealed class ManagedCodexCredentialLifecycle(
                 "Managed Codex credential persistence is pending reconciliation.");
         }
 
-        await RetirePreviousVaultReferenceAsync(owner, current.Credential, mutationCt).ConfigureAwait(false);
         return Result("rotation_accepted", actorId, persistedKey.Id, expiresAt, admission);
     }
 
@@ -943,13 +1001,14 @@ public sealed class ManagedCodexCredentialLifecycle(
                 .Order(StringComparer.Ordinal)
                 .ToArray());
 
-    private async Task<string> ExecuteReadinessRepairAsync(
+    private async Task<ReadinessRepairOutcome> ExecuteReadinessRepairAsync(
         string bearerToken,
         ExternalSubjectRef owner,
         ReadinessRepairPlan repair,
+        OutcomeDeadline outcomeDeadline,
         CancellationToken ct)
     {
-        string expectedApiKeyId;
+        ReadinessRepairOutcome outcome;
         switch (repair.Kind)
         {
             case ReadinessRepairKind.ReconcileCurrent:
@@ -960,15 +1019,21 @@ public sealed class ManagedCodexCredentialLifecycle(
                     repair.Remote!,
                     repair.Eligibility,
                     ct).ConfigureAwait(false);
-                await CleanupObsoleteApiKeysAsync(
+                var reconciliationCleanup = await RevokeObsoleteApiKeysAsync(
                     bearerToken,
                     owner,
                     repair.ApiKeyIdsToRevoke,
+                    repair.Current,
                     ct).ConfigureAwait(false);
-                expectedApiKeyId = reconciled.ApiKeyId;
+                await RecordCleanupOutcomesAsync(
+                        owner,
+                        reconciliationCleanup,
+                        outcomeDeadline)
+                    .ConfigureAwait(false);
+                outcome = new ReadinessRepairOutcome(reconciled, null);
                 break;
             case ReadinessRepairKind.AdoptRemote:
-                expectedApiKeyId = await AdoptRemoteCredentialAsync(
+                outcome = await AdoptRemoteCredentialAsync(
                         bearerToken,
                         owner,
                         repair,
@@ -976,15 +1041,16 @@ public sealed class ManagedCodexCredentialLifecycle(
                     .ConfigureAwait(false);
                 break;
             case ReadinessRepairKind.Replace:
-                expectedApiKeyId = await ReplaceCredentialAsync(
+                outcome = await ReplaceCredentialAsync(
                         bearerToken,
                         owner,
                         repair,
+                        outcomeDeadline,
                         ct)
                     .ConfigureAwait(false);
                 break;
             case ReadinessRepairKind.None:
-                expectedApiKeyId = repair.Current!.ApiKeyId;
+                outcome = new ReadinessRepairOutcome(repair.Current!.Clone(), null);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(repair));
@@ -992,14 +1058,14 @@ public sealed class ManagedCodexCredentialLifecycle(
 
         _ = await ConfirmReadinessForReconciliationAsync(
                 owner,
-                expectedApiKeyId,
+                outcome.ExpectedCredential,
                 ManagedCodexCredentialReadinessEvidence.RemoteValidated,
                 ct)
             .ConfigureAwait(false);
-        return expectedApiKeyId;
+        return outcome;
     }
 
-    private async Task<string> AdoptRemoteCredentialAsync(
+    private async Task<ReadinessRepairOutcome> AdoptRemoteCredentialAsync(
         string bearerToken,
         ExternalSubjectRef owner,
         ReadinessRepairPlan repair,
@@ -1038,26 +1104,28 @@ public sealed class ManagedCodexCredentialLifecycle(
                 repair.Current!.ApiKeyId,
                 descriptor,
                 ct).ConfigureAwait(false);
-            await RetirePreviousVaultReferenceAsync(owner, repair.Current, ct)
-                .ConfigureAwait(false);
-            return descriptor.ApiKeyId;
+            return new ReadinessRepairOutcome(
+                descriptor,
+                repair.Current.Clone());
         }
 
         _ = await CommitProvisionedForReconciliationAsync(descriptor, ct)
             .ConfigureAwait(false);
-        return descriptor.ApiKeyId;
+        return new ReadinessRepairOutcome(descriptor, null);
     }
 
-    private async Task<string> ReplaceCredentialAsync(
+    private async Task<ReadinessRepairOutcome> ReplaceCredentialAsync(
         string bearerToken,
         ExternalSubjectRef owner,
         ReadinessRepairPlan repair,
+        OutcomeDeadline outcomeDeadline,
         CancellationToken ct)
     {
         var pendingCleanup = await RevokeObsoleteApiKeysAsync(
             bearerToken,
             owner,
             repair.ApiKeyIdsToRevoke,
+            repair.Current,
             ct).ConfigureAwait(false);
 
         try
@@ -1066,6 +1134,7 @@ public sealed class ManagedCodexCredentialLifecycle(
                 bearerToken,
                 owner,
                 repair.Eligibility,
+                outcomeDeadline,
                 ct).ConfigureAwait(false);
             if (IsCommandableCurrent(repair.Current, owner))
             {
@@ -1073,8 +1142,6 @@ public sealed class ManagedCodexCredentialLifecycle(
                     repair.Current!.ApiKeyId,
                     descriptor,
                     ct).ConfigureAwait(false);
-                await RetirePreviousVaultReferenceAsync(owner, repair.Current, ct)
-                    .ConfigureAwait(false);
             }
             else
             {
@@ -1082,12 +1149,24 @@ public sealed class ManagedCodexCredentialLifecycle(
                     .ConfigureAwait(false);
             }
 
-            await RecordCleanupOutcomesAsync(owner, pendingCleanup).ConfigureAwait(false);
-            return descriptor.ApiKeyId;
+            await RecordCleanupOutcomesAsync(
+                    owner,
+                    pendingCleanup,
+                    outcomeDeadline)
+                .ConfigureAwait(false);
+            return new ReadinessRepairOutcome(
+                descriptor,
+                IsCommandableCurrent(repair.Current, owner)
+                    ? repair.Current!.Clone()
+                    : null);
         }
         catch
         {
-            await RecordCleanupOutcomesAsync(owner, pendingCleanup).ConfigureAwait(false);
+            await RecordCleanupOutcomesAsync(
+                    owner,
+                    pendingCleanup,
+                    outcomeDeadline)
+                .ConfigureAwait(false);
             throw;
         }
     }
@@ -1097,22 +1176,47 @@ public sealed class ManagedCodexCredentialLifecycle(
             string bearerToken,
             ExternalSubjectRef owner,
             IReadOnlyList<string> apiKeyIds,
+            ManagedCodexCredentialDescriptor? currentCredential,
             CancellationToken ct)
     {
         var pending = new List<ManagedCodexCredentialCleanup>();
+        var ownerScopeKey = ManagedCodexCredentialActorIdentity.From(owner);
+        var currentApiKeyId = IsCommandableCurrent(currentCredential, owner)
+            ? currentCredential!.ApiKeyId.Trim()
+            : null;
         foreach (var apiKeyId in apiKeyIds)
         {
-            if (await TryDeleteNyxIdKeyAsync(bearerToken, apiKeyId, ct)
-                .ConfigureAwait(false))
-            {
+            var isCurrentCredential = string.Equals(
+                apiKeyId,
+                currentApiKeyId,
+                StringComparison.Ordinal);
+            var secretRef = isCurrentCredential &&
+                            !string.IsNullOrWhiteSpace(
+                                currentCredential!.SecretReference?.Ref)
+                ? currentCredential.SecretReference.Ref.Trim()
+                : SecretRefFor(ownerScopeKey, apiKeyId);
+            var nyxIdPending = !await TryDeleteNyxIdKeyAsync(
+                    bearerToken,
+                    apiKeyId,
+                    ct)
+                .ConfigureAwait(false);
+            var vaultPending =
+                !isCurrentCredential &&
+                !await TryRevokeVaultAsync(
+                        secretRef,
+                        ownerScopeKey,
+                        "managed-codex-orphan-cleanup",
+                        ct)
+                    .ConfigureAwait(false);
+            if (!nyxIdPending && !vaultPending)
                 continue;
-            }
 
             pending.Add(new ManagedCodexCredentialCleanup
             {
                 ApiKeyId = apiKeyId,
-                NyxIdPending = true,
-                VaultPending = false,
+                SecretRef = secretRef,
+                NyxIdPending = nyxIdPending,
+                VaultPending = vaultPending,
                 RequestedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
             });
         }
@@ -1122,25 +1226,16 @@ public sealed class ManagedCodexCredentialLifecycle(
 
     private async Task RecordCleanupOutcomesAsync(
         ExternalSubjectRef owner,
-        IReadOnlyList<ManagedCodexCredentialCleanup> pending)
+        IReadOnlyList<ManagedCodexCredentialCleanup> pending,
+        OutcomeDeadline outcomeDeadline)
     {
         foreach (var cleanup in pending)
-            await QueueCleanupOutcomeAsync(owner, cleanup).ConfigureAwait(false);
-    }
-
-    private async Task CleanupObsoleteApiKeysAsync(
-        string bearerToken,
-        ExternalSubjectRef owner,
-        IReadOnlyList<string> apiKeyIds,
-        CancellationToken ct)
-    {
-        foreach (var apiKeyId in apiKeyIds)
         {
-            _ = await CompensateRejectedIssuanceAsync(
-                bearerToken,
-                owner,
-                apiKeyId,
-                ct).ConfigureAwait(false);
+            await QueueCleanupOutcomeAsync(
+                    owner,
+                    cleanup,
+                    outcomeDeadline)
+                .ConfigureAwait(false);
         }
     }
 
@@ -1148,6 +1243,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         string bearerToken,
         ExternalSubjectRef owner,
         ManagedCodexNyxIdEligibility eligibility,
+        OutcomeDeadline outcomeDeadline,
         CancellationToken ct)
     {
         var requestedExpiresAt = _timeProvider.GetUtcNow()
@@ -1174,7 +1270,8 @@ public sealed class ManagedCodexCredentialLifecycle(
                 await CompensateRejectedIssuanceAfterCancellationAsync(
                     bearerToken,
                     owner,
-                    issued.Key.Id).ConfigureAwait(false);
+                    issued.Key.Id,
+                    outcomeDeadline).ConfigureAwait(false);
             }
             throw;
         }
@@ -1215,7 +1312,8 @@ public sealed class ManagedCodexCredentialLifecycle(
                 owner,
                 persistedKey.Id,
                 requestedRef,
-                actorId).ConfigureAwait(false);
+                actorId,
+                outcomeDeadline).ConfigureAwait(false);
             throw;
         }
         catch (Exception)
@@ -1534,16 +1632,13 @@ public sealed class ManagedCodexCredentialLifecycle(
         ManagedCodexCredentialReadinessMode mode,
         CancellationToken ct,
         long minimumStateVersion = long.MinValue,
-        string? expectedApiKeyId = null)
+        ManagedCodexCredentialDescriptor? expectedCredential = null)
     {
         await foreach (var snapshot in observation.ReadAllAsync(ct).ConfigureAwait(false))
         {
             if (snapshot.StateVersion > minimumStateVersion &&
-                (string.IsNullOrWhiteSpace(expectedApiKeyId) ||
-                 string.Equals(
-                     snapshot.Credential?.ApiKeyId,
-                     expectedApiKeyId,
-                     StringComparison.Ordinal)) &&
+                (expectedCredential is null ||
+                 snapshot.Credential?.Equals(expectedCredential) == true) &&
                 HasSufficientReadinessEvidence(snapshot.ReadinessEvidence, mode) &&
                 IsReady(snapshot.Credential, owner, _timeProvider.GetUtcNow()))
             {
@@ -1643,6 +1738,12 @@ public sealed class ManagedCodexCredentialLifecycle(
             TimeSpan.FromSeconds(_options.MutationCompletionSeconds),
             _timeProvider);
     }
+
+    private OutcomeDeadline BeginOutcomeDeadline() =>
+        new(
+            _timeProvider,
+            _timeProvider.GetUtcNow().AddSeconds(
+                _options.MutationCompletionSeconds));
 
     private static ManagedCodexNyxIdApiKeyIssueRequest IssueRequest(
         ManagedCodexNyxIdEligibility eligibility,
@@ -1802,8 +1903,6 @@ public sealed class ManagedCodexCredentialLifecycle(
             current.ApiKeyId,
             descriptor,
             ct).ConfigureAwait(false);
-        await RetirePreviousVaultReferenceAsync(owner, current, ct)
-            .ConfigureAwait(false);
         return Result(
             "rotation_reconciliation_accepted",
             ManagedCodexCredentialActorIdentity.From(owner),
@@ -1947,7 +2046,7 @@ public sealed class ManagedCodexCredentialLifecycle(
 
     private async Task<DispatchAdmission> ConfirmReadinessForReconciliationAsync(
         ExternalSubjectRef owner,
-        string expectedApiKeyId,
+        ManagedCodexCredentialDescriptor expectedCredential,
         ManagedCodexCredentialReadinessEvidence readinessEvidence,
         CancellationToken ct)
     {
@@ -1955,7 +2054,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         {
             var admission = await _commandPort.ConfirmReadinessAsync(
                 owner,
-                expectedApiKeyId,
+                expectedCredential,
                 readinessEvidence,
                 ct).ConfigureAwait(false);
             return admission.Accepted
@@ -2030,6 +2129,17 @@ public sealed class ManagedCodexCredentialLifecycle(
                     ManagedCodexCredentialActorIdentity.SecretSubjectId,
                     "managed-codex-reconcile"),
                 ct).ConfigureAwait(false);
+            if (resolved.FailureReason is
+                SecretResolutionFailureReason.Unauthorized or
+                SecretResolutionFailureReason.AuthenticationFailed or
+                SecretResolutionFailureReason.KeyringMismatch or
+                SecretResolutionFailureReason.UnsupportedAlgorithm)
+            {
+                throw Failure(
+                    "managed_credential_vault_unavailable",
+                    "The managed Codex credential Vault is unavailable; retry reconciliation later.");
+            }
+
             if (!resolved.Resolved ||
                 string.IsNullOrWhiteSpace(resolved.Secret) ||
                 resolved.Reference is null ||
@@ -2044,6 +2154,10 @@ public sealed class ManagedCodexCredentialLifecycle(
             return resolved.Reference.Clone();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ManagedCodexCredentialLifecycleException)
         {
             throw;
         }
@@ -2135,8 +2249,19 @@ public sealed class ManagedCodexCredentialLifecycle(
     private async Task RetirePreviousVaultReferenceAsync(
         ExternalSubjectRef owner,
         ManagedCodexCredentialDescriptor previous,
+        ManagedCodexCredentialDescriptor committed,
         CancellationToken ct)
     {
+        if (previous.SecretReference is null ||
+            committed.SecretReference is null ||
+            string.Equals(
+                previous.SecretReference.Ref,
+                committed.SecretReference.Ref,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
         if (await TryRevokeVaultAsync(
                 previous.SecretReference.Ref,
                 previous.SecretReference.OwnerScopeKey,
@@ -2282,9 +2407,10 @@ public sealed class ManagedCodexCredentialLifecycle(
         ExternalSubjectRef owner,
         string apiKeyId,
         string secretRef,
-        string ownerScopeKey)
+        string ownerScopeKey,
+        OutcomeDeadline outcomeDeadline)
     {
-        using var cleanup = BeginOutcomeCompletion();
+        using var cleanup = outcomeDeadline.Begin();
         var nyxIdPending = !await TryDeleteForOutcomeAsync(
             bearerToken,
             apiKeyId,
@@ -2306,15 +2432,17 @@ public sealed class ManagedCodexCredentialLifecycle(
                 NyxIdPending = nyxIdPending,
                 VaultPending = vaultPending,
                 RequestedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            }).ConfigureAwait(false);
+            },
+            outcomeDeadline).ConfigureAwait(false);
     }
 
     private async Task CompensateRejectedIssuanceAfterCancellationAsync(
         string bearerToken,
         ExternalSubjectRef owner,
-        string apiKeyId)
+        string apiKeyId,
+        OutcomeDeadline outcomeDeadline)
     {
-        using var cleanup = BeginOutcomeCompletion();
+        using var cleanup = outcomeDeadline.Begin();
         if (await TryDeleteForOutcomeAsync(
                 bearerToken,
                 apiKeyId,
@@ -2331,7 +2459,8 @@ public sealed class ManagedCodexCredentialLifecycle(
                 NyxIdPending = true,
                 VaultPending = false,
                 RequestedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
-            }).ConfigureAwait(false);
+            },
+            outcomeDeadline).ConfigureAwait(false);
     }
 
     private async Task<bool> TryDeleteForOutcomeAsync(
@@ -2376,9 +2505,10 @@ public sealed class ManagedCodexCredentialLifecycle(
 
     private async Task QueueCleanupOutcomeAsync(
         ExternalSubjectRef owner,
-        ManagedCodexCredentialCleanup cleanup)
+        ManagedCodexCredentialCleanup cleanup,
+        OutcomeDeadline outcomeDeadline)
     {
-        using var recording = BeginOutcomeCompletion();
+        using var recording = outcomeDeadline.Begin();
         try
         {
             var admission = await _commandPort.QueueCleanupAsync(
@@ -2401,11 +2531,6 @@ public sealed class ManagedCodexCredentialLifecycle(
             "Managed Codex cleanup outcome could not be recorded for API key {ApiKeyId}.",
             cleanup.ApiKeyId);
     }
-
-    private CancellationTokenSource BeginOutcomeCompletion() =>
-        new(
-            TimeSpan.FromSeconds(_options.MutationCompletionSeconds),
-            _timeProvider);
 
     private async Task CompensateUnadoptedAsync(
         string bearerToken,

@@ -63,10 +63,10 @@ public interface IManagedCodexCredentialCommandPort
         ManagedCodexCredentialDescriptor credential,
         CancellationToken ct = default);
 
-    /// <summary>Admits an idempotent readiness confirmation for the expected active API key.</summary>
+    /// <summary>Admits an idempotent readiness confirmation for the exact expected active credential.</summary>
     Task<DispatchAdmission> ConfirmReadinessAsync(
         ExternalSubjectRef owner,
-        string expectedApiKeyId,
+        ManagedCodexCredentialDescriptor expectedCredential,
         ManagedCodexCredentialReadinessEvidence readinessEvidence,
         CancellationToken ct = default);
 

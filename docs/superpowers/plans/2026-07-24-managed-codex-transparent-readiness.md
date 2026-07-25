@@ -353,6 +353,7 @@ message ConfirmManagedCodexCredentialReadinessCommand {
   aevatar.gagents.channel.abstractions.ExternalSubjectRef owner = 1;
   string expected_api_key_id = 2;
   aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialReadinessEvidence readiness_evidence = 3;
+  aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialDescriptor expected_credential = 4;
 }
 
 message ManagedCodexCredentialPolicyReconciledEvent {
@@ -371,6 +372,10 @@ The readiness-confirmed event is emitted when an idempotent duplicate command
 matches current authoritative state or the Application explicitly confirms
 fresh remote validation. This ensures a newly attached observation can receive
 typed committed evidence instead of timing out on a silent no-op.
+
+Explicit confirmation must match the complete `expected_credential`, including
+the exact typed Vault reference. `expected_api_key_id` remains a narrow
+correlation field but is insufficient by itself to authorize readiness.
 
 - [ ] **Step 4: Implement Actor transitions and validation**
 
@@ -1459,7 +1464,9 @@ if (lease is null)
     if (outcome is ConcurrentCredentialCommitted committed)
         return committed.Credential;
 
-    lease = ((ConcurrentMutationLeaseAcquired)outcome).Lease;
+    var acquired = (ConcurrentMutationLeaseAcquired)outcome;
+    lease = acquired.Lease;
+    reacquisitionTrigger = acquired.Trigger;
 }
 
 return await EnsureReadyAsLeaseOwnerAsync(
@@ -1468,8 +1475,9 @@ return await EnsureReadyAsLeaseOwnerAsync(
     bearerToken,
     mode,
     lease,
+    reacquisitionTrigger,
+    outcomeDeadline,
     boundedPreMutationToken,
-    sharedCompletionTimeout,
     ct);
 ```
 
@@ -1477,7 +1485,7 @@ return await EnsureReadyAsLeaseOwnerAsync(
 
 ```text
 ConcurrentCredentialCommitted(credential)
-ConcurrentMutationLeaseAcquired(lease)
+ConcurrentMutationLeaseAcquired(lease, triggeringSnapshot)
 ```
 
 Normal mode accepts either `CurrentStateConfirmed` or `RemoteValidated`.
@@ -1493,19 +1501,26 @@ Force mode accepts only `RemoteValidated`. A Force waiter that observes
 
 The lease holder re-reads the projection once more before remote work, because
 another committed operation may have completed immediately before acquisition.
-It then requires and verifies the bearer owner.
+For reacquisition, it selects the re-read only when its authoritative
+`StateVersion` is at least the triggering committed snapshot's version;
+otherwise the triggering snapshot is the fallback. It then requires and
+verifies the bearer owner.
 
-The busy-call wait links caller cancellation with the configured readiness
-timeout. The same timeout remains the completion boundary after reacquisition;
-the path does not gain a second full timeout. Before irreversible mutation it
-remains linked to caller cancellation. After mutation begins, that same timeout
-carries commit or compensation to a recorded outcome even if the caller later
-disconnects.
+Create one absolute outcome deadline when lease ownership or the lease-busy wait
+begins. Before irreversible mutation, derive a token bounded by both caller
+cancellation and that deadline. After mutation begins, derive mutation,
+compensation, cleanup-recording, confirmation, and observation tokens only from
+the remaining time to the same deadline. No phase receives a fresh full
+`MutationCompletionSeconds` budget, so the fixed Garnet lease remains valid for
+every external side effect.
 
 A Normal owner that only retries obsolete cleanup releases the mutation lease
-before dispatching `CurrentStateConfirmed`. That committed structural event is
-the event-driven handoff that permits a waiting Force caller's one acquisition
-attempt.
+before dispatching `CurrentStateConfirmed`. Its cleanup attempt reserves the
+last ten seconds of the shared deadline for that structural dispatch and
+observation. Internal cleanup timeout is best effort and leaves cleanup pending;
+caller cancellation observed before irreversible cleanup still propagates. The
+committed structural event is the event-driven handoff that permits a waiting
+Force caller's one acquisition attempt.
 
 - [ ] **Step 6: Implement deterministic repair selection**
 
@@ -1518,12 +1533,21 @@ Under the lease:
 4. adopt one unambiguous recoverable remote key when projection is absent;
 5. update a recoverable single-service key in place;
 6. replace expired, revoked, missing-secret, or irreconcilable credentials;
-7. when multiple reserved keys are ambiguous, revoke each through existing
-   compensation tracking and issue one fresh key;
+7. for every non-current orphan reserved key, derive its deterministic Vault
+   reference, attempt both NyxID and Vault cleanup tracks, and record any
+   incomplete track with the exact `SecretRef` and typed pending flags;
 8. dispatch provision, rotation, or policy reconciliation;
 9. explicitly dispatch `ConfirmReadiness(RemoteValidated)` for the expected
-   active key after remote validation, including duplicate/no-op command cases;
-10. return only `WaitForReadyAsync(...)` after sufficient committed evidence.
+   complete active descriptor after remote validation, including duplicate/no-op
+   command cases;
+10. retire a prior Vault reference only after an exactly matching provision,
+    rotation, or reconciliation descriptor is observed committed, and never
+    retire the active locator;
+11. map Vault `Unauthorized`, `AuthenticationFailed`, `KeyringMismatch`, and
+    `UnsupportedAlgorithm` to `managed_credential_vault_unavailable` without
+    revoking, creating, or updating NyxID keys;
+12. return only `WaitForReadyAsync(...)` after sufficient committed evidence
+    for the exact expected descriptor.
 
 Change pending cleanup handling to return a result instead of always throwing:
 

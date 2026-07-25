@@ -168,7 +168,10 @@ Normal mode accepts either evidence value. `ForceRemoteValidation` accepts only
 of remote validity. Duplicate provision, rotation, or policy-reconciliation
 Actor commands therefore emit only `CurrentStateConfirmed`. The narrow explicit
 readiness-confirmation command carries `RemoteValidated` after Application-side
-validation.
+validation. It correlates against the complete expected credential descriptor,
+including the exact typed Vault reference, rather than only the API-key ID. The
+Actor commits confirmation only when that descriptor equals its current
+authoritative credential.
 
 ## Credential Policy
 
@@ -218,22 +221,35 @@ the already-required usable UserServices.
    lease reacquisition attempt. If the lease remains busy, the caller continues
    waiting for `RemoteValidated` evidence regardless of bearer availability. If
    the lease is acquired, a bearer-less caller disposes it and fails with
-   `managed_user_authorization_unavailable`; a bearer-equipped caller re-reads
-   the projection and continues as the lease owner.
+   `managed_user_authorization_unavailable`; a bearer-equipped caller carries
+   the triggering committed snapshot through reacquisition, re-reads the
+   projection once, and continues from whichever committed snapshot has the
+   higher authoritative `StateVersion`.
 10. The lease owner resolves the user's exact required UserServices, reconciles
     remote Aevatar-managed keys, stores or updates Vault material when needed,
     and dispatches the typed actor command.
 11. After remote validation, dispatch the narrow typed
-    `ConfirmReadiness(RemoteValidated)` command and wait for matching committed
-    evidence. A Normal cleanup owner releases its mutation lease before
-    dispatching `CurrentStateConfirmed`, making that committed event the
-    event-driven handoff to a waiting Force caller.
+    `ConfirmReadiness(RemoteValidated)` command for the complete validated
+    descriptor and wait for an exactly matching committed descriptor. A prior
+    Vault reference is retired only after that matching transition is observed
+    committed, and a reference whose locator equals the committed active
+    locator is never retired. A Normal cleanup owner releases its mutation
+    lease before dispatching `CurrentStateConfirmed`, making that committed
+    event the event-driven handoff to a waiting Force caller.
 12. Release the observation and any remaining mutation lease.
 13. Pass the observed committed descriptor to the chrono transport and continue
     the original `codex_exec`.
 
 There is no `Task.Delay` loop, query-time replay, read-model priming, or use of
 an uncommitted method-local descriptor as execution authority.
+
+One absolute outcome deadline starts when lease ownership or the lease-busy
+wait begins. Pre-mutation work is bounded by that deadline and caller
+cancellation. After the first irreversible external mutation, the mutation,
+compensation, Actor cleanup recording, confirmation, and committed observation
+use only the time remaining before that same deadline; no phase receives a new
+full timeout. The fixed-TTL Garnet lease therefore remains valid for every
+external side effect performed by that owner.
 
 ## Automatic Repair
 
@@ -249,15 +265,24 @@ The lifecycle automatically handles these states:
 - **Missing Vault secret:** when a current user bearer is available, rotate or
   replace the remote key, store the new one-time secret, commit it, and
   continue.
+- **Vault authority unavailable:** `Unauthorized`, `AuthenticationFailed`,
+  `KeyringMismatch`, and `UnsupportedAlgorithm` are typed availability
+  failures. They stop repair with `managed_credential_vault_unavailable` and
+  never authorize revoking or replacing the recoverable NyxID key.
 - **Ambiguous prior dispatch:** reconcile the exact remote key and deterministic
   Vault reference before issuing another key.
 - **Duplicate or orphaned Aevatar-managed keys:** keep an unambiguous committed
-  valid key when possible; otherwise revoke the reserved
-  `aevatar-managed-codex` keys and create one fresh credential. Cleanup facts
-  remain Actor-owned and independently retryable.
+  valid key when possible; otherwise derive each orphan key's deterministic
+  Vault reference, attempt both NyxID and Vault cleanup tracks, and create one
+  fresh credential. Any incomplete track is recorded as an Actor-owned cleanup
+  fact with the exact `SecretRef` and independent `NyxIdPending` /
+  `VaultPending` flags.
 - **Pending cleanup with a ready current credential:** retry cleanup
   best-effort, but do not block Codex execution solely because an obsolete key
-  or Vault record is still pending deletion.
+  or Vault record is still pending deletion. The internal cleanup attempt
+  reserves the final ten seconds of the shared outcome deadline for structural
+  confirmation and committed handoff. Reaching that cleanup boundary leaves the
+  cleanup pending and still emits `CurrentStateConfirmed`.
 
 NyxID mutations are re-read and validated before Actor dispatch. Policy
 comparison is order-independent and requires exactly the two expected IDs.
@@ -274,7 +299,11 @@ Concurrent invocations behave as follows:
   stream;
 - a sufficient committed snapshot completes a waiter without mutation;
 - a Force waiter may use one committed structural confirmation to attempt the
-  distributed lease exactly once, then re-read before remote work if acquired;
+  distributed lease exactly once, carry that triggering snapshot through
+  acquisition, then perform one re-read before remote work;
+- when that one re-read lags the triggering snapshot, the triggering committed
+  snapshot remains the authoritative fallback; when the re-read is newer, the
+  newer snapshot wins;
 - if that one attempt remains busy, the waiter only awaits later
   `RemoteValidated` evidence and does not spin;
 - one external mutation is performed per lease owner;
@@ -312,6 +341,8 @@ loop.
   missing, ambiguous, inactive, or unusable.
 - `managed_credential_commit_timeout`: no ready committed snapshot was observed
   within the bounded mutation window.
+- `managed_credential_vault_unavailable`: Vault authority or cryptographic
+  availability prevents safe validation; no recoverable remote key is replaced.
 - existing Vault, NyxID, proxy, timeout, capacity, malformed-output, and
   cancellation failures retain sanitized typed mappings.
 
@@ -320,8 +351,10 @@ normal lifecycle returned `provisioning`. Infrastructure failures may still
 fail the execution, but credential setup is not exposed as a user workflow.
 
 Caller cancellation stops the pending Codex execution. Once an irreversible
-NyxID or Vault mutation has begun, the bounded internal completion token still
-drives the mutation to an Actor-recorded or compensating outcome.
+NyxID or Vault mutation has begun, the shared absolute outcome deadline still
+drives the mutation to an Actor-recorded or compensating outcome. Caller
+cancellation observed before irreversible work propagates without starting
+cleanup or replacement.
 
 ## Manual Lifecycle API
 

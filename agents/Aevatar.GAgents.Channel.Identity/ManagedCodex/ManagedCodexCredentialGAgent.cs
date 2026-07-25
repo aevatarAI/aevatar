@@ -141,6 +141,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         ArgumentNullException.ThrowIfNull(command);
         if (!MatchesActor(command.Owner) ||
             string.IsNullOrWhiteSpace(command.ExpectedApiKeyId) ||
+            !TryValidateCredential(command.ExpectedCredential, out var expectedCredential) ||
             command.ReadinessEvidence is not
                 (ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed or
                  ManagedCodexCredentialReadinessEvidence.RemoteValidated))
@@ -154,7 +155,8 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             !string.Equals(
                 current.ApiKeyId,
                 command.ExpectedApiKeyId.Trim(),
-                StringComparison.Ordinal))
+                StringComparison.Ordinal) ||
+            !current.Equals(expectedCredential))
         {
             return;
         }
