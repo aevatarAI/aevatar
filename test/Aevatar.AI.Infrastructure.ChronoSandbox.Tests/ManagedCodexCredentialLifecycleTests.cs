@@ -1350,6 +1350,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             query,
             commands,
             mutationLease ?? new InMemoryManagedCodexCredentialMutationLease(),
+            Substitute.For<IManagedCodexCredentialReadinessObservationPort>(),
             new FakeTimeProvider(Now),
             NullLogger<ManagedCodexCredentialLifecycle>.Instance);
     }

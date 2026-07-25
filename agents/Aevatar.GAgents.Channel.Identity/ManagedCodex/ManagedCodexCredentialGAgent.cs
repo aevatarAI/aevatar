@@ -39,7 +39,9 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         {
             if (current.Equals(credential))
             {
-                await PersistReadinessConfirmedAsync(current);
+                await PersistReadinessConfirmedAsync(
+                    current,
+                    ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
                 return;
             }
 
@@ -66,7 +68,9 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         var current = State.Credential;
         if (current is not null && current.Equals(credential))
         {
-            await PersistReadinessConfirmedAsync(current);
+            await PersistReadinessConfirmedAsync(
+                current,
+                ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
             return;
         }
 
@@ -117,7 +121,9 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
 
         if (current.Equals(credential))
         {
-            await PersistReadinessConfirmedAsync(current);
+            await PersistReadinessConfirmedAsync(
+                current,
+                ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
             return;
         }
 
@@ -126,6 +132,36 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             ApiKeyId = current.ApiKeyId,
             Credential = credential,
         });
+    }
+
+    [EventHandler]
+    public async Task HandleReadinessConfirmation(
+        ConfirmManagedCodexCredentialReadinessCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (!MatchesActor(command.Owner) ||
+            string.IsNullOrWhiteSpace(command.ExpectedApiKeyId) ||
+            command.ReadinessEvidence is not
+                (ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed or
+                 ManagedCodexCredentialReadinessEvidence.RemoteValidated))
+        {
+            return;
+        }
+
+        var current = State.Credential;
+        if (current is null ||
+            current.Status != ManagedCodexCredentialStatus.Active ||
+            !string.Equals(
+                current.ApiKeyId,
+                command.ExpectedApiKeyId.Trim(),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await PersistReadinessConfirmedAsync(
+            current,
+            command.ReadinessEvidence);
     }
 
     [EventHandler]
@@ -194,11 +230,14 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         });
     }
 
-    private Task PersistReadinessConfirmedAsync(ManagedCodexCredentialDescriptor credential) =>
+    private Task PersistReadinessConfirmedAsync(
+        ManagedCodexCredentialDescriptor credential,
+        ManagedCodexCredentialReadinessEvidence readinessEvidence) =>
         PersistDomainEventAsync(new ManagedCodexCredentialReadinessConfirmedEvent
         {
             ApiKeyId = credential.ApiKeyId,
             VerifiedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ReadinessEvidence = readinessEvidence,
         });
 
     private async Task QueueIncomingCredentialCleanupAsync(ManagedCodexCredentialDescriptor credential)

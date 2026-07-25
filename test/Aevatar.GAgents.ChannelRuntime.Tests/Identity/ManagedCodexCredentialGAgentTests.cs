@@ -75,7 +75,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleProvisioned_WithDuplicateCommand_CommitsReadinessConfirmed()
+    public async Task HandleProvisioned_WithDuplicateCommand_CommitsStructuralReadinessConfirmation()
     {
         var descriptor = Descriptor("key-1", "sec-1", version: 1);
         var command = new CommitManagedCodexCredentialProvisionedCommand
@@ -88,6 +88,83 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
 
         var readiness = await ReadLastReadinessConfirmedAsync();
         readiness.ApiKeyId.Should().Be("key-1");
+        readiness.ReadinessEvidence.Should().Be(
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
+    }
+
+    [Fact]
+    public async Task HandleReadinessConfirmation_WithMatchingCurrentKey_CommitsWithoutChangingCredential()
+    {
+        var descriptor = Descriptor("key-1", "sec-1", version: 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        });
+
+        await _agent.HandleReadinessConfirmation(
+            new ConfirmManagedCodexCredentialReadinessCommand
+            {
+                Owner = descriptor.Owner.Clone(),
+                ExpectedApiKeyId = descriptor.ApiKeyId,
+                ReadinessEvidence =
+                    ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
+            });
+
+        _agent.State.Credential.Should().Be(descriptor);
+        var readiness = await ReadLastReadinessConfirmedAsync();
+        readiness.ApiKeyId.Should().Be("key-1");
+        readiness.ReadinessEvidence.Should().Be(
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
+    }
+
+    [Fact]
+    public async Task HandleReadinessConfirmation_WithExplicitRemoteValidation_CommitsRemoteEvidence()
+    {
+        var descriptor = Descriptor("key-1", "sec-1", version: 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        });
+
+        await _agent.HandleReadinessConfirmation(
+            new ConfirmManagedCodexCredentialReadinessCommand
+            {
+                Owner = descriptor.Owner.Clone(),
+                ExpectedApiKeyId = descriptor.ApiKeyId,
+                ReadinessEvidence =
+                    ManagedCodexCredentialReadinessEvidence.RemoteValidated,
+            });
+
+        _agent.State.Credential.Should().Be(descriptor);
+        var readiness = await ReadLastReadinessConfirmedAsync();
+        readiness.ApiKeyId.Should().Be("key-1");
+        readiness.ReadinessEvidence.Should().Be(
+            ManagedCodexCredentialReadinessEvidence.RemoteValidated);
+    }
+
+    [Fact]
+    public async Task HandleReadinessConfirmation_WithStaleKey_DoesNotCommit()
+    {
+        var descriptor = Descriptor("key-1", "sec-1", version: 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        });
+        var store = _services.GetRequiredService<IEventStore>();
+        var before = await store.GetEventsAsync(_agent.Id);
+
+        await _agent.HandleReadinessConfirmation(
+            new ConfirmManagedCodexCredentialReadinessCommand
+            {
+                Owner = descriptor.Owner.Clone(),
+                ExpectedApiKeyId = "key-stale",
+                ReadinessEvidence =
+                    ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
+            });
+
+        var after = await store.GetEventsAsync(_agent.Id);
+        after.Should().HaveCount(before.Count);
+        _agent.State.Credential.Should().Be(descriptor);
     }
 
     [Fact]
@@ -257,7 +334,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandlePolicyReconciled_WithDuplicateCommand_CommitsReadinessConfirmed()
+    public async Task HandlePolicyReconciled_WithDuplicateCommand_CommitsStructuralReadinessConfirmation()
     {
         var current = Descriptor("key-current", "sec-current", 1);
         current.ChronoLlmUserServiceId = "user-service-llm-old";
@@ -278,6 +355,8 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
 
         var readiness = await ReadLastReadinessConfirmedAsync();
         readiness.ApiKeyId.Should().Be("key-current");
+        readiness.ReadinessEvidence.Should().Be(
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
     }
 
     [Fact]
@@ -302,7 +381,7 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRotated_WithDuplicateDistinctReferenceCommand_CommitsReadinessConfirmed()
+    public async Task HandleRotated_WithDuplicateDistinctReferenceCommand_CommitsStructuralReadinessConfirmation()
     {
         await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
         {
@@ -322,6 +401,8 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
         _agent.State.PendingRevocations.Should().BeEmpty();
         var readiness = await ReadLastReadinessConfirmedAsync();
         readiness.ApiKeyId.Should().Be("key-rotated");
+        readiness.ReadinessEvidence.Should().Be(
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
     }
 
     [Fact]

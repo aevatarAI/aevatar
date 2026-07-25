@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgents.Channel.Identity;
 
@@ -58,11 +59,16 @@ internal sealed class ManagedCodexCredentialReadinessProjector
             return EmptyEntries;
         }
 
+        var readinessEvidence = ResolveReadinessEvidence(stateEvent.EventData);
+        if (readinessEvidence == ManagedCodexCredentialReadinessEvidence.Unspecified)
+            return EmptyEntries;
+
         var snapshot = new ManagedCodexCredentialSnapshot
         {
             Credential = state.Credential.Clone(),
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
+            ReadinessEvidence = readinessEvidence,
         };
         snapshot.PendingRevocations.Add(
             state.PendingRevocations.Select(static item => item.Clone()));
@@ -73,6 +79,27 @@ internal sealed class ManagedCodexCredentialReadinessProjector
                 context.SessionId,
                 snapshot),
         ];
+    }
+
+    private static ManagedCodexCredentialReadinessEvidence ResolveReadinessEvidence(
+        Any? payload)
+    {
+        if (payload?.Is(ManagedCodexCredentialProvisionedEvent.Descriptor) == true ||
+            payload?.Is(ManagedCodexCredentialRotatedEvent.Descriptor) == true ||
+            payload?.Is(ManagedCodexCredentialPolicyReconciledEvent.Descriptor) == true)
+        {
+            return ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed;
+        }
+
+        if (payload?.Is(ManagedCodexCredentialReadinessConfirmedEvent.Descriptor) != true)
+            return ManagedCodexCredentialReadinessEvidence.Unspecified;
+
+        var confirmed = payload.Unpack<ManagedCodexCredentialReadinessConfirmedEvent>();
+        return confirmed.ReadinessEvidence is
+            (ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed or
+             ManagedCodexCredentialReadinessEvidence.RemoteValidated)
+            ? confirmed.ReadinessEvidence
+            : ManagedCodexCredentialReadinessEvidence.Unspecified;
     }
 }
 

@@ -59,6 +59,31 @@ internal sealed class ManagedCodexCredentialCommandPort(
             ct);
     }
 
+    public Task<DispatchAdmission> ConfirmReadinessAsync(
+        ExternalSubjectRef owner,
+        string expectedApiKeyId,
+        ManagedCodexCredentialReadinessEvidence readinessEvidence,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedApiKeyId);
+        if (readinessEvidence is not
+            (ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed or
+             ManagedCodexCredentialReadinessEvidence.RemoteValidated))
+        {
+            throw new ArgumentOutOfRangeException(nameof(readinessEvidence));
+        }
+        return DispatchAsync(
+            owner,
+            new ConfirmManagedCodexCredentialReadinessCommand
+            {
+                Owner = owner.Clone(),
+                ExpectedApiKeyId = expectedApiKeyId.Trim(),
+                ReadinessEvidence = readinessEvidence,
+            },
+            ct);
+    }
+
     public Task<DispatchAdmission> CommitRevokedAsync(
         ExternalSubjectRef owner,
         string expectedApiKeyId,

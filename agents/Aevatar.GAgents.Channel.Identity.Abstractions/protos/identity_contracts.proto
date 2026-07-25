@@ -79,11 +79,18 @@ message ManagedCodexCredentialDescriptor {
   string chrono_llm_user_service_id = 8;
 }
 
+enum ManagedCodexCredentialReadinessEvidence {
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_UNSPECIFIED = 0;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_CURRENT_STATE_CONFIRMED = 1;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_REMOTE_VALIDATED = 2;
+}
+
 message ManagedCodexCredentialSnapshot {
   ManagedCodexCredentialDescriptor credential = 1;
   repeated ManagedCodexCredentialCleanup pending_revocations = 2;
   int64 state_version = 3;
   string last_event_id = 4;
+  ManagedCodexCredentialReadinessEvidence readiness_evidence = 5;
 }
 
 message ManagedCodexCredentialCleanup {

@@ -322,11 +322,18 @@ message ManagedCodexCredentialDescriptor {
   string chrono_llm_user_service_id = 8;
 }
 
+enum ManagedCodexCredentialReadinessEvidence {
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_UNSPECIFIED = 0;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_CURRENT_STATE_CONFIRMED = 1;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_REMOTE_VALIDATED = 2;
+}
+
 message ManagedCodexCredentialSnapshot {
   ManagedCodexCredentialDescriptor credential = 1;
   repeated ManagedCodexCredentialCleanup pending_revocations = 2;
   int64 state_version = 3;
   string last_event_id = 4;
+  ManagedCodexCredentialReadinessEvidence readiness_evidence = 5;
 }
 ```
 
@@ -342,6 +349,12 @@ message CommitManagedCodexCredentialPolicyReconciledCommand {
   aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialDescriptor credential = 2;
 }
 
+message ConfirmManagedCodexCredentialReadinessCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef owner = 1;
+  string expected_api_key_id = 2;
+  aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialReadinessEvidence readiness_evidence = 3;
+}
+
 message ManagedCodexCredentialPolicyReconciledEvent {
   string api_key_id = 1;
   aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialDescriptor credential = 2;
@@ -350,12 +363,14 @@ message ManagedCodexCredentialPolicyReconciledEvent {
 message ManagedCodexCredentialReadinessConfirmedEvent {
   string api_key_id = 1;
   google.protobuf.Timestamp verified_at = 2;
+  aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialReadinessEvidence readiness_evidence = 3;
 }
 ```
 
 The readiness-confirmed event is emitted when an idempotent duplicate command
-matches current authoritative state, ensuring a newly attached observation can
-receive a committed snapshot instead of timing out on a silent no-op.
+matches current authoritative state or the Application explicitly confirms
+fresh remote validation. This ensures a newly attached observation can receive
+typed committed evidence instead of timing out on a silent no-op.
 
 - [ ] **Step 4: Implement Actor transitions and validation**
 
@@ -404,6 +419,8 @@ public async Task HandlePolicyReconciled(
         {
             ApiKeyId = current.ApiKeyId,
             VerifiedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ReadinessEvidence =
+                ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
         });
         return;
     }
@@ -417,7 +434,9 @@ public async Task HandlePolicyReconciled(
 ```
 
 When duplicate provision/rotation commands exactly equal current state, emit
-the same readiness-confirmed event instead of returning silently.
+the same structural readiness-confirmed event instead of returning silently.
+Duplicate Actor turns never claim `RemoteValidated`; only the explicit typed
+confirmation command may carry fresh Application validation evidence.
 
 Update every existing `Descriptor(...)` fixture in managed Codex Actor,
 projection, endpoint, lifecycle, and transport tests to set a distinct
@@ -631,6 +650,7 @@ var snapshot = new ManagedCodexCredentialSnapshot
     Credential = state.Credential.Clone(),
     StateVersion = stateEvent.Version,
     LastEventId = stateEvent.EventId ?? string.Empty,
+    ReadinessEvidence = ResolveReadinessEvidence(stateEvent.EventData),
 };
 snapshot.PendingRevocations.Add(
     state.PendingRevocations.Select(static item => item.Clone()));
@@ -1040,6 +1060,16 @@ git commit -m "Repair managed Codex dual-service key policy"
 - Produces: `IManagedCodexCredentialLifecycle.EnsureReadyAsync`.
 - Consumes: Task 3 observation port and Task 4 dual-service NyxID policy.
 
+Review hardening also extends the existing typed Identity contracts and Actor:
+
+- `ManagedCodexCredentialReadinessEvidence` distinguishes structural
+  confirmation from fresh remote validation;
+- the snapshot, readiness confirmation command, and readiness confirmation
+  event carry that enum;
+- duplicate provision/rotation/policy commands emit
+  `CurrentStateConfirmed`;
+- Application repair paths explicitly confirm `RemoteValidated`.
+
 - [ ] **Step 1: Write failing same-call readiness tests**
 
 Create `ManagedCodexCredentialReadinessTests` with these dependencies:
@@ -1388,11 +1418,13 @@ Wait without polling:
 private async Task<ManagedCodexCredentialDescriptor> WaitForReadyAsync(
     IManagedCodexCredentialReadinessObservationLease observation,
     ExternalSubjectRef owner,
+    ManagedCodexCredentialReadinessMode mode,
     CancellationToken ct)
 {
     await foreach (var snapshot in observation.ReadAllAsync(ct).ConfigureAwait(false))
     {
-        if (IsReady(snapshot.Credential, owner, _timeProvider.GetUtcNow()))
+        if (HasSufficientReadinessEvidence(snapshot.ReadinessEvidence, mode) &&
+            IsReady(snapshot.Credential, owner, _timeProvider.GetUtcNow()))
             return snapshot.Credential.Clone();
     }
 
@@ -1408,44 +1440,72 @@ same stable timeout code.
 - [ ] **Step 5: Serialize mutation and make busy callers wait**
 
 After binding and re-reading, attempt the distributed lease before requiring a
-bearer. A concurrent invocation that does not own the mutation can therefore
-wait for the committed result without needing its own bearer:
+bearer. A concurrent invocation that does not own the mutation first waits for
+typed committed evidence:
 
 ```csharp
-await using var lease = await _mutationLease.TryAcquireAsync(
+var lease = await _mutationLease.TryAcquireAsync(
     ManagedCodexCredentialActorIdentity.From(owner),
     ct).ConfigureAwait(false);
 if (lease is null)
 {
-    using var timeout = new CancellationTokenSource(
-        TimeSpan.FromSeconds(_options.MutationCompletionSeconds),
-        _timeProvider);
-    using var wait = CancellationTokenSource.CreateLinkedTokenSource(
-        ct,
-        timeout.Token);
-    return await WaitForReadyAsync(observation, owner, wait.Token);
+    var outcome = await WaitForConcurrentReadinessAsync(
+        observation,
+        owner,
+        projected,
+        bearerToken,
+        mode,
+        boundedWaitToken);
+    if (outcome is ConcurrentCredentialCommitted committed)
+        return committed.Credential;
+
+    lease = ((ConcurrentMutationLeaseAcquired)outcome).Lease;
 }
 
-if (string.IsNullOrWhiteSpace(bearerToken))
-{
-    throw Failure(
-        "managed_user_authorization_unavailable",
-        "Managed Codex credential creation or repair requires the current user's authorization.");
-}
-
-await VerifyBearerOwnerAsync(bearerToken, owner.ExternalUserId, ct);
+return await EnsureReadyAsLeaseOwnerAsync(
+    observation,
+    owner,
+    bearerToken,
+    mode,
+    lease,
+    boundedPreMutationToken,
+    sharedCompletionTimeout,
+    ct);
 ```
 
-The lease holder must re-read the projection once more before mutating, because
-another committed operation may have completed immediately before lease
-acquisition.
+`WaitForConcurrentReadinessAsync` returns one of two typed outcomes:
+
+```text
+ConcurrentCredentialCommitted(credential)
+ConcurrentMutationLeaseAcquired(lease)
+```
+
+Normal mode accepts either `CurrentStateConfirmed` or `RemoteValidated`.
+Force mode accepts only `RemoteValidated`. A Force waiter that observes
+`CurrentStateConfirmed`:
+
+1. attempts the distributed lease exactly once, whether or not it has a bearer;
+2. when the lease is still busy, continues waiting only for sufficient
+   committed evidence and never retries the lease;
+3. when the lease is acquired without a bearer, disposes it and fails
+   `managed_user_authorization_unavailable`;
+4. when the lease is acquired with a bearer, returns the typed lease outcome.
+
+The lease holder re-reads the projection once more before remote work, because
+another committed operation may have completed immediately before acquisition.
+It then requires and verifies the bearer owner.
 
 The busy-call wait links caller cancellation with the configured readiness
-timeout. The lease holder validates bearer ownership with the request token,
-then creates the existing independent bounded mutation-completion token
-immediately before the first irreversible NyxID/Vault mutation. That token
+timeout. The same timeout remains the completion boundary after reacquisition;
+the path does not gain a second full timeout. Before irreversible mutation it
+remains linked to caller cancellation. After mutation begins, that same timeout
 carries commit or compensation to a recorded outcome even if the caller later
 disconnects.
+
+A Normal owner that only retries obsolete cleanup releases the mutation lease
+before dispatching `CurrentStateConfirmed`. That committed structural event is
+the event-driven handoff that permits a waiting Force caller's one acquisition
+attempt.
 
 - [ ] **Step 6: Implement deterministic repair selection**
 
@@ -1461,7 +1521,9 @@ Under the lease:
 7. when multiple reserved keys are ambiguous, revoke each through existing
    compensation tracking and issue one fresh key;
 8. dispatch provision, rotation, or policy reconciliation;
-9. return only `WaitForReadyAsync(...)`.
+9. explicitly dispatch `ConfirmReadiness(RemoteValidated)` for the expected
+   active key after remote validation, including duplicate/no-op command cases;
+10. return only `WaitForReadyAsync(...)` after sufficient committed evidence.
 
 Change pending cleanup handling to return a result instead of always throwing:
 

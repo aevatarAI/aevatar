@@ -16,12 +16,15 @@ public interface IManagedCodexCredentialQueryPort
 }
 
 /// <summary>
-/// Binds an owner-scoped observation to committed managed Codex credential
-/// snapshots emitted by the unified Projection Pipeline.
+/// Binds an owner-scoped observation to readiness-capable committed managed
+/// Codex credential snapshots emitted by the unified Projection Pipeline.
 /// </summary>
 public interface IManagedCodexCredentialReadinessObservationPort
 {
-    /// <summary>Creates a fresh committed-readiness observation session for the complete owner.</summary>
+    /// <summary>
+    /// Creates a fresh observation session that emits only committed provision,
+    /// rotation, policy-reconciliation, or explicit readiness-confirmation facts.
+    /// </summary>
     Task<IManagedCodexCredentialReadinessObservationLease> BindAsync(
         ExternalSubjectRef owner,
         CancellationToken ct = default);
@@ -33,7 +36,7 @@ public interface IManagedCodexCredentialReadinessObservationPort
 /// </summary>
 public interface IManagedCodexCredentialReadinessObservationLease : IAsyncDisposable
 {
-    /// <summary>Streams cloned authoritative snapshots until cancellation or lease disposal.</summary>
+    /// <summary>Streams cloned authoritative readiness snapshots until cancellation or lease disposal.</summary>
     IAsyncEnumerable<ManagedCodexCredentialSnapshot> ReadAllAsync(
         CancellationToken ct = default);
 }
@@ -58,6 +61,13 @@ public interface IManagedCodexCredentialCommandPort
     Task<DispatchAdmission> CommitPolicyReconciledAsync(
         string expectedApiKeyId,
         ManagedCodexCredentialDescriptor credential,
+        CancellationToken ct = default);
+
+    /// <summary>Admits an idempotent readiness confirmation for the expected active API key.</summary>
+    Task<DispatchAdmission> ConfirmReadinessAsync(
+        ExternalSubjectRef owner,
+        string expectedApiKeyId,
+        ManagedCodexCredentialReadinessEvidence readinessEvidence,
         CancellationToken ct = default);
 
     /// <summary>Admits credential revocation and its independently retryable cleanup tracks.</summary>

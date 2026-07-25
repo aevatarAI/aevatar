@@ -61,18 +61,41 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
         operations.Should().Equal("activate", "subscribe", "dispatch", "publish");
     }
 
-    [Fact]
-    public async Task Projector_WhenCommittedStateIsPublished_UsesCommittedVersionAndEventId()
+    [Theory]
+    [InlineData(
+        ReadinessTransition.Provisioned,
+        ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed)]
+    [InlineData(
+        ReadinessTransition.Rotated,
+        ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed)]
+    [InlineData(
+        ReadinessTransition.PolicyReconciled,
+        ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed)]
+    [InlineData(
+        ReadinessTransition.StructurallyConfirmed,
+        ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed)]
+    [InlineData(
+        ReadinessTransition.RemoteValidationConfirmed,
+        ManagedCodexCredentialReadinessEvidence.RemoteValidated)]
+    public async Task Projector_WhenReadinessTransitionIsCommitted_PublishesAuthoritativeSnapshot(
+        ReadinessTransition transition,
+        ManagedCodexCredentialReadinessEvidence expectedEvidence)
     {
         var hub = new RecordingSessionEventHub();
         var projector = new ManagedCodexCredentialReadinessProjector(hub);
         var owner = Owner("user-a");
         var actorId = ManagedCodexCredentialActorIdentity.From(owner);
+        var descriptor = Descriptor(
+            owner,
+            "key-a",
+            "us-sandbox-a",
+            "us-llm-a");
 
         await projector.ProjectAsync(
             Context("session-a", actorId),
             CommittedEnvelope(
-                Descriptor(owner, "key-a", "us-sandbox-a", "us-llm-a"),
+                descriptor,
+                ReadinessEvent(transition, descriptor),
                 version: 7,
                 eventId: "event-7"));
 
@@ -87,6 +110,62 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
             .Which.ApiKeyId.Should().Be("key-old-key-a");
         published.Event.StateVersion.Should().Be(7);
         published.Event.LastEventId.Should().Be("event-7");
+        published.Event.ReadinessEvidence.Should().Be(expectedEvidence);
+    }
+
+    [Fact]
+    public async Task Projector_WhenCleanupProgressIsCommitted_DoesNotPublish()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new ManagedCodexCredentialReadinessProjector(hub);
+        var owner = Owner("user-a");
+        var actorId = ManagedCodexCredentialActorIdentity.From(owner);
+
+        await projector.ProjectAsync(
+            Context("session-a", actorId),
+            CommittedEnvelope(
+                Descriptor(owner, "key-a", "us-sandbox-a", "us-llm-a"),
+                new ManagedCodexCredentialCleanupTrackCompletedEvent
+                {
+                    Owner = owner.Clone(),
+                    ApiKeyId = "key-old-key-a",
+                    Track = ManagedCodexCredentialCleanupTrack.NyxId,
+                    CompletedAt = Timestamp.FromDateTimeOffset(
+                        DateTimeOffset.Parse("2026-04-29T10:07:00Z")),
+                },
+                version: 7,
+                eventId: "event-cleanup-progress",
+                includePendingCleanup: false));
+
+        hub.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Projector_WhenDuplicateCleanupLeavesStateUnchanged_DoesNotPublish()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new ManagedCodexCredentialReadinessProjector(hub);
+        var owner = Owner("user-a");
+        var actorId = ManagedCodexCredentialActorIdentity.From(owner);
+
+        await projector.ProjectAsync(
+            Context("session-a", actorId),
+            CommittedEnvelope(
+                Descriptor(owner, "key-a", "us-sandbox-a", "us-llm-a"),
+                new ManagedCodexCredentialCleanupQueuedEvent
+                {
+                    Owner = owner.Clone(),
+                    Cleanup = new ManagedCodexCredentialCleanup
+                    {
+                        ApiKeyId = "key-old-key-a",
+                        SecretRef = "secret-old-key-a",
+                        NyxIdPending = true,
+                    },
+                },
+                version: 7,
+                eventId: "event-cleanup-duplicate"));
+
+        hub.Published.Should().BeEmpty();
     }
 
     [Fact]
@@ -393,6 +472,8 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
                 chronoLlmUserServiceId),
             StateVersion = stateVersion,
             LastEventId = $"event-{stateVersion}",
+            ReadinessEvidence =
+                ManagedCodexCredentialReadinessEvidence.RemoteValidated,
         };
         snapshot.PendingRevocations.Add(new ManagedCodexCredentialCleanup
         {
@@ -415,20 +496,83 @@ public sealed class ManagedCodexCredentialReadinessObservationTests
 
     private static EventEnvelope CommittedEnvelope(
         ManagedCodexCredentialDescriptor credential,
+        IMessage committedEvent,
         long version,
-        string eventId)
+        string eventId,
+        bool includePendingCleanup = true)
     {
         var state = new ManagedCodexCredentialState
         {
             Credential = credential.Clone(),
         };
-        state.PendingRevocations.Add(new ManagedCodexCredentialCleanup
+        if (includePendingCleanup)
         {
-            ApiKeyId = $"key-old-{credential.ApiKeyId}",
-            SecretRef = $"secret-old-{credential.ApiKeyId}",
-            NyxIdPending = true,
-        });
-        return TestEnvelopeBuilder.BuildCommittedEnvelope(state, version, eventId);
+            state.PendingRevocations.Add(new ManagedCodexCredentialCleanup
+            {
+                ApiKeyId = $"key-old-{credential.ApiKeyId}",
+                SecretRef = $"secret-old-{credential.ApiKeyId}",
+                NyxIdPending = true,
+            });
+        }
+
+        var envelope = TestEnvelopeBuilder.BuildCommittedEnvelope(state, version, eventId);
+        var published = envelope.Payload.Unpack<CommittedStateEventPublished>();
+        published.StateEvent.EventType = committedEvent.Descriptor.FullName;
+        published.StateEvent.EventData = Any.Pack(committedEvent);
+        envelope.Payload = Any.Pack(published);
+        return envelope;
+    }
+
+    private static IMessage ReadinessEvent(
+        ReadinessTransition transition,
+        ManagedCodexCredentialDescriptor credential) =>
+        transition switch
+        {
+            ReadinessTransition.Provisioned =>
+                new ManagedCodexCredentialProvisionedEvent
+                {
+                    Credential = credential.Clone(),
+                },
+            ReadinessTransition.Rotated =>
+                new ManagedCodexCredentialRotatedEvent
+                {
+                    PreviousApiKeyId = "key-old",
+                    Credential = credential.Clone(),
+                },
+            ReadinessTransition.PolicyReconciled =>
+                new ManagedCodexCredentialPolicyReconciledEvent
+                {
+                    ApiKeyId = credential.ApiKeyId,
+                    Credential = credential.Clone(),
+                },
+            ReadinessTransition.StructurallyConfirmed =>
+                new ManagedCodexCredentialReadinessConfirmedEvent
+                {
+                    ApiKeyId = credential.ApiKeyId,
+                    VerifiedAt = Timestamp.FromDateTimeOffset(
+                        DateTimeOffset.Parse("2026-04-29T10:07:00Z")),
+                    ReadinessEvidence =
+                        ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
+                },
+            ReadinessTransition.RemoteValidationConfirmed =>
+                new ManagedCodexCredentialReadinessConfirmedEvent
+                {
+                    ApiKeyId = credential.ApiKeyId,
+                    VerifiedAt = Timestamp.FromDateTimeOffset(
+                        DateTimeOffset.Parse("2026-04-29T10:07:00Z")),
+                    ReadinessEvidence =
+                        ManagedCodexCredentialReadinessEvidence.RemoteValidated,
+                },
+            _ => throw new ArgumentOutOfRangeException(nameof(transition)),
+        };
+
+    public enum ReadinessTransition
+    {
+        Provisioned,
+        Rotated,
+        PolicyReconciled,
+        StructurallyConfirmed,
+        RemoteValidationConfirmed,
     }
 
     private static async Task<T> ReadOneAsync<T>(IAsyncEnumerable<T> source)

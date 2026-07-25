@@ -155,10 +155,20 @@ reference when NyxID updates the existing key in place. Provision, rotation,
 revocation, and policy reconciliation remain separate typed transitions.
 
 The read side gains a protobuf readiness snapshot carrying the committed
-descriptor, pending cleanup facts, authoritative state version, and committed
-event ID. A Projection Session publishes this snapshot from
+descriptor, pending cleanup facts, authoritative state version, committed
+event ID, and typed readiness evidence. `CurrentStateConfirmed` means the
+expected active credential is still the committed structural state;
+`RemoteValidated` means an Application readiness path completed fresh
+NyxID/Vault validation. A Projection Session publishes this snapshot from
 `CommittedStateEventPublished`; it does not infer readiness from inbound
 commands or local actor runtime state.
+
+Normal mode accepts either evidence value. `ForceRemoteValidation` accepts only
+`RemoteValidated`; `CurrentStateConfirmed` is a coordination signal, not proof
+of remote validity. Duplicate provision, rotation, or policy-reconciliation
+Actor commands therefore emit only `CurrentStateConfirmed`. The narrow explicit
+readiness-confirmation command carries `RemoteValidated` after Application-side
+validation.
 
 ## Credential Policy
 
@@ -197,19 +207,29 @@ the already-required usable UserServices.
    projection. The re-read closes the gap between the first read and live
    subscription without polling.
 5. If the second read is ready, return it.
-6. When mutation is required, require the current user's NyxID bearer and verify
-   that `/users/me` matches the typed caller authority.
-7. Attempt the per-user distributed mutation lease.
-8. If another invocation owns the lease, wait for the owner-scoped committed
-   readiness snapshot instead of returning
-   `managed_credential_mutation_in_progress`.
-9. The lease owner resolves the user's exact required UserServices, reconciles
-   remote Aevatar-managed keys, stores or updates Vault material when needed,
-   and dispatches the typed actor command.
-10. Wait for a committed readiness snapshot that satisfies the exact descriptor
-    contract.
-11. Release the observation and mutation leases.
-12. Pass the observed committed descriptor to the chrono transport and continue
+6. Attempt the per-user distributed mutation lease before requiring a bearer.
+7. If the lease is acquired, re-read the authoritative projection, then require
+   the current user's NyxID bearer and verify that `/users/me` matches the typed
+   caller authority before remote work.
+8. If another invocation owns the lease, observe committed readiness evidence
+   instead of returning `managed_credential_mutation_in_progress`.
+9. A sufficient committed snapshot completes the wait. For a Force caller,
+   `CurrentStateConfirmed` is insufficient but triggers at most one distributed
+   lease reacquisition attempt. If the lease remains busy, the caller continues
+   waiting for `RemoteValidated` evidence regardless of bearer availability. If
+   the lease is acquired, a bearer-less caller disposes it and fails with
+   `managed_user_authorization_unavailable`; a bearer-equipped caller re-reads
+   the projection and continues as the lease owner.
+10. The lease owner resolves the user's exact required UserServices, reconciles
+    remote Aevatar-managed keys, stores or updates Vault material when needed,
+    and dispatches the typed actor command.
+11. After remote validation, dispatch the narrow typed
+    `ConfirmReadiness(RemoteValidated)` command and wait for matching committed
+    evidence. A Normal cleanup owner releases its mutation lease before
+    dispatching `CurrentStateConfirmed`, making that committed event the
+    event-driven handoff to a waiting Force caller.
+12. Release the observation and any remaining mutation lease.
+13. Pass the observed committed descriptor to the chrono transport and continue
     the original `codex_exec`.
 
 There is no `Task.Delay` loop, query-time replay, read-model priming, or use of
@@ -247,14 +267,19 @@ comparison is order-independent and requires exactly the two expected IDs.
 The existing cluster-shared Garnet mutation lease remains the sole external
 mutation serializer for a NyxID owner.
 
-Concurrent first invocations behave as follows:
+Concurrent invocations behave as follows:
 
 - one invocation acquires the mutation lease and performs the external work;
 - other invocations subscribe to the same owner-scoped committed readiness
   stream;
-- one external key mutation is performed;
-- every still-active invocation receives the committed ready descriptor and
-  continues its own Codex execution.
+- a sufficient committed snapshot completes a waiter without mutation;
+- a Force waiter may use one committed structural confirmation to attempt the
+  distributed lease exactly once, then re-read before remote work if acquired;
+- if that one attempt remains busy, the waiter only awaits later
+  `RemoteValidated` evidence and does not spin;
+- one external mutation is performed per lease owner;
+- every still-active invocation receives a committed descriptor with evidence
+  sufficient for its requested mode and continues its own Codex execution.
 
 No process-local owner-to-task dictionary is introduced. Projection Session
 leases and the distributed mutation lease carry all cross-request coordination.
