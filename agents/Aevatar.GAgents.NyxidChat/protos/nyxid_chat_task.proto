@@ -199,6 +199,9 @@ message NyxIdChatOperationState {
   google.protobuf.Timestamp completed_at = 9;
   string terminal_code = 10;
   string safe_message = 11;
+  // Latest child-owned progress sequence reconciled for this exact operation.
+  // This is distinct from the conversation-wide projection sequence.
+  int64 latest_progress_sequence = 12;
 }
 
 message NyxIdChatTaskStepState {
@@ -471,6 +474,50 @@ message NyxIdChatConversationGAgentState {
   google.protobuf.Timestamp updated_at = 14;
 }
 
+// One atomic controller commit for a newly admitted turn. The snapshot already
+// contains the active turn, task, first step, and requested operation waterline;
+// transient credentials remain exclusively on the later child-actor command.
+message NyxIdChatTurnStartedEvent {
+  NyxIdChatConversationGAgentState state = 1;
+}
+
+// Durable child-actor waterline. It deliberately stores only reconciliation
+// identity and safe terminal evidence; provider credentials, raw responses,
+// tool arguments, and execution capabilities are never persisted here.
+message NyxIdChatTurnGAgentState {
+  NyxIdChatOperationKey admitted_operation = 1;
+  NyxIdChatStepKind operation_kind = 2;
+  NyxIdChatOperationPhase phase = 3;
+  string terminal_code = 4;
+  string safe_message = 5;
+  NyxIdChatEffectEvidence external_effect = 6;
+  bool result_delivered = 7;
+  google.protobuf.Timestamp admitted_at = 8;
+  google.protobuf.Timestamp completed_at = 9;
+  google.protobuf.Timestamp delivered_at = 10;
+  repeated NyxIdChatOperationKey delivered_operations = 11;
+}
+
+message NyxIdChatTurnOperationAdmittedEvent {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatStepKind operation_kind = 2;
+  google.protobuf.Timestamp admitted_at = 3;
+}
+
+message NyxIdChatTurnOperationCompletedEvent {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatOperationPhase phase = 2;
+  string terminal_code = 3;
+  string safe_message = 4;
+  NyxIdChatEffectEvidence external_effect = 5;
+  google.protobuf.Timestamp completed_at = 6;
+}
+
+message NyxIdChatTurnOperationDeliveredEvent {
+  NyxIdChatOperationKey key = 1;
+  google.protobuf.Timestamp delivered_at = 2;
+}
+
 message NyxIdChatLLMOperationInput {
   aevatar.ai.ChatRequestEvent request = 1;
 }
@@ -652,6 +699,12 @@ message NyxIdChatOperationRequestedEvent {
 message NyxIdChatOperationDispatchedEvent {
   NyxIdChatOperationKey key = 1;
   google.protobuf.Timestamp dispatched_at = 2;
+}
+
+message NyxIdChatOperationProgressedEvent {
+  NyxIdChatOperationProgressSignal progress = 1;
+  int64 progress_sequence = 2;
+  google.protobuf.Timestamp committed_at = 3;
 }
 
 message NyxIdChatOperationReconciledEvent {

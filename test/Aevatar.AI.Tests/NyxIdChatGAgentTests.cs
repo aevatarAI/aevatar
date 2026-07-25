@@ -68,7 +68,8 @@ public class NyxIdChatGAgentTests
 
         result.Succeeded.Should().BeTrue();
         source.CallCount.Should().Be(1);
-        runtime.CreateCalls.Should().ContainSingle();
+        runtime.CreateCalls.Should().ContainSingle().Which.Type.Should()
+            .Be(typeof(NyxIdChatConversationGAgent));
         source.ActorIds.Should().Equal(runtime.CreateCalls.Select(static call => call.Id!));
         command.AgentProfile.Should().NotBeNull();
         AgentProfileSnapshotCodec.ByteEquivalent(command.AgentProfile, source.Snapshot).Should().BeTrue();
@@ -142,7 +143,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-order";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -166,7 +167,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-repeat";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
         var profile = BuildSealedProfile("profile-v1");
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
@@ -195,7 +196,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-conflict";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -224,7 +225,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-bad-digest";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
         var profile = BuildSealedProfile("profile-v1");
         profile.ProfileVersion = "tampered";
 
@@ -245,7 +246,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         const string actorId = "nyxid-chat-profile-restart";
-        var first = CreateAgent(provider, actorId);
+        var first = CreateConversationAgent(provider, actorId);
         await first.ActivateAsync();
         await first.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -254,7 +255,7 @@ public class NyxIdChatGAgentTests
         }));
         await first.DeactivateAsync();
 
-        var restored = CreateAgent(provider, actorId);
+        var restored = CreateConversationAgent(provider, actorId);
         await restored.ActivateAsync();
 
         restored.State.AgentProfile.Should().NotBeNull();
@@ -282,7 +283,7 @@ public class NyxIdChatGAgentTests
         }
 
         await AppendCommittedEventsAsync(provider, actorId, binding);
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         var act = () => agent.ActivateAsync();
 
@@ -302,7 +303,7 @@ public class NyxIdChatGAgentTests
             actorId,
             new AgentProfileBoundEvent { Profile = profile.Clone() },
             new AgentProfileBoundEvent { Profile = profile.Clone() });
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         await agent.ActivateAsync();
 
@@ -319,7 +320,7 @@ public class NyxIdChatGAgentTests
             actorId,
             new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v1") },
             new AgentProfileBoundEvent { Profile = BuildSealedProfile("profile-v2") });
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         var act = () => agent.ActivateAsync();
 
@@ -334,7 +335,7 @@ public class NyxIdChatGAgentTests
         var registry = new RecordingGAgentActorRegistryCommandPort();
         using var provider = BuildServiceProvider(registry, new RecordingActorRuntime());
         var agents = Enumerable.Range(1, 4)
-            .Select(index => CreateAgent(provider, $"nyxid-chat-profile-{index}"))
+            .Select(index => CreateConversationAgent(provider, $"nyxid-chat-profile-{index}"))
             .ToArray();
 
         for (var index = 0; index < agents.Length; index++)
@@ -1686,7 +1687,7 @@ public class NyxIdChatGAgentTests
         var runtime = new RecordingActorRuntime();
         using var provider = BuildServiceProvider(registry, runtime);
         var actorId = $"{NyxIdChatServiceDefaults.ActorIdPrefix}-existing";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -1711,7 +1712,7 @@ public class NyxIdChatGAgentTests
         var runtime = new RecordingActorRuntime();
         using var provider = BuildServiceProvider(registry, runtime);
         const string actorId = "routed-id-without-local-prefix";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationCreateCommand
         {
@@ -1733,7 +1734,7 @@ public class NyxIdChatGAgentTests
         var runtime = new RecordingActorRuntime();
         using var provider = BuildServiceProvider(registry, runtime);
         const string actorId = "nyxid-chat-delete-compensation";
-        var agent = CreateAgent(provider, actorId);
+        var agent = CreateConversationAgent(provider, actorId);
 
         await agent.HandleEventAsync(CreateEnvelope(actorId, new NyxIdChatConversationDeletionCompensationRequested
         {
@@ -1794,6 +1795,25 @@ public class NyxIdChatGAgentTests
             EventSourcingBehaviorFactory = provider.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
         };
 
+        var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
+            .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        setId.Invoke(agent, [actorId]);
+        return agent;
+    }
+
+    private static NyxIdChatConversationGAgent CreateConversationAgent(
+        IServiceProvider provider,
+        string actorId)
+    {
+        var agent = new NyxIdChatConversationGAgent(
+            provider.GetService<IActorRuntime>() ?? new RecordingActorRuntime(),
+            new NoopActorDispatchPort(),
+            TimeProvider.System)
+        {
+            Services = provider,
+            EventSourcingBehaviorFactory = provider.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
         var setId = typeof(Aevatar.Foundation.Core.GAgentBase)
             .GetMethod("SetId", BindingFlags.Instance | BindingFlags.NonPublic)!;
         setId.Invoke(agent, [actorId]);
@@ -2121,6 +2141,18 @@ public class NyxIdChatGAgentTests
         public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
 
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NoopActorDispatchPort : IActorDispatchPort
+    {
+        public Task<DispatchAdmission> DispatchAsync(
+            string actorId,
+            EventEnvelope envelope,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(DispatchAdmissionFactory.Create(actorId, envelope));
+        }
     }
 
     private sealed class RecordingActor(string id) : IActor

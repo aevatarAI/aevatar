@@ -24,7 +24,8 @@ public sealed record NyxIdChatCommand(
     IReadOnlyDictionary<string, string>? Metadata,
     LLMControlContext? LlmControl = null,
     string? CommandId = null,
-    string? CorrelationId = null)
+    string? CorrelationId = null,
+    string? ClientRequestId = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -270,17 +271,21 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
-        var chatRequest = new ChatRequestEvent
+        var startTurn = new NyxIdChatStartTurnCommand
         {
             Prompt = command.Prompt,
-            SessionId = command.TurnId,
             ScopeId = command.ScopeId,
-            CommandAttemptId = context.CommandId,
+            ConversationActorId = command.ActorId,
+            TurnId = command.TurnId,
+            TaskId = CreateTaskId(command.ActorId, command.TurnId),
+            ClientRequestId = command.ClientRequestId?.Trim() ?? string.Empty,
+            CommandId = context.CommandId,
+            CorrelationId = context.CorrelationId,
         };
         if (command.InputParts is { Count: > 0 })
         {
             foreach (var part in command.InputParts)
-                chatRequest.InputParts.Add(part.ToProto());
+                startTurn.InputParts.Add(part.ToProto());
         }
 
         var control = command.LlmControl ?? LLMControlContext.Empty;
@@ -290,11 +295,11 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
                 ? control.NyxIdAccessToken
                 : command.AccessToken.Trim(),
         };
-        chatRequest.LlmControl = effectiveControl.ToPayload();
-        AppendMetadata(chatRequest.Metadata, command.Metadata);
-        chatRequest.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
+        startTurn.LlmControl = effectiveControl.ToPayload();
+        startTurn.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
+        AppendExternalContext(startTurn.ToolContext.ExternalMetadata, command.Metadata);
 
-        return CreateDirectEnvelope(context, chatRequest);
+        return CreateDirectEnvelope(context, startTurn);
     }
 
     private static AgentToolExecutionContext BuildToolContext(NyxIdChatCommand command, LLMControlContext effectiveControl)
@@ -313,7 +318,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         return effectiveControl.ToToolContext(toolContext);
     }
 
-    private static void AppendMetadata(
+    private static void AppendExternalContext(
         Google.Protobuf.Collections.MapField<string, string> destination,
         IReadOnlyDictionary<string, string>? source)
     {
@@ -325,6 +330,16 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
             if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
                 destination[key.Trim()] = value.Trim();
         }
+    }
+
+    private static string CreateTaskId(string actorId, string turnId)
+    {
+        var normalizedActorId = actorId?.Trim() ?? string.Empty;
+        var normalizedTurnId = turnId?.Trim() ?? string.Empty;
+        var identity = $"{normalizedActorId.Length}:{normalizedActorId}{normalizedTurnId.Length}:{normalizedTurnId}";
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity));
+        return $"task-{Convert.ToHexStringLower(hash)[..32]}";
     }
 
     private static EventEnvelope CreateDirectEnvelope(CommandContext context, IMessage message) =>

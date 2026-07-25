@@ -43,6 +43,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddNyxIdChat(this IServiceCollection services, IConfiguration? configuration = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+        RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatConversationGAgent).TypeHandle);
+        RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatTurnGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(AgentRunGAgent).TypeHandle);
         RuntimeHelpers.RunClassConstructor(typeof(ChannelWorkflowDraftRunGAgent).TypeHandle);
@@ -148,6 +150,8 @@ public static class ServiceCollectionExtensions
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
+        services.TryAddSingleton<INyxIdChatTurnOperationExecutor, NyxIdChatTurnOperationExecutor>();
+        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
         services.TryAddSingleton<IWorkflowRunBackgroundDeliveryRegistrationPort, WorkflowRunBackgroundDeliveryRegistrationPort>();

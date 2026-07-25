@@ -211,11 +211,15 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
                     llmRequest,
                     async (chunk, token) =>
                     {
-                        if (string.IsNullOrEmpty(chunk.DeltaContent))
-                            return;
-                        output.Append(chunk.DeltaContent);
-                        if (streamingState is not null)
-                            await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+                        if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                        {
+                            output.Append(chunk.DeltaContent);
+                            if (streamingState is not null)
+                                await streamingState.OnDeltaAsync(output.ToString(), token).ConfigureAwait(false);
+                        }
+
+                        if (workItem.ReportChunkAsync is not null)
+                            await workItem.ReportChunkAsync(chunk, token).ConfigureAwait(false);
                     },
                     ct)
                 .ConfigureAwait(false);

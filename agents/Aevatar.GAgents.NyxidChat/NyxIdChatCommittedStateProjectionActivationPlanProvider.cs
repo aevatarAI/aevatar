@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.Foundation.Abstractions.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
@@ -17,7 +16,7 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
     public IEnumerable<ProjectionActivationPlan> GetPlans(CommittedStatePublicationContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (context.ActorType != typeof(NyxIdChatGAgent))
+        if (context.ActorType != typeof(NyxIdChatConversationGAgent))
             yield break;
 
         var eventData = context.Published.StateEvent?.EventData;
@@ -43,20 +42,17 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProvider
 
     private static string? TryResolveTurnId(Any eventData)
     {
-        if (eventData.Is(RoleChatSessionStartedEvent.Descriptor))
-            return eventData.Unpack<RoleChatSessionStartedEvent>().SessionId;
+        if (eventData.Is(NyxIdChatTurnStartedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatTurnStartedEvent>().State?.ActiveTurn?.TurnId;
 
-        if (eventData.Is(RoleChatSessionCompletedEvent.Descriptor))
-            return eventData.Unpack<RoleChatSessionCompletedEvent>().SessionId;
+        if (eventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatOperationDispatchedEvent>().Key?.TurnId;
 
-        if (eventData.Is(RoleChatSessionConflictEvent.Descriptor))
-            return eventData.Unpack<RoleChatSessionConflictEvent>().SessionId;
+        if (eventData.Is(NyxIdChatOperationProgressedEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatOperationProgressedEvent>().Progress?.Key?.TurnId;
 
-        if (eventData.Is(RoleChatCommandAttemptRejectedEvent.Descriptor))
-            return eventData.Unpack<RoleChatCommandAttemptRejectedEvent>().RequestedSessionId;
-
-        if (eventData.Is(PendingToolApprovalPersistedEvent.Descriptor))
-            return eventData.Unpack<PendingToolApprovalPersistedEvent>().Pending?.SessionId;
+        if (eventData.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+            return eventData.Unpack<NyxIdChatOperationReconciledEvent>().Result?.Key?.TurnId;
 
         return null;
     }

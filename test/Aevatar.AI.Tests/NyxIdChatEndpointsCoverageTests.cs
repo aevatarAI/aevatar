@@ -224,7 +224,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == createdActorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == createdActorId);
         await AssertSingleCreationAcceptedEventAsync(runtime, createdActorId!);
     }
@@ -264,7 +264,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == createdActorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == createdActorId);
         await AssertSingleCreationAcceptedEventAsync(runtime, createdActorId!);
     }
@@ -302,7 +302,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             entry.AgentKind == NyxIdChatServiceDefaults.GAgentKind &&
             entry.ActorId == actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == actorId);
         await AssertSingleCreationAcceptedEventAsync(runtime, actorId!);
     }
@@ -515,7 +515,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             entry.ActorId == actorId);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == actorId);
     }
 
@@ -552,7 +552,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             entry.ActorId == actorId);
         runtime.DestroyCalls.Should().ContainSingle().Which.Should().Be(actorId);
         runtime.CreateCalls.Should().ContainSingle(call =>
-            call.Type == typeof(NyxIdChatGAgent) &&
+            call.Type == typeof(NyxIdChatConversationGAgent) &&
             call.Id == actorId);
     }
 
@@ -3294,7 +3294,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             foreach (var (actorId, actor) in Actors.ToArray())
             {
                 if (actor is StubActor)
-                    Actors[actorId] = new NyxIdChatTestActor(actorId, _nyxIdChatServices);
+                    Actors[actorId] = new NyxIdChatConversationTestActor(actorId, _nyxIdChatServices);
             }
         }
 
@@ -3306,8 +3306,8 @@ public partial class NyxIdChatEndpointsCoverageTests
         public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
         {
             var actorId = id ?? Guid.NewGuid().ToString("N");
-            IActor actor = agentType == typeof(NyxIdChatGAgent) && _nyxIdChatServices is not null
-                ? new NyxIdChatTestActor(actorId, _nyxIdChatServices)
+            IActor actor = agentType == typeof(NyxIdChatConversationGAgent) && _nyxIdChatServices is not null
+                ? new NyxIdChatConversationTestActor(actorId, _nyxIdChatServices)
                 : new StubActor(actorId);
             Actors[actorId] = actor;
             CreateCalls.Add((agentType, id));
@@ -3337,19 +3337,23 @@ public partial class NyxIdChatEndpointsCoverageTests
         public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
     }
 
-    private sealed class NyxIdChatTestActor : IActor
+    private sealed class NyxIdChatConversationTestActor : IActor
     {
-        private readonly NyxIdChatGAgent _agent;
+        private readonly NyxIdChatConversationGAgent _agent;
         private readonly StubActorRuntime _runtime;
 
-        public NyxIdChatTestActor(string id, IServiceProvider services)
+        public NyxIdChatConversationTestActor(string id, IServiceProvider services)
         {
             Id = id;
             _runtime = (StubActorRuntime)services.GetRequiredService<IActorRuntime>();
-            _agent = new NyxIdChatGAgent(new SystemSkillOverlayPromptInjectionTests.StubBuiltInPromptFloorProvider())
+            _agent = new NyxIdChatConversationGAgent(
+                _runtime,
+                new StubActorDispatchPort(_runtime),
+                TimeProvider.System)
             {
                 Services = services,
-                EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+                EventSourcingBehaviorFactory = services.GetRequiredService<
+                    IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
             };
 
             var setId = typeof(Aevatar.Foundation.Core.GAgentBase)

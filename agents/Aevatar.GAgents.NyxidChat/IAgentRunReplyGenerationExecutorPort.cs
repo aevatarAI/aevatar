@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -81,4 +82,5 @@ public sealed record AgentRunReplyStepExecutionRequest(
     int Attempt,
     int StepIndex,
     NeedsLlmReplyEvent Request,
-    AgentRunReplyStepState StepState);
+    AgentRunReplyStepState StepState,
+    Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null);
