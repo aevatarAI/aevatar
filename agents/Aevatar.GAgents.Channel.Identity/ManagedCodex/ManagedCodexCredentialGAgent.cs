@@ -35,13 +35,42 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         if (!TryValidateCredential(command.Credential, out var credential))
             return;
 
+        if (HasPendingCleanupConflict(credential))
+        {
+            Logger.LogWarning(
+                "Managed Codex provision rejected because the incoming credential is already pending cleanup.");
+            return;
+        }
+        if (!TryNormalizeObsoleteCleanups(
+                command.ObsoleteCredentialCleanups,
+                credential,
+                out var obsoleteCleanups))
+        {
+            Logger.LogWarning(
+                "Managed Codex provision rejected because an obsolete cleanup intent is invalid.");
+            await QueueIncomingCredentialCleanupAsync(credential);
+            return;
+        }
+
         if (State.Credential is { Status: ManagedCodexCredentialStatus.Active } current)
         {
             if (current.Equals(credential))
             {
-                await PersistReadinessConfirmedAsync(
-                    current,
-                    ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
+                if (obsoleteCleanups.Count == 0)
+                {
+                    await PersistReadinessConfirmedAsync(
+                        current,
+                        ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
+                }
+                else
+                {
+                    var duplicateEvent = new ManagedCodexCredentialProvisionedEvent
+                    {
+                        Credential = credential,
+                    };
+                    duplicateEvent.ObsoleteCredentialCleanups.Add(obsoleteCleanups);
+                    await PersistDomainEventAsync(duplicateEvent);
+                }
                 return;
             }
 
@@ -52,10 +81,12 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             return;
         }
 
-        await PersistDomainEventAsync(new ManagedCodexCredentialProvisionedEvent
+        var provisioned = new ManagedCodexCredentialProvisionedEvent
         {
             Credential = credential,
-        });
+        };
+        provisioned.ObsoleteCredentialCleanups.Add(obsoleteCleanups);
+        await PersistDomainEventAsync(provisioned);
     }
 
     [EventHandler]
@@ -66,6 +97,12 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             return;
 
         var current = State.Credential;
+        if (HasPendingCleanupConflict(credential))
+        {
+            Logger.LogWarning(
+                "Managed Codex rotation rejected because the incoming credential is already pending cleanup.");
+            return;
+        }
         if (current is not null && current.Equals(credential))
         {
             await PersistReadinessConfirmedAsync(
@@ -107,13 +144,25 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             await QueueIncomingCredentialCleanupAsync(credential);
             return;
         }
+        if (!TryNormalizeObsoleteCleanups(
+                command.ObsoleteCredentialCleanups,
+                credential,
+                out var obsoleteCleanups))
+        {
+            Logger.LogWarning(
+                "Managed Codex rotation rejected because an obsolete cleanup intent is invalid.");
+            await QueueIncomingCredentialCleanupAsync(credential);
+            return;
+        }
 
-        await PersistDomainEventAsync(new ManagedCodexCredentialRotatedEvent
+        var rotated = new ManagedCodexCredentialRotatedEvent
         {
             PreviousApiKeyId = current.ApiKeyId,
             Credential = credential,
             PreviousCredentialCleanup = previousCleanup,
-        });
+        };
+        rotated.ObsoleteCredentialCleanups.Add(obsoleteCleanups);
+        await PersistDomainEventAsync(rotated);
     }
 
     [EventHandler]
@@ -135,7 +184,23 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             return;
         }
 
-        if (current.Equals(credential))
+        if (HasPendingCleanupConflict(credential))
+        {
+            Logger.LogWarning(
+                "Managed Codex policy reconciliation rejected because the active credential is pending cleanup.");
+            return;
+        }
+        if (!TryNormalizeObsoleteCleanups(
+                command.ObsoleteCredentialCleanups,
+                credential,
+                out var obsoleteCleanups))
+        {
+            Logger.LogWarning(
+                "Managed Codex policy reconciliation rejected because an obsolete cleanup intent is invalid.");
+            return;
+        }
+
+        if (current.Equals(credential) && obsoleteCleanups.Count == 0)
         {
             await PersistReadinessConfirmedAsync(
                 current,
@@ -143,11 +208,13 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             return;
         }
 
-        await PersistDomainEventAsync(new ManagedCodexCredentialPolicyReconciledEvent
+        var reconciled = new ManagedCodexCredentialPolicyReconciledEvent
         {
             ApiKeyId = current.ApiKeyId,
             Credential = credential,
-        });
+        };
+        reconciled.ObsoleteCredentialCleanups.Add(obsoleteCleanups);
+        await PersistDomainEventAsync(reconciled);
     }
 
     [EventHandler]
@@ -168,6 +235,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         var current = State.Credential;
         if (current is null ||
             current.Status != ManagedCodexCredentialStatus.Active ||
+            HasPendingCleanupConflict(current) ||
             !string.Equals(
                 current.ApiKeyId,
                 command.ExpectedApiKeyId.Trim(),
@@ -239,8 +307,13 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             string.IsNullOrWhiteSpace(command.ApiKeyId) ||
             command.Track == ManagedCodexCredentialCleanupTrack.Unspecified ||
             command.CompletedAt is null ||
+            command.Track == ManagedCodexCredentialCleanupTrack.Vault &&
+            string.IsNullOrWhiteSpace(command.SecretRef) ||
             State.PendingRevocations.All(item =>
-                !string.Equals(item.ApiKeyId, command.ApiKeyId.Trim(), StringComparison.Ordinal)))
+                !MatchesCleanupIdentity(
+                    item,
+                    command.ApiKeyId,
+                    command.SecretRef)))
         {
             return;
         }
@@ -249,6 +322,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         {
             Owner = command.Owner.Clone(),
             ApiKeyId = command.ApiKeyId.Trim(),
+            SecretRef = command.SecretRef?.Trim() ?? string.Empty,
             Track = command.Track,
             CompletedAt = command.CompletedAt.Clone(),
         });
@@ -371,16 +445,70 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
     {
         var current = State.Credential;
         return current is { Status: ManagedCodexCredentialStatus.Active } &&
-               (cleanup.NyxIdPending &&
-                string.Equals(
-                    cleanup.ApiKeyId,
-                    current.ApiKeyId,
-                    StringComparison.Ordinal) ||
-                cleanup.VaultPending &&
-                string.Equals(
-                    cleanup.SecretRef,
-                    current.SecretReference?.Ref,
-                    StringComparison.Ordinal));
+               TargetsCredential(cleanup, current);
+    }
+
+    private bool HasPendingCleanupConflict(
+        ManagedCodexCredentialDescriptor credential) =>
+        State.PendingRevocations.Any(cleanup =>
+            TargetsCredential(cleanup, credential));
+
+    private static bool TargetsCredential(
+        ManagedCodexCredentialCleanup cleanup,
+        ManagedCodexCredentialDescriptor credential) =>
+        cleanup.NyxIdPending &&
+        string.Equals(
+            cleanup.ApiKeyId,
+            credential.ApiKeyId,
+            StringComparison.Ordinal) ||
+        cleanup.VaultPending &&
+        string.Equals(
+            cleanup.SecretRef,
+            credential.SecretReference?.Ref,
+            StringComparison.Ordinal);
+
+    private static bool TryNormalizeObsoleteCleanups(
+        IEnumerable<ManagedCodexCredentialCleanup> cleanups,
+        ManagedCodexCredentialDescriptor incoming,
+        out IReadOnlyList<ManagedCodexCredentialCleanup> normalized)
+    {
+        var candidates = new List<ManagedCodexCredentialCleanup>();
+        foreach (var candidate in cleanups)
+        {
+            var cleanup = NormalizeCleanup(candidate, null, null);
+            if (cleanup is null ||
+                !cleanup.NyxIdPending && !cleanup.VaultPending ||
+                cleanup.VaultPending && string.IsNullOrWhiteSpace(cleanup.SecretRef) ||
+                TargetsCredential(cleanup, incoming))
+            {
+                normalized = [];
+                return false;
+            }
+
+            candidates.Add(cleanup);
+        }
+
+        var result = new List<ManagedCodexCredentialCleanup>();
+        foreach (var cleanup in candidates
+                     .OrderBy(static item => item.ApiKeyId, StringComparer.Ordinal)
+                     .ThenBy(static item => item.SecretRef, StringComparer.Ordinal))
+        {
+            if (cleanup.NyxIdPending &&
+                result.Any(item =>
+                    item.NyxIdPending &&
+                    string.Equals(
+                        item.ApiKeyId,
+                        cleanup.ApiKeyId,
+                        StringComparison.Ordinal)))
+            {
+                cleanup.NyxIdPending = false;
+            }
+
+            AddOrMergeCleanup(result, cleanup);
+        }
+
+        normalized = result;
+        return true;
     }
 
     private static bool IsExactPreviousCredentialCleanup(
@@ -442,6 +570,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         var next = current.Clone();
         next.Credential = evt.Credential?.Clone();
         next.RevokedAt = null;
+        AddOrMergeCleanups(next, evt.ObsoleteCredentialCleanups);
         return next;
     }
 
@@ -452,7 +581,11 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         var next = current.Clone();
         next.Credential = evt.Credential?.Clone();
         next.RevokedAt = null;
-        AddOrMergeCleanup(next, evt.PreviousCredentialCleanup);
+        AddOrMergeCleanup(
+            next,
+            evt.PreviousCredentialCleanup,
+            preferNyxIdTrack: true);
+        AddOrMergeCleanups(next, evt.ObsoleteCredentialCleanups);
         return next;
     }
 
@@ -463,6 +596,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         var next = current.Clone();
         next.Credential = evt.Credential?.Clone();
         next.RevokedAt = null;
+        AddOrMergeCleanups(next, evt.ObsoleteCredentialCleanups);
         return next;
     }
 
@@ -493,7 +627,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
     {
         var next = current.Clone();
         var cleanup = next.PendingRevocations.FirstOrDefault(item =>
-            string.Equals(item.ApiKeyId, evt.ApiKeyId, StringComparison.Ordinal));
+            MatchesCleanupIdentity(item, evt.ApiKeyId, evt.SecretRef));
         if (cleanup is null)
             return next;
 
@@ -509,7 +643,30 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
 
     private static void AddOrMergeCleanup(
         ManagedCodexCredentialState state,
-        ManagedCodexCredentialCleanup? cleanup)
+        ManagedCodexCredentialCleanup? cleanup,
+        bool preferNyxIdTrack = false)
+    {
+        if (cleanup is null)
+            return;
+
+        AddOrMergeCleanup(
+            state.PendingRevocations,
+            cleanup,
+            preferNyxIdTrack);
+    }
+
+    private static void AddOrMergeCleanups(
+        ManagedCodexCredentialState state,
+        IEnumerable<ManagedCodexCredentialCleanup> cleanups)
+    {
+        foreach (var cleanup in cleanups)
+            AddOrMergeCleanup(state, cleanup);
+    }
+
+    private static void AddOrMergeCleanup(
+        IList<ManagedCodexCredentialCleanup> cleanups,
+        ManagedCodexCredentialCleanup cleanup,
+        bool preferNyxIdTrack = false)
     {
         if (cleanup is null || string.IsNullOrWhiteSpace(cleanup.ApiKeyId) ||
             (!cleanup.NyxIdPending && !cleanup.VaultPending))
@@ -517,18 +674,62 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             return;
         }
 
-        var existing = state.PendingRevocations.FirstOrDefault(item =>
-            string.Equals(item.ApiKeyId, cleanup.ApiKeyId, StringComparison.Ordinal));
+        var nyxIdOwner = cleanup.NyxIdPending
+            ? cleanups.FirstOrDefault(item =>
+                item.NyxIdPending &&
+                string.Equals(
+                    item.ApiKeyId,
+                    cleanup.ApiKeyId,
+                    StringComparison.Ordinal))
+            : null;
+        var existing = cleanups.FirstOrDefault(item =>
+            MatchesCleanupIdentity(
+                item,
+                cleanup.ApiKeyId,
+                cleanup.SecretRef));
         if (existing is null)
         {
-            state.PendingRevocations.Add(cleanup.Clone());
+            var added = cleanup.Clone();
+            if (nyxIdOwner is not null)
+            {
+                if (preferNyxIdTrack)
+                    nyxIdOwner.NyxIdPending = false;
+                else
+                    added.NyxIdPending = false;
+            }
+            if (added.NyxIdPending || added.VaultPending)
+                cleanups.Add(added);
             return;
         }
 
-        existing.NyxIdPending |= cleanup.NyxIdPending;
+        if (cleanup.NyxIdPending)
+        {
+            if (preferNyxIdTrack && nyxIdOwner is not null &&
+                !ReferenceEquals(nyxIdOwner, existing))
+            {
+                nyxIdOwner.NyxIdPending = false;
+            }
+            existing.NyxIdPending |=
+                nyxIdOwner is null ||
+                ReferenceEquals(nyxIdOwner, existing) ||
+                preferNyxIdTrack;
+        }
         existing.VaultPending |= cleanup.VaultPending;
         if (string.IsNullOrWhiteSpace(existing.SecretRef))
             existing.SecretRef = cleanup.SecretRef;
         existing.RequestedAt ??= cleanup.RequestedAt?.Clone();
     }
+
+    private static bool MatchesCleanupIdentity(
+        ManagedCodexCredentialCleanup cleanup,
+        string? apiKeyId,
+        string? secretRef) =>
+        string.Equals(
+            cleanup.ApiKeyId,
+            apiKeyId?.Trim(),
+            StringComparison.Ordinal) &&
+        string.Equals(
+            cleanup.SecretRef ?? string.Empty,
+            secretRef?.Trim() ?? string.Empty,
+            StringComparison.Ordinal);
 }

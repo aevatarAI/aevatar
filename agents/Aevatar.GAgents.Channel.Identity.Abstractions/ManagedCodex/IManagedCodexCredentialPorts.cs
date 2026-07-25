@@ -49,6 +49,7 @@ public interface IManagedCodexCredentialCommandPort
     /// <summary>Admits an initial provisioned descriptor.</summary>
     Task<DispatchAdmission> CommitProvisionedAsync(
         ManagedCodexCredentialDescriptor credential,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
         CancellationToken ct = default);
 
     /// <summary>
@@ -59,12 +60,14 @@ public interface IManagedCodexCredentialCommandPort
         string expectedPreviousApiKeyId,
         ManagedCodexCredentialDescriptor credential,
         ManagedCodexCredentialCleanup previousCredentialCleanup,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
         CancellationToken ct = default);
 
     /// <summary>Admits policy reconciliation while preserving the current API key and Vault reference.</summary>
     Task<DispatchAdmission> CommitPolicyReconciledAsync(
         string expectedApiKeyId,
         ManagedCodexCredentialDescriptor credential,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
         CancellationToken ct = default);
 
     /// <summary>Admits an idempotent readiness confirmation for the exact expected active credential.</summary>
@@ -92,6 +95,7 @@ public interface IManagedCodexCredentialCommandPort
     Task<DispatchAdmission> CompleteCleanupTrackAsync(
         ExternalSubjectRef owner,
         string apiKeyId,
+        string secretRef,
         ManagedCodexCredentialCleanupTrack track,
         DateTimeOffset completedAt,
         CancellationToken ct = default);

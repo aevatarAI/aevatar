@@ -114,28 +114,45 @@ only those lease-bound phase deadlines.
 Every issued NyxID key has its own deterministic Vault reference. Rotation
 stores the new key at a new reference and submits a compare-and-set Actor
 transition carrying typed cleanup for the exact previous API-key ID and Vault
-locator. The Actor atomically commits the replacement descriptor and prior
-cleanup fact, and rejects generic cleanup that targets the active key or active
-Vault locator. Application retries those Actor-owned tracks only after the
-exact replacement is observed committed. It never overwrites or retires the
-secret referenced by the active descriptor before commit. Provision and
-rotation re-read NyxID to verify the persisted key's active state, exact
-grants, platform, and expiry before Vault persistence. A later lifecycle call
-reconciles a valid active remote key and deterministic Vault reference after an
-ambiguous Actor dispatch instead of issuing another key blindly. Same-key,
-same-locator reference drift selects replacement and completes readiness in the
-same call rather than certifying stale reference metadata.
+locator. Provision, rotation, and policy reconciliation also carry typed
+cleanup intents for every remotely observed obsolete credential. The Actor
+validates and commits the incoming descriptor and all cleanup intents
+atomically; it rejects an intent that targets the incoming credential and
+rejects any incoming or current descriptor already targeted by an active
+pending cleanup track. Application never deletes an observed remote key or
+Vault locator before that atomic credential commit is observed. After commit,
+it retries only the Actor-owned pending tracks and completes each track by the
+exact `(ApiKeyId, SecretRef)` identity.
+
+For one API key with multiple historical Vault locators, exactly one cleanup
+fact owns `NyxIdPending`, while every distinct locator may independently own
+`VaultPending`. Rotation gives NyxID ownership to the exact previous Actor
+credential cleanup; otherwise the Actor chooses the stable sorted locator.
+Application therefore revokes NyxID once per key and Vault once per exact
+locator. It never overwrites or retires the secret referenced by the active
+descriptor before commit. Provision and rotation re-read NyxID to verify the
+persisted key's active state, exact grants, platform, and expiry before Vault
+persistence. A later lifecycle call reconciles a valid active remote key and
+deterministic Vault reference after an ambiguous Actor dispatch instead of
+issuing another key blindly. Same-key, same-locator reference drift selects
+replacement and completes readiness in the same call rather than certifying
+stale reference metadata.
 
 Revocation runs the NyxID and Vault tracks independently. Cleanup of
-non-current orphan keys derives each deterministic Vault reference and records
-each orphan's known incomplete tracks before advancing, so cancellation cannot
-discard earlier outcomes or the Vault-only remainder of a partially completed
-orphan. Failed external cleanup is recorded as non-secret Actor-owned work and
-retried before a later lifecycle mutation. Once a ready credential is committed,
-cleanup timeout or rejected track-completion admission is best effort in both
-Normal and Force validation modes and does not suppress readiness. Status
-derives `expired` from an active descriptor whose committed expiry has passed,
-without writing from the query path.
+non-current orphan keys derives each deterministic Vault reference and enters
+the complete pending intent set in the same Actor commit as the replacement or
+provisioned credential. Caller cancellation during post-commit cleanup cannot
+erase those facts; a successful track is completed explicitly and an
+interrupted or failed track remains pending. Cleanup-recording admission is
+never ignored: if an uncommitted compensation outcome cannot be durably
+recorded, the lifecycle returns
+`managed_credential_persistence_pending`. Manual revoke likewise catches
+compensation-boundary expiry, marks unknown or unattempted tracks pending, and
+uses the still-live recording reserve to commit the revoked state. Once a ready
+credential is committed, cleanup timeout or rejected track-completion admission
+is best effort in both Normal and Force validation modes and does not suppress
+readiness. Status derives `expired` from an active descriptor whose committed
+expiry has passed, without writing from the query path.
 
 The global `Enabled` option is the kill switch. It blocks managed execution, provisioning, and rotation while leaving status and revocation available.
 

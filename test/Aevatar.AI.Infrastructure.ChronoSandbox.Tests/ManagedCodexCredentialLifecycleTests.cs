@@ -40,7 +40,8 @@ public sealed class ManagedCodexCredentialLifecycleTests
         handler.Paths.Should().Equal("/api/v1/users/me");
         await query.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs()
+            .CommitProvisionedAsync(default!, default!, default);
     }
 
     [Theory]
@@ -161,6 +162,92 @@ public sealed class ManagedCodexCredentialLifecycleTests
             "user-bearer",
             "key-pending",
             Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("provision")]
+    [InlineData("rotate")]
+    [InlineData("revoke")]
+    public async Task ManualMutation_WhenCallerCancelsAtPendingCleanupBoundary_PreservesActorOwnedFact(
+        string operation)
+    {
+        using var callerCancellation = new CancellationTokenSource();
+        var current = Descriptor("key-current", "sec-current", version: 1);
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                PendingRevocations =
+                {
+                    new ManagedCodexCredentialCleanup
+                    {
+                        ApiKeyId = "key-pending",
+                        SecretRef = "sec-pending",
+                        NyxIdPending = true,
+                        RequestedAt =
+                            Google.Protobuf.WellKnownTypes.Timestamp
+                                .FromDateTimeOffset(Now),
+                    },
+                },
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-pending",
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                callerCancellation.Cancel();
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return true;
+            });
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        commands.CompleteCleanupTrackAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<ManagedCodexCredentialCleanupTrack>(),
+                Arg.Any<DateTimeOffset>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Admission());
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            Substitute.For<ISecretVault>(),
+            commands,
+            query,
+            mutationLease: new InMemoryManagedCodexCredentialMutationLease(),
+            nyxIdPort: nyxId);
+        Func<Task> act = operation switch
+        {
+            "provision" => () => lifecycle.ProvisionAsync(
+                "user-bearer",
+                "user-a",
+                callerCancellation.Token),
+            "rotate" => () => lifecycle.RotateAsync(
+                "user-bearer",
+                "user-a",
+                callerCancellation.Token),
+            "revoke" => () => lifecycle.RevokeAsync(
+                "user-bearer",
+                "user-a",
+                callerCancellation.Token),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        await commands.DidNotReceiveWithAnyArgs()
+            .CompleteCleanupTrackAsync(
+                default!,
+                default!,
+                default!,
+                default,
+                default,
+                default);
     }
 
     [Fact]
@@ -419,6 +506,236 @@ public sealed class ManagedCodexCredentialLifecycleTests
             Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData("vault")]
+    [InlineData("nyxid")]
+    public async Task RevokeAsync_WhenCleanupTrackReachesCompensationBoundary_StillRecordsPendingWithLiveToken(
+        string boundaryTrack)
+    {
+        var time = new FakeTimeProvider(Now);
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 90;
+        var current = Descriptor("key-current", "sec-current", version: 1);
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(
+                Arg.Any<RevokeSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (boundaryTrack == "vault")
+                {
+                    time.Advance(TimeSpan.FromSeconds(70));
+                    call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                }
+                return new RevokeSecretResult(true);
+            });
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                current.ApiKeyId,
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (boundaryTrack == "nyxid")
+                {
+                    time.Advance(TimeSpan.FromSeconds(70));
+                    call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                }
+                return true;
+            });
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        CancellationToken recordingToken = default;
+        ManagedCodexCredentialCleanup? recordedCleanup = null;
+        commands.CommitRevokedAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                current.ApiKeyId,
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<DateTimeOffset>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                recordedCleanup =
+                    call.Arg<ManagedCodexCredentialCleanup>().Clone();
+                recordingToken = call.Arg<CancellationToken>();
+                recordingToken.ThrowIfCancellationRequested();
+                return Admission();
+            });
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            query,
+            options,
+            new InMemoryManagedCodexCredentialMutationLease(),
+            nyxId,
+            time);
+
+        var result = await lifecycle.RevokeAsync(
+            "user-bearer",
+            "user-a");
+
+        result.Status.Should().Be("revocation_accepted");
+        recordingToken.CanBeCanceled.Should().BeTrue();
+        recordingToken.IsCancellationRequested.Should().BeFalse();
+        recordedCleanup.Should().NotBeNull();
+        recordedCleanup!.NyxIdPending.Should().BeTrue();
+        recordedCleanup.VaultPending.Should().Be(boundaryTrack == "vault");
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenCancellationCleanupAdmissionIsRejected_ReturnsPersistencePending()
+    {
+        var time = new FakeTimeProvider(Now);
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 90;
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.ListUserServicesAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(EligibleServices());
+        var listAttempt = 0;
+        nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (Interlocked.Increment(ref listAttempt) == 1)
+                    return [];
+
+                time.Advance(TimeSpan.FromSeconds(60));
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return [];
+            });
+        nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-timeout"));
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-timeout",
+                Arg.Any<CancellationToken>())
+            .Returns(false);
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        CancellationToken recordingToken = default;
+        commands.QueueCleanupAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                recordingToken = call.Arg<CancellationToken>();
+                recordingToken.ThrowIfCancellationRequested();
+                return new DispatchAdmission(
+                    false,
+                    "command-rejected",
+                    Now,
+                    "managed-codex-credential:nyxid::user-a",
+                    "command-rejected");
+            });
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            Substitute.For<ISecretVault>(),
+            commands,
+            options: options,
+            mutationLease: new InMemoryManagedCodexCredentialMutationLease(),
+            nyxIdPort: nyxId,
+            timeProvider: time);
+
+        var act = () => lifecycle.ProvisionAsync(
+            "user-bearer",
+            "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_credential_persistence_pending");
+        recordingToken.CanBeCanceled.Should().BeTrue();
+        recordingToken.IsCancellationRequested.Should().BeFalse();
+        await commands.Received(1).QueueCleanupAsync(
+            Arg.Any<ExternalSubjectRef>(),
+            Arg.Is<ManagedCodexCredentialCleanup>(cleanup =>
+                cleanup.ApiKeyId == "key-timeout" &&
+                cleanup.NyxIdPending),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenUnadoptedCleanupAdmissionIsRejected_ReturnsPersistencePending()
+    {
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.ListUserServicesAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(EligibleServices());
+        nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                [],
+                [RemoteKey("key-unadopted", Now.AddDays(30), ["us-sandbox", "us-llm"])]);
+        nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-unadopted"));
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-unadopted",
+                Arg.Any<CancellationToken>())
+            .Returns(false);
+        var vault = Substitute.For<ISecretVault>();
+        vault.PutAsync(
+                Arg.Any<StoreSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<StoreSecretResult>>(_ =>
+                throw new InvalidOperationException("vault write failed"));
+        vault.RevokeAsync(
+                Arg.Any<RevokeSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new RevokeSecretResult(false));
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        CancellationToken recordingToken = default;
+        commands.QueueCleanupAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                recordingToken = call.Arg<CancellationToken>();
+                recordingToken.ThrowIfCancellationRequested();
+                return new DispatchAdmission(
+                    false,
+                    "command-rejected",
+                    Now,
+                    "managed-codex-credential:nyxid::user-a",
+                    "command-rejected");
+            });
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            mutationLease: new InMemoryManagedCodexCredentialMutationLease(),
+            nyxIdPort: nyxId);
+
+        var act = () => lifecycle.ProvisionAsync(
+            "user-bearer",
+            "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_credential_persistence_pending");
+        recordingToken.CanBeCanceled.Should().BeTrue();
+        recordingToken.IsCancellationRequested.Should().BeFalse();
+    }
+
     [Fact]
     public async Task ProvisionAsync_WhenReconciliationCleanupStartsAtPrimaryDeadline_UsesLiveReserves()
     {
@@ -519,6 +836,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         ManagedCodexCredentialDescriptor? committed = null;
         commands.CommitProvisionedAsync(
                 Arg.Do<ManagedCodexCredentialDescriptor>(value => committed = value.Clone()),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands);
@@ -634,6 +952,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         commands.CommitPolicyReconciledAsync(
                 "key-a",
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands);
@@ -658,6 +977,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 descriptor.SecretReference.Fingerprint == "fingerprint" &&
                 descriptor.ChronoSandboxUserServiceId == "us-sandbox" &&
                 descriptor.ChronoLlmUserServiceId == "us-llm"),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -681,6 +1001,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         commands.CommitPolicyReconciledAsync(
                 "key-a",
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands);
@@ -702,6 +1023,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 descriptor.ApiKeyId == "key-a" &&
                 descriptor.SecretReference.Equals(current.SecretReference) &&
                 descriptor.ChronoLlmUserServiceId == "us-llm"),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -725,6 +1047,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         commands.CommitPolicyReconciledAsync(
                 "key-a",
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands);
@@ -739,7 +1062,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Which.Code.Should().Be("managed_credential_vault_reference_invalid");
         handler.Methods.Should().Equal(HttpMethod.Put, HttpMethod.Get);
         await commands.DidNotReceiveWithAnyArgs()
-            .CommitPolicyReconciledAsync(default!, default!, default);
+            .CommitPolicyReconciledAsync(default!, default!, default!, default);
     }
 
     [Fact]
@@ -779,6 +1102,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
         commands.CommitProvisionedAsync(
                 Arg.Do<ManagedCodexCredentialDescriptor>(descriptor => committed.Add(descriptor.Clone())),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var options = ManagedCodexOptionsValidatorTests.ValidOptions();
@@ -840,7 +1164,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.Code.Should().Be(expectedCode);
         handler.Paths.Should().Equal("/api/v1/users/me", "/api/v1/user-services");
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Theory]
@@ -864,7 +1188,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.Code.Should().Be("managed_user_services_unavailable");
         handler.Paths.Should().Equal("/api/v1/users/me", "/api/v1/user-services");
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Theory]
@@ -889,7 +1213,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.Code.Should().Be("managed_user_services_unavailable");
         handler.Paths.Should().Equal("/api/v1/users/me", "/api/v1/user-services");
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Theory]
@@ -911,7 +1235,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.Code.Should().Be("managed_user_services_unavailable");
         handler.Paths.Should().Equal("/api/v1/users/me", "/api/v1/user-services");
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Fact]
@@ -941,7 +1265,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.ToString().Should().NotContain(RawKey);
         handler.Paths.Should().EndWith("/api/v1/api-keys/key-orphan");
         handler.Methods.Should().EndWith(HttpMethod.Delete);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
         await commands.DidNotReceiveWithAnyArgs().QueueCleanupAsync(default!, default!, default);
     }
 
@@ -974,7 +1298,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         await act.Should().ThrowAsync<OperationCanceledException>();
         handler.Paths.Should().EndWith("/api/v1/api-keys/key-cancelled");
         handler.Methods.Should().EndWith(HttpMethod.Delete);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Theory]
@@ -1017,7 +1341,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         handler.Paths.Should().EndWith("/api/v1/api-keys/key-over-broad");
         handler.Methods.Should().EndWith(HttpMethod.Delete);
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Fact]
@@ -1060,7 +1384,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 request.Ref == requestedRef &&
                 request.OwnerScopeKey == "managed-codex-credential:nyxid::user-a"),
             Arg.Any<CancellationToken>());
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Fact]
@@ -1085,6 +1409,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
         commands.CommitProvisionedAsync(
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns<Task<DispatchAdmission>>(_ => throw new InvalidOperationException("dispatch unavailable"));
         var lifecycle = CreateLifecycle(handler, vault, commands);
@@ -1133,6 +1458,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 "key-1",
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
                 Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands, query);
@@ -1162,6 +1488,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 cleanup.SecretRef == current.SecretReference.Ref &&
                 cleanup.NyxIdPending &&
                 cleanup.VaultPending),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -1188,7 +1515,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.Code.Should().Be("managed_api_key_expiry_invalid");
         handler.Paths.Should().EndWith("/api/v1/api-keys/key-wrong-expiry");
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Fact]
@@ -1205,6 +1532,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
         commands.CommitProvisionedAsync(
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands);
@@ -1217,7 +1545,70 @@ public sealed class ManagedCodexCredentialLifecycleTests
             Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
                 descriptor.ApiKeyId == "key-recover" &&
                 descriptor.SecretReference.Ref.StartsWith("sec_managed_codex_", StringComparison.Ordinal)),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("provision")]
+    [InlineData("rotate")]
+    public async Task ManualReconciliation_WhenCallerCancelsDuringVaultResolution_DoesNotDeleteRemoteCredential(
+        string operation)
+    {
+        using var callerCancellation = new CancellationTokenSource();
+        var expiresAt = Now.AddDays(30);
+        var handler = new RoutingHandler(
+            MeResponse(),
+            UserServicesResponse(),
+            ApiKeyListResponse("key-recover", expiresAt),
+            """{"message":"deleted"}""");
+        var vault = Substitute.For<ISecretVault>();
+        vault.ResolveAsync(
+                Arg.Any<ResolveSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callerCancellation.Cancel();
+                return new ResolveSecretResult(
+                    null,
+                    null,
+                    SecretResolutionFailureReason.NotFound);
+            });
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(operation == "rotate"
+                ? new ManagedCodexCredentialSnapshot
+                {
+                    Credential = Descriptor(
+                        "key-current",
+                        "sec-current",
+                        version: 1),
+                    StateVersion = 4,
+                    LastEventId = "event-4",
+                }
+                : null);
+        var lifecycle = CreateLifecycle(
+            handler,
+            vault,
+            Substitute.For<IManagedCodexCredentialCommandPort>(),
+            query);
+        Func<Task> act = operation switch
+        {
+            "provision" => () => lifecycle.ProvisionAsync(
+                "user-bearer",
+                "user-a",
+                callerCancellation.Token),
+            "rotate" => () => lifecycle.RotateAsync(
+                "user-bearer",
+                "user-a",
+                callerCancellation.Token),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+        };
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.Methods.Should().OnlyContain(method => method == HttpMethod.Get);
     }
 
     [Fact]
@@ -1243,7 +1634,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.ToString().Should().NotContain(RawKey);
         handler.Methods.Should().OnlyContain(method => method == HttpMethod.Get);
         await commands.DidNotReceiveWithAnyArgs().QueueCleanupAsync(default!, default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     [Fact]
@@ -1271,6 +1662,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 "key-old",
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
                 Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands, query);
@@ -1290,6 +1682,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 cleanup.SecretRef == current.SecretReference.Ref &&
                 cleanup.NyxIdPending &&
                 cleanup.VaultPending),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -1324,6 +1717,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 "key-1",
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
                 Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns<Task<DispatchAdmission>>(_ => throw new InvalidOperationException("dispatch unavailable"));
         var lifecycle = CreateLifecycle(handler, vault, commands, query);
@@ -1645,12 +2039,14 @@ public sealed class ManagedCodexCredentialLifecycleTests
         commands.CompleteCleanupTrackAsync(
                 Arg.Any<ExternalSubjectRef>(),
                 "key-orphan",
+                "sec-orphan",
                 Arg.Any<ManagedCodexCredentialCleanupTrack>(),
                 Arg.Any<DateTimeOffset>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         commands.CommitProvisionedAsync(
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands, query);
@@ -1672,12 +2068,14 @@ public sealed class ManagedCodexCredentialLifecycleTests
         await commands.Received(1).CompleteCleanupTrackAsync(
             Arg.Any<ExternalSubjectRef>(),
             "key-orphan",
+            "sec-orphan",
             ManagedCodexCredentialCleanupTrack.NyxId,
             Now,
             Arg.Any<CancellationToken>());
         await commands.Received(1).CompleteCleanupTrackAsync(
             Arg.Any<ExternalSubjectRef>(),
             "key-orphan",
+            "sec-orphan",
             ManagedCodexCredentialCleanupTrack.Vault,
             Now,
             Arg.Any<CancellationToken>());
@@ -1701,6 +2099,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
         commands.CommitProvisionedAsync(
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         var lifecycle = CreateLifecycle(handler, vault, commands);
@@ -1714,6 +2113,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
             Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
                 descriptor.ChronoSandboxUserServiceId == "us-sandbox" &&
                 descriptor.ChronoLlmUserServiceId == "us-llm"),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -1733,7 +2133,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
         exception.Code.Should().Be("managed_user_services_unavailable");
         handler.Paths.Should().Equal("/api/v1/users/me", "/api/v1/user-services");
         await vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
-        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default);
+        await commands.DidNotReceiveWithAnyArgs().CommitProvisionedAsync(default!, default!, default);
     }
 
     private static RoutingHandler SuccessfulProvisionHandler(
@@ -1766,6 +2166,12 @@ public sealed class ManagedCodexCredentialLifecycleTests
         var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
         commands.CommitProvisionedAsync(
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Admission());
+        commands.QueueCleanupAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
                 Arg.Any<CancellationToken>())
             .Returns(Admission());
         return CreateLifecycle(handler, vault, commands);
@@ -1793,6 +2199,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 current,
                 remote,
                 eligibility,
+                Array.Empty<ManagedCodexCredentialCleanup>(),
                 CancellationToken.None,
             ]);
         task.Should().BeOfType<Task<ManagedCodexCredentialDescriptor>>();

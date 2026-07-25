@@ -235,13 +235,19 @@ the already-required usable UserServices.
    higher authoritative `StateVersion`.
 10. The lease owner resolves the user's exact required UserServices, reconciles
     remote Aevatar-managed keys, stores or updates Vault material when needed,
-    and dispatches the typed actor command.
+    and dispatches the typed actor command. Remotely observed obsolete keys are
+    carried as typed cleanup intents in that command; they are not deleted
+    before credential commit.
 11. After remote validation, dispatch the narrow typed
     `ConfirmReadiness(RemoteValidated)` command for the complete validated
     descriptor and wait for an exactly matching committed descriptor. Rotation
     has already atomically committed the exact previous-key and previous-Vault
-    pending cleanup. Only after matching observation does Application retry
-    those Actor-owned tracks and explicitly complete successful tracks.
+    cleanup plus every validated obsolete cleanup intent. Only after matching
+    observation does Application retry those Actor-owned tracks and explicitly
+    complete successful tracks by exact `(ApiKeyId, SecretRef)` identity.
+    Same-key cleanup facts share exactly one NyxID track but preserve one Vault
+    track per distinct locator; the exact previous Actor cleanup owns the
+    NyxID track during rotation.
     Cleanup timeout or rejected completion remains best effort and cannot
     suppress the committed ready credential in Normal or Force mode. A Normal
     cleanup owner releases its mutation lease before dispatching
@@ -297,12 +303,17 @@ The lifecycle automatically handles these states:
   Vault reference before issuing another key.
 - **Duplicate or orphaned Aevatar-managed keys:** keep an unambiguous committed
   valid key when possible; otherwise derive each orphan key's deterministic
-  Vault reference, attempt both NyxID and Vault cleanup tracks, and create one
-  fresh credential. Each orphan's known outcome is recorded before cleanup
-  advances to the next orphan. Cancellation between tracks records the exact
-  completed/pending split for that orphan. Any incomplete track is an
-  Actor-owned cleanup fact with the exact `SecretRef` and independent
-  `NyxIdPending` / `VaultPending` flags.
+  Vault reference, create one fresh credential, and atomically commit the new
+  credential with cleanup intents for all observed obsolete keys. No observed
+  orphan key or Vault locator is deleted before that commit. After the exact
+  committed snapshot is observed, Application attempts the Actor-owned tracks.
+  Cancellation between tracks leaves the already committed remainder pending.
+  Each cleanup fact has an exact `SecretRef`; one fact per API key owns
+  `NyxIdPending`, while every distinct locator may own `VaultPending`.
+- **Cleanup conflicts:** repair selection never adopts a remote credential
+  targeted by pending cleanup. Provision, rotation, policy reconciliation, and
+  readiness confirmation reject an incoming/current descriptor whose API key
+  or exact Vault locator is targeted by an active pending track.
 - **Pending cleanup with a ready current credential:** retry cleanup
   best-effort, but do not block Codex execution solely because an obsolete key
   or Vault record is still pending deletion. The internal cleanup attempt
@@ -312,6 +323,11 @@ The lifecycle automatically handles these states:
   best-effort rule applies after Force validation and after a committed
   replacement; caller cancellation at the cleanup boundary remains distinct
   from the internal cleanup timeout.
+- **Manual compensation expiry:** if revoke or issuance compensation reaches
+  its phase boundary, unknown and unattempted tracks are classified as pending
+  and dispatched with the independent durable-recording reserve. Rejected or
+  expired cleanup recording returns the stable persistence-pending failure
+  instead of discarding the external outcome.
 
 NyxID mutations are re-read and validated before Actor dispatch. Policy
 comparison is order-independent and requires exactly the two expected IDs.

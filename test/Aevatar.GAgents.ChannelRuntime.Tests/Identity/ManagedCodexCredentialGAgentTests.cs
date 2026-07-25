@@ -46,6 +46,40 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public void CredentialCommitContracts_CarryAtomicObsoleteCleanupAndExactCompletionIdentity()
+    {
+        CommitManagedCodexCredentialProvisionedCommand.Descriptor
+            .FindFieldByName("obsolete_credential_cleanups")
+            .Should().NotBeNull();
+        ManagedCodexCredentialProvisionedEvent.Descriptor
+            .FindFieldByName("obsolete_credential_cleanups")
+            .Should().NotBeNull();
+        CommitManagedCodexCredentialRotatedCommand.Descriptor
+            .FindFieldByName("obsolete_credential_cleanups")
+            .Should().NotBeNull();
+        ManagedCodexCredentialRotatedEvent.Descriptor
+            .FindFieldByName("obsolete_credential_cleanups")
+            .Should().NotBeNull();
+        CommitManagedCodexCredentialPolicyReconciledCommand.Descriptor
+            .FindFieldByName("obsolete_credential_cleanups")
+            .Should().NotBeNull();
+        ManagedCodexCredentialPolicyReconciledEvent.Descriptor
+            .FindFieldByName("obsolete_credential_cleanups")
+            .Should().NotBeNull();
+        CompleteManagedCodexCredentialCleanupTrackCommand.Descriptor
+            .FindFieldByName("secret_ref")
+            .Should().NotBeNull();
+        ManagedCodexCredentialCleanupTrackCompletedEvent.Descriptor
+            .FindFieldByName("secret_ref")
+            .Should().NotBeNull();
+        typeof(IManagedCodexCredentialCommandPort)
+            .GetMethod(nameof(IManagedCodexCredentialCommandPort.CompleteCleanupTrackAsync))!
+            .GetParameters()
+            .Select(static parameter => parameter.Name)
+            .Should().Contain("secretRef");
+    }
+
+    [Fact]
     public void ActorIdentity_UsesTheCompleteNyxIdAuthority()
     {
         var first = Subject("tenant-a", "user-a");
@@ -72,6 +106,91 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
         _agent.State.Credential.Status.Should().Be(ManagedCodexCredentialStatus.Active);
         _agent.State.PendingRevocations.Should().BeEmpty();
         _agent.State.ToString().Should().NotContain("raw-agent-key");
+    }
+
+    [Fact]
+    public async Task HandleProvisioned_AtomicallyCommitsValidatedObsoleteCleanupIntents()
+    {
+        var descriptor = Descriptor("key-current", "sec-current", version: 1);
+        var command = new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        };
+        command.ObsoleteCredentialCleanups.Add(new ManagedCodexCredentialCleanup
+        {
+            ApiKeyId = "key-obsolete",
+            SecretRef = "sec-obsolete",
+            NyxIdPending = true,
+            VaultPending = true,
+        });
+
+        await _agent.HandleProvisioned(command);
+
+        _agent.State.Credential.Should().BeEquivalentTo(descriptor);
+        var cleanup = _agent.State.PendingRevocations.Should()
+            .ContainSingle().Which;
+        cleanup.ApiKeyId.Should().Be("key-obsolete");
+        cleanup.SecretRef.Should().Be("sec-obsolete");
+        cleanup.NyxIdPending.Should().BeTrue();
+        cleanup.VaultPending.Should().BeTrue();
+        cleanup.RequestedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task HandleProvisioned_WithSameKeyDifferentLocators_AssignsNyxIdToSortedLocator()
+    {
+        var descriptor = Descriptor("key-current", "sec-current", version: 1);
+        var command = new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        };
+        foreach (var secretRef in new[] { "sec-obsolete-b", "sec-obsolete-a" })
+        {
+            command.ObsoleteCredentialCleanups.Add(
+                new ManagedCodexCredentialCleanup
+                {
+                    ApiKeyId = "key-obsolete",
+                    SecretRef = secretRef,
+                    NyxIdPending = true,
+                    VaultPending = true,
+                });
+        }
+
+        await _agent.HandleProvisioned(command);
+
+        _agent.State.PendingRevocations.Should().HaveCount(2);
+        var sortedOwner = _agent.State.PendingRevocations.Should()
+            .ContainSingle(cleanup => cleanup.SecretRef == "sec-obsolete-a")
+            .Which;
+        sortedOwner.NyxIdPending.Should().BeTrue();
+        sortedOwner.VaultPending.Should().BeTrue();
+        var otherLocator = _agent.State.PendingRevocations.Should()
+            .ContainSingle(cleanup => cleanup.SecretRef == "sec-obsolete-b")
+            .Which;
+        otherLocator.NyxIdPending.Should().BeFalse();
+        otherLocator.VaultPending.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleProvisioned_WhenObsoleteCleanupTargetsIncomingCredential_RejectsActivation()
+    {
+        var descriptor = Descriptor("key-current", "sec-current", version: 1);
+        var command = new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        };
+        command.ObsoleteCredentialCleanups.Add(new ManagedCodexCredentialCleanup
+        {
+            ApiKeyId = descriptor.ApiKeyId,
+            SecretRef = "sec-unrelated",
+            NyxIdPending = true,
+        });
+
+        await _agent.HandleProvisioned(command);
+
+        _agent.State.Credential.Should().BeNull();
+        _agent.State.PendingRevocations.Should().ContainSingle()
+            .Which.ApiKeyId.Should().Be(descriptor.ApiKeyId);
     }
 
     [Fact]
@@ -467,6 +586,136 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
         _agent.State.Credential.Should().BeEquivalentTo(current);
         _agent.State.PendingRevocations.Should().ContainSingle()
             .Which.ApiKeyId.Should().Be(rotated.ApiKeyId);
+    }
+
+    [Fact]
+    public async Task HandleRotated_WhenIncomingCredentialIsPendingCleanup_DoesNotActivateIt()
+    {
+        var current = Descriptor("key-current", "sec-current", version: 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+        var pending = Descriptor("key-pending", "sec-pending", version: 1);
+        await _agent.HandleCleanupQueued(new QueueManagedCodexCredentialCleanupCommand
+        {
+            Owner = current.Owner.Clone(),
+            Cleanup = new ManagedCodexCredentialCleanup
+            {
+                ApiKeyId = pending.ApiKeyId,
+                SecretRef = pending.SecretReference.Ref,
+                NyxIdPending = true,
+                VaultPending = true,
+            },
+        });
+
+        await _agent.HandleRotated(new CommitManagedCodexCredentialRotatedCommand
+        {
+            ExpectedPreviousApiKeyId = current.ApiKeyId,
+            Credential = pending,
+            PreviousCredentialCleanup = PreviousCleanup(current, pending),
+        });
+
+        _agent.State.Credential.Should().BeEquivalentTo(current);
+        _agent.State.PendingRevocations.Should().ContainSingle()
+            .Which.ApiKeyId.Should().Be(pending.ApiKeyId);
+    }
+
+    [Fact]
+    public async Task HandleRotated_WithSameKeyDifferentLocators_PrefersPreviousCleanupForNyxId()
+    {
+        var current = Descriptor("key-shared", "sec-previous", version: 1);
+        await _agent.HandleProvisioned(new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = current,
+        });
+        var rotated = Descriptor("key-rotated", "sec-rotated", version: 1);
+        var command = new CommitManagedCodexCredentialRotatedCommand
+        {
+            ExpectedPreviousApiKeyId = current.ApiKeyId,
+            Credential = rotated,
+            PreviousCredentialCleanup = PreviousCleanup(current, rotated),
+        };
+        command.ObsoleteCredentialCleanups.Add(
+            new ManagedCodexCredentialCleanup
+            {
+                ApiKeyId = current.ApiKeyId,
+                SecretRef = "sec-deterministic",
+                NyxIdPending = true,
+                VaultPending = true,
+            });
+
+        await _agent.HandleRotated(command);
+
+        _agent.State.PendingRevocations.Should().HaveCount(2);
+        var previousCleanup = _agent.State.PendingRevocations.Should()
+            .ContainSingle(cleanup => cleanup.SecretRef == "sec-previous")
+            .Which;
+        previousCleanup.NyxIdPending.Should().BeTrue();
+        previousCleanup.VaultPending.Should().BeTrue();
+        var deterministicCleanup = _agent.State.PendingRevocations.Should()
+            .ContainSingle(cleanup => cleanup.SecretRef == "sec-deterministic")
+            .Which;
+        deterministicCleanup.NyxIdPending.Should().BeFalse();
+        deterministicCleanup.VaultPending.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task HandleCleanupQueued_WithSameKeyAndDifferentVaultLocators_PreservesBothFacts()
+    {
+        var owner = Subject("tenant-a", "user-a");
+        foreach (var secretRef in new[] { "sec-old-a", "sec-old-b" })
+        {
+            await _agent.HandleCleanupQueued(new QueueManagedCodexCredentialCleanupCommand
+            {
+                Owner = owner.Clone(),
+                Cleanup = new ManagedCodexCredentialCleanup
+                {
+                    ApiKeyId = "key-shared",
+                    SecretRef = secretRef,
+                    NyxIdPending = false,
+                    VaultPending = true,
+                },
+            });
+        }
+
+        _agent.State.PendingRevocations.Should().HaveCount(2);
+        _agent.State.PendingRevocations
+            .Select(static cleanup => cleanup.SecretRef)
+            .Should().BeEquivalentTo("sec-old-a", "sec-old-b");
+    }
+
+    [Fact]
+    public async Task HandleCleanupTrackCompleted_UsesExactKeyAndVaultLocatorIdentity()
+    {
+        var owner = Subject("tenant-a", "user-a");
+        foreach (var secretRef in new[] { "sec-old-a", "sec-old-b" })
+        {
+            await _agent.HandleCleanupQueued(new QueueManagedCodexCredentialCleanupCommand
+            {
+                Owner = owner.Clone(),
+                Cleanup = new ManagedCodexCredentialCleanup
+                {
+                    ApiKeyId = "key-shared",
+                    SecretRef = secretRef,
+                    VaultPending = true,
+                },
+            });
+        }
+
+        await _agent.HandleCleanupTrackCompleted(
+            new CompleteManagedCodexCredentialCleanupTrackCommand
+            {
+                Owner = owner.Clone(),
+                ApiKeyId = "key-shared",
+                SecretRef = "sec-old-a",
+                Track = ManagedCodexCredentialCleanupTrack.Vault,
+                CompletedAt = Timestamp.FromDateTimeOffset(
+                    DateTimeOffset.Parse("2026-07-25T00:00:00Z")),
+            });
+
+        _agent.State.PendingRevocations.Should().ContainSingle()
+            .Which.SecretRef.Should().Be("sec-old-b");
     }
 
     [Fact]

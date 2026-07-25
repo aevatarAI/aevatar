@@ -1077,8 +1077,16 @@ Review hardening also extends the existing typed Identity contracts and Actor:
 - rotation commands and events carry typed `previous_credential_cleanup`, so
   the Actor commits the replacement descriptor and exact prior-key/prior-Vault
   cleanup fact atomically;
+- provision, rotation, and policy reconciliation commands/events carry typed
+  `obsolete_credential_cleanups`, so no remotely observed key or Vault locator
+  is deleted before the incoming credential commit;
+- cleanup completion carries the exact `secret_ref`; the Actor keeps
+  same-key/different-locator facts separate, assigns one NyxID owner per key,
+  and preserves one Vault track per exact locator;
 - generic cleanup commands are rejected when a pending track targets the
-  active API key or active Vault locator.
+  active API key or active Vault locator, and incoming credentials targeted by
+  pending cleanup are rejected across provision, rotation, policy
+  reconciliation, and readiness confirmation.
 
 - [ ] **Step 1: Write failing same-call readiness tests**
 
@@ -1547,9 +1555,10 @@ Under the lease:
 4. adopt one unambiguous recoverable remote key when projection is absent;
 5. update a recoverable single-service key in place;
 6. replace expired, revoked, missing-secret, or irreconcilable credentials;
-7. for every non-current orphan reserved key, derive its deterministic Vault
-   reference, attempt both NyxID and Vault cleanup tracks, and record that
-   orphan's incomplete tracks immediately before moving to the next orphan;
+7. for every remotely observed obsolete reserved key, derive its deterministic
+   Vault reference and carry a typed cleanup intent in the provision, rotation,
+   or policy-reconciliation command; do not delete any observed key or locator
+   before the exact incoming credential is committed;
 8. dispatch provision or policy reconciliation directly; when rotating,
    include the exact previous API-key ID, previous Vault locator, and
    independent pending-track flags as typed `previous_credential_cleanup`; the
@@ -1559,10 +1568,13 @@ Under the lease:
    complete active descriptor after remote validation, including duplicate/no-op
    command cases;
 10. after an exactly matching provision, rotation, or reconciliation descriptor
-    is observed committed, retry the Actor-owned previous-key and previous-Vault
-    cleanup tracks best-effort and complete each successful track explicitly;
-    timeout or rejected cleanup completion never suppresses the committed ready
-    credential in Normal or Force mode;
+    is observed committed, retry only the Actor-owned cleanup tracks
+    best-effort and complete each successful track by exact
+    `(ApiKeyId, SecretRef)` identity; normalize same-key/different-locator
+    facts so the exact previous Actor cleanup owns the single NyxID track during
+    rotation, otherwise the stable sorted locator owns it, while every locator
+    retains its independent Vault track; timeout or rejected completion never
+    suppresses the committed ready credential in Normal or Force mode;
 11. map Vault `Unauthorized`, `AuthenticationFailed`, `KeyringMismatch`, and
     `UnsupportedAlgorithm` to `managed_credential_vault_unavailable` without
     revoking, creating, or updating NyxID keys;
@@ -1572,6 +1584,14 @@ Under the lease:
     descriptor or timing out;
 13. return only `WaitForReadyAsync(...)` after sufficient committed evidence
     for the exact expected descriptor.
+
+Every cleanup-recording result is checked. If compensation or cancellation
+produces an outcome that cannot be admitted to the Actor with the live
+recording reserve, return `managed_credential_persistence_pending`. Manual
+pending-cleanup calls use the caller-linked pre-mutation token at the actual
+external boundary. Manual revoke catches compensation expiry, leaves unknown
+or unattempted tracks pending, and commits them with the independent recording
+reserve.
 
 Change pending cleanup handling to return a result instead of always throwing:
 
