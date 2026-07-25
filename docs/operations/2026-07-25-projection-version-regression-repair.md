@@ -66,8 +66,12 @@ Before either repair:
 1. Confirm the deployed release includes the guarded repair routes and the
    target-specific repair services.
 2. Obtain an elevated platform-owner bearer for synthetic example subject
-   `user-alpha`. Put it in a dedicated mode-`0600` file outside the repository;
-   do not print it, export it as a shell value, or persist it anywhere else.
+   `user-alpha`. The credential owner must inject it into a disposable,
+   one-run, mode-`0600` file outside the repository and provide that disposable
+   path to this procedure. Never point this script at the long-lived
+   secret-store source. By supplying the path, the credential owner transfers
+   deletion responsibility to this script. Do not print the bearer, export it
+   as a shell value, or persist it anywhere else.
 3. Assign an incident/change record and the synthetic example request ID
    `repair-alpha`. A real execution must use its own non-secret request ID and a
    concise reason containing no catalog or credential data.
@@ -88,7 +92,35 @@ set -euo pipefail
 umask 077
 
 : "${AEVATAR_BASE_URL:?set the deployed Aevatar base URL}"
-: "${ELEVATED_OWNER_BEARER_FILE:?set the mode-0600 elevated owner bearer file}"
+: "${ELEVATED_OWNER_BEARER_FILE:?set the disposable mode-0600 bearer file}"
+
+cleanup_repair_material() {
+  local bearer_file="${ELEVATED_OWNER_BEARER_FILE:-}"
+  local repair_dir="${REPAIR_DIR:-}"
+  local cleanup_failed=false
+
+  if test -n "$bearer_file"; then
+    rm -f -- "$bearer_file" || cleanup_failed=true
+    if test -e "$bearer_file"; then
+      cleanup_failed=true
+    fi
+  fi
+  if test -n "$repair_dir"; then
+    rm -rf -- "$repair_dir" || cleanup_failed=true
+    if test -e "$repair_dir"; then
+      cleanup_failed=true
+    fi
+  fi
+
+  unset ELEVATED_OWNER_BEARER_FILE BEARER_FILE_MODE REPAIR_DIR
+  if test "$cleanup_failed" = "true"; then
+    printf 'STOP: protected repair material cleanup failed\n' >&2
+    return 1
+  fi
+}
+trap cleanup_repair_material EXIT
+trap 'exit 1' HUP INT TERM
+
 test -f "$ELEVATED_OWNER_BEARER_FILE"
 
 if stat -f '%Lp' "$ELEVATED_OWNER_BEARER_FILE" >/dev/null 2>&1; then
@@ -111,11 +143,6 @@ awk '
 
 REPAIR_DIR="$(mktemp -d "${TMPDIR:-/tmp}/aevatar-projection-repair.XXXXXX")"
 chmod 700 "$REPAIR_DIR"
-cleanup_repair_dir() {
-  rm -rf -- "$REPAIR_DIR"
-}
-trap cleanup_repair_dir EXIT
-trap 'exit 1' HUP INT TERM
 
 protected_api_request() {
   local method="$1"
@@ -163,9 +190,11 @@ expect_http_status() {
 }
 ```
 
-Set the bearer-file path and other inputs outside shell history, then execute
-the protected script with a clean non-interactive shell. Do not print or attach
-the protected request/response directory.
+Set the disposable bearer-file path and other inputs outside shell history,
+then execute the protected script with a clean non-interactive shell. The trap
+deletes and verifies removal of both the disposable bearer file and protected
+request/response directory, then clears bearer-related variables. Do not print
+or attach either path or their contents.
 
 ## Workspace Repair
 
@@ -220,48 +249,50 @@ jq -e '
   and .document_state_version > .source_state_version
   and (.document_last_event_id | type == "string" and length > 0)
 ' "$WORKSPACE_INSPECT_RESPONSE" >/dev/null
-
-WORKSPACE_ACTOR_ID="$(jq -er '.actor_id' "$WORKSPACE_INSPECT_RESPONSE")"
-WORKSPACE_SOURCE_VERSION="$(
-  jq -er '.source_state_version' "$WORKSPACE_INSPECT_RESPONSE"
-)"
-WORKSPACE_DOCUMENT_VERSION="$(
-  jq -er '.document_state_version' "$WORKSPACE_INSPECT_RESPONSE"
-)"
-WORKSPACE_LAST_EVENT_ID="$(
-  jq -er '.document_last_event_id' "$WORKSPACE_INSPECT_RESPONSE"
-)"
 ```
 
 ### 2. Apply The Exact Workspace Manifest
 
-Build `apply=true` only from the exact values extracted above:
+Build `apply=true` by having `jq` read the protected inspection request,
+inspection response, and a small protected operator-control manifest directly.
+The inspected actor ID, versions, event ID, and scope ID never become process
+arguments:
 
 ```bash
 WORKSPACE_REPAIR_REQUEST_ID="repair-alpha"
 WORKSPACE_REPAIR_REASON="restore the regressed workspace current-state replica"
+WORKSPACE_APPLY_CONTROL="$REPAIR_DIR/workspace-apply-control.json"
 WORKSPACE_APPLY_REQUEST="$REPAIR_DIR/workspace-apply-request.json"
 WORKSPACE_APPLY_RESPONSE="$REPAIR_DIR/workspace-apply-response.json"
 
 jq -n \
-  --arg scopeId "$SCOPE_ID" \
-  --arg actorId "$WORKSPACE_ACTOR_ID" \
-  --argjson sourceVersion "$WORKSPACE_SOURCE_VERSION" \
-  --argjson documentVersion "$WORKSPACE_DOCUMENT_VERSION" \
-  --arg lastEventId "$WORKSPACE_LAST_EVENT_ID" \
   --arg repairRequestId "$WORKSPACE_REPAIR_REQUEST_ID" \
   --arg repairReason "$WORKSPACE_REPAIR_REASON" '
   {
-    scope_id: $scopeId,
-    apply: true,
-    expected_actor_id: $actorId,
-    expected_source_state_version: $sourceVersion,
-    expected_document_state_version: $documentVersion,
-    expected_document_last_event_id: $lastEventId,
     repair_request_id: $repairRequestId,
     repair_reason: $repairReason
   }
-' > "$WORKSPACE_APPLY_REQUEST"
+' > "$WORKSPACE_APPLY_CONTROL"
+
+jq -s '
+  .[0] as $inspectionRequest
+  | .[1] as $inspection
+  | .[2] as $control
+  | {
+      scope_id: $inspectionRequest.scope_id,
+      apply: true,
+      expected_actor_id: $inspection.actor_id,
+      expected_source_state_version: $inspection.source_state_version,
+      expected_document_state_version: $inspection.document_state_version,
+      expected_document_last_event_id: $inspection.document_last_event_id,
+      repair_request_id: $control.repair_request_id,
+      repair_reason: $control.repair_reason
+    }
+' \
+  "$WORKSPACE_INSPECT_REQUEST" \
+  "$WORKSPACE_INSPECT_RESPONSE" \
+  "$WORKSPACE_APPLY_CONTROL" \
+  > "$WORKSPACE_APPLY_REQUEST"
 
 HTTP_STATUS="$(protected_api_request POST \
   /api/admin/scheduled-agent-key/projection-repair/workspace \
@@ -353,47 +384,47 @@ jq -e '
   and .document_state_version > .source_state_version
   and (.document_last_event_id | type == "string" and length > 0)
 ' "$CATALOG_INSPECT_RESPONSE" >/dev/null
-
-CATALOG_ACTOR_ID="$(jq -er '.actor_id' "$CATALOG_INSPECT_RESPONSE")"
-CATALOG_SOURCE_VERSION="$(
-  jq -er '.source_state_version' "$CATALOG_INSPECT_RESPONSE"
-)"
-CATALOG_DOCUMENT_VERSION="$(
-  jq -er '.document_state_version' "$CATALOG_INSPECT_RESPONSE"
-)"
-CATALOG_LAST_EVENT_ID="$(
-  jq -er '.document_last_event_id' "$CATALOG_INSPECT_RESPONSE"
-)"
 ```
 
 ### 2. Apply And Fresh-Refresh
 
-Use the same elevated bearer file and build the apply body from the exact
-inspection manifest:
+Use the same elevated bearer file and have `jq` build the apply body directly
+from the protected inspection response and a protected operator-control
+manifest. No incident fingerprint or production identity is placed in process
+arguments:
 
 ```bash
 CATALOG_REPAIR_REQUEST_ID="repair-alpha"
 CATALOG_REPAIR_REASON="restore the regressed personal authorization catalog replica"
+CATALOG_APPLY_CONTROL="$REPAIR_DIR/catalog-apply-control.json"
 CATALOG_APPLY_REQUEST="$REPAIR_DIR/catalog-apply-request.json"
 CATALOG_APPLY_RESPONSE="$REPAIR_DIR/catalog-apply-response.json"
 
 jq -n \
-  --arg actorId "$CATALOG_ACTOR_ID" \
-  --argjson sourceVersion "$CATALOG_SOURCE_VERSION" \
-  --argjson documentVersion "$CATALOG_DOCUMENT_VERSION" \
-  --arg lastEventId "$CATALOG_LAST_EVENT_ID" \
   --arg repairRequestId "$CATALOG_REPAIR_REQUEST_ID" \
   --arg repairReason "$CATALOG_REPAIR_REASON" '
   {
-    apply: true,
-    expected_actor_id: $actorId,
-    expected_source_state_version: $sourceVersion,
-    expected_document_state_version: $documentVersion,
-    expected_document_last_event_id: $lastEventId,
     repair_request_id: $repairRequestId,
     repair_reason: $repairReason
   }
-' > "$CATALOG_APPLY_REQUEST"
+' > "$CATALOG_APPLY_CONTROL"
+
+jq -s '
+  .[0] as $inspection
+  | .[1] as $control
+  | {
+      apply: true,
+      expected_actor_id: $inspection.actor_id,
+      expected_source_state_version: $inspection.source_state_version,
+      expected_document_state_version: $inspection.document_state_version,
+      expected_document_last_event_id: $inspection.document_last_event_id,
+      repair_request_id: $control.repair_request_id,
+      repair_reason: $control.repair_reason
+    }
+' \
+  "$CATALOG_INSPECT_RESPONSE" \
+  "$CATALOG_APPLY_CONTROL" \
+  > "$CATALOG_APPLY_REQUEST"
 
 HTTP_STATUS="$(protected_api_request POST \
   /api/admin/scheduled-agent-key/projection-repair/nyxid-catalog \
