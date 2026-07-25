@@ -18,6 +18,24 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     private static readonly DateTimeOffset EvaluatedAt = DateTimeOffset.Parse("2026-07-21T08:59:59Z");
 
     [Fact]
+    public void ConcreteRefreshPort_ShouldNotImplementRepairRefreshPort()
+    {
+        typeof(INyxIdAuthorizationCatalogRepairRefreshPort)
+            .IsAssignableFrom(typeof(NyxIdAuthorizationCatalogRefreshPort))
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public void ConcreteCommandPort_ShouldNotImplementRepairCommandPort()
+    {
+        typeof(INyxIdAuthorizationCatalogRepairCommandPort)
+            .IsAssignableFrom(typeof(NyxIdAuthorizationCatalogCommandPort))
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
     public async Task RefreshPersonalAsync_ShouldNotTreatDispatchAdmissionAsCommittedBegin()
     {
         var commands = new RecordingCommandPort();
@@ -140,14 +158,37 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
     }
 
     [Fact]
+    public async Task RefreshPersonalAsync_ShouldCaptureStartTimeBeforeLifecycleFenceQueryCompletes()
+    {
+        var commands = new RecordingCommandPort();
+        var catalog = new DelayedCatalogQueryPort(lifecycleFence: 7);
+        var clock = new FakeTimeProvider(Now);
+
+        var refresh = Create(
+                commands,
+                new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+                timeProvider: clock,
+                catalogQuery: catalog)
+            .RefreshPersonalAsync("owner-alpha", "bearer-secret");
+
+        await catalog.QueryStarted;
+        clock.Advance(TimeSpan.FromMinutes(1));
+        catalog.Complete();
+
+        var result = await refresh;
+
+        result.Success.Should().BeTrue();
+        commands.Beginnings.Should().ContainSingle()
+            .Which.At.Should().Be(Now);
+    }
+
+    [Fact]
     public async Task RepairRefreshPersonalAsync_ShouldSkipCatalogQueryAndDispatchRepairBegin()
     {
         var commands = new RecordingCommandPort();
-        var catalog = new RecordingCatalogQueryPort(lifecycleFence: 7);
-        var repairRefresh = (INyxIdAuthorizationCatalogRepairRefreshPort)Create(
+        var repairRefresh = CreateRepair(
             commands,
-            new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
-            catalogQuery: catalog);
+            new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())));
 
         var result = await repairRefresh.RefreshPersonalAsync(
             " owner-alpha ",
@@ -156,7 +197,12 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             repairRequestId: " repair-alpha ");
 
         result.Success.Should().BeTrue();
-        catalog.Owners.Should().BeEmpty();
+        typeof(NyxIdAuthorizationCatalogRepairRefreshPort)
+            .GetConstructors()
+            .SelectMany(static constructor => constructor.GetParameters())
+            .Should()
+            .NotContain(static parameter =>
+                parameter.ParameterType == typeof(INyxIdAuthorizationCatalogQueryPort));
         commands.Beginnings.Should().BeEmpty();
         var beginning = commands.RepairBeginnings.Should().ContainSingle().Subject;
         beginning.Owner.Should().BeEquivalentTo(Owner());
@@ -922,7 +968,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         bool publishCommittedOutcomes = true,
         RecordingObservationRuntime? observation = null,
         TimeProvider? timeProvider = null,
-        RecordingCatalogQueryPort? catalogQuery = null,
+        INyxIdAuthorizationCatalogQueryPort? catalogQuery = null,
         ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example") };
@@ -942,7 +988,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         bool publishCommittedOutcomes = true,
         RecordingObservationRuntime? observation = null,
         TimeProvider? timeProvider = null,
-        RecordingCatalogQueryPort? catalogQuery = null,
+        INyxIdAuthorizationCatalogQueryPort? catalogQuery = null,
         ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
     {
         observation ??= new RecordingObservationRuntime();
@@ -952,8 +998,31 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             httpClient);
         return new NyxIdAuthorizationCatalogRefreshPort(
             commands,
-            commands,
             catalogQuery ?? new RecordingCatalogQueryPort(),
+            new TestNyxIdApiClientFactory(client),
+            observation,
+            observation,
+            timeProvider ?? new FakeTimeProvider(Now),
+            logger ?? NullLogger<NyxIdAuthorizationCatalogRefreshPort>.Instance);
+    }
+
+    private static NyxIdAuthorizationCatalogRepairRefreshPort CreateRepair(
+        RecordingCommandPort commands,
+        HttpMessageHandler handler,
+        bool publishCommittedOutcomes = true,
+        RecordingObservationRuntime? observation = null,
+        TimeProvider? timeProvider = null,
+        ILogger<NyxIdAuthorizationCatalogRefreshPort>? logger = null)
+    {
+        observation ??= new RecordingObservationRuntime();
+        commands.Observation = publishCommittedOutcomes ? observation : null;
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example") };
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            httpClient);
+        return new NyxIdAuthorizationCatalogRepairRefreshPort(
+            commands,
+            commands,
             new TestNyxIdApiClientFactory(client),
             observation,
             observation,
@@ -1545,6 +1614,38 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
                     Services: [],
                     LifecycleFence: lifecycleFence.Value)
                 : null);
+        }
+    }
+
+    private sealed class DelayedCatalogQueryPort(long lifecycleFence)
+        : INyxIdAuthorizationCatalogQueryPort
+    {
+        private readonly TaskCompletionSource _queryStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task QueryStarted => _queryStarted.Task;
+
+        public void Complete() => _release.TrySetResult();
+
+        public async Task<NyxIdAuthorizationCatalogSnapshot?> GetAsync(
+            AuthorizationOwnerIdentity owner,
+            CancellationToken ct = default)
+        {
+            _queryStarted.TrySetResult();
+            await _release.Task.WaitAsync(ct);
+            return new NyxIdAuthorizationCatalogSnapshot(
+                owner.Clone(),
+                StateVersion: 19,
+                ObservedAtUtc: Now.AddMinutes(-1),
+                FreshUntilUtc: Now.AddMinutes(14),
+                ContractVersion: "1",
+                PolicyVersion: "api-key-scope-v1",
+                EvaluatedAtUtc: EvaluatedAt,
+                ContentDigest: "digest",
+                Services: [],
+                LifecycleFence: lifecycleFence);
         }
     }
 

@@ -29,6 +29,7 @@ using Aevatar.GAgentService.Core.Services;
 using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Infrastructure.Adapters;
 using Aevatar.GAgentService.Infrastructure.Dispatch;
+using Aevatar.GAgentService.Infrastructure.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Orchestration;
 using Aevatar.GAgentService.Infrastructure.Schedules;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
@@ -303,6 +304,7 @@ public static class ServiceCollectionExtensions
             services.AddElasticsearchDocumentProjectionRepairStore<
                 NyxIdAuthorizationCatalogDocument,
                 string>();
+            services.AddNyxIdAuthorizationCatalogVersionRegressionRepairPorts();
             services.TryAddSingleton<
                 INyxIdAuthorizationCatalogVersionRegressionStorePort,
                 ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStorePort>();

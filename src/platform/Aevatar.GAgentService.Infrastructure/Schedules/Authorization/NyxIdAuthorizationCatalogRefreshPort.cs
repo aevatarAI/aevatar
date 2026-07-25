@@ -6,31 +6,20 @@ using System.Runtime.ExceptionServices;
 
 namespace Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 
-public sealed class NyxIdAuthorizationCatalogRefreshPort
-    : INyxIdAuthorizationCatalogRefreshPort,
-      INyxIdAuthorizationCatalogRepairRefreshPort
+public sealed class NyxIdAuthorizationCatalogRefreshPort : INyxIdAuthorizationCatalogRefreshPort
 {
     public static readonly TimeSpan CatalogFreshnessLifetime = TimeSpan.FromMinutes(15);
     public static readonly TimeSpan CatalogObservationTimeout = TimeSpan.FromSeconds(15);
 
     private const string OrganizationOwnerNotSupportedFailureCode =
         "nyxid_catalog_organization_owner_not_supported";
-    private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
-    private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
 
-    private readonly INyxIdAuthorizationCatalogRepairCommandPort _repairCommandPort;
     private readonly INyxIdAuthorizationCatalogCommandPort _commandPort;
     private readonly INyxIdAuthorizationCatalogQueryPort _catalogQueryPort;
-    private readonly INyxIdApiClientFactory _nyxClientFactory;
-    private readonly INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort
-        _observationPreparation;
-    private readonly INyxIdAuthorizationCatalogRefreshObservationProjectionPort
-        _observationProjection;
+    private readonly NyxIdAuthorizationCatalogRefreshPipeline _pipeline;
     private readonly TimeProvider _timeProvider;
-    private readonly ILogger<NyxIdAuthorizationCatalogRefreshPort> _logger;
 
     public NyxIdAuthorizationCatalogRefreshPort(
-        INyxIdAuthorizationCatalogRepairCommandPort repairCommandPort,
         INyxIdAuthorizationCatalogCommandPort commandPort,
         INyxIdAuthorizationCatalogQueryPort catalogQueryPort,
         INyxIdApiClientFactory nyxClientFactory,
@@ -39,17 +28,16 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort
         TimeProvider timeProvider,
         ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
     {
-        _repairCommandPort = repairCommandPort ??
-                             throw new ArgumentNullException(nameof(repairCommandPort));
         _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
         _catalogQueryPort = catalogQueryPort ?? throw new ArgumentNullException(nameof(catalogQueryPort));
-        _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
-        _observationPreparation = observationPreparation ??
-                                  throw new ArgumentNullException(nameof(observationPreparation));
-        _observationProjection = observationProjection ??
-                                 throw new ArgumentNullException(nameof(observationProjection));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _pipeline = new NyxIdAuthorizationCatalogRefreshPipeline(
+            _commandPort,
+            nyxClientFactory,
+            observationPreparation,
+            observationProjection,
+            _timeProvider,
+            logger);
     }
 
     public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
@@ -59,39 +47,6 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(verifiedOwnerSubject);
         return RefreshAsync(PersonalOwner(verifiedOwnerSubject), bearerToken, ct);
-    }
-
-    public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
-        string verifiedOwnerSubject,
-        string bearerToken,
-        long minimumSourceStateVersion,
-        string repairRequestId,
-        CancellationToken ct = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(verifiedOwnerSubject);
-        ArgumentException.ThrowIfNullOrWhiteSpace(bearerToken);
-        if (minimumSourceStateVersion <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(minimumSourceStateVersion),
-                "Minimum source state version must be positive.");
-        }
-
-        ArgumentException.ThrowIfNullOrWhiteSpace(repairRequestId);
-        var normalizedOwner = PersonalOwner(verifiedOwnerSubject);
-        var normalizedRepairRequestId = repairRequestId.Trim();
-        return RefreshCoreAsync(
-            normalizedOwner,
-            bearerToken,
-            (refreshId, startedAt, dispatchCancellation) =>
-                _repairCommandPort.BeginRepairRefreshAsync(
-                    normalizedOwner,
-                    refreshId,
-                    startedAt,
-                    minimumSourceStateVersion,
-                    normalizedRepairRequestId,
-                    dispatchCancellation),
-            ct);
     }
 
     public async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
@@ -120,11 +75,15 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort
         var normalizedOwner = owner.Clone();
         normalizedOwner.Authority = NyxIdAuthorizationAuthorities.NyxId;
         normalizedOwner.OwnerSubject = owner.OwnerSubject.Trim();
+        var refreshId = Guid.NewGuid().ToString("N");
+        var startedAt = _timeProvider.GetUtcNow();
         var catalog = await _catalogQueryPort.GetAsync(normalizedOwner, ct).ConfigureAwait(false);
         var expectedLifecycleFence = catalog?.LifecycleFence ?? 0;
-        return await RefreshCoreAsync(
+        return await _pipeline.RefreshAsync(
                 normalizedOwner,
                 bearerToken,
+                refreshId,
+                startedAt,
                 (refreshId, startedAt, dispatchCancellation) =>
                     _commandPort.BeginRefreshAsync(
                         normalizedOwner,
@@ -136,14 +95,59 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort
             .ConfigureAwait(false);
     }
 
-    private async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshCoreAsync(
+    private static AuthorizationOwnerIdentity PersonalOwner(string verifiedOwnerSubject) => new()
+    {
+        Authority = NyxIdAuthorizationAuthorities.NyxId,
+        OwnerKind = AuthorizationOwnerKind.Personal,
+        OwnerSubject = verifiedOwnerSubject.Trim(),
+    };
+}
+
+internal sealed class NyxIdAuthorizationCatalogRefreshPipeline
+{
+    private static readonly TimeSpan CatalogFreshnessLifetime =
+        NyxIdAuthorizationCatalogRefreshPort.CatalogFreshnessLifetime;
+    private static readonly TimeSpan CatalogObservationTimeout =
+        NyxIdAuthorizationCatalogRefreshPort.CatalogObservationTimeout;
+
+    private const string CatalogMismatchFailureCode = "nyxid_scope_plan_catalog_mismatch";
+    private const string ProviderTimedOutFailureCode = "nyxid_catalog_refresh_provider_timed_out";
+
+    private readonly INyxIdAuthorizationCatalogCommandPort _commandPort;
+    private readonly INyxIdApiClientFactory _nyxClientFactory;
+    private readonly INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort
+        _observationPreparation;
+    private readonly INyxIdAuthorizationCatalogRefreshObservationProjectionPort
+        _observationProjection;
+    private readonly TimeProvider _timeProvider;
+    private readonly ILogger<NyxIdAuthorizationCatalogRefreshPort> _logger;
+
+    public NyxIdAuthorizationCatalogRefreshPipeline(
+        INyxIdAuthorizationCatalogCommandPort commandPort,
+        INyxIdApiClientFactory nyxClientFactory,
+        INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort observationPreparation,
+        INyxIdAuthorizationCatalogRefreshObservationProjectionPort observationProjection,
+        TimeProvider timeProvider,
+        ILogger<NyxIdAuthorizationCatalogRefreshPort> logger)
+    {
+        _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
+        _nyxClientFactory = nyxClientFactory ?? throw new ArgumentNullException(nameof(nyxClientFactory));
+        _observationPreparation = observationPreparation ??
+                                  throw new ArgumentNullException(nameof(observationPreparation));
+        _observationProjection = observationProjection ??
+                                 throw new ArgumentNullException(nameof(observationProjection));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    public async Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
         AuthorizationOwnerIdentity normalizedOwner,
         string bearerToken,
+        string refreshId,
+        DateTimeOffset startedAt,
         Func<string, DateTimeOffset, CancellationToken, Task> beginRefresh,
         CancellationToken ct)
     {
-        var refreshId = Guid.NewGuid().ToString("N");
-        var startedAt = _timeProvider.GetUtcNow();
         var actorId = NyxIdAuthorizationCatalogActorIds.Build(normalizedOwner);
         NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparation? preparation = null;
         EventSinkProjectionAttachment<INyxIdAuthorizationCatalogRefreshObservationProjectionLease>?
@@ -209,13 +213,6 @@ public sealed class NyxIdAuthorizationCatalogRefreshPort
 
         return result ?? throw new InvalidOperationException("nyxid_catalog_refresh_result_missing");
     }
-
-    private static AuthorizationOwnerIdentity PersonalOwner(string verifiedOwnerSubject) => new()
-    {
-        Authority = NyxIdAuthorizationAuthorities.NyxId,
-        OwnerKind = AuthorizationOwnerKind.Personal,
-        OwnerSubject = verifiedOwnerSubject.Trim(),
-    };
 
     private async Task<NyxIdAuthorizationCatalogRefreshResult> RunProviderWhileObservingAsync(
         AuthorizationOwnerIdentity normalizedOwner,

@@ -287,7 +287,6 @@ public sealed class NyxIdAuthorizationCatalogRefreshObservationInfrastructureTes
         };
         var refreshPort = new NyxIdAuthorizationCatalogRefreshPort(
             commandPort,
-            commandPort,
             new EmptyCatalogQueryPort(),
             new TestNyxIdApiClientFactory(new NyxIdApiClient(
                 new NyxIdToolOptions { BaseUrl = "https://nyx.example" },

@@ -5,11 +5,8 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 
-public sealed class NyxIdAuthorizationCatalogCommandPort
-    : INyxIdAuthorizationCatalogCommandPort,
-      INyxIdAuthorizationCatalogRepairCommandPort
+public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCatalogCommandPort
 {
-    private const string PublisherId = "gagent-service.nyxid-authorization-catalog";
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
 
@@ -31,22 +28,6 @@ public sealed class NyxIdAuthorizationCatalogCommandPort
             RefreshId = refreshId ?? string.Empty,
             StartedAt = Timestamp.FromDateTimeOffset(startedAtUtc),
             ExpectedLifecycleFence = expectedLifecycleFence,
-        }, ct);
-
-    public Task BeginRepairRefreshAsync(
-        AuthorizationOwnerIdentity owner,
-        string refreshId,
-        DateTimeOffset startedAtUtc,
-        long minimumSourceStateVersion,
-        string repairRequestId,
-        CancellationToken ct = default) =>
-        DispatchAsync(owner, new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
-        {
-            Owner = owner.Clone(),
-            RefreshId = refreshId ?? string.Empty,
-            StartedAt = Timestamp.FromDateTimeOffset(startedAtUtc),
-            MinimumSourceStateVersion = minimumSourceStateVersion,
-            RepairRequestId = repairRequestId ?? string.Empty,
         }, ct);
 
     public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default)
@@ -140,23 +121,13 @@ public sealed class NyxIdAuthorizationCatalogCommandPort
     private async Task DispatchAsync(
         AuthorizationOwnerIdentity owner,
         Google.Protobuf.IMessage command,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(owner);
-        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
-        var actor = await _runtime.GetAsync(actorId) ??
-                    await _runtime.CreateAsync<NyxIdAuthorizationCatalogGAgent>(actorId, ct);
-        var commandId = Guid.NewGuid().ToString("N");
-        var envelope = new EventEnvelope
-        {
-            Id = commandId,
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, actor.Id),
-            Propagation = new EnvelopePropagation { CorrelationId = commandId },
-        };
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
-    }
+        CancellationToken ct) =>
+        await NyxIdAuthorizationCatalogCommandDispatch.DispatchAsync(
+            _runtime,
+            _dispatchPort,
+            owner,
+            command,
+            ct);
 
     private static NyxIdAuthorizationCatalogRefreshOutcomeStatusState ToOutcomeStatusState(
         NyxIdAuthorizationCatalogRefreshOutcomeStatus status) => status switch
@@ -170,4 +141,32 @@ public sealed class NyxIdAuthorizationCatalogCommandPort
             status,
             "Catalog refresh invalidation requires an access-denied or unstable outcome."),
     };
+}
+
+internal static class NyxIdAuthorizationCatalogCommandDispatch
+{
+    private const string PublisherId = "gagent-service.nyxid-authorization-catalog";
+
+    public static async Task DispatchAsync(
+        IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
+        AuthorizationOwnerIdentity owner,
+        Google.Protobuf.IMessage command,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
+        var actor = await runtime.GetAsync(actorId) ??
+                    await runtime.CreateAsync<NyxIdAuthorizationCatalogGAgent>(actorId, ct);
+        var commandId = Guid.NewGuid().ToString("N");
+        var envelope = new EventEnvelope
+        {
+            Id = commandId,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(command),
+            Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, actor.Id),
+            Propagation = new EnvelopePropagation { CorrelationId = commandId },
+        };
+        await dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+    }
 }

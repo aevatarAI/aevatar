@@ -38,13 +38,7 @@ public static class NyxIdAuthorizationCatalogHostingServiceCollectionExtensions
         services.AddGAgentServiceProjectionReadModelProviders(configuration);
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<INyxIdAuthorizationCatalogCommandPort, NyxIdAuthorizationCatalogCommandPort>();
-        services.TryAddSingleton<
-            INyxIdAuthorizationCatalogRepairCommandPort,
-            NyxIdAuthorizationCatalogCommandPort>();
         services.TryAddSingleton<INyxIdAuthorizationCatalogRefreshPort, NyxIdAuthorizationCatalogRefreshPort>();
-        services.TryAddSingleton<
-            INyxIdAuthorizationCatalogRepairRefreshPort,
-            NyxIdAuthorizationCatalogRefreshPort>();
         services.TryAddTransient<NyxIdAuthorizationCatalogGAgent>();
         services.AddSingleton<NyxIdAuthorizationCatalogHostingRegistrationsMarker>();
         return services;
