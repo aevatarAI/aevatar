@@ -16,6 +16,10 @@ Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner ima
 
 Before enabling Aevatar, operations must confirm:
 
+- the NyxID UserService that fronts Aevatar temporarily uses
+  `forward_access_token=true` for the internal P0; it may also inject a
+  delegation token, and Aevatar selects the forwarded bearer for transparent
+  current-user readiness
 - the `chrono-sandbox` service is deployed and exposes `POST /codex/execute`
 - its NyxID service definition is active with `forward_access_token=false`
 - `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
@@ -30,15 +34,23 @@ Before enabling Aevatar, operations must confirm:
 
 The runner image itself must contain no provider, NyxID, OpenSandbox control-plane, or user credential. The P0 delegation token must not be written to a shell wrapper, profile, workspace, persisted session, logs, or result. Aevatar no longer needs an OpenSandbox endpoint or API key.
 
-The internal P0 relies on mutable NyxID UserService policy. Aevatar validates
-`forward_access_token=false` and exact `proxy:*` delegation during first-use
+The internal P0 uses two distinct NyxID UserService policies. The UserService
+fronting Aevatar temporarily forwards the interactive access token so the same
+workflow call can confirm `/users/me` and create or repair the user's Agent
+Key. The user's `chrono-sandbox` UserService must instead keep
+`forward_access_token=false`, `inject_delegation_token=true`, and exact
+`proxy:*` delegation; Aevatar validates that chrono policy during first-use
 readiness, explicit provisioning, and rotation, but cannot prevent the service
-owner from changing it later. The five-minute token can access other NyxID
-REST proxy services available to the same user, so keep the rollout restricted
-to trusted internal users and operators. Do not use `All` beyond that internal
-population until #2899 adds immutable/version-bound caller-credential
-non-forwarding and NyxID replaces `proxy:*` with authorization limited to
-`chrono-llm-public`.
+owner from changing it later.
+
+The five-minute runner token can access other NyxID REST proxy services
+available to the same user, and Aevatar ingress temporarily handles the
+forwarded interactive bearer, so keep the rollout restricted to trusted
+internal users and operators. Do not use `All` beyond that internal population
+until #2899 adds immutable/version-bound caller-credential non-forwarding,
+NyxID replaces `proxy:*` with authorization limited to `chrono-llm-public`,
+and transparent readiness no longer depends on forwarding the interactive
+bearer.
 
 ## Configure Aevatar
 
