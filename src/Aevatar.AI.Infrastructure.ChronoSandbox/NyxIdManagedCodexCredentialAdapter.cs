@@ -93,6 +93,29 @@ internal sealed class NyxIdManagedCodexCredentialAdapter(
         return ParseIssued(response, request.Platform);
     }
 
+    public async Task UpdateApiKeyPolicyAsync(
+        string bearerToken,
+        string apiKeyId,
+        ManagedCodexNyxIdApiKeyPolicyUpdateRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var response = await Client.UpdateApiKeyAsync(
+            bearerToken,
+            apiKeyId,
+            JsonSerializer.Serialize(new
+            {
+                scopes = request.Scopes,
+                platform = request.Platform,
+                allow_all_services = request.AllowAllServices,
+                allowed_service_ids = request.AllowedServiceIds,
+                allow_all_nodes = request.AllowAllNodes,
+                allowed_node_ids = request.AllowedNodeIds,
+            }, RequestJsonOptions),
+            ct).ConfigureAwait(false);
+        using var _ = ParseObject(response, "managed_api_key_update_invalid");
+    }
+
     public async Task<ManagedCodexNyxIdIssuedApiKey> RotateApiKeyAsync(
         string bearerToken,
         string apiKeyId,

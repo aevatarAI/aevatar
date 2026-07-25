@@ -16,28 +16,84 @@ internal sealed class ManagedCodexCredentialCommandPort(
 
     public Task<DispatchAdmission> CommitProvisionedAsync(
         ManagedCodexCredentialDescriptor credential,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(credential);
-        return DispatchAsync(
-            credential.Owner,
-            new CommitManagedCodexCredentialProvisionedCommand { Credential = credential.Clone() },
-            ct);
+        ArgumentNullException.ThrowIfNull(obsoleteCredentialCleanups);
+        var command = new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = credential.Clone(),
+        };
+        command.ObsoleteCredentialCleanups.Add(
+            obsoleteCredentialCleanups.Select(static cleanup => cleanup.Clone()));
+        return DispatchAsync(credential.Owner, command, ct);
     }
 
     public Task<DispatchAdmission> CommitRotatedAsync(
         string expectedPreviousApiKeyId,
         ManagedCodexCredentialDescriptor credential,
+        ManagedCodexCredentialCleanup previousCredentialCleanup,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedPreviousApiKeyId);
         ArgumentNullException.ThrowIfNull(credential);
+        ArgumentNullException.ThrowIfNull(previousCredentialCleanup);
+        ArgumentNullException.ThrowIfNull(obsoleteCredentialCleanups);
+        var command = new CommitManagedCodexCredentialRotatedCommand
+        {
+            ExpectedPreviousApiKeyId = expectedPreviousApiKeyId.Trim(),
+            Credential = credential.Clone(),
+            PreviousCredentialCleanup = previousCredentialCleanup.Clone(),
+        };
+        command.ObsoleteCredentialCleanups.Add(
+            obsoleteCredentialCleanups.Select(static cleanup => cleanup.Clone()));
+        return DispatchAsync(credential.Owner, command, ct);
+    }
+
+    public Task<DispatchAdmission> CommitPolicyReconciledAsync(
+        string expectedApiKeyId,
+        ManagedCodexCredentialDescriptor credential,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedApiKeyId);
+        ArgumentNullException.ThrowIfNull(credential);
+        ArgumentNullException.ThrowIfNull(obsoleteCredentialCleanups);
+        var command = new CommitManagedCodexCredentialPolicyReconciledCommand
+        {
+            ExpectedApiKeyId = expectedApiKeyId.Trim(),
+            Credential = credential.Clone(),
+        };
+        command.ObsoleteCredentialCleanups.Add(
+            obsoleteCredentialCleanups.Select(static cleanup => cleanup.Clone()));
+        return DispatchAsync(credential.Owner, command, ct);
+    }
+
+    public Task<DispatchAdmission> ConfirmReadinessAsync(
+        ExternalSubjectRef owner,
+        ManagedCodexCredentialDescriptor expectedCredential,
+        ManagedCodexCredentialReadinessEvidence readinessEvidence,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        ArgumentNullException.ThrowIfNull(expectedCredential);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedCredential.ApiKeyId);
+        if (readinessEvidence is not
+            (ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed or
+             ManagedCodexCredentialReadinessEvidence.RemoteValidated))
+        {
+            throw new ArgumentOutOfRangeException(nameof(readinessEvidence));
+        }
         return DispatchAsync(
-            credential.Owner,
-            new CommitManagedCodexCredentialRotatedCommand
+            owner,
+            new ConfirmManagedCodexCredentialReadinessCommand
             {
-                ExpectedPreviousApiKeyId = expectedPreviousApiKeyId.Trim(),
-                Credential = credential.Clone(),
+                Owner = owner.Clone(),
+                ExpectedApiKeyId = expectedCredential.ApiKeyId.Trim(),
+                ExpectedCredential = expectedCredential.Clone(),
+                ReadinessEvidence = readinessEvidence,
             },
             ct);
     }
@@ -82,19 +138,24 @@ internal sealed class ManagedCodexCredentialCommandPort(
     public Task<DispatchAdmission> CompleteCleanupTrackAsync(
         ExternalSubjectRef owner,
         string apiKeyId,
+        string secretRef,
         ManagedCodexCredentialCleanupTrack track,
         DateTimeOffset completedAt,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKeyId);
+        ArgumentNullException.ThrowIfNull(secretRef);
         if (track == ManagedCodexCredentialCleanupTrack.Unspecified)
             throw new ArgumentOutOfRangeException(nameof(track));
+        if (track == ManagedCodexCredentialCleanupTrack.Vault)
+            ArgumentException.ThrowIfNullOrWhiteSpace(secretRef);
         return DispatchAsync(
             owner,
             new CompleteManagedCodexCredentialCleanupTrackCommand
             {
                 Owner = owner.Clone(),
                 ApiKeyId = apiKeyId.Trim(),
+                SecretRef = secretRef.Trim(),
                 Track = track,
                 CompletedAt = Timestamp.FromDateTimeOffset(completedAt.ToUniversalTime()),
             },

@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Application.CodexExecution.DependencyInjection;
 using Microsoft.Extensions.Configuration;
@@ -31,10 +30,9 @@ public static class ServiceCollectionExtensions
                 IManagedCodexCredentialMutationLease,
                 GarnetManagedCodexCredentialMutationLease>();
         }
-        services.TryAddSingleton<IChronoSandboxCodexClient, NyxIdChronoSandboxCodexClient>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<
-            ICodexExecutionPort,
-            ChronoSandboxCodexExecutionAdapter>());
+        services.TryAddSingleton<
+            IManagedCodexChronoTransport,
+            NyxIdManagedCodexChronoTransport>();
         return services;
     }
 }

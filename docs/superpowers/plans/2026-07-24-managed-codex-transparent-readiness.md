@@ -322,11 +322,18 @@ message ManagedCodexCredentialDescriptor {
   string chrono_llm_user_service_id = 8;
 }
 
+enum ManagedCodexCredentialReadinessEvidence {
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_UNSPECIFIED = 0;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_CURRENT_STATE_CONFIRMED = 1;
+  MANAGED_CODEX_CREDENTIAL_READINESS_EVIDENCE_REMOTE_VALIDATED = 2;
+}
+
 message ManagedCodexCredentialSnapshot {
   ManagedCodexCredentialDescriptor credential = 1;
   repeated ManagedCodexCredentialCleanup pending_revocations = 2;
   int64 state_version = 3;
   string last_event_id = 4;
+  ManagedCodexCredentialReadinessEvidence readiness_evidence = 5;
 }
 ```
 
@@ -342,6 +349,13 @@ message CommitManagedCodexCredentialPolicyReconciledCommand {
   aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialDescriptor credential = 2;
 }
 
+message ConfirmManagedCodexCredentialReadinessCommand {
+  aevatar.gagents.channel.abstractions.ExternalSubjectRef owner = 1;
+  string expected_api_key_id = 2;
+  aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialReadinessEvidence readiness_evidence = 3;
+  aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialDescriptor expected_credential = 4;
+}
+
 message ManagedCodexCredentialPolicyReconciledEvent {
   string api_key_id = 1;
   aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialDescriptor credential = 2;
@@ -350,12 +364,18 @@ message ManagedCodexCredentialPolicyReconciledEvent {
 message ManagedCodexCredentialReadinessConfirmedEvent {
   string api_key_id = 1;
   google.protobuf.Timestamp verified_at = 2;
+  aevatar.gagents.channel.identity.abstractions.ManagedCodexCredentialReadinessEvidence readiness_evidence = 3;
 }
 ```
 
 The readiness-confirmed event is emitted when an idempotent duplicate command
-matches current authoritative state, ensuring a newly attached observation can
-receive a committed snapshot instead of timing out on a silent no-op.
+matches current authoritative state or the Application explicitly confirms
+fresh remote validation. This ensures a newly attached observation can receive
+typed committed evidence instead of timing out on a silent no-op.
+
+Explicit confirmation must match the complete `expected_credential`, including
+the exact typed Vault reference. `expected_api_key_id` remains a narrow
+correlation field but is insufficient by itself to authorize readiness.
 
 - [ ] **Step 4: Implement Actor transitions and validation**
 
@@ -404,6 +424,8 @@ public async Task HandlePolicyReconciled(
         {
             ApiKeyId = current.ApiKeyId,
             VerifiedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            ReadinessEvidence =
+                ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
         });
         return;
     }
@@ -417,7 +439,9 @@ public async Task HandlePolicyReconciled(
 ```
 
 When duplicate provision/rotation commands exactly equal current state, emit
-the same readiness-confirmed event instead of returning silently.
+the same structural readiness-confirmed event instead of returning silently.
+Duplicate Actor turns never claim `RemoteValidated`; only the explicit typed
+confirmation command may carry fresh Application validation evidence.
 
 Update every existing `Descriptor(...)` fixture in managed Codex Actor,
 projection, endpoint, lifecycle, and transport tests to set a distinct
@@ -631,6 +655,7 @@ var snapshot = new ManagedCodexCredentialSnapshot
     Credential = state.Credential.Clone(),
     StateVersion = stateEvent.Version,
     LastEventId = stateEvent.EventId ?? string.Empty,
+    ReadinessEvidence = ResolveReadinessEvidence(stateEvent.EventData),
 };
 snapshot.PendingRevocations.Add(
     state.PendingRevocations.Select(static item => item.Clone()));
@@ -1040,6 +1065,29 @@ git commit -m "Repair managed Codex dual-service key policy"
 - Produces: `IManagedCodexCredentialLifecycle.EnsureReadyAsync`.
 - Consumes: Task 3 observation port and Task 4 dual-service NyxID policy.
 
+Review hardening also extends the existing typed Identity contracts and Actor:
+
+- `ManagedCodexCredentialReadinessEvidence` distinguishes structural
+  confirmation from fresh remote validation;
+- the snapshot, readiness confirmation command, and readiness confirmation
+  event carry that enum;
+- duplicate provision/rotation/policy commands emit
+  `CurrentStateConfirmed`;
+- Application repair paths explicitly confirm `RemoteValidated`.
+- rotation commands and events carry typed `previous_credential_cleanup`, so
+  the Actor commits the replacement descriptor and exact prior-key/prior-Vault
+  cleanup fact atomically;
+- provision, rotation, and policy reconciliation commands/events carry typed
+  `obsolete_credential_cleanups`, so no remotely observed key or Vault locator
+  is deleted before the incoming credential commit;
+- cleanup completion carries the exact `secret_ref`; the Actor keeps
+  same-key/different-locator facts separate, assigns one NyxID owner per key,
+  and preserves one Vault track per exact locator;
+- generic cleanup commands are rejected when a pending track targets the
+  active API key or active Vault locator, and incoming credentials targeted by
+  pending cleanup are rejected across provision, rotation, policy
+  reconciliation, and readiness confirmation.
+
 - [ ] **Step 1: Write failing same-call readiness tests**
 
 Create `ManagedCodexCredentialReadinessTests` with these dependencies:
@@ -1388,11 +1436,13 @@ Wait without polling:
 private async Task<ManagedCodexCredentialDescriptor> WaitForReadyAsync(
     IManagedCodexCredentialReadinessObservationLease observation,
     ExternalSubjectRef owner,
+    ManagedCodexCredentialReadinessMode mode,
     CancellationToken ct)
 {
     await foreach (var snapshot in observation.ReadAllAsync(ct).ConfigureAwait(false))
     {
-        if (IsReady(snapshot.Credential, owner, _timeProvider.GetUtcNow()))
+        if (HasSufficientReadinessEvidence(snapshot.ReadinessEvidence, mode) &&
+            IsReady(snapshot.Credential, owner, _timeProvider.GetUtcNow()))
             return snapshot.Credential.Clone();
     }
 
@@ -1408,44 +1458,91 @@ same stable timeout code.
 - [ ] **Step 5: Serialize mutation and make busy callers wait**
 
 After binding and re-reading, attempt the distributed lease before requiring a
-bearer. A concurrent invocation that does not own the mutation can therefore
-wait for the committed result without needing its own bearer:
+bearer. A concurrent invocation that does not own the mutation first waits for
+typed committed evidence:
 
 ```csharp
-await using var lease = await _mutationLease.TryAcquireAsync(
+var lease = await _mutationLease.TryAcquireAsync(
     ManagedCodexCredentialActorIdentity.From(owner),
     ct).ConfigureAwait(false);
 if (lease is null)
 {
-    using var timeout = new CancellationTokenSource(
-        TimeSpan.FromSeconds(_options.MutationCompletionSeconds),
-        _timeProvider);
-    using var wait = CancellationTokenSource.CreateLinkedTokenSource(
-        ct,
-        timeout.Token);
-    return await WaitForReadyAsync(observation, owner, wait.Token);
+    var outcome = await WaitForConcurrentReadinessAsync(
+        observation,
+        owner,
+        projected,
+        bearerToken,
+        mode,
+        boundedWaitToken);
+    if (outcome is ConcurrentCredentialCommitted committed)
+        return committed.Credential;
+
+    var acquired = (ConcurrentMutationLeaseAcquired)outcome;
+    lease = acquired.Lease;
+    reacquisitionTrigger = acquired.Trigger;
 }
 
-if (string.IsNullOrWhiteSpace(bearerToken))
-{
-    throw Failure(
-        "managed_user_authorization_unavailable",
-        "Managed Codex credential creation or repair requires the current user's authorization.");
-}
-
-await VerifyBearerOwnerAsync(bearerToken, owner.ExternalUserId, ct);
+return await EnsureReadyAsLeaseOwnerAsync(
+    observation,
+    owner,
+    bearerToken,
+    mode,
+    lease,
+    reacquisitionTrigger,
+    outcomeDeadline,
+    boundedPreMutationToken,
+    ct);
 ```
 
-The lease holder must re-read the projection once more before mutating, because
-another committed operation may have completed immediately before lease
-acquisition.
+`WaitForConcurrentReadinessAsync` returns one of two typed outcomes:
 
-The busy-call wait links caller cancellation with the configured readiness
-timeout. The lease holder validates bearer ownership with the request token,
-then creates the existing independent bounded mutation-completion token
-immediately before the first irreversible NyxID/Vault mutation. That token
-carries commit or compensation to a recorded outcome even if the caller later
-disconnects.
+```text
+ConcurrentCredentialCommitted(credential)
+ConcurrentMutationLeaseAcquired(lease, triggeringSnapshot)
+```
+
+Normal mode accepts either `CurrentStateConfirmed` or `RemoteValidated`.
+Force mode accepts only `RemoteValidated`. A Force waiter that observes
+`CurrentStateConfirmed`:
+
+1. attempts the distributed lease exactly once, whether or not it has a bearer;
+2. when the lease is still busy, continues waiting only for sufficient
+   committed evidence and never retries the lease;
+3. when the lease is acquired without a bearer, disposes it and fails
+   `managed_user_authorization_unavailable`;
+4. when the lease is acquired with a bearer, returns the typed lease outcome.
+
+The lease holder re-reads the projection once more before remote work, because
+another committed operation may have completed immediately before acquisition.
+For reacquisition, it selects the re-read only when its authoritative
+`StateVersion` is at least the triggering committed snapshot's version;
+otherwise the triggering snapshot is the fallback. It then requires and
+verifies the bearer owner.
+
+Create one absolute outcome deadline immediately before every distributed lease
+acquisition attempt. The initial attempt and the Force caller's one
+reacquisition attempt therefore have separate anchors, and delayed acquisition
+cannot extend work beyond the fixed Garnet TTL. `MutationCompletionSeconds`
+bounds primary work. The lease configuration must additionally reserve ten
+seconds for compensation, ten seconds for durable Actor recording, and ten
+seconds of lease-safety margin, so
+`MutationLeaseSeconds >= MutationCompletionSeconds + 30`.
+
+Before irreversible mutation, derive a token bounded by both caller cancellation
+and the primary deadline. After mutation begins, compensation and cleanup
+recording use their later reserved absolute boundaries; no phase receives a
+fresh full-duration timeout. The same pre-acquisition anchor and phased
+boundaries apply to the explicit Provision, Rotate, and Revoke APIs, including
+ambiguous-dispatch reconciliation and compensation, while their accepted-only
+receipt semantics remain unchanged.
+
+A Normal owner that only retries obsolete cleanup releases the mutation lease
+before dispatching `CurrentStateConfirmed`. Its cleanup attempt reserves the
+last ten seconds of the shared deadline for that structural dispatch and
+observation. Internal cleanup timeout is best effort and leaves cleanup pending;
+caller cancellation observed before irreversible cleanup still propagates. The
+committed structural event is the event-driven handoff that permits a waiting
+Force caller's one acquisition attempt.
 
 - [ ] **Step 6: Implement deterministic repair selection**
 
@@ -1458,10 +1555,55 @@ Under the lease:
 4. adopt one unambiguous recoverable remote key when projection is absent;
 5. update a recoverable single-service key in place;
 6. replace expired, revoked, missing-secret, or irreconcilable credentials;
-7. when multiple reserved keys are ambiguous, revoke each through existing
-   compensation tracking and issue one fresh key;
-8. dispatch provision, rotation, or policy reconciliation;
-9. return only `WaitForReadyAsync(...)`.
+7. for every remotely observed obsolete reserved key, derive its deterministic
+   Vault reference and carry a typed cleanup intent in the provision, rotation,
+   or policy-reconciliation command; do not delete any observed key or locator
+   before the exact incoming credential is committed; manual provision/rotation
+   reconciliation candidates that fail validation or deterministic Vault
+   resolution follow this same atomic path rather than issuance compensation;
+   an active reserved entry without a stable nonblank key ID fails closed before
+   any mutation because no exact cleanup identity can be constructed; every
+   active-key list or relist repeats this validation, including post-issuance
+   confirmation and policy reconciliation; only the exact stable nonblank ID
+   returned by the local create or rotate may enter issuance compensation;
+   every bearer-authorized Actor-owned cleanup retry and explicit revoke
+   performs the same read-only preflight, while post-commit best-effort cleanup
+   skips mutation and preserves committed readiness when that preflight fails;
+8. dispatch provision or policy reconciliation directly; when rotating,
+   include the exact previous API-key ID, previous Vault locator, and
+   independent pending-track flags as typed `previous_credential_cleanup`; the
+   Actor rejects a mismatch and commits the new descriptor plus prior cleanup
+   atomically;
+9. explicitly dispatch `ConfirmReadiness(RemoteValidated)` for the expected
+   complete active descriptor after remote validation, including duplicate/no-op
+   command cases;
+10. after an exactly matching provision, rotation, or reconciliation descriptor
+    is observed committed, retry only the Actor-owned cleanup tracks
+    best-effort and complete each successful track by exact
+    `(ApiKeyId, SecretRef)` identity; normalize same-key/different-locator
+    facts so the exact previous Actor cleanup owns the single NyxID track during
+    rotation, otherwise the stable sorted locator owns it, while every locator
+    retains its independent Vault track; timeout or rejected completion never
+    suppresses the committed ready credential in Normal or Force mode;
+11. map Vault `Unauthorized`, `AuthenticationFailed`, `KeyringMismatch`, and
+    `UnsupportedAlgorithm` to `managed_credential_vault_unavailable` without
+    revoking, creating, or updating NyxID keys;
+12. when the same API key and deterministic Vault locator resolve to newer
+    reference metadata than the committed descriptor, select replacement and
+    complete readiness in the same call rather than certifying the stale
+    descriptor or timing out;
+13. return only `WaitForReadyAsync(...)` after sufficient committed evidence
+    for the exact expected descriptor.
+
+Every cleanup-recording result is checked. If compensation or cancellation
+produces an outcome that cannot be admitted to the Actor with the live
+recording reserve, return `managed_credential_persistence_pending`. Manual
+pending-cleanup calls use the caller-linked pre-mutation token at the actual
+external boundary. Manual revoke catches compensation expiry, leaves unknown
+or unattempted tracks pending, and commits them with the independent recording
+reserve. Cancellation, exception, or rejected admission from that
+post-destruction revoked-state recording also returns
+`managed_credential_persistence_pending`.
 
 Change pending cleanup handling to return a result instead of always throwing:
 
@@ -1947,6 +2089,7 @@ The runbook configuration becomes:
 
 ```text
 Aevatar__CodexExecution__ManagedSandbox__Enabled=true
+Aevatar__CodexExecution__ManagedSandbox__RolloutBoundary=InternalOnly
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=Allowlist
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__AllowedNyxIdUserIds__0=example-nyxid-user-id
 ```
@@ -1956,6 +2099,9 @@ For all ready internal users:
 ```text
 Aevatar__CodexExecution__ManagedSandbox__Eligibility__Mode=All
 ```
+
+The enabled configuration remains internal-only until the delegated
+authorization boundary no longer uses `proxy:*`.
 
 Remove manual POST-and-poll provisioning from the normal canary sequence.
 Canary proof starts directly with the public workflow and verifies that the
