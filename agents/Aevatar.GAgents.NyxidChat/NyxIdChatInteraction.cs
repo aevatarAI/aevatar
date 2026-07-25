@@ -44,6 +44,21 @@ public sealed record NyxIdApprovalCommand(
     public IReadOnlyDictionary<string, string>? Headers => null;
 }
 
+public sealed record NyxIdActionContinuationCommand(
+    string ActorId,
+    string ScopeId,
+    string OriginTurnId,
+    string ContinuationTurnId,
+    string OwnerSubject,
+    string ClientRequestId,
+    IReadOnlyList<NyxIdChatActionReport> Actions,
+    string? CommandId = null,
+    string? CorrelationId = null)
+    : ICommandContextSeed
+{
+    public IReadOnlyDictionary<string, string>? Headers => null;
+}
+
 // Refactor (iter21/cluster-002-request-path-projection-session-priming):
 //   Old pattern: streaming endpoints implied completion from local live-sink progress.
 //   New principle: accepted receipts expose only dispatch identity; completion is observed separately.
@@ -377,6 +392,46 @@ internal sealed class NyxIdApprovalCommandEnvelopeFactory : ICommandEnvelopeFact
     }
 }
 
+internal sealed class NyxIdActionContinuationCommandEnvelopeFactory
+    : ICommandEnvelopeFactory<NyxIdActionContinuationCommand>
+{
+    public EventEnvelope CreateEnvelope(
+        NyxIdActionContinuationCommand command,
+        CommandContext context)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var message = new NyxIdChatActionContinueCommand
+        {
+            ScopeId = command.ScopeId,
+            ConversationActorId = command.ActorId,
+            OriginTurnId = command.OriginTurnId,
+            ContinuationTurnId = command.ContinuationTurnId,
+            OwnerSubject = command.OwnerSubject,
+            ClientRequestId = command.ClientRequestId,
+            CommandId = context.CommandId,
+            CorrelationId = context.CorrelationId,
+        };
+        message.Actions.Add(command.Actions.Select(static action => action.Clone()));
+
+        return new EventEnvelope
+        {
+            Id = context.CommandId,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(message),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = context.TargetId },
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = context.CorrelationId,
+            },
+        };
+    }
+}
+
 internal sealed class NyxIdChatAcceptedReceiptFactory
     : ICommandReceiptFactory<NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt>
 {
@@ -475,6 +530,13 @@ internal static class NyxIdChatInteractionFactories
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
             static command => command.ActorId);
 
+    public static ICommandTargetResolver<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatStartError> CreateActionContinuationResolver(
+        IServiceProvider sp) =>
+        new NyxIdChatCommandTargetResolver<NyxIdActionContinuationCommand>(
+            sp.GetRequiredService<IActorRuntime>(),
+            sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
+            static command => command.ActorId);
+
     public static ICommandObservationLifecycle<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError> CreateChatObservationLifecycle(
         IServiceProvider sp) =>
         new NyxIdChatObservationLifecycle<NyxIdChatCommand>(
@@ -486,4 +548,10 @@ internal static class NyxIdChatInteractionFactories
         new NyxIdChatObservationLifecycle<NyxIdApprovalCommand>(
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
             static command => command.TurnId);
+
+    public static ICommandObservationLifecycle<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError> CreateActionContinuationObservationLifecycle(
+        IServiceProvider sp) =>
+        new NyxIdChatObservationLifecycle<NyxIdActionContinuationCommand>(
+            sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
+            static command => command.ContinuationTurnId);
 }

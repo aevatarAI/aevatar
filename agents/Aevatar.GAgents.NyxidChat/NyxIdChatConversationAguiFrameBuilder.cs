@@ -152,10 +152,54 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         if (committed.Request is null || committed.Task is null || committed.OriginTurn is null || sequence <= 0)
             return [];
 
+        var wirePayload = MapActionRequestWirePayload(committed.Request);
+        if (wirePayload is null)
+            return [];
+
         var frames = BuildTaskFrames(committed.Task, ResolveActiveOrLast(committed.Task), sequence);
-        frames.Insert(0, Custom(ActionRequestEventName, committed.Request, sequence));
+        frames.Insert(0, Custom(ActionRequestEventName, wirePayload, sequence));
         AppendTerminalIfNeeded(frames, actorId, turnId, committed.Task, committed.OriginTurn, sequence);
         return frames;
+    }
+
+    private static NyxIdAssistantActionRequestWirePayload? MapActionRequestWirePayload(
+        NyxIdChatActionRequestState request)
+    {
+        if (request.SchemaVersion != NyxIdAssistantActionRegistry.SupportedSchemaVersion ||
+            request.Action != NyxIdAssistantActionKind.ServiceConnect ||
+            request.Params is null)
+        {
+            return null;
+        }
+
+        var wireParams = request.Params.ParamsCase switch
+        {
+            NyxIdAssistantActionParams.ParamsOneofCase.CatalogServiceConnect =>
+                new NyxIdAssistantActionWireParams
+                {
+                    CatalogService = request.Params.CatalogServiceConnect.Clone(),
+                },
+            NyxIdAssistantActionParams.ParamsOneofCase.CustomServiceConnect =>
+                new NyxIdAssistantActionWireParams
+                {
+                    CustomService = request.Params.CustomServiceConnect.Clone(),
+                },
+            _ => null,
+        };
+        if (wireParams is null)
+            return null;
+
+        return new NyxIdAssistantActionRequestWirePayload
+        {
+            SchemaVersion = request.SchemaVersion,
+            ActorId = request.ConversationActorId,
+            OriginTurnId = request.OriginTurnId,
+            TaskId = request.TaskId,
+            StepId = request.StepId,
+            ActionRequestId = request.ActionRequestId,
+            Action = "service.connect",
+            Params = wireParams,
+        };
     }
 
     public static IReadOnlyList<AGUIEvent> BuildContinuationChanged(

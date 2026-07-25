@@ -256,6 +256,33 @@ public sealed class NyxIdChatTaskContractTests
             descriptor.Name.Contains("Metadata", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void BrowserActionContracts_ShouldPersistReportsAndTypedPostconditionCorrelation()
+    {
+        NyxIdChatActionRequestState.Descriptor.FindFieldByName("reports")
+            .Should().NotBeNull();
+        NyxIdChatActionRequestState.Descriptor.FindFieldByName("postcondition_result")
+            .Should().NotBeNull();
+        NyxIdChatActionRequestedEvent.Descriptor.FindFieldByName("state")
+            .Should().NotBeNull();
+        NyxIdChatActionPostconditionInput.Descriptor.FindFieldByName("scope_id")
+            .Should().NotBeNull();
+        NyxIdChatActionPostconditionInput.Descriptor.FindFieldByName("owner_subject")
+            .Should().NotBeNull();
+        NyxIdChatActionPostconditionInput.Descriptor.FindFieldByName("origin_turn_id")
+            .Should().NotBeNull();
+        NyxIdChatActionPostconditionInput.Descriptor.FindFieldByName("reported_disposition")
+            .Should().NotBeNull();
+        NyxIdChatActionPostconditionInput.Descriptor.FindFieldByName("params")
+            .Should().NotBeNull();
+        NyxIdChatConversationGAgentState.Descriptor.FindFieldByName("recent_actions")
+            .Should().NotBeNull();
+        NyxIdChatActionContinueCommand.Descriptor.FindFieldByName("continuation_turn_id")
+            .Should().NotBeNull();
+        NyxIdChatActionContinueCommand.Descriptor.FindFieldByName("owner_subject")
+            .Should().NotBeNull();
+    }
+
     private static void AssertEnumField<TMessage>(string name, string enumName)
         where TMessage : IMessage<TMessage>
     {

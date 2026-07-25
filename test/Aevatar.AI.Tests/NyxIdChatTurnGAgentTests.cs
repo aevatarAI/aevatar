@@ -448,6 +448,98 @@ public sealed class NyxIdChatTurnGAgentTests
         continuation.Result.Llm.ToolCalls.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task OperationExecutor_Postcondition_ShouldDelegateTypedInputToReadModelPort()
+    {
+        var port = new RecordingActionPostconditionPort
+        {
+            Result = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = "action-alpha",
+                Disposition = NyxIdChatActionDisposition.Completed,
+                Verified = true,
+                Resource = new NyxIdChatSafeResourceRef
+                {
+                    UserService = new NyxIdChatUserServiceRef
+                    {
+                        UserServiceId = "service-alpha",
+                    },
+                },
+            },
+        };
+        var executor = new NyxIdChatTurnOperationExecutor(
+            new CapabilityGeneratingReplyExecutor(),
+            port);
+        var command = PostconditionCommand(NyxIdChatActionDisposition.Completed);
+
+        var execution = await executor.ExecuteAsync(
+            command,
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        port.Inputs.Should().ContainSingle().Which.Should().BeEquivalentTo(
+            command.ActionPostcondition);
+        execution.Result.Key.Should().BeEquivalentTo(command.Key);
+        execution.Result.ActionPostcondition.Verified.Should().BeTrue();
+        execution.Result.ActionPostcondition.Resource.UserService.UserServiceId.Should().Be(
+            "service-alpha");
+    }
+
+    [Theory]
+    [InlineData(NyxIdChatActionDisposition.Declined)]
+    [InlineData(NyxIdChatActionDisposition.Failed)]
+    [InlineData(NyxIdChatActionDisposition.Cancelled)]
+    [InlineData(NyxIdChatActionDisposition.Expired)]
+    public async Task OperationExecutor_NonCompletedActionReport_ShouldFailClosedWithoutRead(
+        NyxIdChatActionDisposition disposition)
+    {
+        var port = new RecordingActionPostconditionPort();
+        var executor = new NyxIdChatTurnOperationExecutor(
+            new CapabilityGeneratingReplyExecutor(),
+            port);
+
+        var execution = await executor.ExecuteAsync(
+            PostconditionCommand(disposition),
+            new NyxIdChatTransientExecutionSession(),
+            static (_, _) => Task.CompletedTask,
+            CancellationToken.None);
+
+        port.Inputs.Should().BeEmpty();
+        execution.Result.ActionPostcondition.Verified.Should().BeFalse();
+        execution.Result.ActionPostcondition.FailureCode.Should().Be(
+            "NYXID_ACTION_POSTCONDITION_INPUT_INVALID");
+    }
+
+    private static NyxIdChatOperationDispatchCommand PostconditionCommand(
+        NyxIdChatActionDisposition disposition) => new()
+    {
+        Key = CreateKey(),
+        ActionPostcondition = new NyxIdChatActionPostconditionInput
+        {
+            ScopeId = "scope-alpha",
+            OwnerSubject = "owner-alpha",
+            OriginTurnId = "turn-origin-alpha",
+            ActionRequestId = "action-alpha",
+            Action = NyxIdAssistantActionKind.ServiceConnect,
+            ReportedDisposition = disposition,
+            ResourceHint = new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef
+                {
+                    UserServiceId = "service-alpha",
+                },
+            },
+            Params = new NyxIdAssistantActionParams
+            {
+                CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+                {
+                    ServiceSlug = "api-github",
+                },
+            },
+        },
+    };
+
     private static NyxIdChatTurnGAgent CreateAgent(
         ServiceProvider services,
         INyxIdChatTurnOperationExecutor executor,
@@ -516,6 +608,29 @@ public sealed class NyxIdChatTurnGAgentTests
             ct.ThrowIfCancellationRequested();
             Commands.Add(command.Clone());
             return Task.FromResult(new NyxIdChatTurnOperationExecution(resultFactory(command)));
+        }
+    }
+
+    private sealed class RecordingActionPostconditionPort : INyxIdActionPostconditionPort
+    {
+        public List<NyxIdChatActionPostconditionInput> Inputs { get; } = [];
+
+        public NyxIdChatActionPostconditionResult Result { get; set; } = new()
+        {
+            ActionRequestId = "action-alpha",
+            Disposition = NyxIdChatActionDisposition.Completed,
+            Verified = false,
+            FailureCode = "NYXID_ACTION_POSTCONDITION_UNAVAILABLE",
+            SafeMessage = "The action postcondition read model is unavailable.",
+        };
+
+        public Task<NyxIdChatActionPostconditionResult> VerifyAsync(
+            NyxIdChatActionPostconditionInput input,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            Inputs.Add(input.Clone());
+            return Task.FromResult(Result.Clone());
         }
     }
 

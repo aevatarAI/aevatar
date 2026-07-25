@@ -837,7 +837,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             runtime,
             new StubGAgentActorStore(),
             interactionService,
@@ -859,7 +859,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest(null),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest(null, Type: "text"),
             runtime,
             new StubGAgentActorStore(),
             new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
@@ -881,7 +881,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             new StubActorRuntime(),
             actorStore,
             new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
@@ -907,7 +907,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-missing",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             new StubActorRuntime(),
             actorStore,
             new StubNyxIdChatInteractionService<NyxIdChatCommand>(),
@@ -1056,7 +1056,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello there"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello there", Type: "text"),
             runtime,
             new StubGAgentActorStore(),
             interactionService,
@@ -1123,7 +1123,10 @@ public partial class NyxIdChatEndpointsCoverageTests
                 context,
                 "scope-a",
                 "actor-1",
-                new NyxIdChatEndpoints.NyxIdChatStreamRequest("long turn", SessionId: "session-keepalive"),
+                new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+                    "long turn",
+                    SessionId: "session-keepalive",
+                    Type: "text"),
                 runtime,
                 new StubGAgentActorStore(),
                 interactionService,
@@ -1164,7 +1167,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             new StubGAgentActorStore(),
             interactionService,
             NullLoggerFactory.Instance,
@@ -2723,6 +2726,33 @@ public partial class NyxIdChatEndpointsCoverageTests
             {
                 normalized.Insert(projectionPortIndex, new StubNyxIdChatSessionProjectionPort());
             }
+        }
+
+        if (parameters.Any(parameter =>
+                parameter.ParameterType == typeof(ICommandInteractionService<
+                    NyxIdActionContinuationCommand,
+                    NyxIdChatAcceptedReceipt,
+                    NyxIdChatStartError,
+                    AGUIEvent,
+                    NyxIdChatCompletionStatus>)) &&
+            normalized.All(arg => arg is not ICommandInteractionService<
+                NyxIdActionContinuationCommand,
+                NyxIdChatAcceptedReceipt,
+                NyxIdChatStartError,
+                AGUIEvent,
+                NyxIdChatCompletionStatus>))
+        {
+            var index = Array.FindIndex(
+                parameters,
+                parameter => parameter.ParameterType == typeof(ICommandInteractionService<
+                    NyxIdActionContinuationCommand,
+                    NyxIdChatAcceptedReceipt,
+                    NyxIdChatStartError,
+                    AGUIEvent,
+                    NyxIdChatCompletionStatus>));
+            normalized.Insert(
+                index,
+                new StubNyxIdChatInteractionService<NyxIdActionContinuationCommand>());
         }
 
         if (parameters.Any(parameter => parameter.ParameterType == typeof(IChatRoutePolicyQueryPort)) &&

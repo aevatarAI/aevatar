@@ -47,6 +47,7 @@ public sealed class NyxIdChatConversationGAgent
             .On<NyxIdChatControlFenceCommittedEvent>(ApplyControlFenceCommitted)
             .On<NyxIdChatContinuationAdmissionCommittedEvent>(ApplyContinuationAdmissionCommitted)
             .On<NyxIdChatStepControlCommittedEvent>(ApplyStepControlCommitted)
+            .On<NyxIdChatActionRequestedEvent>(ApplyActionRequested)
             .OrCurrent();
 
     [EventHandler(AllowSelfHandling = true)]
@@ -439,6 +440,32 @@ public sealed class NyxIdChatConversationGAgent
     }
 
     [EventHandler]
+    public async Task HandleActionContinueAsync(NyxIdChatActionContinueCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var now = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow());
+        var decision = NyxIdChatBrowserActions.Continue(State, command, now);
+        if (decision.ShouldCommit)
+        {
+            await PersistDomainEventAsync(new NyxIdChatContinuationAdmissionCommittedEvent
+            {
+                Admission = decision.Admission.Clone(),
+                State = decision.State.Clone(),
+            }, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        if (!decision.ShouldDispatch || decision.NextCommand is null)
+            return;
+
+        await EnsureTurnActorAsync(decision.NextCommand.Key.TurnId).ConfigureAwait(false);
+        await DispatchAuthorizedOperationAsync(
+                decision.NextCommand,
+                command.CorrelationId,
+                now)
+            .ConfigureAwait(false);
+    }
+
+    [EventHandler]
     public async Task HandleOperationProgressAsync(NyxIdChatOperationProgressSignal signal)
     {
         ArgumentNullException.ThrowIfNull(signal);
@@ -486,6 +513,61 @@ public sealed class NyxIdChatConversationGAgent
                 ProgressSequence = lateEvidence.State.ProgressSequence,
                 CommittedAt = now.Clone(),
                 State = lateEvidence.State.Clone(),
+            }, CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
+        if (signal.ResultCase ==
+            NyxIdChatOperationResultSignal.ResultOneofCase.ActionPostcondition)
+        {
+            var actionDecision = NyxIdChatBrowserActions.ReconcilePostcondition(
+                State,
+                signal,
+                now);
+            if (!actionDecision.ShouldCommit)
+                return;
+
+            await PersistDomainEventAsync(new NyxIdChatOperationReconciledEvent
+            {
+                Result = BuildDurableResultEvidence(signal),
+                Task = actionDecision.State.ActiveTask.Clone(),
+                Turn = actionDecision.State.ActiveTurn.Clone(),
+                ProgressSequence = actionDecision.State.ProgressSequence,
+                State = actionDecision.State.Clone(),
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            if (!actionDecision.ShouldDispatch || actionDecision.NextCommand is null)
+                return;
+
+            await DispatchAuthorizedOperationAsync(
+                    actionDecision.NextCommand,
+                    ActiveInboundEnvelope?.Propagation?.CorrelationId ??
+                    signal.Key.OperationId,
+                    now)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (signal.Tool?.Receipt is
+            {
+                Status: AgentToolReceiptStatus.AuthorizationRequired,
+                AuthorizationRequired: not null,
+            })
+        {
+            var actionDecision = NyxIdChatBrowserActions.RequestAuthorization(
+                State,
+                signal,
+                Services.GetRequiredService<NyxIdAssistantActionRegistry>(),
+                now);
+            if (!actionDecision.ShouldCommit)
+                return;
+
+            await PersistDomainEventAsync(new NyxIdChatActionRequestedEvent
+            {
+                Request = actionDecision.Request.Clone(),
+                Task = actionDecision.State.ActiveTask.Clone(),
+                OriginTurn = actionDecision.State.ActiveTurn.Clone(),
+                State = actionDecision.State.Clone(),
             }, CancellationToken.None).ConfigureAwait(false);
             return;
         }
@@ -679,6 +761,10 @@ public sealed class NyxIdChatConversationGAgent
         next.RecentStepControlResults.AddRange(
             State.RecentStepControlResults.Select(static result => result.Clone()));
         next.LatestStepControlResult = State.LatestStepControlResult?.Clone();
+        next.PendingActions.AddRange(
+            State.PendingActions.Select(static action => action.Clone()));
+        next.RecentActions.AddRange(
+            State.RecentActions.Select(static action => action.Clone()));
         if (State.ContinuationAdmission is not null &&
             string.Equals(
                 State.ContinuationAdmission.ContinuationTurnId,
@@ -927,6 +1013,30 @@ public sealed class NyxIdChatConversationGAgent
         return evt.State.Clone();
     }
 
+    private static NyxIdChatConversationGAgentState ApplyActionRequested(
+        NyxIdChatConversationGAgentState current,
+        NyxIdChatActionRequestedEvent evt)
+    {
+        if (evt.State?.ActiveTask is null ||
+            evt.State.ActiveTurn is null ||
+            evt.Request is null ||
+            !string.Equals(
+                evt.State.ConversationActorId,
+                evt.Request.ConversationActorId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                evt.State.ActiveTurn.TurnId,
+                evt.Request.OriginTurnId,
+                StringComparison.Ordinal) ||
+            !evt.State.PendingActions.Any(action =>
+                action.ToByteString().Equals(evt.Request.ToByteString())))
+        {
+            return current;
+        }
+
+        return evt.State.Clone();
+    }
+
     private bool TryResolveCurrentOperation(
         NyxIdChatOperationKey? key,
         out NyxIdChatOperationState operation)
@@ -1068,6 +1178,16 @@ public sealed class NyxIdChatConversationGAgent
             Key = command.Key.Clone(),
             DispatchedAt = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task EnsureTurnActorAsync(string turnId)
+    {
+        var turnActorId = NyxIdChatTurnActorIds.ForTurn(Id, turnId);
+        var turnActor = await _actorRuntime
+            .CreateAsync<NyxIdChatTurnGAgent>(turnActorId, CancellationToken.None)
+            .ConfigureAwait(false);
+        await _actorRuntime.LinkAsync(Id, turnActor.Id, CancellationToken.None)
+            .ConfigureAwait(false);
     }
 
     private long CurrentCommittedVersion() =>

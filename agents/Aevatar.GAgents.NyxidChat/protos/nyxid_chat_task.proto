@@ -305,6 +305,10 @@ message NyxIdChatContinuationAdmissionState {
   // transient command and are never copied into state or committed events.
   string instruction = 10;
   repeated aevatar.ai.ChatContentPart input_parts = 11;
+  // Action-continuation-only authenticated query identity and exact safe
+  // reports. Steering admissions leave these fields empty.
+  string owner_subject = 12;
+  repeated NyxIdChatActionReport action_reports = 13;
 }
 
 message NyxIdChatStepControlResultState {
@@ -421,6 +425,28 @@ message NyxIdAssistantActionParams {
   }
 }
 
+// AGUI Schema v4 wire contract. This presentation DTO deliberately differs
+// from NyxIdChatActionRequestState: registry policy, timestamps, reports, and
+// postcondition facts remain internal committed state and never leak into the
+// browser-action request frame.
+message NyxIdAssistantActionWireParams {
+  oneof params {
+    NyxIdCatalogServiceConnectParams catalog_service = 1;
+    NyxIdCustomServiceConnectParams custom_service = 2;
+  }
+}
+
+message NyxIdAssistantActionRequestWirePayload {
+  int32 schema_version = 1;
+  string actor_id = 2;
+  string origin_turn_id = 3;
+  string task_id = 4;
+  string step_id = 5;
+  string action_request_id = 6;
+  string action = 7;
+  NyxIdAssistantActionWireParams params = 8;
+}
+
 message NyxIdChatUserServiceRef {
   string user_service_id = 1;
 }
@@ -469,6 +495,11 @@ message NyxIdChatActionRequestState {
   NyxIdAssistantActionRisk advisory_risk = 10;
   bool remember_eligible = 11;
   google.protobuf.Timestamp requested_at = 12;
+  // Browser reports are safe, typed wake-up facts. Caller prose is stripped
+  // before commit and no report is itself mutation proof.
+  repeated NyxIdChatActionReport reports = 13;
+  // The latest typed read-model proof attempt for this exact action request.
+  NyxIdChatActionPostconditionResult postcondition_result = 14;
 }
 
 message NyxIdChatActionReport {
@@ -513,6 +544,10 @@ message NyxIdChatConversationGAgentState {
   // identities. Runtime credentials never enter these results.
   repeated NyxIdChatStepControlResultState recent_step_control_results = 16;
   NyxIdChatStepControlResultState latest_step_control_result = 17;
+  // Bounded terminal browser-action summaries. Active/waiting actions remain
+  // in pending_actions; completed/declined/failed/cancelled/expired actions
+  // move here without losing typed correlation and proof evidence.
+  repeated NyxIdChatActionRequestState recent_actions = 18;
 }
 
 // One atomic controller commit for a newly admitted turn. The snapshot already
@@ -580,6 +615,11 @@ message NyxIdChatActionPostconditionInput {
   string action_request_id = 1;
   NyxIdAssistantActionKind action = 2;
   NyxIdChatSafeResourceRef resource_hint = 3;
+  string scope_id = 4;
+  string owner_subject = 5;
+  string origin_turn_id = 6;
+  NyxIdChatActionDisposition reported_disposition = 7;
+  NyxIdAssistantActionParams params = 8;
 }
 
 message NyxIdChatOperationDispatchCommand {
@@ -752,6 +792,12 @@ message NyxIdChatActionContinueCommand {
   string command_id = 5;
   string correlation_id = 6;
   repeated NyxIdChatActionReport actions = 7;
+  // Server-owned identity created by the Host adapter from actorId plus the
+  // authenticated client request id. Callers never choose or reuse old turns.
+  string continuation_turn_id = 8;
+  // Authenticated NyxID subject used only to select the typed read-model
+  // authority. It is an identity, not a credential or bearer token.
+  string owner_subject = 9;
 }
 
 message NyxIdChatOperationRequestedEvent {
@@ -829,6 +875,7 @@ message NyxIdChatActionRequestedEvent {
   NyxIdChatActionRequestState request = 1;
   NyxIdChatTaskState task = 2;
   NyxIdChatTurnState origin_turn = 3;
+  NyxIdChatConversationGAgentState state = 4;
 }
 
 message NyxIdChatTransitionDecisionFact {

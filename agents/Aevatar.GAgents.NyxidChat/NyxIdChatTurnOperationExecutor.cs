@@ -45,13 +45,27 @@ public sealed class NyxIdChatTurnOperationExecutor
         "The operation executor returned an invalid typed result.";
     private const string UnsupportedOperationMessage =
         "This operation kind is not available in the turn executor.";
+    private const string InvalidPostconditionInputCode =
+        "NYXID_ACTION_POSTCONDITION_INPUT_INVALID";
+    private const string InvalidPostconditionInputMessage =
+        "The action postcondition input was invalid.";
 
     private readonly IAgentRunReplyGenerationExecutorPort _generationExecutor;
+    private readonly INyxIdActionPostconditionPort _actionPostconditionPort;
 
     public NyxIdChatTurnOperationExecutor(
         IAgentRunReplyGenerationExecutorPort generationExecutor)
+        : this(generationExecutor, new UnavailableNyxIdActionPostconditionPort())
+    {
+    }
+
+    public NyxIdChatTurnOperationExecutor(
+        IAgentRunReplyGenerationExecutorPort generationExecutor,
+        INyxIdActionPostconditionPort actionPostconditionPort)
     {
         _generationExecutor = generationExecutor ?? throw new ArgumentNullException(nameof(generationExecutor));
+        _actionPostconditionPort = actionPostconditionPort ??
+                                   throw new ArgumentNullException(nameof(actionPostconditionPort));
     }
 
     public async Task<NyxIdChatTurnOperationExecution> ExecuteAsync(
@@ -71,6 +85,8 @@ public sealed class NyxIdChatTurnOperationExecutor
                 await ExecuteLlmAsync(command, session, reportProgressAsync, ct).ConfigureAwait(false),
             NyxIdChatOperationDispatchCommand.InputOneofCase.Tool =>
                 await ExecuteToolAsync(command, session, reportProgressAsync, ct).ConfigureAwait(false),
+            NyxIdChatOperationDispatchCommand.InputOneofCase.ActionPostcondition =>
+                await ExecuteActionPostconditionAsync(command, ct).ConfigureAwait(false),
             _ => Failure(
                 command.Key,
                 UnsupportedOperationCode,
@@ -78,6 +94,74 @@ public sealed class NyxIdChatTurnOperationExecutor
                 NyxIdChatEffectEvidence.NotStarted),
         };
     }
+
+    private async Task<NyxIdChatTurnOperationExecution> ExecuteActionPostconditionAsync(
+        NyxIdChatOperationDispatchCommand command,
+        CancellationToken ct)
+    {
+        var input = command.ActionPostcondition;
+        if (input is null ||
+            input.ReportedDisposition != NyxIdChatActionDisposition.Completed ||
+            string.IsNullOrWhiteSpace(input.ScopeId) ||
+            string.IsNullOrWhiteSpace(input.OwnerSubject) ||
+            string.IsNullOrWhiteSpace(input.OriginTurnId) ||
+            string.IsNullOrWhiteSpace(input.ActionRequestId) ||
+            input.Action == NyxIdAssistantActionKind.Unspecified ||
+            input.Params?.ParamsCase == NyxIdAssistantActionParams.ParamsOneofCase.None)
+        {
+            return Postcondition(
+                command.Key,
+                input,
+                verified: false,
+                InvalidPostconditionInputCode,
+                InvalidPostconditionInputMessage);
+        }
+
+        var result = await _actionPostconditionPort
+            .VerifyAsync(input.Clone(), ct)
+            .ConfigureAwait(false);
+        if (result is null ||
+            !string.Equals(
+                result.ActionRequestId,
+                input.ActionRequestId,
+                StringComparison.Ordinal) ||
+            result.Disposition != input.ReportedDisposition)
+        {
+            return Postcondition(
+                command.Key,
+                input,
+                verified: false,
+                InvalidExecutionResultCode,
+                InvalidExecutionResultMessage);
+        }
+
+        return new NyxIdChatTurnOperationExecution(new NyxIdChatOperationResultSignal
+        {
+            Key = command.Key.Clone(),
+            ActionPostcondition = result.Clone(),
+        });
+    }
+
+    private static NyxIdChatTurnOperationExecution Postcondition(
+        NyxIdChatOperationKey key,
+        NyxIdChatActionPostconditionInput? input,
+        bool verified,
+        string code,
+        string safeMessage) =>
+        new(new NyxIdChatOperationResultSignal
+        {
+            Key = key?.Clone(),
+            ActionPostcondition = new NyxIdChatActionPostconditionResult
+            {
+                ActionRequestId = input?.ActionRequestId ?? string.Empty,
+                Disposition = input?.ReportedDisposition ??
+                              NyxIdChatActionDisposition.Unspecified,
+                Verified = verified,
+                Resource = input?.ResourceHint?.Clone(),
+                FailureCode = code,
+                SafeMessage = safeMessage,
+            },
+        });
 
     private async Task<NyxIdChatTurnOperationExecution> ExecuteLlmAsync(
         NyxIdChatOperationDispatchCommand command,

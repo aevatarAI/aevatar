@@ -194,9 +194,9 @@ internal static class NyxIdChatAguiSseEventWriter
                 customEvent.Name,
                 NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName,
                 StringComparison.Ordinal) &&
-            customEvent.Payload.Is(NyxIdChatActionRequestState.Descriptor))
+            customEvent.Payload.Is(NyxIdAssistantActionRequestWirePayload.Descriptor))
         {
-            payload = customEvent.Payload.Unpack<NyxIdChatActionRequestState>();
+            payload = customEvent.Payload.Unpack<NyxIdAssistantActionRequestWirePayload>();
             return true;
         }
 

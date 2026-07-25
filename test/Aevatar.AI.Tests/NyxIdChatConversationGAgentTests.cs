@@ -1,4 +1,5 @@
 using System.Reflection;
+using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -213,6 +214,229 @@ public sealed class NyxIdChatConversationGAgentTests
         reconciliation.Turn.Status.Should().Be(NyxIdChatTurnStatus.Succeeded);
         agent.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Succeeded);
         agent.State.ActiveTask.Steps.Single().Status.Should().Be(NyxIdChatStepStatus.Done);
+    }
+
+    [Fact]
+    public async Task AuthorizationRequiredResult_ShouldAtomicallyCommitBlockedActionRequest()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, conversationActorId);
+        await agent.ActivateAsync();
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, CreateStartTurnCommand()));
+        var llmKey = agent.State.ActiveTask.Steps.Single().Operation.Key.Clone();
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
+        {
+            Key = llmKey,
+            Llm = new NyxIdChatLLMOperationResult
+            {
+                ToolCalls =
+                {
+                    new NyxIdChatToolCall
+                    {
+                        CallId = "call-connect-alpha",
+                        ToolName = "nyxid_proxy",
+                        ArgumentsJson = "{}",
+                        Safety = new NyxIdChatToolCallSafety(),
+                    },
+                },
+            },
+        }));
+        var toolKey = agent.State.ActiveTask.Steps.Last().Operation.Key.Clone();
+        var beforeAuthorization = await eventStore.GetEventsAsync(conversationActorId);
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, new NyxIdChatOperationResultSignal
+        {
+            Key = toolKey,
+            Tool = new NyxIdChatToolOperationResult
+            {
+                ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                Receipt = new AgentToolReceipt
+                {
+                    CallId = "call-connect-alpha",
+                    ToolName = "nyxid_proxy",
+                    Status = AgentToolReceiptStatus.AuthorizationRequired,
+                    ErrorCode = "NYXID_UNAUTHORIZED",
+                    ErrorMessage = "Connect or reauthorize api-github to continue.",
+                    AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                    {
+                        ServiceSlug = "api-github",
+                        ReasonCode = "NYXID_UNAUTHORIZED",
+                        SafeMessage = "Connect or reauthorize api-github to continue.",
+                    },
+                },
+            },
+        }));
+
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed.Should().HaveCount(beforeAuthorization.Count + 1,
+            "the waiting tool result and browser handoff are one authoritative commit");
+        committed[^1].EventData.Is(NyxIdChatActionRequestedEvent.Descriptor).Should().BeTrue();
+        var requested = committed[^1].EventData.Unpack<NyxIdChatActionRequestedEvent>();
+        requested.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Blocked);
+        requested.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Blocked);
+        requested.State.PendingActions.Should().ContainSingle();
+        requested.Request.Should().BeEquivalentTo(requested.State.PendingActions.Single());
+        requested.Task.Should().BeEquivalentTo(requested.State.ActiveTask);
+        requested.OriginTurn.Should().BeEquivalentTo(requested.State.ActiveTurn);
+        agent.State.Should().BeEquivalentTo(requested.State);
+        agent.State.ActiveTask.Steps.Should().Contain(step =>
+            step.StepId == toolKey.StepId &&
+            step.Status == NyxIdChatStepStatus.Waiting);
+        agent.State.ActiveTask.Steps.Should().Contain(step =>
+            step.Kind == NyxIdChatStepKind.BrowserAction &&
+            step.Status == NyxIdChatStepStatus.Waiting);
+    }
+
+    [Fact]
+    public async Task ActionContinuation_ShouldCommitPostconditionWaterlineBeforeDispatch()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var blocked = CreateBlockedActionState();
+        await PersistActionStateAsync(eventStore, conversationActorId, blocked);
+        IReadOnlyList<StateEvent>? eventsObservedAtDispatch = null;
+        NyxIdChatConversationGAgentState? stateObservedAtDispatch = null;
+        NyxIdChatConversationGAgent? agent = null;
+        var operations = new List<string>();
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            async (_, envelope) =>
+            {
+                envelope.Payload.Is(NyxIdChatOperationDispatchCommand.Descriptor).Should().BeTrue();
+                eventsObservedAtDispatch = await eventStore.GetEventsAsync(conversationActorId);
+                stateObservedAtDispatch = agent!.State.Clone();
+            });
+        using var services = BuildEventSourcingServices(eventStore);
+        agent = new NyxIdChatConversationGAgent(
+            new RecordingActorRuntime(operations),
+            dispatch,
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, conversationActorId);
+        await agent.ActivateAsync();
+        var command = CreateActionContinueCommand(blocked.PendingActions.Single().ActionRequestId);
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, command));
+
+        eventsObservedAtDispatch.Should().NotBeNull();
+        eventsObservedAtDispatch![^1].EventData.Is(
+            NyxIdChatContinuationAdmissionCommittedEvent.Descriptor).Should().BeTrue();
+        stateObservedAtDispatch.Should().NotBeNull();
+        stateObservedAtDispatch!.ActiveTurn.TurnId.Should().Be("turn-action-alpha");
+        stateObservedAtDispatch.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+        var postcondition = stateObservedAtDispatch.ActiveTask.Steps.Should()
+            .ContainSingle().Which;
+        postcondition.Kind.Should().Be(NyxIdChatStepKind.Postcondition);
+        postcondition.Operation.Phase.Should().Be(NyxIdChatOperationPhase.Requested);
+        dispatch.Calls.Should().ContainSingle();
+        var dispatched = dispatch.Calls.Single().Envelope.Payload
+            .Unpack<NyxIdChatOperationDispatchCommand>();
+        dispatched.Key.Should().BeEquivalentTo(postcondition.Operation.Key);
+        dispatched.ActionPostcondition.OwnerSubject.Should().Be("owner-alpha");
+        dispatched.ActionPostcondition.OriginTurnId.Should().Be("turn-alpha");
+
+        var all = await eventStore.GetEventsAsync(conversationActorId);
+        all[^1].EventData.Is(NyxIdChatOperationDispatchedEvent.Descriptor).Should().BeTrue();
+        agent.State.ActiveTask.Steps.Single().Operation.Phase.Should().Be(
+            NyxIdChatOperationPhase.Dispatched);
+    }
+
+    [Fact]
+    public async Task ActiveTurnActionContinuation_ShouldCommitTypedRejectionWithoutDispatch()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var blocked = CreateBlockedActionState();
+        await PersistActionStateAsync(eventStore, conversationActorId, blocked);
+        var activeWithPendingAction = blocked.Clone();
+        activeWithPendingAction.ActiveTurn = new NyxIdChatTurnState
+        {
+            TurnId = "turn-other-active",
+            TaskId = "task-other-active",
+            Status = NyxIdChatTurnStatus.Active,
+        };
+        activeWithPendingAction.LatestTurn = activeWithPendingAction.ActiveTurn.Clone();
+        activeWithPendingAction.ActiveTask = new NyxIdChatTaskState
+        {
+            TurnId = "turn-other-active",
+            TaskId = "task-other-active",
+            Status = NyxIdChatTaskStatus.Active,
+        };
+        await PersistTestStateAsync(
+            eventStore,
+            conversationActorId,
+            version: 2,
+            activeWithPendingAction);
+        var operations = new List<string>();
+        var dispatch = new RecordingActorDispatchPort(
+            operations,
+            static (_, _) => Task.CompletedTask);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = new NyxIdChatConversationGAgent(
+            new RecordingActorRuntime(operations),
+            dispatch,
+            new FixedTimeProvider(new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)))
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<
+                IEventSourcingBehaviorFactory<NyxIdChatConversationGAgentState>>(),
+        };
+        AssignActorId(agent, conversationActorId);
+        await agent.ActivateAsync();
+
+        await agent.HandleEventAsync(CreateEnvelope(
+            conversationActorId,
+            CreateActionContinueCommand(blocked.PendingActions.Single().ActionRequestId)));
+
+        dispatch.Calls.Should().BeEmpty();
+        var committed = await eventStore.GetEventsAsync(conversationActorId);
+        committed[^1].EventData.Is(
+            NyxIdChatContinuationAdmissionCommittedEvent.Descriptor).Should().BeTrue();
+        var rejected = committed[^1].EventData
+            .Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();
+        rejected.Admission.Status.Should().Be(
+            NyxIdChatContinuationAdmissionStatus.Rejected);
+        rejected.Admission.ReasonCode.Should().Be(
+            NyxIdChatBrowserActions.ActionContinuationActiveTurn);
+        rejected.State.ActiveTurn.TurnId.Should().Be("turn-other-active");
+        rejected.State.PendingActions.Should().ContainSingle();
+        agent.State.Should().BeEquivalentTo(rejected.State);
+    }
+
+    [Fact]
+    public async Task LaterOrdinaryTurn_ShouldPreservePendingAndRecentActions()
+    {
+        const string conversationActorId = "conversation-alpha";
+        var eventStore = new InMemoryEventStoreForTests();
+        var state = CreateBlockedActionState();
+        var recent = state.PendingActions.Single().Clone();
+        recent.ActionRequestId = "action-recent-alpha";
+        recent.StepId = "step-recent-alpha";
+        state.RecentActions.Add(recent);
+        await PersistActionStateAsync(eventStore, conversationActorId, state);
+        using var services = BuildEventSourcingServices(eventStore);
+        var agent = CreateController(services, conversationActorId);
+        await agent.ActivateAsync();
+        var nextTurn = CreateStartTurnCommand();
+        nextTurn.TurnId = "turn-beta";
+        nextTurn.TaskId = "task-beta";
+        nextTurn.ClientRequestId = "client-beta";
+        nextTurn.CommandId = "command-beta";
+        nextTurn.CorrelationId = "correlation-beta";
+
+        await agent.HandleEventAsync(CreateEnvelope(conversationActorId, nextTurn));
+
+        agent.State.ActiveTurn.TurnId.Should().Be("turn-beta");
+        agent.State.PendingActions.Should().ContainSingle(action =>
+            action.ActionRequestId == state.PendingActions.Single().ActionRequestId);
+        agent.State.RecentActions.Should().ContainSingle(action =>
+            action.ActionRequestId == "action-recent-alpha");
     }
 
     [Fact]
@@ -1289,6 +1513,141 @@ public sealed class NyxIdChatConversationGAgentTests
         },
     };
 
+    private static NyxIdChatActionContinueCommand CreateActionContinueCommand(
+        string actionRequestId)
+    {
+        var command = new NyxIdChatActionContinueCommand
+        {
+            ScopeId = "scope-alpha",
+            ConversationActorId = "conversation-alpha",
+            OriginTurnId = "turn-alpha",
+            ContinuationTurnId = "turn-action-alpha",
+            OwnerSubject = "owner-alpha",
+            ClientRequestId = "client-action-alpha",
+            CommandId = "command-action-alpha",
+            CorrelationId = "correlation-action-alpha",
+        };
+        command.Actions.Add(new NyxIdChatActionReport
+        {
+            ActionRequestId = actionRequestId,
+            OriginTurnId = "turn-alpha",
+            Disposition = NyxIdChatActionDisposition.Completed,
+            Resource = new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef
+                {
+                    UserServiceId = "service-alpha",
+                },
+            },
+        });
+        return command;
+    }
+
+    private static NyxIdChatConversationGAgentState CreateBlockedActionState()
+    {
+        var key = new NyxIdChatOperationKey
+        {
+            ConversationActorId = "conversation-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-tool-alpha",
+            OperationId = "operation-tool-alpha",
+            OperationGeneration = 1,
+        };
+        var state = new NyxIdChatConversationGAgentState
+        {
+            ConversationActorId = "conversation-alpha",
+            ScopeId = "scope-alpha",
+            ActiveTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Active,
+            },
+            LatestTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Active,
+            },
+            ActiveTask = new NyxIdChatTaskState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTaskStatus.Active,
+            },
+            ProgressSequence = 1,
+        };
+        state.ActiveTask.Steps.Add(new NyxIdChatTaskStepState
+        {
+            StepId = key.StepId,
+            Order = 1,
+            Kind = NyxIdChatStepKind.Tool,
+            Status = NyxIdChatStepStatus.Waiting,
+            Required = true,
+            Operation = new NyxIdChatOperationState
+            {
+                Key = key.Clone(),
+                Kind = NyxIdChatStepKind.Tool,
+                Phase = NyxIdChatOperationPhase.Succeeded,
+            },
+            Source = new NyxIdChatStepSource
+            {
+                Tool = new NyxIdChatToolStepSource { ToolName = "nyxid_proxy" },
+            },
+        });
+        var signal = new NyxIdChatOperationResultSignal
+        {
+            Key = key,
+            Tool = new NyxIdChatToolOperationResult
+            {
+                ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                Receipt = new AgentToolReceipt
+                {
+                    Status = AgentToolReceiptStatus.AuthorizationRequired,
+                    AuthorizationRequired = new NyxIdAuthorizationRequiredEvent
+                    {
+                        ServiceSlug = "api-github",
+                        ReasonCode = "NYXID_UNAUTHORIZED",
+                        SafeMessage = "Connect GitHub.",
+                    },
+                },
+            },
+        };
+        return NyxIdChatBrowserActions.RequestAuthorization(
+            state,
+            signal,
+            CreateActionRegistry(),
+            Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero))).State;
+    }
+
+    private static Task PersistActionStateAsync(
+        IEventStore eventStore,
+        string actorId,
+        NyxIdChatConversationGAgentState state) =>
+        eventStore.AppendAsync(
+            actorId,
+            [
+                new StateEvent
+                {
+                    EventId = "action-state-alpha",
+                    AgentId = actorId,
+                    Version = 1,
+                    Timestamp = Timestamp.FromDateTimeOffset(
+                        new DateTimeOffset(2026, 7, 24, 8, 0, 0, TimeSpan.Zero)),
+                    EventType = NyxIdChatActionRequestedEvent.Descriptor.FullName,
+                    EventData = Any.Pack(new NyxIdChatActionRequestedEvent
+                    {
+                        Request = state.PendingActions.Single().Clone(),
+                        Task = state.ActiveTask.Clone(),
+                        OriginTurn = state.ActiveTurn.Clone(),
+                        State = state.Clone(),
+                    }),
+                },
+            ],
+            expectedVersion: 0);
+
     private static Task PersistTestStateAsync(
         IEventStore eventStore,
         string actorId,
@@ -1331,10 +1690,70 @@ public sealed class NyxIdChatConversationGAgentTests
     private static ServiceProvider BuildEventSourcingServices(IEventStore eventStore) =>
         new ServiceCollection()
             .AddSingleton(eventStore)
+            .AddSingleton(CreateActionRegistry())
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddSingleton<IActorRuntimeCallbackScheduler, NoopRuntimeCallbackScheduler>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
             .BuildServiceProvider();
+
+    private static NyxIdAssistantActionRegistry CreateActionRegistry() =>
+        NyxIdAssistantActionRegistry.Load("""
+        {
+          "schema_version": 4,
+          "revision": "nyxid-assistant-actions.v4",
+          "actions": [
+            {
+              "action": "service.connect",
+              "description": "Connect a catalog service in NyxID.",
+              "params_schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["catalogService"],
+                    "properties": {
+                      "catalogService": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["serviceSlug"],
+                        "properties": {
+                          "serviceSlug": {"type": "string"},
+                          "requestedScopes": {"type": "array", "items": {"type": "string"}},
+                          "viaNodeId": {"type": "string"},
+                          "targetOrgId": {"type": "string"}
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["customService"],
+                    "properties": {
+                      "customService": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["name", "endpointUrl", "authMethod"],
+                        "properties": {
+                          "name": {"type": "string"},
+                          "endpointUrl": {"type": "string"},
+                          "authMethod": {"type": "string"},
+                          "authKeyName": {"type": "string"},
+                          "viaNodeId": {"type": "string"},
+                          "targetOrgId": {"type": "string"}
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "risk": "grant",
+              "tier": "v1",
+              "remember_eligible": true
+            }
+          ]
+        }
+        """);
 
     private static EventEnvelope CreateEnvelope(string actorId, IMessage payload) => new()
     {
