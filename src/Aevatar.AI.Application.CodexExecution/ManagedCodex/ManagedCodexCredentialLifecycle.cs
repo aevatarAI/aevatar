@@ -321,9 +321,11 @@ public sealed class ManagedCodexCredentialLifecycle(
                             cleanupWait.Token)
                         .ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
-                    when (!requestCt.IsCancellationRequested &&
-                          cleanupAttempt.IsCancellationRequested)
+                catch (Exception exception)
+                    when (IsBestEffortCleanupFailure(
+                        exception,
+                        requestCt,
+                        readinessCommitted: false))
                 {
                     cleanupCompleted = false;
                 }
@@ -836,11 +838,14 @@ public sealed class ManagedCodexCredentialLifecycle(
         }
         catch (ManagedCodexCredentialLifecycleException)
         {
-            _ = await CompensateRejectedIssuanceWithinOutcomeAsync(
-                bearerToken,
-                owner,
-                issued.Key.Id,
-                outcomeDeadline).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(issued.Key.Id))
+            {
+                _ = await CompensateRejectedIssuanceWithinOutcomeAsync(
+                    bearerToken,
+                    owner,
+                    issued.Key.Id,
+                    outcomeDeadline).ConfigureAwait(false);
+            }
             throw;
         }
 
@@ -972,6 +977,10 @@ public sealed class ManagedCodexCredentialLifecycle(
         {
             throw CleanupPending();
         }
+        await ValidateActiveManagedKeyIdentitiesAsync(
+                bearerToken,
+                mutation.PreMutationToken)
+            .ConfigureAwait(false);
         var credential = current.Credential;
         ValidateActiveDescriptor(credential, owner, _timeProvider.GetUtcNow(), requireFutureExpiry: false);
 
@@ -2048,11 +2057,20 @@ public sealed class ManagedCodexCredentialLifecycle(
         CancellationToken ct)
     {
         var keys = await _nyxIdPort.ListApiKeysAsync(bearerToken, ct).ConfigureAwait(false);
-        return keys
+        var activeManagedKeys = keys
             .Where(static key =>
                 key.IsActive &&
                 string.Equals(key.Name, CredentialName, StringComparison.Ordinal))
             .ToArray();
+        if (activeManagedKeys.Any(static key =>
+                string.IsNullOrWhiteSpace(key.Id)))
+        {
+            throw Failure(
+                "managed_api_key_issue_invalid",
+                "NyxID returned an active managed Codex key without a stable identity.");
+        }
+
+        return activeManagedKeys;
     }
 
     private static void EnsureAtMostOneActiveKey(
@@ -2221,7 +2239,8 @@ public sealed class ManagedCodexCredentialLifecycle(
                 ct).ConfigureAwait(false);
         }
 
-        var keys = await _nyxIdPort.ListApiKeysAsync(bearerToken, ct).ConfigureAwait(false);
+        var keys = await GetActiveManagedKeysAsync(bearerToken, ct)
+            .ConfigureAwait(false);
         var matches = keys
             .Where(key => string.Equals(key.Id, currentApiKeyId, StringComparison.Ordinal))
             .ToArray();
@@ -2371,7 +2390,8 @@ public sealed class ManagedCodexCredentialLifecycle(
         DateTimeOffset expectedExpiresAt,
         CancellationToken ct)
     {
-        var keys = await _nyxIdPort.ListApiKeysAsync(bearerToken, ct).ConfigureAwait(false);
+        var keys = await GetActiveManagedKeysAsync(bearerToken, ct)
+            .ConfigureAwait(false);
         var matches = keys
             .Where(key => string.Equals(key.Id, apiKeyId, StringComparison.Ordinal))
             .ToArray();
@@ -2565,15 +2585,38 @@ public sealed class ManagedCodexCredentialLifecycle(
                     cleanupWait.Token)
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-            when (!requestCt.IsCancellationRequested &&
-                  cleanupDeadline.IsCancellationRequested)
+        catch (Exception exception)
+            when (IsBestEffortCleanupFailure(
+                exception,
+                requestCt,
+                readinessCommitted: true))
         {
-            completed = false;
+            LogPendingCleanup(pendingCleanup);
+            return;
         }
 
         if (!completed)
             LogPendingCleanup(pendingCleanup);
+    }
+
+    private static bool IsBestEffortCleanupFailure(
+        Exception exception,
+        CancellationToken requestCt,
+        bool readinessCommitted)
+    {
+        if (exception is OperationCanceledException)
+            return !requestCt.IsCancellationRequested;
+
+        if (exception is ManagedCodexCredentialLifecycleException lifecycle)
+        {
+            return readinessCommitted ||
+                   !string.Equals(
+                       lifecycle.Code,
+                       "managed_api_key_issue_invalid",
+                       StringComparison.Ordinal);
+        }
+
+        return exception is HttpRequestException or TimeoutException;
     }
 
     private ManagedCodexCredentialCleanup BuildPreviousCredentialCleanup(
@@ -2621,6 +2664,14 @@ public sealed class ManagedCodexCredentialLifecycle(
             "managed_credential_persistence_pending",
             "Managed Codex credential persistence is pending reconciliation.");
 
+    private async Task ValidateActiveManagedKeyIdentitiesAsync(
+        string bearerToken,
+        CancellationToken ct)
+    {
+        _ = await GetActiveManagedKeysAsync(bearerToken, ct)
+            .ConfigureAwait(false);
+    }
+
     private async Task<bool> TryRetryPendingCleanupAsync(
         string bearerToken,
         ExternalSubjectRef owner,
@@ -2630,6 +2681,8 @@ public sealed class ManagedCodexCredentialLifecycle(
         if (pendingRevocations is null || pendingRevocations.Count == 0)
             return true;
 
+        await ValidateActiveManagedKeyIdentitiesAsync(bearerToken, ct)
+            .ConfigureAwait(false);
         var allCompleted = true;
         var ownerScopeKey = ManagedCodexCredentialActorIdentity.From(owner);
         foreach (var cleanup in pendingRevocations)

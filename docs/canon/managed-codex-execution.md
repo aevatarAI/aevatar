@@ -127,7 +127,19 @@ exact `(ApiKeyId, SecretRef)` identity.
 Manual provision/rotation reconciliation follows the same rule. A remotely
 listed key that fails validation or lacks its deterministic Vault reference is
 carried as obsolete cleanup on the subsequent credential command; a rejected
-command deletes nothing.
+command deletes nothing. An active reserved NyxID entry without a stable
+nonblank key ID cannot form an exact cleanup identity and fails closed before
+any provision, rotation, or readiness-repair mutation. This validation applies
+to every active-key list and relist, including post-issuance persistence
+confirmation and policy reconciliation. Issuance compensation may use only the
+exact stable nonblank ID returned by that local create or rotate operation; a
+blank or enumerated candidate never enters compensation.
+
+Every bearer-authorized Actor-owned cleanup retry and explicit revoke performs
+the same read-only identity preflight before deleting a NyxID key, revoking a
+Vault locator, or completing an Actor cleanup track. If the check fails after a
+replacement credential is already committed, cleanup remains pending and the
+committed credential remains ready.
 
 For one API key with multiple historical Vault locators, exactly one cleanup
 fact owns `NyxIdPending`, while every distinct locator may independently own

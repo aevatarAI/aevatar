@@ -854,6 +854,202 @@ public sealed class ManagedCodexCredentialReadinessTests
     }
 
     [Fact]
+    public async Task EnsureReadyAsync_WhenObservedActiveKeyHasNoStableId_FailsBeforeMutation()
+    {
+        var projected = Snapshot(ReadyDescriptor(), stateVersion: 4);
+        projected.PendingRevocations.Add(Cleanup("key-pending"));
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(projected);
+        _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(Keys(Key("   ", ["us-sandbox", "us-llm"])));
+        _observation.PublishAfterDispatch(Snapshot(
+            ReadyDescriptor(),
+            stateVersion: 5,
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed));
+
+        var act = () => _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_api_key_issue_invalid");
+        await _nyxId.DidNotReceiveWithAnyArgs()
+            .CreateApiKeyAsync(default!, default!, default);
+        await _nyxId.DidNotReceiveWithAnyArgs()
+            .RotateApiKeyAsync(default!, default!, default);
+        await _nyxId.DidNotReceiveWithAnyArgs()
+            .UpdateApiKeyPolicyAsync(default!, default!, default!, default);
+        await _nyxId.DidNotReceiveWithAnyArgs()
+            .RevokeApiKeyAsync(default!, default!, default);
+        await _vault.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
+        await _vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
+        await _vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .CommitProvisionedAsync(default!, default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .CommitRotatedAsync(default!, default!, default!, default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .CommitPolicyReconciledAsync(default!, default!, default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .ConfirmReadinessAsync(default!, default!, default, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .QueueCleanupAsync(default!, default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .CompleteCleanupTrackAsync(
+                default!,
+                default!,
+                default!,
+                default,
+                default,
+                default);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenReplacementRelistContainsMalformedManagedKey_CompensatesExactIssuedKeyBeforeVaultOrActorMutation()
+    {
+        var issued = IssuedKey("key-new");
+        _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                Keys(),
+                Keys(
+                    issued.Key,
+                    Key("   ", ["us-sandbox", "us-llm"])));
+        _nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(issued);
+        _nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-new",
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+        PublishConfirmedCredential(stateVersion: 1);
+
+        var act = () => _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_api_key_issue_invalid");
+        await _nyxId.Received(1).RevokeApiKeyAsync(
+            "user-bearer",
+            "key-new",
+            Arg.Any<CancellationToken>());
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "   ",
+            Arg.Any<CancellationToken>());
+        await _vault.DidNotReceiveWithAnyArgs().PutAsync(default!, default);
+        await _vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .CommitProvisionedAsync(default!, default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .CommitRotatedAsync(default!, default!, default!, default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .ConfirmReadinessAsync(default!, default!, default, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .QueueCleanupAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenMalformedKeyAppearsBeforePostCommitCleanup_SkipsCleanup()
+    {
+        _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                Keys(Key("key-orphan", ["wrong-service"])),
+                Keys(Key("key-new", ["us-sandbox", "us-llm"])),
+                Keys(Key("   ", ["us-sandbox", "us-llm"])));
+        _nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-new"));
+        PublishConfirmedCredential(stateVersion: 1);
+
+        var ready = await _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        ready.ApiKeyId.Should().Be("key-new");
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "key-orphan",
+            Arg.Any<CancellationToken>());
+        await _vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await _commands.DidNotReceive().CompleteCleanupTrackAsync(
+            Owner("user-a"),
+            "key-orphan",
+            Arg.Any<string>(),
+            Arg.Any<ManagedCodexCredentialCleanupTrack>(),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("managed")]
+    [InlineData("http")]
+    [InlineData("timeout")]
+    [InlineData("task-canceled")]
+    public async Task EnsureReadyAsync_WhenPostCommitCleanupPreflightHasKnownFailure_ReturnsCommittedCredential(
+        string failureKind)
+    {
+        ArrangeReplacementWithPostCommitCleanupFailure(failureKind);
+
+        var ready = await _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        ready.ApiKeyId.Should().Be("key-new");
+        await _commands.Received(1).CommitProvisionedAsync(
+            Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
+                descriptor.ApiKeyId == "key-new"),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
+            Arg.Any<CancellationToken>());
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "key-orphan",
+            Arg.Any<CancellationToken>());
+        await _vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await _commands.DidNotReceive().CompleteCleanupTrackAsync(
+            Owner("user-a"),
+            "key-orphan",
+            Arg.Any<string>(),
+            Arg.Any<ManagedCodexCredentialCleanupTrack>(),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenPostCommitCleanupPreflightHasProgrammingFault_Propagates()
+    {
+        ArrangeReplacementWithPostCommitCleanupFailure("programming");
+
+        var act = () => _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Be("Cleanup invariant failed.");
+        await _commands.Received(1).CommitProvisionedAsync(
+            Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
+                descriptor.ApiKeyId == "key-new"),
+            Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
+            Arg.Any<CancellationToken>());
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "key-orphan",
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task EnsureReadyAsync_WhenReservedKeysAreAmbiguous_RevokesAllAndCreatesOne()
     {
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
@@ -1227,6 +1423,102 @@ public sealed class ManagedCodexCredentialReadinessTests
             Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData("managed")]
+    [InlineData("http")]
+    [InlineData("timeout")]
+    [InlineData("task-canceled")]
+    public async Task EnsureReadyAsync_WhenReadyCleanupPreflightIsUnavailable_ConfirmsReadiness(
+        string failureKind)
+    {
+        var snapshot = Snapshot(ReadyDescriptor(), stateVersion: 4);
+        snapshot.PendingRevocations.Add(Cleanup("key-old"));
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(snapshot);
+        _nyxId.ListApiKeysAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<ManagedCodexNyxIdApiKey>>>(_ =>
+            {
+                throw CleanupFailure(failureKind);
+            });
+        var confirmed = Snapshot(
+            ReadyDescriptor(),
+            stateVersion: 5,
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
+        confirmed.PendingRevocations.Add(Cleanup("key-old"));
+        _observation.PublishAfterDispatch(confirmed);
+
+        var ready = await _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        ready.ApiKeyId.Should().Be("key-a");
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "key-old",
+            Arg.Any<CancellationToken>());
+        await _vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await _commands.DidNotReceive().CompleteCleanupTrackAsync(
+            Owner("user-a"),
+            "key-old",
+            Arg.Any<string>(),
+            Arg.Any<ManagedCodexCredentialCleanupTrack>(),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+        await _commands.Received(1).ConfirmReadinessAsync(
+            Owner("user-a"),
+            Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
+                descriptor.ApiKeyId == "key-a"),
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenReadyCleanupPreflightHasProgrammingFault_Propagates()
+    {
+        var snapshot = Snapshot(ReadyDescriptor(), stateVersion: 4);
+        snapshot.PendingRevocations.Add(Cleanup("key-old"));
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(snapshot);
+        _nyxId.ListApiKeysAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<ManagedCodexNyxIdApiKey>>>(_ =>
+            {
+                throw CleanupFailure("programming");
+            });
+        var confirmed = Snapshot(
+            ReadyDescriptor(),
+            stateVersion: 5,
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
+        confirmed.PendingRevocations.Add(Cleanup("key-old"));
+        _observation.PublishAfterDispatch(confirmed);
+
+        var act = () => _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Be("Cleanup invariant failed.");
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "key-old",
+            Arg.Any<CancellationToken>());
+        await _vault.DidNotReceiveWithAnyArgs().RevokeAsync(default!, default);
+        await _commands.DidNotReceiveWithAnyArgs()
+            .ConfirmReadinessAsync(default!, default!, default, default);
+        await _commands.DidNotReceive().CompleteCleanupTrackAsync(
+            Owner("user-a"),
+            "key-old",
+            Arg.Any<string>(),
+            Arg.Any<ManagedCodexCredentialCleanupTrack>(),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task EnsureReadyAsync_WhenReadyCleanupHitsInternalTimeout_ConfirmsStructuralReadiness()
     {
@@ -1536,7 +1828,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         var results = await Task.WhenAll(normalOwner, forceWaiter);
 
         results.Should().OnlyContain(result => result.ApiKeyId == "key-a");
-        await _nyxId.Received(1).ListApiKeysAsync(
+        await _nyxId.Received(2).ListApiKeysAsync(
             "user-bearer",
             Arg.Any<CancellationToken>());
         await _commands.Received(1).ConfirmReadinessAsync(
@@ -1612,8 +1904,9 @@ public sealed class ManagedCodexCredentialReadinessTests
             ManagedCodexCredentialActorIdentity.From(Owner("user-a")));
         releasedLease.Should().NotBeNull();
         await releasedLease!.DisposeAsync();
-        await _nyxId.DidNotReceiveWithAnyArgs()
-            .ListApiKeysAsync(default!, default);
+        await _nyxId.Received(1).ListApiKeysAsync(
+            "user-bearer",
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -2582,6 +2875,31 @@ public sealed class ManagedCodexCredentialReadinessTests
         }
     }
 
+    private void ArrangeReplacementWithPostCommitCleanupFailure(
+        string failureKind)
+    {
+        var listAttempt = 0;
+        _nyxId.ListApiKeysAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                listAttempt++;
+                return listAttempt switch
+                {
+                    1 => Keys(Key("key-orphan", ["wrong-service"])),
+                    2 => Keys(Key("key-new", ["us-sandbox", "us-llm"])),
+                    _ => throw CleanupFailure(failureKind),
+                };
+            });
+        _nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-new"));
+        PublishConfirmedCredential(stateVersion: 1);
+    }
+
     private void ArrangeSingleOrphanReplacement(
         bool nyxIdDeleted,
         bool vaultRevoked)
@@ -2610,6 +2928,24 @@ public sealed class ManagedCodexCredentialReadinessTests
             .Returns(IssuedKey("key-fresh"));
         PublishConfirmedCredential(stateVersion: 1);
     }
+
+    private static Exception CleanupFailure(string failureKind) =>
+        failureKind switch
+        {
+            "managed" => new ManagedCodexCredentialLifecycleException(
+                "managed_api_key_list_invalid",
+                "NyxID returned an invalid API-key list."),
+            "http" => new HttpRequestException("NyxID unavailable."),
+            "timeout" => new TimeoutException("NyxID timed out."),
+            "task-canceled" => new TaskCanceledException(
+                "NyxID request timed out."),
+            "programming" => new InvalidOperationException(
+                "Cleanup invariant failed."),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(failureKind),
+                failureKind,
+                "Unsupported cleanup failure kind."),
+        };
 
     private static DispatchAdmission Admission() =>
         new(

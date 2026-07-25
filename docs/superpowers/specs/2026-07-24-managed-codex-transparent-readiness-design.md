@@ -305,7 +305,16 @@ The lifecycle automatically handles these states:
 - **Manual reconciliation replacement:** manual provision/rotation never routes
   a remotely listed validation-failed or deterministic-Vault-missing key through
   issuance compensation. It carries that observed key as typed cleanup on the
-  subsequent credential command, and a rejected command deletes nothing.
+  subsequent credential command, and a rejected command deletes nothing. An
+  active reserved entry without a stable nonblank key ID fails closed before
+  create, rotate, explicit revoke, pending-cleanup mutation, Vault mutation, or
+  Actor dispatch. Every bearer-authorized pending-cleanup retry shares this
+  read-only preflight, and every post-issuance or policy-repair relist repeats
+  the same validation before Vault or Actor mutation. Only the exact stable
+  nonblank ID returned by the local create or rotate may enter issuance
+  compensation. Post-commit best-effort cleanup skips mutation and leaves the
+  cleanup fact pending when the preflight fails, without suppressing the already
+  committed ready credential.
 - **Duplicate or orphaned Aevatar-managed keys:** keep an unambiguous committed
   valid key when possible; otherwise derive each orphan key's deterministic
   Vault reference, create one fresh credential, and atomically commit the new

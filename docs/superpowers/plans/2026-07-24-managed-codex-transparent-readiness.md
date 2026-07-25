@@ -1561,6 +1561,14 @@ Under the lease:
    before the exact incoming credential is committed; manual provision/rotation
    reconciliation candidates that fail validation or deterministic Vault
    resolution follow this same atomic path rather than issuance compensation;
+   an active reserved entry without a stable nonblank key ID fails closed before
+   any mutation because no exact cleanup identity can be constructed; every
+   active-key list or relist repeats this validation, including post-issuance
+   confirmation and policy reconciliation; only the exact stable nonblank ID
+   returned by the local create or rotate may enter issuance compensation;
+   every bearer-authorized Actor-owned cleanup retry and explicit revoke
+   performs the same read-only preflight, while post-commit best-effort cleanup
+   skips mutation and preserves committed readiness when that preflight fails;
 8. dispatch provision or policy reconciliation directly; when rotating,
    include the exact previous API-key ID, previous Vault locator, and
    independent pending-track flags as typed `previous_credential_cleanup`; the
