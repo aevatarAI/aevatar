@@ -209,6 +209,8 @@ public sealed class ActorBackedGAgentRegistryPortsTests
         public AppScopeContext? Resolve(HttpContext? httpContext = null) => new("scope-a", "test");
 
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) => false;
+
+        public bool HasHttpRequestContext(HttpContext? httpContext = null) => false;
     }
 
     private sealed class StubActor(string id) : IActor

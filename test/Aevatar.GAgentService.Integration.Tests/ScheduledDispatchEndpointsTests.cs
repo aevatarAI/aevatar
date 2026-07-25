@@ -428,6 +428,63 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_WithCallerAuthorityInHttpAuth_ShouldReturnBadRequestWithoutScheduleMutation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            scheduleKind = "Workflow",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+                auth = new
+                {
+                    senderNyxId = new
+                    {
+                        subject = new
+                        {
+                            platform = "nyxid",
+                            externalUserId = "user-42",
+                        },
+                        scope = "proxy",
+                    },
+                    callerAuthority = new
+                    {
+                        platform = "nyxid",
+                        externalUserId = "user-42",
+                        scope = "proxy",
+                        bindingId = "bnd-forged",
+                    },
+                },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.Created.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Create_ShouldDefaultMissingScheduleKindToGeneric()
     {
         var service = new RecordingScheduledDispatchApplicationService();
@@ -685,12 +742,15 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task List_ShouldForwardQueryParameters()
+    public async Task List_ShouldForwardScopeAndPageQueryParameters()
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
             service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "member-alpha",
             take: 25,
             cursor: "cursor-1",
             includeTotalCount: true);
@@ -699,9 +759,35 @@ public sealed class ScheduledDispatchEndpointsTests
         await result.ExecuteAsync(http);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        service.LastListTake.Should().Be(25);
-        service.LastListCursor.Should().Be("cursor-1");
-        service.LastListIncludeTotalCount.Should().BeTrue();
+        service.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-1",
+            IncludeTotalCount: true,
+            TeamAutomationScopeId: "scope-alpha",
+            TeamAutomationTeamId: "team-alpha",
+            TeamAutomationMemberId: "member-alpha"));
+    }
+
+    [Fact]
+    public async Task List_WhenScopeIdMissing_ShouldUseGenericListPath()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.List(
+            service,
+            scopeId: null,
+            take: 25,
+            cursor: "cursor-1",
+            includeTotalCount: true);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.LastListQuery.Should().Be(new ScheduledDispatchListQuery(
+            Take: 25,
+            Cursor: "cursor-1",
+            IncludeTotalCount: true));
     }
 
     [Fact]
@@ -712,8 +798,17 @@ public sealed class ScheduledDispatchEndpointsTests
             Detail = CreateDetail("schedule-1"),
         };
 
-        var ok = await ScheduledDispatchEndpoints.Get("schedule-1", service);
-        var notFound = await ScheduledDispatchEndpoints.Get("missing", new RecordingScheduledDispatchApplicationService());
+        var notFoundService = new RecordingScheduledDispatchApplicationService();
+        var ok = await ScheduledDispatchEndpoints.Get(
+            "schedule-1",
+            service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "member-alpha");
+        var notFound = await ScheduledDispatchEndpoints.Get(
+            "missing",
+            notFoundService,
+            scopeId: "scope-alpha");
 
         var okHttp = CreateHttpContext();
         await ok.ExecuteAsync(okHttp);
@@ -722,6 +817,74 @@ public sealed class ScheduledDispatchEndpointsTests
 
         okHttp.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        service.LastTeamScheduleGet.Should().Be(("schedule-1", "scope-alpha", "team-alpha", "member-alpha"));
+        notFoundService.LastTeamScheduleGet.Should().NotBeNull();
+        notFoundService.LastTeamScheduleGet!.Value.ScheduleId.Should().Be("missing");
+        notFoundService.LastTeamScheduleGet.Value.ScopeId.Should().Be("scope-alpha");
+        notFoundService.LastTeamScheduleGet.Value.MemberId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Get_WhenScopeIdMissing_ShouldUseGenericGetPath()
+    {
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = CreateDetail("schedule-1"),
+        };
+
+        var result = await ScheduledDispatchEndpoints.Get("schedule-1", service, scopeId: null);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        service.LastScheduleGet.Should().Be("schedule-1");
+        service.LastTeamScheduleGet.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Get_ShouldSerializeOwnerLLMRuntimeEvidenceWithoutSensitiveAuthorityMaterial()
+    {
+        var detail = CreateDetail("schedule-owner-llm");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMRouteKind", "nyx_id_user_service");
+        SetRequiredStringProperty(
+            detail.Schedule,
+            "OwnerLLMRoute",
+            "/api/v1/proxy/s/chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMUserServiceId", "us-chrono");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMServiceSlug", "chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMModel", "gpt-5.5");
+        SetRequiredStringProperty(detail.Schedule, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(detail.Schedule, "VaultRevocationStatus", "vault-track-terminal");
+        var service = new RecordingScheduledDispatchApplicationService
+        {
+            Detail = detail,
+        };
+
+        var result = await ScheduledDispatchEndpoints.Get("schedule-owner-llm", service);
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var document = await JsonDocument.ParseAsync(http.Response.Body);
+
+        var payload = document.RootElement.GetProperty("schedule");
+        payload.GetProperty("ownerLLMRouteKind").GetString().Should().Be("nyx_id_user_service");
+        payload.GetProperty("ownerLLMRoute").GetString().Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        payload.GetProperty("ownerLLMUserServiceId").GetString().Should().Be("us-chrono");
+        payload.GetProperty("ownerLLMServiceSlug").GetString().Should().Be("chrono-llm-public");
+        payload.GetProperty("ownerLLMModel").GetString().Should().Be("gpt-5.5");
+        payload.GetProperty("nyxIdRevocationStatus").GetString().Should().Be("nyx-track-terminal");
+        payload.GetProperty("vaultRevocationStatus").GetString().Should().Be("vault-track-terminal");
+        var json = document.RootElement.GetRawText();
+        json.Should().NotContain("callerAuthority")
+            .And.NotContain("bindingId")
+            .And.NotContain("bearerToken")
+            .And.NotContain("refreshToken")
+            .And.NotContain("secretReference")
+            .And.NotContain("vaultRef")
+            .And.NotContain("full_key")
+            .And.NotContain("ciphertext");
     }
 
     [Fact]
@@ -732,7 +895,7 @@ public sealed class ScheduledDispatchEndpointsTests
             GetException = new ArgumentException("invalid id"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Get("invalid/id", service);
+        var result = await ScheduledDispatchEndpoints.Get("invalid/id", service, scopeId: "scope-alpha");
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -856,6 +1019,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
                 revisionId = "rev-chat",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -869,14 +1033,52 @@ public sealed class ScheduledDispatchEndpointsTests
         invocation.Payload.Unpack<ChatRequestEvent>().Prompt.Should().Be("summarize status");
         invocation.RevisionId.Should().Be("rev-chat");
         invocation.Auth.Should().NotBeNull();
-        invocation.Auth!.ScopeOwnerNyxId.Should().NotBeNull();
-        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
-        invocation.Auth.ScopeOwnerNyxId.OwnerSubject.Should().BeEquivalentTo(new ScheduledServiceInvocationNyxIdSubjectRef(
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            "owner-user-1"));
+        invocation.Auth!.SenderNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId.Should().BeNull();
         configuration.ScheduleKind.Should().Be(ScheduledDispatchScheduleKind.Workflow);
         host.CredentialExchange.ScopeOwnerSources.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_WithWorkflowServiceInvocationAndOmittedAuth_ShouldDefaultScopeOwnerAuth()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "schedule-chat",
+            displayName = "Workflow chat",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var invocation = host.Schedules.Created.Should().ContainSingle().Which.Target.ServiceInvocation;
+        invocation.Should().NotBeNull();
+        invocation!.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
     }
 
     [Fact]
@@ -1068,7 +1270,7 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldReturnBadRequest()
+    public async Task Update_WithWorkflowServiceInvocationAndOmittedAuth_ShouldDefaultScopeOwnerAuth()
     {
         await using var host = await ScheduleEndpointTestHost.StartAsync();
         host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
@@ -1100,8 +1302,13 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        host.Schedules.Updated.Should().BeEmpty();
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        var invocation = host.Schedules.Updated.Should().ContainSingle().Which.Configuration.Target.ServiceInvocation;
+        invocation.Should().NotBeNull();
+        invocation!.Auth.Should().NotBeNull();
+        invocation.Auth!.SenderNyxId.Should().BeNull();
+        invocation.Auth.ScopeOwnerNyxId.Should().NotBeNull();
+        invocation.Auth.ScopeOwnerNyxId!.Scope.Should().Be("proxy");
     }
 
     [Fact]
@@ -1226,6 +1433,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 endpointId = "chat",
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadJson = """{"prompt":"json prompt"}""",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -1273,6 +1481,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 endpointId = "chat",
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadJson = """{"prompt":"json prompt"}""",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -1313,6 +1522,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
                 revisionId = "rev-chat",
+                auth = SenderNyxIdAuth(),
             },
         });
 
@@ -1344,6 +1554,7 @@ public sealed class ScheduledDispatchEndpointsTests
                 endpointId = "chat",
                 payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
                 payloadJson = """{"prompt":"json prompt"}""",
+                auth = SenderNyxIdAuth(),
             },
         });
         var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
@@ -1451,6 +1662,20 @@ public sealed class ScheduledDispatchEndpointsTests
             },
         };
 
+    private static object SenderNyxIdAuth() => new
+    {
+        senderNyxId = new
+        {
+            subject = new
+            {
+                platform = "nyxid",
+                tenant = "tenant-1",
+                externalUserId = "user-42",
+            },
+            scope = "proxy",
+        },
+    };
+
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
@@ -1531,6 +1756,13 @@ public sealed class ScheduledDispatchEndpointsTests
             CollectFileProto(dependency, fds, seen);
 
         fds.File.Add(FileDescriptorProto.Parser.ParseFrom(file.SerializedData));
+    }
+
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        property!.SetValue(target, value);
     }
 
     private static ScheduledDispatchDetail CreateDetail(string scheduleId) =>
@@ -1762,6 +1994,9 @@ public sealed class ScheduledDispatchEndpointsTests
         public int? LastListTake { get; private set; }
         public string? LastListCursor { get; private set; }
         public bool? LastListIncludeTotalCount { get; private set; }
+        public ScheduledDispatchListQuery? LastListQuery { get; private set; }
+        public string? LastScheduleGet { get; private set; }
+        public (string ScheduleId, string ScopeId, string? TeamId, string? MemberId)? LastTeamScheduleGet { get; private set; }
         public int? LastPreviewCount { get; private set; }
         public DateTimeOffset? LastPreviewFromUtc { get; private set; }
         public ScheduledDispatchDetail? Detail { get; set; }
@@ -1894,6 +2129,21 @@ public sealed class ScheduledDispatchEndpointsTests
 
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
+            LastScheduleGet = scheduleId;
+            if (GetException != null)
+                throw GetException;
+
+            return Task.FromResult(Detail?.Schedule.ScheduleId == scheduleId ? Detail : null);
+        }
+
+        public Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+            string scheduleId,
+            string scopeId,
+            string? teamId = null,
+            string? memberId = null,
+            CancellationToken ct = default)
+        {
+            LastTeamScheduleGet = (scheduleId, scopeId, teamId, memberId);
             if (GetException != null)
                 throw GetException;
 
@@ -1919,6 +2169,7 @@ public sealed class ScheduledDispatchEndpointsTests
             LastListTake = query.Take;
             LastListCursor = query.Cursor;
             LastListIncludeTotalCount = query.IncludeTotalCount;
+            LastListQuery = query;
             return Task.FromResult(new ScheduledDispatchListResult([], null, query.IncludeTotalCount ? 0 : null));
         }
 

@@ -98,6 +98,10 @@ public partial class NyxIdChatEndpointsCoverageTests
         commands.Should().HaveCount(2);
         commands[0].TurnId.Should().Be(commands[1].TurnId);
         commands[0].TurnId.Should().StartWith("turn-");
+        var firstBody = await ReadResponseBodyAsync(firstContext);
+        var secondBody = await ReadResponseBodyAsync(secondContext);
+        firstBody.Should().Contain("RUN_FINISHED").And.Contain(commands[0].TurnId);
+        secondBody.Should().Contain("RUN_FINISHED").And.Contain(commands[1].TurnId);
     }
 
     [Fact]
@@ -132,10 +136,15 @@ public partial class NyxIdChatEndpointsCoverageTests
             var command = interactionService.Commands.Should().ContainSingle().Which;
             var body = bodyStream.GetText();
             var frames = ParseSseFrames(body);
-            frames.Select(frame => frame.GetProperty("type").GetString()).Should().Equal(
-                "RUN_STARTED",
-                "CUSTOM",
-                "RUN_ERROR");
+            var frameTypes = frames.Select(frame => frame.GetProperty("type").GetString()).ToArray();
+            frameTypes[0].Should().Be("RUN_STARTED");
+            frameTypes[^1].Should().Be("RUN_ERROR");
+            frameTypes.Skip(1).SkipLast(1).Should().OnlyContain(type => type == "CUSTOM");
+            frames.Skip(1).SkipLast(1)
+                .Select(frame => frame.GetProperty("custom").GetProperty("name").GetString())
+                .Should()
+                .NotBeEmpty()
+                .And.OnlyContain(name => name == "aevatar.nyxid_chat.keepalive");
             var terminal = frames[^1];
             terminal.GetProperty("turnId").GetString().Should().Be(command.TurnId);
             terminal.GetProperty("runError").GetProperty("runId").GetString().Should().Be(command.TurnId);

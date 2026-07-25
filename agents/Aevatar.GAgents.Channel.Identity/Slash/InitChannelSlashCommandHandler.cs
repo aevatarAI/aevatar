@@ -74,7 +74,7 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
             return PlainText("启动 NyxID 绑定时遇到内部错误,请稍后重试 /init。");
         }
 
-        return BuildBindingCard(challenge.AuthorizeUrl, challenge.ReviewsExistingBinding);
+        return BuildBindingCard(challenge.AuthorizeUrl, challenge.RenewsExistingBinding);
     }
 
     private static MessageContent PlainText(string text) => new() { Text = text };
@@ -86,26 +86,26 @@ public sealed class InitChannelSlashCommandHandler : IChannelSlashCommandHandler
     /// </summary>
     public static MessageContent BuildBindingCard(
         string authorizeUrl,
-        bool reviewsExistingBinding = false)
+        bool renewsExistingBinding = false)
     {
         var content = new MessageContent
         {
-            Text = reviewsExistingBinding
-                ? $"打开此链接查看或更新 Lark bot 的 NyxID 服务授权(5 分钟内有效):\n{authorizeUrl}"
+            Text = renewsExistingBinding
+                ? $"打开此链接重新确认并更新 Lark bot 的 NyxID 服务授权(5 分钟内有效):\n{authorizeUrl}"
                 : $"打开此链接完成 NyxID 登录并确认服务授权(5 分钟内有效):\n{authorizeUrl}",
         };
         content.Cards.Add(new CardBlock
         {
-            Title = reviewsExistingBinding ? "查看 NyxID 服务授权" : "完成 NyxID 绑定",
-            Text = reviewsExistingBinding
-                ? "查看当前已授权服务，并按需勾选新的服务。链接 5 分钟内有效。"
+            Title = renewsExistingBinding ? "更新 NyxID 服务授权" : "完成 NyxID 绑定",
+            Text = renewsExistingBinding
+                ? "重新确认服务授权；成功后会安全更新当前 Lark 绑定。链接 5 分钟内有效。"
                 : "登录并确认 Lark bot 可使用的 NyxID 服务。链接 5 分钟内有效。",
         });
         content.Actions.Add(new ActionElement
         {
             Kind = ActionElementKind.Link,
             ActionId = "nyxid_init_open",
-            Label = reviewsExistingBinding ? "查看服务授权" : "立即绑定 NyxID",
+            Label = renewsExistingBinding ? "更新服务授权" : "立即绑定 NyxID",
             Value = authorizeUrl,
             IsPrimary = true,
         });

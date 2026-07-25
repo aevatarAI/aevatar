@@ -2056,7 +2056,10 @@ export function ConversationLlmConfigBar({
             <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>
               {t("pages.chat.chatpresentation.config.default", "Config default")}</option>
             {routeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
+              <option
+                key={option.value}
+                value={encodeConversationRouteSelectValue(option.value)}
+              >
                 {option.label}
               </option>
             ))}

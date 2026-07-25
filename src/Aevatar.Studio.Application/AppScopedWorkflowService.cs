@@ -1,7 +1,8 @@
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Domain.Studio.Models;
-using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.Extensions.Logging;
 
 using Aevatar.Studio.Application.Studio;
@@ -14,20 +15,21 @@ namespace Aevatar.Studio.Application;
 public sealed class AppScopedWorkflowService
 {
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
-    private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
     private readonly IStudioWorkspaceQueryPort? _workspaceQueryPort;
     private readonly IStudioWorkspaceCommandPort? _workspaceCommandPort;
     private readonly ILogger<AppScopedWorkflowService>? _logger;
 
     public AppScopedWorkflowService(
         IWorkflowYamlDocumentService yamlDocumentService,
-        IWorkflowDefinitionParser workflowDefinitionParser,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         IStudioWorkspaceQueryPort? workspaceQueryPort = null,
         IStudioWorkspaceCommandPort? workspaceCommandPort = null,
         ILogger<AppScopedWorkflowService>? logger = null)
     {
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
-        _workflowDefinitionParser = workflowDefinitionParser ?? throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _capabilityAdmissionService = capabilityAdmissionService
+            ?? throw new ArgumentNullException(nameof(capabilityAdmissionService));
         _workspaceQueryPort = workspaceQueryPort;
         _workspaceCommandPort = workspaceCommandPort;
         _logger = logger;
@@ -104,9 +106,35 @@ public sealed class AppScopedWorkflowService
             normalizedYaml = AlignWorkflowYamlName(normalizedYaml, requestedWorkflowName);
         }
 
-        var validation = await _workflowDefinitionParser.ParseWorkflowYamlAsync(normalizedYaml, ct);
-        if (!validation.Succeeded)
-            throw new InvalidOperationException(validation.Error);
+        var suppliedAdmission = request.CapabilityAdmission;
+        var executionMode = suppliedAdmission?.ExecutionMode
+            ?? ExternalCapabilityExecutionMode.Interactive;
+        if (suppliedAdmission?.ExistingPlan is { } existingPlan)
+        {
+            await _capabilityAdmissionService.RevalidatePersistedAsync(
+                new PersistedWorkflowCapabilityAdmissionRequest(
+                    existingPlan,
+                    normalizedYaml,
+                    new Dictionary<string, string>(),
+                    "studio_workflow_draft",
+                    executionMode),
+                ct);
+        }
+        else
+        {
+            await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
+                new ExternalWorkflowCapabilityAccessContext(
+                    normalizedScopeId,
+                    suppliedAdmission?.CallerId ?? string.Empty,
+                    suppliedAdmission?.NyxIdCallerBearerToken,
+                    suppliedAdmission?.NyxIdOrganizationBearerToken),
+                normalizedYaml,
+                new Dictionary<string, string>(),
+                "studio_workflow_draft",
+                executionMode),
+                ct);
+        }
 
         var parsed = _yamlDocumentService.Parse(normalizedYaml);
         var workflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName)

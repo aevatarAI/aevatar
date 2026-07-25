@@ -7,5 +7,5 @@ namespace Aevatar.AI.Abstractions.ToolProviders;
 /// </summary>
 public interface ISystemSkillOverlayProvider
 {
-    Aevatar.AI.Abstractions.SystemSkillOverlay? GetCurrent(SystemSkillOverlayRequest request);
+    Aevatar.AI.Abstractions.Prompting.GlobalSystemSkillPromptLayer? GetCurrent(SystemSkillOverlayRequest request);
 }

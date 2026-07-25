@@ -178,6 +178,18 @@ public static class ServiceCollectionExtensions
                 ProjectionKind = scopeKey.ProjectionKind,
             },
             static context => new TeamAutomationOperationObservationRuntimeLease(context));
+        services.AddEventSinkProjectionRuntimeCore<
+            NyxIdAuthorizationCatalogRefreshObservationProjectionContext,
+            NyxIdAuthorizationCatalogRefreshObservationRuntimeLease,
+            NyxIdAuthorizationCatalogRefreshCommittedOutcome,
+            ProjectionSessionScopeGAgent<NyxIdAuthorizationCatalogRefreshObservationProjectionContext>>(
+            static scopeKey => new NyxIdAuthorizationCatalogRefreshObservationProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new NyxIdAuthorizationCatalogRefreshObservationRuntimeLease(context));
 
         services.TryAddSingleton<IGAgentRunTerminalProjectionPort, GAgentRunTerminalProjectionPort>();
         services.TryAddSingleton<IGAgentDraftRunObservationScopeLeasePreparationPort, GAgentDraftRunObservationScopeLeasePreparationPort>();
@@ -185,6 +197,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             ITeamAutomationOperationObservationScopeLeasePreparationPort,
             TeamAutomationOperationObservationScopeLeasePreparationPort>();
+        services.TryAddSingleton<
+            INyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort,
+            NyxIdAuthorizationCatalogRefreshObservationScopeLeasePreparationPort>();
         services.TryAddSingleton<IProjectionSessionEventCodec<AGUIEvent>, GAgentDraftRunSessionEventCodec>();
         services.TryAddSingleton<IProjectionSessionEventHub<AGUIEvent>, ProjectionSessionEventHub<AGUIEvent>>();
         services.TryAddSingleton<LlmSessionObservationSessionEventCodec>();
@@ -195,12 +210,21 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<
             IProjectionSessionEventHub<TeamAutomationOperationCommittedOutcome>,
             ProjectionSessionEventHub<TeamAutomationOperationCommittedOutcome>>();
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<NyxIdAuthorizationCatalogRefreshCommittedOutcome>,
+            NyxIdAuthorizationCatalogRefreshObservationSessionEventCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<NyxIdAuthorizationCatalogRefreshCommittedOutcome>,
+            ProjectionSessionEventHub<NyxIdAuthorizationCatalogRefreshCommittedOutcome>>();
         services.TryAddSingleton<IGAgentDraftRunProjectionPort, GAgentDraftRunProjectionPort>();
         services.TryAddSingleton<IScriptServiceAguiProjectionPort, ScriptServiceAguiProjectionPort>();
         services.TryAddSingleton<ILlmSessionObservationProjectionPort, LlmSessionObservationProjectionPort>();
         services.TryAddSingleton<
             ITeamAutomationOperationObservationProjectionPort,
             TeamAutomationOperationObservationProjectionPort>();
+        services.TryAddSingleton<
+            INyxIdAuthorizationCatalogRefreshObservationProjectionPort,
+            NyxIdAuthorizationCatalogRefreshObservationProjectionPort>();
         services.TryAddSingleton<ProjectionActivationPlanDispatcher>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             ICommittedStatePublicationHook,
@@ -328,6 +352,9 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<TeamAutomationOperationObservationProjectionContext>,
             TeamAutomationOperationObservationSessionEventProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<NyxIdAuthorizationCatalogRefreshObservationProjectionContext>,
+            NyxIdAuthorizationCatalogRefreshObservationSessionEventProjector>());
 
         return services;
     }

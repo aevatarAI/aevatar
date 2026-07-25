@@ -13,7 +13,13 @@ public interface ISkillWorkflowMountPort
 public sealed record SkillWorkflowMountRequest(
     string ScopeId,
     string NyxIdAccessToken,
-    IReadOnlyList<SkillWorkflowDescriptor> Workflows);
+    IReadOnlyList<SkillWorkflowDescriptor> Workflows)
+{
+    public string CallerId { get; init; } = string.Empty;
+
+    public override string ToString() =>
+        $"{nameof(SkillWorkflowMountRequest)} {{ ScopeId = {ScopeId}, CallerId = {CallerId}, Credentials = [REDACTED], Workflows = [REDACTED], WorkflowCount = {Workflows.Count} }}";
+}
 
 public sealed record SkillWorkflowMountResult(
     string Status,

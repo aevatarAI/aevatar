@@ -23,6 +23,6 @@
     <Protobuf Include="protos\*.proto"
               GrpcServices="None"
               ProtoRoot="protos"
-              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Abstractions\protos" />
+              AdditionalImportDirs="..\Aevatar.GAgents.Channel.Abstractions\protos;..\..\src\Aevatar.Foundation.Abstractions" />
   </ItemGroup>
 </Project>

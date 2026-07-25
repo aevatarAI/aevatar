@@ -70,6 +70,8 @@ public sealed record StudioMemberWorkflowScheduleResult(
     public string OperationId { get; init; } = string.Empty;
 
     public string CommandId { get; init; } = string.Empty;
+
+    public bool NewOperationCommitted { get; init; }
 }
 
 public sealed record StudioMemberAutomationUpdateCommand(
@@ -87,6 +89,8 @@ public sealed record StudioMemberAutomationUpdateCommand(
     public string? Prompt { get; init; }
 
     public string? DisplayName { get; init; }
+
+    public string? ProvisioningBearerToken { get; init; }
 }
 
 public sealed record StudioMemberAutomationActionCommand(
@@ -126,6 +130,20 @@ public sealed record StudioMemberAutomationView(
     public string CredentialSourceKind { get; init; } = "scheduled_invocation_agent_key";
 
     public DateTimeOffset UpdatedAt { get; init; }
+
+    public string OwnerLLMRouteKind { get; init; } = "unspecified";
+
+    public string OwnerLLMRoute { get; init; } = string.Empty;
+
+    public string OwnerLLMUserServiceId { get; init; } = string.Empty;
+
+    public string OwnerLLMServiceSlug { get; init; } = string.Empty;
+
+    public string OwnerLLMModel { get; init; } = string.Empty;
+
+    public string NyxIdRevocationStatus { get; init; } = string.Empty;
+
+    public string VaultRevocationStatus { get; init; } = string.Empty;
 }
 
 public sealed record StudioMemberAutomationListResponse(
@@ -157,4 +175,34 @@ public sealed class StudioMemberAutomationPlanConflictException : Exception
     }
 
     public string Code { get; }
+}
+
+public sealed class StudioMemberAutomationProjectionPendingException : Exception
+{
+    public StudioMemberAutomationProjectionPendingException(long requiredStateVersion)
+        : base("The authorization catalog projection has not reached the committed state version.")
+    {
+        if (requiredStateVersion <= 0)
+            throw new ArgumentOutOfRangeException(nameof(requiredStateVersion));
+
+        RequiredStateVersion = requiredStateVersion;
+    }
+
+    public long RequiredStateVersion { get; }
+}
+
+public sealed class StudioMemberAutomationCatalogRefreshSupersededException : Exception
+{
+    public StudioMemberAutomationCatalogRefreshSupersededException()
+        : base("The authorization catalog refresh was superseded by a newer refresh.")
+    {
+    }
+}
+
+public sealed class StudioMemberAutomationCatalogRefreshUnavailableException : Exception
+{
+    public StudioMemberAutomationCatalogRefreshUnavailableException()
+        : base("The authorization catalog could not be refreshed. Retry this request.")
+    {
+    }
 }

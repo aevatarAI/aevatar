@@ -9,6 +9,7 @@ using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Workspace;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
@@ -53,6 +54,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<ChatHistoryCreateRecoveryCurrentStateDocument>(
+                services,
+                configuration,
+                static document => document.Id);
             RegisterElasticsearch<GAgentRegistryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserMemoryCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<UserConfigCurrentStateDocument>(services, configuration);
@@ -60,6 +65,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioWorkspaceCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<WorkOrderCurrentStateDocument>(services, configuration);
         }
         else
         {
@@ -70,6 +76,10 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
             RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
             RegisterInMemory<ChatConversationCurrentStateDocument>(services);
+            RegisterInMemory<ChatHistoryCreateRecoveryCurrentStateDocument>(
+                services,
+                static document => document.Id,
+                static document => document.UpdatedAt);
             RegisterInMemory<GAgentRegistryCurrentStateDocument>(services);
             RegisterInMemory<UserMemoryCurrentStateDocument>(services);
             RegisterInMemory<UserConfigCurrentStateDocument>(services);
@@ -77,6 +87,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<StudioMemberBindingRunCurrentStateDocument>(services);
             RegisterInMemory<StudioTeamCurrentStateDocument>(services);
             RegisterInMemory<StudioWorkspaceCurrentStateDocument>(services);
+            RegisterInMemory<WorkOrderCurrentStateDocument>(services);
         }
 
         return services;
@@ -145,13 +156,15 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<ChatHistoryCreateRecoveryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserConfigCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioMemberBindingRunCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<StudioTeamCurrentStateDocument>(services, providerKind)
-               && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind);
+               && HasDocumentReaderForProvider<StudioWorkspaceCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<WorkOrderCurrentStateDocument>(services, providerKind);
     }
 
     private static bool HasAnyDocumentReader<TDoc>(IServiceCollection services)
@@ -196,10 +209,12 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RoleCatalogState.Descriptor,
             UserMemoryState.Descriptor,
             ChatConversationState.Descriptor,
+            ChatTurnHistoryDeliveryState.Descriptor,
             StudioMemberState.Descriptor,
             StudioMemberBindingRunState.Descriptor,
             StudioTeamState.Descriptor,
-            StudioWorkspaceState.Descriptor);
+            StudioWorkspaceState.Descriptor,
+            WorkOrderState.Descriptor);
     }
 
 }

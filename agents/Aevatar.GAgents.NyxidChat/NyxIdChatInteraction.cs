@@ -275,6 +275,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
             Prompt = command.Prompt,
             SessionId = command.TurnId,
             ScopeId = command.ScopeId,
+            CommandAttemptId = context.CommandId,
         };
         if (command.InputParts is { Count: > 0 })
         {

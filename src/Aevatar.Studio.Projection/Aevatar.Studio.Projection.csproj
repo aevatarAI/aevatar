@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioMember\Aevatar.GAgents.StudioMember.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StudioTeam\Aevatar.GAgents.StudioTeam.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.WorkOrder\Aevatar.GAgents.WorkOrder.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Abstractions\Aevatar.Workflow.Abstractions.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Studio\Aevatar.Workflow.Studio.csproj" />
@@ -43,7 +44,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" />
+    <Protobuf Include="ReadModels/studio_projection_readmodels.proto" GrpcServices="None" AdditionalImportDirs="../../agents/Aevatar.GAgents.UserConfig" />
   </ItemGroup>
 
   <ItemGroup>

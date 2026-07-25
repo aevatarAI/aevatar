@@ -29,7 +29,8 @@ public sealed class ScheduledInvocationAuthorizationRevalidator
         {
             return ScheduledInvocationAuthorizationValidationResult.Failed(
                 ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
-                current.Detail);
+                current.Detail,
+                current.ObservedCatalogStateVersion);
         }
 
         var plan = current.Plan!;
@@ -44,7 +45,8 @@ public sealed class ScheduledInvocationAuthorizationRevalidator
         {
             return ScheduledInvocationAuthorizationValidationResult.Failed(
                 ScheduledInvocationAuthorizationFailureCode.AuthorizationPlanChanged,
-                "scheduled_invocation_authorization_plan_changed");
+                "scheduled_invocation_authorization_plan_changed",
+                current.ObservedCatalogStateVersion);
         }
 
         return ScheduledInvocationAuthorizationValidationResult.Succeeded(plan);

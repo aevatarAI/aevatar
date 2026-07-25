@@ -4,18 +4,16 @@ using System.Text;
 namespace Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 
 /// <summary>
-/// Builds stable, provider-safe tool names of the form <c>nyxid_{service}__{operation}</c>.
-/// Names are deterministic for a given (slug, operation) pair so the LLM sees the same tool
-/// across turns; over-long names are truncated with a stable hash suffix to stay unique.
+/// Builds stable, provider-safe operation tool names without embedding service-instance identity.
 /// </summary>
 public static class ConnectedServiceToolNaming
 {
-    public const string Prefix = "nyxid_";
+    public const string Prefix = "nyxid_service_operation__";
     private const int MaxLength = 64;
 
-    public static string Build(string serviceSlug, string operation)
+    public static string Build(string operation)
     {
-        var raw = $"{Prefix}{Sanitize(serviceSlug)}__{Sanitize(operation)}";
+        var raw = $"{Prefix}{Sanitize(operation)}";
         if (raw.Length <= MaxLength)
             return raw;
 

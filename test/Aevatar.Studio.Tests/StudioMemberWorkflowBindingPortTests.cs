@@ -4,6 +4,7 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -15,10 +16,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
     public async Task BindAsync_WhenWorkflowIdMissing_ShouldDeriveStableWorkflowId()
     {
         var memberService = new RecordingMemberService();
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -34,6 +34,45 @@ public sealed class StudioMemberWorkflowBindingPortTests
         memberService.LastRequest.Workflow.WorkflowId.Should().HaveLength("workflow-".Length + 32);
         memberService.LastRequest.Workflow.WorkflowYamls.Should().ContainSingle()
             .Which.Should().Contain("name: demo");
+        memberService.LastRequest.Workflow.CapabilityAdmissionPlan.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task BindAsync_WhenCapabilityAdmissionFails_ShouldNotReadOrMutateMember()
+    {
+        var memberService = new RecordingMemberService();
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("external capability is not ready"));
+        var saveAndBindPort = new RecordingSaveAndBindPort();
+        var memberCommandPort = new RecordingMemberCommandPort();
+        var port = new StudioMemberWorkflowBindingPort(
+            memberService,
+            admission,
+            saveAndBindPort,
+            memberCommandPort);
+
+        var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
+            "scope-1",
+            "member-1",
+            "name: demo\nsteps: []\n")
+        {
+            CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                "caller-alpha",
+                "runtime-caller-credential"),
+        });
+
+        await action.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("external capability is not ready");
+        var request = admission.Requests.Should().ContainSingle().Which;
+        request.Access.ScopeId.Should().Be("scope-1");
+        request.Access.CallerId.Should().Be("caller-alpha");
+        request.Access.NyxIdCallerBearerToken.Should().Be("runtime-caller-credential");
+        request.SourceKind.Should().Be("studio_member_workflow_binding");
+        request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+        memberService.GetCallCount.Should().Be(0);
+        memberService.LastRequest.Should().BeNull();
+        saveAndBindPort.LastRequest.Should().BeNull();
+        memberCommandPort.LastRecordPublishedBinding.Should().BeNull();
     }
 
     [Fact]
@@ -51,10 +90,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
     public async Task BindAsync_WhenWorkflowIdProvided_ShouldUseTrimmedWorkflowId()
     {
         var memberService = new RecordingMemberService();
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -75,10 +113,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
         var memberService = new RecordingMemberService();
         memberService.EnqueueBindingRun(StudioMemberBindingRunStatusNames.PlatformBindingPending);
         memberService.EnqueueBindingRun(StudioMemberBindingRunStatusNames.Succeeded);
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -104,10 +141,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
             MissingBindingRunReadCount = 1,
         };
         memberService.EnqueueBindingRun(StudioMemberBindingRunStatusNames.Succeeded);
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -128,10 +164,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
                 Code: "STUDIO_MEMBER_PLATFORM_BINDING_FAILED",
                 Message: "workflow parse failed",
                 FailedAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -151,10 +186,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
         {
             ThrowMemberNotFoundOnGet = true,
         };
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -182,10 +216,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
                     ImplementationKind: "workflow",
                     BoundAt: DateTimeOffset.Parse("2026-07-01T00:00:00Z"))),
         };
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         var result = await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -210,6 +243,8 @@ public sealed class StudioMemberWorkflowBindingPortTests
         saveAndBindPort.LastRequest.ExposureDesired.Should().BeTrue();
         saveAndBindPort.LastRequest.DisplayName.Should().Be("Member One");
         saveAndBindPort.LastRequest.WorkflowId.Should().Be("workflow-explicit");
+        saveAndBindPort.LastRequest.CapabilityAdmission.Should().NotBeNull();
+        saveAndBindPort.LastRequest.CapabilityAdmission!.ExistingPlan.Should().NotBeNull();
         memberCommandPort.LastRecordPublishedBinding.Should().NotBeNull();
         memberCommandPort.LastScopeId.Should().Be("scope-1");
         memberCommandPort.LastMemberId.Should().Be("member-1");
@@ -231,10 +266,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
                 lastBoundRevisionId: "revision-existing",
                 implementationKind: MemberImplementationKindNames.Script),
         };
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -256,10 +290,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
                 publishedServiceId: " ",
                 lastBoundRevisionId: "revision-existing"),
         };
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -277,13 +310,11 @@ public sealed class StudioMemberWorkflowBindingPortTests
     public async Task BindAsync_WhenWorkflowYamlInvalid_ShouldRejectBeforeDispatchingBind()
     {
         var memberService = new RecordingMemberService();
-        var parser = new RecordingWorkflowDefinitionParser
-        {
-            Error = "missing workflow name",
-        };
+        var admission = new StudioWorkflowCapabilityAdmissionTestService(
+            new InvalidOperationException("workflow_yaml is not a valid workflow definition: missing workflow name"));
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, admission, saveAndBindPort, memberCommandPort);
 
         var action = () => port.BindAsync(new StudioMemberWorkflowBindingRequest(
             ScopeId: "scope-1",
@@ -292,7 +323,8 @@ public sealed class StudioMemberWorkflowBindingPortTests
 
         await action.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("workflow_yaml is not a valid workflow definition: missing workflow name");
-        parser.LastYaml.Should().Be("steps: []\n");
+        admission.Requests.Should().ContainSingle()
+            .Which.WorkflowYaml.Should().Be("steps: []\n");
         memberService.LastRequest.Should().BeNull();
         saveAndBindPort.LastRequest.Should().BeNull();
     }
@@ -320,10 +352,9 @@ public sealed class StudioMemberWorkflowBindingPortTests
     private static async Task<string> BindWithoutWorkflowIdAsync(string scopeId, string memberId)
     {
         var memberService = new RecordingMemberService();
-        var parser = new RecordingWorkflowDefinitionParser();
         var saveAndBindPort = new RecordingSaveAndBindPort();
         var memberCommandPort = new RecordingMemberCommandPort();
-        var port = new StudioMemberWorkflowBindingPort(memberService, parser, saveAndBindPort, memberCommandPort);
+        var port = new StudioMemberWorkflowBindingPort(memberService, new StudioWorkflowCapabilityAdmissionTestService(), saveAndBindPort, memberCommandPort);
 
         await port.BindAsync(new StudioMemberWorkflowBindingRequest(
             scopeId,
@@ -331,22 +362,6 @@ public sealed class StudioMemberWorkflowBindingPortTests
             "name: demo\nsteps: []\n"));
 
         return memberService.LastRequest!.Workflow!.WorkflowId;
-    }
-
-    private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
-    {
-        public string? Error { get; init; }
-        public string? LastYaml { get; private set; }
-
-        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
-            string workflowYaml,
-            CancellationToken ct = default)
-        {
-            LastYaml = workflowYaml;
-            return Task.FromResult(Error is null
-                ? WorkflowYamlParseResult.Success("demo")
-                : WorkflowYamlParseResult.Invalid(Error));
-        }
     }
 
     private sealed class RecordingMemberService : IStudioMemberService
@@ -359,6 +374,7 @@ public sealed class StudioMemberWorkflowBindingPortTests
         public string? LastMemberId { get; private set; }
         public UpdateStudioMemberBindingRequest? LastRequest { get; private set; }
         public int GetBindingRunCallCount { get; private set; }
+        public int GetCallCount { get; private set; }
         public int MissingBindingRunReadCount { get; init; }
         private int _missingBindingRunReads;
 
@@ -403,10 +419,13 @@ public sealed class StudioMemberWorkflowBindingPortTests
         public Task<StudioMemberDetailResponse> GetAsync(
             string scopeId,
             string memberId,
-            CancellationToken ct = default) =>
-            ThrowMemberNotFoundOnGet
+            CancellationToken ct = default)
+        {
+            GetCallCount++;
+            return ThrowMemberNotFoundOnGet
                 ? throw new StudioMemberNotFoundException(scopeId, memberId)
                 : Task.FromResult(Detail);
+        }
 
         public Task<StudioMemberBindingViewResponse> GetBindingAsync(
             string scopeId,

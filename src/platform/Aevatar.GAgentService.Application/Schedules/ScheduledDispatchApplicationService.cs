@@ -99,6 +99,17 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             requireScheduleId: true,
             ct);
         var existing = await GetMutableScheduleAsync(normalized.ScheduleId, normalized.TeamAutomationOwner, ct);
+        if (existing?.Schedule is
+            {
+                TeamOwned: true,
+                TeamAutomationLifecycleStatus: TeamAutomationLifecycleStatus.ReplacementPending,
+            })
+        {
+            throw new ScheduledDispatchConflictException(
+                normalized.ScheduleId,
+                "team_automation_replacement_pending");
+        }
+
         normalized = AdmitCredentialRequirement(
             normalized,
             ScheduledDispatchCredentialRequirementOperation.Update,
@@ -171,6 +182,20 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        var teamAutomationScopeId = NormalizeNullable(query.TeamAutomationScopeId);
+        if (teamAutomationScopeId is not null)
+        {
+            return _queryPort.ListAsync(query with
+            {
+                Take = Math.Clamp(query.Take, 1, 200),
+                TeamAutomationOwner = null,
+                TeamAutomationScopeId = teamAutomationScopeId,
+                TeamAutomationTeamId = NormalizeNullable(query.TeamAutomationTeamId),
+                TeamAutomationMemberId = NormalizeNullable(query.TeamAutomationMemberId),
+                IncludeDeleted = false,
+            }, ct);
+        }
+
         return _queryPort.ListAsync(query with
         {
             Take = Math.Clamp(query.Take, 1, 200),
@@ -560,6 +585,26 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             "accepted");
     }
 
+    public async Task<ScheduledDispatchDetail?> GetTeamScheduleAsync(
+        string scheduleId,
+        string scopeId,
+        string? teamId = null,
+        string? memberId = null,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedTeamId = NormalizeNullable(teamId);
+        var normalizedMemberId = NormalizeNullable(memberId);
+        var detail = await _queryPort.GetAsync(normalizedScheduleId, ct);
+        return detail?.Schedule is { Deleted: false } &&
+               TeamScopeEquals(detail.Schedule, normalizedScopeId) &&
+               (normalizedTeamId is null || TeamEquals(detail.Schedule, normalizedTeamId)) &&
+               (normalizedMemberId is null || TeamMemberEquals(detail.Schedule, normalizedMemberId))
+            ? detail
+            : null;
+    }
+
     public async Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
@@ -766,7 +811,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ArgumentNullException.ThrowIfNull(owner);
         return new TeamMemberAutomationOwner(
             NormalizeRequired(owner.ScopeId, nameof(owner.ScopeId)),
-            NormalizeRequired(owner.MemberId, nameof(owner.MemberId)));
+            NormalizeRequired(owner.MemberId, nameof(owner.MemberId)),
+            NormalizeOptional(owner.TeamId));
     }
 
     private static ScheduledInvocationAuthorizationOwner NormalizeAuthorizationOwner(
@@ -794,7 +840,93 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             NormalizeRequired(operation.PolicyVersion, nameof(operation.PolicyVersion)),
             kind,
             NormalizeCredentialEffectLocator(operation.CredentialEffectLocator),
+            NormalizeTeamActivationDecision(operation.ActivationDecision),
             NormalizeRequired(operation.MutationDigest, nameof(operation.MutationDigest)));
+    }
+
+    private static TeamAutomationActivationDecision NormalizeTeamActivationDecision(
+        TeamAutomationActivationDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        var mode = NormalizeScheduleMode(decision.ScheduleMode);
+        var callerAuthority = NormalizeCallerAuthority(decision.CallerAuthority) ??
+            throw new ArgumentException("Team automation caller authority is required.", nameof(decision));
+        return new TeamAutomationActivationDecision(
+            NormalizeScheduleId(decision.ScheduleId),
+            NormalizeOptional(decision.DisplayName),
+            NormalizeTeamOwner(decision.Owner),
+            NormalizeServiceInvocationIdentity(decision.ServiceIdentity),
+            NormalizeRequired(decision.EndpointId, nameof(decision.EndpointId)),
+            decision.Payload?.Clone() ??
+                throw new ArgumentException("Team automation payload is required.", nameof(decision)),
+            callerAuthority,
+            NormalizeAuthorizationFact(decision.AuthorizationFact),
+            mode == ScheduledDispatchScheduleMode.RecurringCron
+                ? NormalizeRequired(decision.CronExpression, nameof(decision.CronExpression))
+                : string.Empty,
+            ScheduledDispatchCalculator.NormalizeTimezone(decision.Timezone),
+            decision.Enabled,
+            decision.ScheduleKind,
+            NormalizeHeaders(decision.Headers),
+            mode,
+            NormalizeOneShotFireAt(mode, decision.OneShotFireAt),
+            decision.CredentialRequirementTargetKind,
+            NormalizeOptional(decision.RevisionId),
+            decision.Caller == null
+                ? null
+                : new ServiceInvocationCaller
+                {
+                    ServiceKey = NormalizeOptional(decision.Caller.ServiceKey),
+                    TenantId = NormalizeOptional(decision.Caller.TenantId),
+                    AppId = NormalizeOptional(decision.Caller.AppId),
+                });
+    }
+
+    private static ScheduledInvocationAuthorizationFact NormalizeAuthorizationFact(
+        ScheduledInvocationAuthorizationFact fact)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        ArgumentNullException.ThrowIfNull(fact.Disclosure);
+        ArgumentNullException.ThrowIfNull(fact.Authority);
+        var grants = (fact.ServiceGrants ?? [])
+            .Select(static grant => new ScheduledInvocationAuthorizationServiceGrant(
+                NormalizeRequired(grant.ServiceId, nameof(grant.ServiceId)),
+                (grant.NodeIds ?? [])
+                    .Select(static nodeId => NormalizeRequired(nodeId, nameof(nodeId)))
+                    .Order(StringComparer.Ordinal)
+                    .ToArray(),
+                grant.NodeGrantsNotRequired))
+            .OrderBy(static grant => grant.ServiceId, StringComparer.Ordinal)
+            .ThenBy(static grant => grant.NodeGrantsNotRequired)
+            .ThenBy(static grant => string.Join('\n', grant.NodeIds), StringComparer.Ordinal)
+            .ToArray();
+        return new ScheduledInvocationAuthorizationFact(
+            NormalizeRequired(fact.PermissionDigest, nameof(fact.PermissionDigest)),
+            NormalizeRequired(fact.PolicyVersion, nameof(fact.PolicyVersion)),
+            NormalizeAuthorizationOwner(fact.Owner),
+            grants,
+            NormalizeOptional(fact.Scopes),
+            fact.ExpiresAt.ToUniversalTime(),
+            fact.ServiceGrantsNotRequired,
+            new ScheduledInvocationAuthorizationDisclosure(
+                fact.Disclosure.DedicatedToSchedule,
+                fact.Disclosure.SecretManagedByAevatar,
+                fact.Disclosure.BrowserReceivesRawKey,
+                fact.Disclosure.DeleteRevokesCredential,
+                fact.Disclosure.PauseResumeRevokesCredential),
+            new ScheduledInvocationAuthorizationAuthority(
+                fact.Authority.MemberStateVersion,
+                fact.Authority.WorkflowStateVersion,
+                fact.Authority.ConnectorStateVersion,
+                fact.Authority.OwnerLlmStateVersion,
+                fact.Authority.CatalogStateVersion,
+                fact.Authority.CatalogObservedAt.ToUniversalTime(),
+                fact.Authority.CatalogFreshUntil.ToUniversalTime(),
+                NormalizeOptional(fact.Authority.CatalogContentDigest),
+                NormalizeOptional(fact.Authority.CatalogContractVersion),
+                NormalizeOptional(fact.Authority.CatalogPolicyVersion),
+                fact.Authority.CatalogEvaluatedAt.ToUniversalTime()),
+            fact.OwnerLLMSelection?.Clone());
     }
 
     private static ScheduledCredentialEffectLocator NormalizeCredentialEffectLocator(
@@ -817,6 +949,15 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private static bool TeamOwnerEquals(ScheduledDispatchSummary schedule, TeamMemberAutomationOwner owner) =>
         string.Equals(schedule.TeamOwnerScopeId, owner.ScopeId, StringComparison.Ordinal) &&
         string.Equals(schedule.TeamOwnerMemberId, owner.MemberId, StringComparison.Ordinal);
+
+    private static bool TeamScopeEquals(ScheduledDispatchSummary schedule, string scopeId) =>
+        string.Equals(schedule.TeamOwnerScopeId, scopeId, StringComparison.Ordinal);
+
+    private static bool TeamEquals(ScheduledDispatchSummary schedule, string teamId) =>
+        string.Equals(schedule.TeamId, teamId, StringComparison.Ordinal);
+
+    private static bool TeamMemberEquals(ScheduledDispatchSummary schedule, string memberId) =>
+        string.Equals(schedule.TeamOwnerMemberId, memberId, StringComparison.Ordinal);
 
     private async Task<TeamAutomationCommittedMutationReceipt> DispatchObservedTeamOperationAsync(
         string scheduleId,
@@ -1164,12 +1305,31 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             null => throw new ArgumentException("Exactly one service invocation credential source is required.", nameof(auth)),
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => NormalizeNyxIdAuth(nyxId, auth),
             ScheduledServiceInvocationDurableCredentialReference durable =>
-                new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable)),
+                new ScheduledServiceInvocationAuth(NormalizeDurableCredentialReference(durable))
+                {
+                    CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+                },
             ScheduledInvocationAgentKeyCredentialReference agentKey =>
-                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey)),
+                new ScheduledServiceInvocationAuth(NormalizeScheduledInvocationAgentKey(agentKey))
+                {
+                    CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+                },
             _ => throw new ArgumentException("Unsupported service invocation credential source.", nameof(auth)),
         };
     }
+
+    private static ScheduledCallerNyxIdAuthority? NormalizeCallerAuthority(
+        ScheduledCallerNyxIdAuthority? authority) =>
+        authority == null
+            ? null
+            : new ScheduledCallerNyxIdAuthority
+            {
+                Platform = NormalizeRequired(authority.Platform, nameof(authority.Platform)),
+                Tenant = NormalizeNullable(authority.Tenant) ?? string.Empty,
+                ExternalUserId = NormalizeRequired(authority.ExternalUserId, nameof(authority.ExternalUserId)),
+                Scope = NormalizeRequired(authority.Scope, nameof(authority.Scope)),
+                BindingId = NormalizeRequired(authority.BindingId, nameof(authority.BindingId)),
+            };
 
     private static ScheduledServiceInvocationAuth NormalizeNyxIdAuth(
         ScheduledServiceInvocationNyxIdCredentialSource source,
@@ -1191,13 +1351,19 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 new ScheduledServiceInvocationNyxIdCredentialSource(
                     null!,
                     NormalizeRequired(source.Scope, nameof(source.Scope)),
-                    role));
+                    role))
+            {
+                CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+            };
         }
 
         return new ScheduledServiceInvocationAuth(new ScheduledServiceInvocationNyxIdCredentialSource(
             NormalizeSubject(source.Subject),
             NormalizeRequired(source.Scope, nameof(source.Scope)),
-            role));
+            role))
+        {
+            CallerAuthority = NormalizeCallerAuthority(auth.CallerAuthority),
+        };
     }
 
     private static ScheduledServiceInvocationDurableCredentialReference NormalizeDurableCredentialReference(

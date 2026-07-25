@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 
@@ -70,6 +71,38 @@ public sealed class UseSkillTool : IAgentTool
           "required": ["skill"]
         }
         """;
+
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.Skill(
+            Name,
+            "Use skill",
+            Description,
+            skillName: string.Empty,
+            source: "local-or-remote");
+
+    public ToolPresentationDescriptor ResolvePresentation(string argumentsJson)
+    {
+        var requestedSkillName = ParseArguments(argumentsJson).SkillName.Trim();
+        if (string.IsNullOrWhiteSpace(requestedSkillName))
+            return Presentation;
+
+        if (_localCatalog.TryGet(requestedSkillName, out var localSkill) && localSkill != null)
+        {
+            return ToolPresentationDescriptors.Skill(
+                Name,
+                localSkill.Name,
+                localSkill.Description,
+                localSkill.Name,
+                source: "local");
+        }
+
+        return ToolPresentationDescriptors.Skill(
+            Name,
+            requestedSkillName,
+            Description,
+            requestedSkillName,
+            source: "local-or-remote");
+    }
 
     public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
@@ -228,10 +261,23 @@ public sealed class UseSkillTool : IAgentTool
                 Message: "Workflow mounting skipped because nyxid access token is missing from the request context.");
         }
 
+        var callerId = ResolveCapabilityCallerId();
+        if (string.IsNullOrWhiteSpace(callerId))
+        {
+            return new SkillWorkflowMountResult(
+                Status: "missing_identity",
+                Mounted: false,
+                Workflows: [],
+                Message: "Workflow mounting skipped because authenticated caller identity is missing from the request context.");
+        }
+
         try
         {
             return await _workflowMountPort.MountAsync(
-                new SkillWorkflowMountRequest(scopeId.Trim(), token.Trim(), skill.Workflows),
+                new SkillWorkflowMountRequest(scopeId.Trim(), token.Trim(), skill.Workflows)
+                {
+                    CallerId = callerId.Trim(),
+                },
                 ct);
         }
         catch (OperationCanceledException)
@@ -271,6 +317,14 @@ public sealed class UseSkillTool : IAgentTool
                 "Workflow mounting is not available in this host.",
                 "scope workflow command port is not available in this host");
 
+        var callerId = ResolveCapabilityCallerId();
+        if (string.IsNullOrWhiteSpace(callerId))
+            return BuildScopeWorkflowMountError(
+                "missing_identity",
+                "Workflow mounting skipped because authenticated caller identity is missing from the request context.",
+                "authenticated caller identity not available in request context");
+
+        callerId = callerId.Trim();
         var mountedPayloads = new List<object>(skill.Workflows.Count);
         var mountedWorkflows = new List<MountedSkillWorkflow>(skill.Workflows.Count);
         foreach (var workflow in skill.Workflows)
@@ -296,7 +350,13 @@ public sealed class UseSkillTool : IAgentTool
                     workflow.WorkflowId.Trim(),
                     workflowYamls[0],
                     DisplayName: workflow.WorkflowId.Trim(),
-                    InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls)),
+                    InlineWorkflowYamls: BuildInlineWorkflowYamls(workflowYamls))
+                {
+                    CapabilityAdmission = new WorkflowCapabilityAdmissionContext(
+                        callerId,
+                        AgentToolRequestContext.NyxIdAccessToken,
+                        AgentToolRequestContext.NyxIdOrgToken),
+                },
                 ct);
 
             mountedPayloads.Add(ToMountedWorkflowPayload(upsertResult));
@@ -323,6 +383,16 @@ public sealed class UseSkillTool : IAgentTool
                 workflows = mountedPayloads,
             },
             BuildMountedWorkflowsPayload(mountedPayloads));
+    }
+
+    private static string ResolveCapabilityCallerId()
+    {
+        var authority = AgentToolRequestContext.NyxIdAuthority;
+        if (authority.IsComplete)
+            return authority.ExternalUserId!;
+
+        return AgentToolRequestContext.OwnerSubject?.Trim()
+            ?? string.Empty;
     }
 
     private static UseSkillArguments ParseArguments(string argumentsJson)

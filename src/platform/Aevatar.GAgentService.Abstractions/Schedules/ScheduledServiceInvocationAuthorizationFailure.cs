@@ -9,6 +9,9 @@ public enum ScheduledServiceInvocationAuthorizationFailureCode
     CredentialUnresolvable = 5,
     CredentialVaultUnavailable = 6,
     AuthorizationFactInvalid = 7,
+    CallerAuthorityInvalid = 8,
+    OwnerLLMSelectionInvalid = 9,
+    OwnerLLMPayloadMismatch = 10,
 }
 
 public sealed class ScheduledServiceInvocationAuthorizationException : InvalidOperationException
@@ -37,6 +40,12 @@ public sealed class ScheduledServiceInvocationAuthorizationException : InvalidOp
             "credential_vault_unavailable",
         ScheduledServiceInvocationAuthorizationFailureCode.AuthorizationFactInvalid =>
             "authorization_fact_invalid",
+        ScheduledServiceInvocationAuthorizationFailureCode.CallerAuthorityInvalid =>
+            "caller_authority_invalid",
+        ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMSelectionInvalid =>
+            "owner_llm_selection_invalid",
+        ScheduledServiceInvocationAuthorizationFailureCode.OwnerLLMPayloadMismatch =>
+            "owner_llm_payload_mismatch",
         _ => throw new ArgumentOutOfRangeException(nameof(Code), Code, "Unsupported authorization failure code."),
     };
 }

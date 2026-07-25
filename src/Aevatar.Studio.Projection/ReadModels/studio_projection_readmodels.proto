@@ -4,6 +4,78 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "user_config_messages.proto";
+
+message WorkOrderArtifactReferenceDocument {
+  string artifact_id = 1;
+  string artifact_kind = 2;
+  string uri = 3;
+  string revision_id = 4;
+}
+
+message WorkOrderRunOutcomeReferenceDocument {
+  string delivery_id = 1;
+  string run_id = 2;
+  string run_actor_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  string outcome = 6;
+  int64 terminal_at_unix_ms = 7;
+}
+
+// Actor-scoped current-state replica for WorkOrderGAgent. Business lifecycle
+// decisions are copied from the authoritative actor state; projection does
+// not reconstruct or advance the WorkOrder state machine.
+message WorkOrderCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+
+  string work_order_id = 20;
+  string dedup_key = 21;
+  string scope_id = 22;
+  string team_id = 23;
+  string requester_principal_id = 24;
+  string requester_principal_kind = 25;
+  string member_id = 26;
+  string published_service_id = 27;
+  string workflow_id = 28;
+  string service_revision_id = 29;
+  string implementation_kind = 30;
+  string endpoint_id = 31;
+  string intent = 32;
+  string lifecycle_status = 33;
+  int64 lifecycle_version = 34;
+  int64 created_at_unix_ms = 35;
+  int64 timeout_at_unix_ms = 36;
+  google.protobuf.Timestamp work_order_updated_at_utc = 37;
+
+  string input_prompt = 40;
+  repeated WorkOrderArtifactReferenceDocument input_artifacts = 41;
+  repeated WorkOrderArtifactReferenceDocument declared_result_artifacts = 42;
+  reserved 43 to 45;
+
+  reserved 50 to 56;
+
+  string run_id = 60;
+  string run_actor_id = 61;
+  string run_command_id = 62;
+  string run_correlation_id = 63;
+  string run_revision_id = 64;
+  string run_deployment_id = 65;
+  int64 run_accepted_at_unix_ms = 66;
+  reserved 67;
+
+  WorkOrderRunOutcomeReferenceDocument run_outcome = 70;
+  WorkOrderRunOutcomeReferenceDocument late_run_outcome = 71;
+  string failure_code = 72;
+  string failure_message = 73;
+  string failure_source = 74;
+  string failure_reference_id = 75;
+  string terminal_reason = 76;
+}
 
 // ─── Workflow Board Execution Materialized View ───
 //
@@ -71,6 +143,7 @@ message UserConfigCurrentStateDocument {
   string remote_runtime_base_url = 14;
   int32 max_tool_rounds = 15;
   string github_username = 16;
+  aevatar.gagents.user_config.UserLlmSelection llm_selection = 17;
 }
 
 // ─── GAgentRegistry Current State ReadModel ───
@@ -149,6 +222,26 @@ message ChatConversationCurrentStateDocument {
   string llm_model = 29;
   bool deleted = 30;
   repeated ChatConversationTurnDocument turns = 31;
+}
+
+// ─── Chat History Create Recovery Current State ReadModel ───
+
+message ChatHistoryCreateRecoveryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  string scope_id = 20;
+  string conversation_id = 21;
+  string turn_id = 22;
+  string workflow_actor_id = 23;
+  string workflow_command_id = 24;
+  string workflow_correlation_id = 25;
+  string request_fingerprint = 26;
+  string status = 27;
+  int64 reserved_at_unix_ms = 28;
+  int64 completed_at_unix_ms = 29;
 }
 
 // ─── StudioMember Current State ReadModel ───

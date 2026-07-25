@@ -1,6 +1,12 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.Abstractions.ToolProviders;
+
+public sealed record AgentToolCallSafety(
+    bool? RequiresApproval,
+    bool IsReadOnly,
+    bool IsDestructive);
 
 /// <summary>Agent 可调用工具接口。LLM 通过 tool_call 触发执行。</summary>
 public interface IAgentTool
@@ -13,6 +19,16 @@ public interface IAgentTool
 
     /// <summary>工具参数 JSON Schema，描述输入格式。</summary>
     string ParametersSchema { get; }
+
+    /// <summary>Provider-owned presentation identity snapshotted for historical tool cards.</summary>
+    ToolPresentationDescriptor Presentation => ToolPresentationDescriptors.Generic(Name, Description);
+
+    /// <summary>
+    /// Resolves provider-owned presentation identity for one invocation. Tools
+    /// whose card identity depends on structured arguments override this while
+    /// ordinary tools retain the static descriptor.
+    /// </summary>
+    ToolPresentationDescriptor ResolvePresentation(string argumentsJson) => Presentation;
 
     /// <summary>工具审批模式。默认 NeverRequire（立即执行）。</summary>
     ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
@@ -44,6 +60,10 @@ public interface IAgentTool
     /// (e.g., HTTP proxy: GET is read-only, POST is destructive).
     /// </summary>
     bool? RequiresApproval(string argumentsJson) => null;
+
+    /// <summary>Classifies one concrete invocation without collapsing approval and safety semantics.</summary>
+    AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+        new(RequiresApproval(argumentsJson), IsReadOnly, IsDestructive);
 
     /// <summary>执行工具。参数为 JSON 字符串，返回结果为 JSON 字符串。</summary>
     /// <param name="argumentsJson">LLM 传入的参数 JSON。</param>

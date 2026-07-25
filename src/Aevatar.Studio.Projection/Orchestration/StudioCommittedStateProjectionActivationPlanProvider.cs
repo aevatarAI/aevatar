@@ -6,6 +6,7 @@ using Aevatar.GAgents.Registry;
 using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
+using Aevatar.GAgents.WorkOrder;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Workspace;
@@ -26,9 +27,11 @@ public sealed class StudioCommittedStateProjectionActivationPlanProvider : IProj
             [typeof(RoleCatalogGAgent)] = RoleCatalogGAgent.ProjectionKind,
             [typeof(UserMemoryGAgent)] = UserMemoryGAgent.ProjectionKind,
             [typeof(ChatConversationGAgent)] = ChatConversationGAgent.ProjectionKind,
+            [typeof(ChatTurnHistoryDeliveryGAgent)] = ChatTurnHistoryDeliveryGAgent.ProjectionKind,
             [typeof(StudioMemberGAgent)] = StudioMemberGAgent.ProjectionKind,
             [typeof(StudioMemberBindingRunGAgent)] = StudioMemberBindingRunGAgent.ProjectionKind,
             [typeof(StudioTeamGAgent)] = StudioTeamGAgent.ProjectionKind,
+            [typeof(WorkOrderGAgent)] = WorkOrderGAgent.ProjectionKind,
             [typeof(StudioWorkspaceGAgent)] = StudioWorkspaceGAgent.ProjectionKind,
         };
 

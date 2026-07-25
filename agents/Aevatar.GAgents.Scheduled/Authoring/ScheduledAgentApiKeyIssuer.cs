@@ -161,11 +161,15 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         if (policy == null ||
             policy.AllowAllServices ||
             policy.AllowAllNodes ||
+            policy.ServiceGrantRequirement is not (AuthorizationGrantRequirement.NotRequired or
+                AuthorizationGrantRequirement.Required) ||
+            policy.NodeGrantRequirement is not (AuthorizationGrantRequirement.NotRequired or
+                AuthorizationGrantRequirement.Required) ||
             owner == null ||
-            !string.Equals(owner.Authority?.Trim(), NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) ||
-            owner.OwnerKind == AuthorizationOwnerKind.Unspecified ||
-            !Enum.IsDefined(owner.OwnerKind) ||
-            string.IsNullOrWhiteSpace(owner.OwnerSubject) ||
+            !string.Equals(owner.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) ||
+            !IsNormalized(owner.OwnerSubject) ||
+            !TryResolveOwnerScope(owner, out var ownerKind, out var ownerSubject) ||
+            !IsValidAuthenticatedActor(plan.AuthenticatedActor) ||
             !TryResolveFutureExpiry(policy.ExpiresAt, _timeProvider.GetUtcNow(), out var expiresAt))
         {
             return ScheduledAgentApiKeyIssueResult.Failed("authorization_plan_policy_invalid");
@@ -174,22 +178,16 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         var serviceIds = plan.NyxIdServiceGrants
             .Select(static grant => grant.UserServiceId)
             .ToArray();
-        var nodeIds = plan.NyxIdNodeGrants
-            .Select(static grant => grant.NodeId)
+        var nodeIds = plan.NyxIdServiceGrants
+            .SelectMany(static grant => grant.NodeIds)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
             .ToArray();
-        if (string.IsNullOrWhiteSpace(plan.PermissionDigest) ||
-            !IsExactIdSequence(serviceIds) ||
-            !IsExactIdSequence(nodeIds) ||
-            plan.NyxIdNodeGrants.Any(grant =>
-                !serviceIds.Contains(grant.UserServiceId, StringComparer.Ordinal) ||
-                grant.Role == NyxIdNodeRole.Unspecified ||
-                !Enum.IsDefined(grant.Role) ||
-                grant.EdgeKind == NyxIdNodeEdgeKind.Unspecified ||
-                !Enum.IsDefined(grant.EdgeKind) ||
-                grant.EdgeKind == NyxIdNodeEdgeKind.NodeBinding &&
-                string.IsNullOrWhiteSpace(grant.BindingId) ||
-                grant.EdgeKind == NyxIdNodeEdgeKind.UserServicePrimary &&
-                (!string.IsNullOrWhiteSpace(grant.BindingId) || grant.Role != NyxIdNodeRole.Primary)) ||
+        if (!IsCanonicalIdSequence(serviceIds) ||
+            plan.NyxIdServiceGrants.Any(static grant => !IsValidServiceGrant(grant)) ||
+            plan.CatalogAuthority == null ||
+            !IsNormalized(plan.CatalogAuthority.ContractVersion) ||
+            !IsNormalized(plan.CatalogAuthority.PolicyVersion) ||
             serviceIds.Length == 0 && policy.ServiceGrantRequirement == AuthorizationGrantRequirement.Required ||
             nodeIds.Length == 0 && policy.NodeGrantRequirement == AuthorizationGrantRequirement.Required)
         {
@@ -199,7 +197,45 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         if (scopes == null)
             return ScheduledAgentApiKeyIssueResult.Failed("authorization_plan_scopes_invalid");
 
-        var response = await _nyxClientFactory.CreateClient().CreateApiKeyAsync(
+        var targetOrganizationId = ownerKind == AuthorizationOwnerKind.Organization
+            ? ownerSubject
+            : null;
+        var client = _nyxClientFactory.CreateClient();
+        string scopePlanResponse;
+        try
+        {
+            scopePlanResponse = await client.PlanApiKeyScopeAsync(
+                token,
+                serviceIds,
+                targetOrganizationId,
+                ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return ScheduledAgentApiKeyIssueResult.Failed("nyxid_scope_plan_provider_timed_out");
+        }
+        var scopePlanResult = NyxIdApiAccessResponseParser.ParseScopePlan(scopePlanResponse);
+        if (!scopePlanResult.Succeeded)
+        {
+            var failure = scopePlanResult.Failure;
+            return ScheduledAgentApiKeyIssueResult.Failed(
+                failure?.Code ?? "nyxid_scope_plan_failed",
+                httpStatus: failure?.HttpStatus);
+        }
+
+        var scopePlan = scopePlanResult.Value!;
+        if (!MatchesAuthorizationPlan(
+                scopePlan,
+                plan,
+                ownerKind,
+                ownerSubject,
+                serviceIds,
+                nodeIds))
+        {
+            return ScheduledAgentApiKeyIssueResult.Failed("authorization_plan_changed");
+        }
+
+        var response = await client.CreateApiKeyAsync(
             token,
             JsonSerializer.Serialize(new
             {
@@ -208,11 +244,10 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
                 platform = "generic",
                 allow_all_services = false,
                 allow_all_nodes = false,
-                allowed_service_ids = serviceIds,
-                allowed_node_ids = nodeIds,
-                target_org_id = owner.OwnerKind == AuthorizationOwnerKind.Organization
-                    ? owner.OwnerSubject.Trim()
-                    : null,
+                allowed_service_ids = scopePlan.AllowedServiceIds,
+                allowed_node_ids = scopePlan.AllowedNodeIds,
+                scope_plan_digest = scopePlan.NormalizedGrantDigest,
+                target_org_id = targetOrganizationId,
                 expires_at = expiresAt.ToString("O"),
             }, CreateKeyJsonOptions),
             ct);
@@ -405,10 +440,118 @@ internal sealed class ScheduledAgentApiKeyIssuer : IScheduledAgentApiKeyIssuer
         }
     }
 
-    private static bool IsExactIdSequence(IReadOnlyList<string> ids) =>
-        ids.All(static id =>
-            !string.IsNullOrWhiteSpace(id) &&
-            string.Equals(id, id.Trim(), StringComparison.Ordinal));
+    private static bool MatchesAuthorizationPlan(
+        NyxIdApiKeyScopePlan scopePlan,
+        ScheduledInvocationAuthorizationPlan plan,
+        AuthorizationOwnerKind ownerKind,
+        string ownerSubject,
+        IReadOnlyList<string> serviceIds,
+        IReadOnlyList<string> nodeIds)
+    {
+        if (!string.Equals(scopePlan.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) ||
+            !string.Equals(scopePlan.ContractVersion, plan.CatalogAuthority.ContractVersion, StringComparison.Ordinal) ||
+            !string.Equals(scopePlan.PolicyVersion, plan.CatalogAuthority.PolicyVersion, StringComparison.Ordinal) ||
+            !MatchesPrincipal(scopePlan.IntendedKeyOwner, ownerKind, ownerSubject) ||
+            !MatchesPrincipal(scopePlan.AuthenticatedActor, plan.AuthenticatedActor) ||
+            scopePlan.Freshness.Mode != NyxIdScopePlanFreshnessMode.MutationRevalidatedSnapshot ||
+            !string.Equals(scopePlan.Freshness.PreconditionField, "scope_plan_digest", StringComparison.Ordinal) ||
+            scopePlan.Freshness.PostCreationDrift != NyxIdScopePlanPostCreationDrift.FailClosed ||
+            !scopePlan.Completeness.ListComplete ||
+            !scopePlan.Completeness.NoDuplicates ||
+            scopePlan.Completeness.RouteCandidateBasis !=
+            NyxIdScopePlanRouteCandidateBasis.ActiveConfiguredRoutes ||
+            !scopePlan.Completeness.TransientNodeStateExcluded ||
+            !scopePlan.AllowedServiceIds.SequenceEqual(serviceIds, StringComparer.Ordinal) ||
+            !scopePlan.AllowedNodeIds.SequenceEqual(nodeIds, StringComparer.Ordinal) ||
+            scopePlan.Services.Count != plan.NyxIdServiceGrants.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < plan.NyxIdServiceGrants.Count; index++)
+        {
+            var plannedGrant = plan.NyxIdServiceGrants[index];
+            var currentGrant = scopePlan.Services[index];
+            if (!string.Equals(currentGrant.UserServiceId, plannedGrant.UserServiceId, StringComparison.Ordinal) ||
+                !MatchesPrincipal(currentGrant.ResourceOwner, plannedGrant.ResourceOwner) ||
+                !MatchesNodeGrant(currentGrant.NodeGrant, plannedGrant))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool MatchesPrincipal(
+        NyxIdScopePlanPrincipal principal,
+        AuthorizationOwnerIdentity? owner) =>
+        owner != null &&
+        string.Equals(owner.Authority, NyxIdAuthorizationAuthorities.NyxId, StringComparison.Ordinal) &&
+        MatchesPrincipal(principal, owner.OwnerKind, owner.OwnerSubject);
+
+    private static bool MatchesPrincipal(
+        NyxIdScopePlanPrincipal principal,
+        AuthorizationOwnerKind ownerKind,
+        string ownerSubject) =>
+        principal.Kind == (ownerKind switch
+        {
+            AuthorizationOwnerKind.Personal => NyxIdScopePlanPrincipalKind.Personal,
+            AuthorizationOwnerKind.Organization => NyxIdScopePlanPrincipalKind.Organization,
+            _ => NyxIdScopePlanPrincipalKind.Unspecified,
+        }) &&
+        string.Equals(principal.Id, ownerSubject, StringComparison.Ordinal);
+
+    private static bool MatchesNodeGrant(
+        NyxIdScopePlanNodeGrant currentGrant,
+        NyxIdServiceGrant plannedGrant) =>
+        currentGrant.Kind == (plannedGrant.NodeGrantRequirement switch
+        {
+            AuthorizationGrantRequirement.NotRequired => NyxIdScopePlanNodeGrantKind.NotRequired,
+            AuthorizationGrantRequirement.Required => NyxIdScopePlanNodeGrantKind.Required,
+            _ => NyxIdScopePlanNodeGrantKind.Unspecified,
+        }) &&
+        currentGrant.NodeIds.SequenceEqual(plannedGrant.NodeIds, StringComparer.Ordinal);
+
+    private static bool IsValidServiceGrant(NyxIdServiceGrant grant) =>
+        IsNormalized(grant.UserServiceId) &&
+        IsNormalized(grant.ServiceSlug) &&
+        IsNormalized(grant.DisplayName) &&
+        TryResolveOwnerScope(grant.ResourceOwner, out _, out _) &&
+        (grant.NodeGrantRequirement is AuthorizationGrantRequirement.NotRequired or
+            AuthorizationGrantRequirement.Required) &&
+        IsCanonicalIdSequence(grant.NodeIds) &&
+        (grant.NodeGrantRequirement == AuthorizationGrantRequirement.Required
+            ? grant.NodeIds.Count > 0
+            : grant.NodeIds.Count == 0);
+
+    private static bool IsValidAuthenticatedActor(AuthorizationOwnerIdentity? authenticatedActor) =>
+        authenticatedActor != null &&
+        string.Equals(
+            authenticatedActor.Authority,
+            NyxIdAuthorizationAuthorities.NyxId,
+            StringComparison.Ordinal) &&
+        authenticatedActor.OwnerKind == AuthorizationOwnerKind.Personal &&
+        IsNormalized(authenticatedActor.OwnerSubject);
+
+    private static bool IsCanonicalIdSequence(IReadOnlyList<string> ids)
+    {
+        string? previous = null;
+        foreach (var id in ids)
+        {
+            if (!IsNormalized(id) ||
+                previous != null && StringComparer.Ordinal.Compare(previous, id) >= 0)
+            {
+                return false;
+            }
+            previous = id;
+        }
+        return true;
+    }
+
+    private static bool IsNormalized(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal);
 
     private static bool TryResolveFutureExpiry(
         Google.Protobuf.WellKnownTypes.Timestamp? value,

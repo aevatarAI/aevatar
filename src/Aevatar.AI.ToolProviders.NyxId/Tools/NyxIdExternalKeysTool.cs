@@ -5,7 +5,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID external API keys/credentials.</summary>
-public sealed class NyxIdExternalKeysTool : IAgentTool, IAgentToolCapabilityDescriptor
+public sealed class NyxIdExternalKeysTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 

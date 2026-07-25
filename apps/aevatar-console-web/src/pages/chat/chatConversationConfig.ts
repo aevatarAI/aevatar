@@ -4,7 +4,7 @@ import type {
   StudioUserLlmSettings,
 } from "@/shared/studio/models";
 
-export const USER_LLM_ROUTE_GATEWAY = "";
+export const USER_LLM_ROUTE_GATEWAY = "/api/v1/llm/gateway/v1";
 export const LLM_ROUTE_HEADER_KEY = "nyxid.route_preference";
 export const LLM_MODEL_HEADER_KEY = "aevatar.model_override";
 export const CONVERSATION_ROUTE_DEFAULT_VALUE = "__config_default__";
@@ -112,7 +112,11 @@ export function buildConversationRouteOptions(
 
     seen.add(route);
     options.push({
-      label: option.label.trim() || route || USER_LLM_ROUTE_GATEWAY_LABEL,
+      label:
+        option.label.trim() ||
+        (route === USER_LLM_ROUTE_GATEWAY
+          ? USER_LLM_ROUTE_GATEWAY_LABEL
+          : route),
       value: route,
     });
   }

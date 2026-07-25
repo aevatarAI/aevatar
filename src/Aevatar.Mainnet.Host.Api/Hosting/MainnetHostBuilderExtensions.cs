@@ -1,7 +1,8 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.AI.Infrastructure.OpenSandbox;
+using Aevatar.AI.Application.CodexExecution;
+using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -16,6 +17,7 @@ using Aevatar.AI.ToolProviders.StudioProvisioning;
 using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
@@ -38,6 +40,7 @@ using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.ChatbotClassifier;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
@@ -51,6 +54,9 @@ using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
 using Aevatar.Mainnet.Host.Api.Messages;
+using Aevatar.Mainnet.Host.Api.ManagedCodex;
+using Aevatar.Mainnet.Host.Api.AgentProfiles;
+using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -153,7 +159,12 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
         builder.AddNyxIdIdentityAssertionAuthentication();
+        var agentProfileRolloutSelector = MainnetAgentProfileRolloutSelector.Create(
+            builder.Configuration,
+            builder.Environment.ContentRootPath);
+        builder.Services.AddSingleton(agentProfileRolloutSelector);
         builder.Services.AddNyxIdChat(builder.Configuration);
+        AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
@@ -292,12 +303,15 @@ public static class MainnetHostBuilderExtensions
         deviceEventOptions.EnsureNotSkippingHmacInProduction(builder.Environment.IsProduction());
         // NyxID-backed current-user resolver plus aevatar admin access policy.
         builder.Services.AddNyxIdPlatformAuthorization(builder.Configuration);
-        builder.Services.AddOpenSandboxCodexExecution(builder.Configuration);
+        builder.Services.AddChronoSandboxCodexExecution(
+            builder.Configuration,
+            builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
         builder.Services.AddNyxIdTools(o =>
         {
             // Override the single default (NyxIdToolOptions.DefaultBaseUrl) only when config provides a
             // non-empty value; an absent/empty config key must NOT clobber the default to null.
-            var nyxAuthority = builder.Configuration["Aevatar:NyxId:Authority"]
+            var nyxAuthority = builder.Configuration["Aevatar:NyxId:ApiBaseUrl"]
+                               ?? builder.Configuration["Aevatar:NyxId:Authority"]
                                ?? builder.Configuration["Cli:App:NyxId:Authority"]
                                ?? builder.Configuration["Aevatar:Authentication:Authority"];
             if (!string.IsNullOrWhiteSpace(nyxAuthority))
@@ -315,7 +329,7 @@ public static class MainnetHostBuilderExtensions
                 o.EnableSshExecTool = true; // mainnet default: enabled (Lark bot needs it)
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
-                $"{OpenSandboxCodexOptions.SectionName}:Enabled");
+                $"{ManagedCodexOptions.SectionName}:Enabled");
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
         });
@@ -357,9 +371,14 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<StartWorkflowToolSource>,
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
+                    CreateToolSource<WorkflowCatalogAgentToolSource>,
                     CreateToolSource<ProvisionWorkflowScheduleToolSource>,
                     CreateToolSource<CreateStudioTeamToolSource>,
+                    CreateToolSource<StudioTeamQueryToolSource>,
                     CreateToolSource<CreateStudioMemberToolSource>,
+                    CreateToolSource<StudioMemberQueryToolSource>,
+                    CreateToolSource<StudioScheduleQueryToolSource>,
+                    CreateToolSource<StudioWorkflowQueryToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
                     CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
@@ -387,9 +406,28 @@ public static class MainnetHostBuilderExtensions
                 ToolSetNames.NyxIdConnectedServices,
                 [CreateToolSource<NyxIdConnectedServiceToolSource>],
                 "NyxID connected-service operations explicitly marked x-aevatar-tool, registered as individual tools.");
+            agentProfileRolloutSelector.AddReviewedRouteToolSet(
+                options,
+                ToolSetNames.WorkspaceDefault);
         });
 
         return builder;
+    }
+
+    private static void AddNyxIdChatAgentProfile(WebApplicationBuilder builder)
+    {
+        builder.Services.TryAddSingleton(
+            new NyxIdChatAgentProfileValidationBaseline([], []));
+        builder.Services
+            .AddOptions<NyxIdChatAgentProfileOptions>()
+            .Bind(builder.Configuration.GetSection(NyxIdChatAgentProfileOptions.SectionName))
+            .ValidateOnStart();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NyxIdChatAgentProfileOptions>,
+                NyxIdChatAgentProfileOptionsValidator>());
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<INyxIdChatAgentProfileSnapshotSource>(serviceProvider =>
+                serviceProvider.GetRequiredService<MainnetAgentProfileRolloutSelector>()));
     }
 
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)
@@ -418,6 +456,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
+        app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
 

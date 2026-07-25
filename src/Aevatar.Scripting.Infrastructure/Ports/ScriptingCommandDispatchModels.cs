@@ -84,7 +84,10 @@ public sealed record RunScriptRuntimeCommand(
     string RequestedEventType,
     string? ScopeId,
     string? ExplicitCommandId = null,
-    string? ExplicitCorrelationId = null) : ICommandContextSeed
+    string? ExplicitCorrelationId = null,
+    string? CompletionNotificationActorId = null,
+    string? CompletionNotificationDeliveryId = null,
+    long CompletionNotificationExpiresAtUnixMs = 0) : ICommandContextSeed
 {
     public string? CommandId => string.IsNullOrWhiteSpace(ExplicitCommandId)
         ? ScriptingCommandIds.Build("script-runtime", RuntimeActorId, RunId)

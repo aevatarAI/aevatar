@@ -7,6 +7,9 @@ public static class ScheduledServiceInvocationPayloadPolicy
 {
     public const string ConnectorHttpAuthorizationKey = "connector.http.authorization";
 
+    public static bool IsConnectorHttpAuthorizationKey(string? key) =>
+        string.Equals(key?.Trim(), ConnectorHttpAuthorizationKey, StringComparison.OrdinalIgnoreCase);
+
     public static Any StripScheduleOwnedCredentialFields(Any payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
@@ -41,8 +44,8 @@ public static class ScheduledServiceInvocationPayloadPolicy
     {
         chatRequest.ConnectorHttpAuthorization = string.Empty;
         chatRequest.CallerDurableCredential = null;
-        chatRequest.Metadata.Remove(ConnectorHttpAuthorizationKey);
-        chatRequest.Headers.Remove(ConnectorHttpAuthorizationKey);
+        RemoveConnectorHttpAuthorizationKeys(chatRequest.Metadata);
+        RemoveConnectorHttpAuthorizationKeys(chatRequest.Headers);
 
         if (chatRequest.LlmControl != null)
         {
@@ -57,5 +60,11 @@ public static class ScheduledServiceInvocationPayloadPolicy
             chatRequest.ToolContext.Credentials.NyxIdOrgToken = string.Empty;
             chatRequest.ToolContext.Credentials.SenderNyxIdAccessToken = string.Empty;
         }
+    }
+
+    private static void RemoveConnectorHttpAuthorizationKeys(IDictionary<string, string> values)
+    {
+        foreach (var key in values.Keys.Where(IsConnectorHttpAuthorizationKey).ToArray())
+            values.Remove(key);
     }
 }

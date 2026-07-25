@@ -151,9 +151,42 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 CredentialOwner = CreateAuthorizationOwnerState(
                     operation.CredentialEffectLocator.CredentialOwner),
             },
+            ActivationDecision = CreateActivationDecisionState(operation.ActivationDecision),
             MutationDigest = operation.MutationDigest,
             ObservationRequestId = observationRequestId,
         }, ct);
+    }
+
+    private static TeamAutomationActivationDecisionState CreateActivationDecisionState(
+        TeamAutomationActivationDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        var state = new TeamAutomationActivationDecisionState
+        {
+            ScheduleId = decision.ScheduleId,
+            DisplayName = decision.DisplayName,
+            Owner = CreateTeamOwnerState(decision.Owner),
+            ServiceIdentity = decision.ServiceIdentity.Clone(),
+            EndpointId = decision.EndpointId,
+            Payload = decision.Payload.Clone(),
+            CallerAuthority = decision.CallerAuthority.Clone(),
+            AuthorizationFact = CreateAuthorizationFactState(decision.AuthorizationFact),
+            CronExpression = decision.CronExpression,
+            Timezone = decision.Timezone,
+            Enabled = decision.Enabled,
+            ScheduleKind = ToStateScheduleKind(decision.ScheduleKind),
+            ScheduleMode = ToStateScheduleMode(decision.ScheduleMode),
+            OneShotFireAt = decision.OneShotFireAt.HasValue
+                ? Timestamp.FromDateTimeOffset(decision.OneShotFireAt.Value.ToUniversalTime())
+                : null,
+            CredentialRequirementTargetKind =
+                ToStateCredentialRequirementTargetKind(decision.CredentialRequirementTargetKind),
+            RevisionId = decision.RevisionId,
+            Caller = decision.Caller?.Clone(),
+        };
+        foreach (var (key, value) in decision.Headers)
+            state.Headers[key] = value;
+        return state;
     }
 
     public Task<DispatchAdmission> DispatchRecordTeamAutomationCredentialCandidateAsync(
@@ -589,9 +622,12 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
                 CatalogStateVersion = fact.Authority.CatalogStateVersion,
                 CatalogObservedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogObservedAt),
                 CatalogFreshUntil = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogFreshUntil),
-                CatalogExternalRevision = fact.Authority.CatalogExternalRevision,
                 CatalogContentDigest = fact.Authority.CatalogContentDigest,
+                CatalogContractVersion = fact.Authority.CatalogContractVersion,
+                CatalogPolicyVersion = fact.Authority.CatalogPolicyVersion,
+                CatalogEvaluatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(fact.Authority.CatalogEvaluatedAt),
             },
+            OwnerLlmSelection = fact.OwnerLLMSelection?.Clone(),
         };
         state.ServiceGrants.Add(fact.ServiceGrants.Select(static grant =>
         {
@@ -603,17 +639,6 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             item.NodeIds.Add(grant.NodeIds);
             return item;
         }));
-        state.NodeGrants.Add(fact.NodeGrants.Select(static grant =>
-            new ScheduledInvocationAuthorizationNodeGrantState
-            {
-                UserServiceId = grant.UserServiceId,
-                NodeId = grant.NodeId,
-                DisplayName = grant.DisplayName,
-                Role = grant.Role,
-                EdgeKind = grant.EdgeKind,
-                BindingId = grant.BindingId,
-                RoutePriority = grant.RoutePriority,
-            }));
         return state;
     }
 
@@ -634,7 +659,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
         if (auth?.Source == null)
             return null;
 
-        return auth.Source switch
+        var state = auth.Source switch
         {
             ScheduledServiceInvocationNyxIdCredentialSource nyxId => new ScheduledServiceInvocationAuthState
             {
@@ -654,6 +679,8 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             },
             _ => throw new ArgumentException("Unsupported scheduled service invocation credential source.", nameof(auth)),
         };
+        state.CallerAuthority = auth.CallerAuthority?.Clone();
+        return state;
     }
 
     private static ScheduledServiceInvocationNyxIdCredentialSourceState CreateNyxIdCredentialSourceState(
@@ -690,6 +717,7 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
             {
                 ScopeId = owner.ScopeId,
                 MemberId = owner.MemberId,
+                TeamId = owner.TeamId,
             };
 
     private static TeamAutomationOperationKindState ToStateOperationKind(TeamAutomationOperationKind kind) =>
