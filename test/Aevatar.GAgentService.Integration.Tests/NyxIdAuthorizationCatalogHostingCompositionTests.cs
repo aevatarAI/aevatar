@@ -1,6 +1,9 @@
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
+using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Application.Schedules.Authorization;
 using Aevatar.GAgentService.Core.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
@@ -8,6 +11,7 @@ using Aevatar.GAgentService.Projection.Contexts;
 using Aevatar.GAgentService.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Projectors;
 using Aevatar.GAgentService.Projection.Queries;
+using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +20,101 @@ namespace Aevatar.GAgentService.Integration.Tests;
 
 public sealed class NyxIdAuthorizationCatalogHostingCompositionTests
 {
+    [Fact]
+    public void NyxIdCatalogHosting_WithElasticsearch_ShouldResolveVersionRegressionRepair()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Projection:Document:Providers:Elasticsearch:Enabled"] = "true",
+                ["Projection:Document:Providers:Elasticsearch:Endpoints:0"] =
+                    "http://localhost:9200",
+                ["Projection:Document:Providers:InMemory:Enabled"] = "false",
+            })
+            .Build();
+        services.AddAevatarRuntime();
+
+        services.AddNyxIdAuthorizationCatalogHosting(configuration);
+
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType == typeof(
+                IElasticsearchProjectionDocumentRepairStore<
+                    NyxIdAuthorizationCatalogDocument,
+                    string>));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType ==
+            typeof(INyxIdAuthorizationCatalogVersionRegressionStorePort));
+        services.Should().ContainSingle(static descriptor =>
+            descriptor.ServiceType ==
+            typeof(INyxIdAuthorizationCatalogVersionRegressionRepairService));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<INyxIdAuthorizationCatalogVersionRegressionRepairService>()
+            .Should().BeOfType<NyxIdAuthorizationCatalogVersionRegressionRepairService>();
+        provider.GetRequiredService<
+                IElasticsearchProjectionDocumentRepairStore<
+                    NyxIdAuthorizationCatalogDocument,
+                    string>>()
+            .Should().NotBeNull();
+    }
+
+    [Fact]
+    public void NyxIdCatalogHosting_WithInMemory_ShouldNotExposeVersionRegressionRepair()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddAevatarRuntime();
+
+        services.AddNyxIdAuthorizationCatalogHosting(configuration);
+
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType == typeof(
+                IElasticsearchProjectionDocumentRepairStore<
+                    NyxIdAuthorizationCatalogDocument,
+                    string>));
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType ==
+            typeof(INyxIdAuthorizationCatalogVersionRegressionStorePort));
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType ==
+            typeof(INyxIdAuthorizationCatalogVersionRegressionRepairService));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetService<INyxIdAuthorizationCatalogVersionRegressionRepairService>()
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void NyxIdCatalogHosting_WithInMemoryAndAccidentalRepairStore_ShouldNotExposeRepairService()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>())
+            .Build();
+        services.AddAevatarRuntime();
+        services.AddSingleton<
+            IElasticsearchProjectionDocumentRepairStore<
+                NyxIdAuthorizationCatalogDocument,
+                string>,
+            PreRegisteredRepairStore>();
+
+        services.AddNyxIdAuthorizationCatalogHosting(configuration);
+
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType ==
+            typeof(INyxIdAuthorizationCatalogVersionRegressionStorePort));
+        services.Should().NotContain(static descriptor =>
+            descriptor.ServiceType ==
+            typeof(INyxIdAuthorizationCatalogVersionRegressionRepairService));
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetService<INyxIdAuthorizationCatalogVersionRegressionRepairService>()
+            .Should().BeNull();
+    }
+
     [Fact]
     public void FullAndScheduledCapabilities_WhenRepeated_ShouldRegisterSingleNyxIdApiClient()
     {
@@ -117,5 +216,26 @@ public sealed class NyxIdAuthorizationCatalogHostingCompositionTests
             .Should().Be(1);
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<NyxIdToolOptions>().BaseUrl.Should().Be("https://nyxid.invalid");
+    }
+
+    private sealed class PreRegisteredRepairStore
+        : IElasticsearchProjectionDocumentRepairStore<
+            NyxIdAuthorizationCatalogDocument,
+            string>
+    {
+        public Task<ElasticsearchProjectionDocumentRepairLease<
+            NyxIdAuthorizationCatalogDocument,
+            string>?> InspectAsync(
+            string key,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<ElasticsearchProjectionDocumentRepairDeleteDisposition>
+            DeleteIfUnchangedAsync(
+                ElasticsearchProjectionDocumentRepairLease<
+                    NyxIdAuthorizationCatalogDocument,
+                    string> lease,
+                CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 }

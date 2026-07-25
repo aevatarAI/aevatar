@@ -300,6 +300,15 @@ public static class ServiceCollectionExtensions
             TryAddElasticsearchDocumentProjectionStore<ResponsesAgentToolStateCurrentStateReadModel>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<ScheduledDispatchDocument>(services, configuration, static readModel => readModel.ScheduleId);
             TryAddElasticsearchDocumentProjectionStore<NyxIdAuthorizationCatalogDocument>(services, configuration, static readModel => readModel.Id);
+            services.AddElasticsearchDocumentProjectionRepairStore<
+                NyxIdAuthorizationCatalogDocument,
+                string>();
+            services.TryAddSingleton<
+                INyxIdAuthorizationCatalogVersionRegressionStorePort,
+                ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStorePort>();
+            services.TryAddSingleton<
+                INyxIdAuthorizationCatalogVersionRegressionRepairService,
+                NyxIdAuthorizationCatalogVersionRegressionRepairService>();
             TryAddElasticsearchDocumentProjectionStore<UserConfigCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
             TryAddElasticsearchDocumentProjectionStore<WorkflowCatalogCurrentStateDocument>(services, configuration, static readModel => readModel.Id);
         }
