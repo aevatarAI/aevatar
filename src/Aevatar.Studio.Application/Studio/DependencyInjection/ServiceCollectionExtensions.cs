@@ -1,5 +1,4 @@
 using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
@@ -63,7 +62,6 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<StudioMemberWorkflowSchedulePort>());
         services.TryAddSingleton<IStudioMemberAutomationQueryPort>(provider =>
             provider.GetRequiredService<IStudioMemberWorkflowSchedulePort>());
-        services.TryAddSingleton<IScheduledInvocationOwnerLLMServiceIdentityResolver, StudioOwnerLLMServiceIdentityResolver>();
         services.TryAddSingleton<IStudioTeamGAgentStreamInvocationService, StudioTeamGAgentStreamInvocationService>();
         services.TryAddSingleton<IWorkflowBoardClock, SystemWorkflowBoardClock>();
         services.TryAddSingleton<IWorkflowBoardRosterQueryPort, StudioWorkflowBoardRosterQueryPort>();

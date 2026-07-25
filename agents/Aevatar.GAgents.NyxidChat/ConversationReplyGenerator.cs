@@ -209,7 +209,15 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var isChannelTurn = IsChannelRelayTurn(toolContext);
-        var primaryTools = await BuildTurnToolsAsync(replyPlan.DisableTools, isChannelTurn, ct);
+        var primaryDiscoveryContext = BuildEffectiveToolContext(
+            replyPlan.Primary,
+            replyPlan.PrimaryControl,
+            replyPlan.PrimaryToolContext);
+        var primaryTools = await BuildTurnToolsAsync(
+            replyPlan.DisableTools,
+            isChannelTurn,
+            primaryDiscoveryContext,
+            ct);
 
         try
         {
@@ -236,7 +244,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 "Sender LLM request failed; retrying with bot owner LLM config and no tools. activity={ActivityId}",
                 activity.Id);
 
-            var fallbackTools = await BuildTurnToolsAsync(disableTools: true, isChannelTurn, ct);
+            var fallbackTools = await BuildTurnToolsAsync(
+                disableTools: true,
+                isChannelTurn,
+                discoveryContext: null,
+                ct);
             return await GenerateWithMetadataAsync(
                     activity,
                     replyPlan.OwnerFallback,
@@ -310,13 +322,16 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var replyPlan = await BuildEffectiveReplyPlanAsync(metadata, llmControl, toolContext, ct);
         var provider = ResolveProvider();
         var disableTools = forceDisableTools || replyPlan.DisableTools;
-        var tools = await BuildTurnToolsAsync(disableTools, IsChannelRelayTurn(toolContext), ct);
         var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(replyPlan.Primary);
-        var effectiveToolContext = replyPlan.PrimaryControl.ToToolContext(
-            replyPlan.PrimaryToolContext ?? AgentToolExecutionContext.Empty with
-            {
-                ExternalMetadata = externalMetadata,
-            });
+        var effectiveToolContext = BuildEffectiveToolContext(
+            replyPlan.Primary,
+            replyPlan.PrimaryControl,
+            replyPlan.PrimaryToolContext);
+        var tools = await BuildTurnToolsAsync(
+            disableTools,
+            IsChannelRelayTurn(toolContext),
+            effectiveToolContext,
+            ct);
         var input = await BuildUserInputPartsAsync(
                 activity,
                 provider,
@@ -364,14 +379,21 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     // slash silently consumed.
     // New: unbound sender disables tool dispatch; unknown slash gates to /init bootstrap;
     // non-slash text path unchanged (owner-LLM chat fallback).
-    private async Task<ToolManager> BuildTurnToolsAsync(bool disableTools, bool isChannelTurn, CancellationToken ct)
+    private async Task<ToolManager> BuildTurnToolsAsync(
+        bool disableTools,
+        bool isChannelTurn,
+        AgentToolExecutionContext? discoveryContext,
+        CancellationToken ct)
     {
         var tools = new ToolManager();
         if (disableTools)
             return tools;
 
-        foreach (var tool in await DiscoverToolsAsync(isChannelTurn, ct))
-            tools.Register(tool);
+        using (AgentToolContextScope.Push(discoveryContext))
+        {
+            foreach (var tool in await DiscoverToolsAsync(isChannelTurn, ct))
+                tools.Register(tool);
+        }
 
         // Refactor (iter27/cluster-027-skill-registry-remote-skill-process-state):
         //   Old pattern: SkillRegistry 暴露混合 local + remote skill 注册并用 5min TTL process-wide cache 缓存 remote skill,违反读写分离 + 多用户 token 共享 + 进程内事实状态
@@ -383,6 +405,19 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         return tools;
+    }
+
+    private static AgentToolExecutionContext BuildEffectiveToolContext(
+        IReadOnlyDictionary<string, string> metadata,
+        LLMControlContext control,
+        AgentToolExecutionContext? baseContext)
+    {
+        var externalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata);
+        var context = baseContext ?? AgentToolExecutionContext.Empty with
+        {
+            ExternalMetadata = externalMetadata,
+        };
+        return control.ToToolContext(context);
     }
 
     private async Task<ConversationReplyResult> GenerateWithMetadataAsync(

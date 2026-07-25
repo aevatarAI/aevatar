@@ -1,12 +1,16 @@
+import type { StudioUserLlmSettings } from "@/shared/studio/models";
 import {
   buildConversationRouteOptions,
   buildConversationModelGroups,
   USER_LLM_ROUTE_GATEWAY,
 } from "./chatConversationConfig";
 
-const llmSettings = {
+const llmSettings: StudioUserLlmSettings = {
   savedRoute: USER_LLM_ROUTE_GATEWAY,
   savedRouteLabel: "Company LLM Gateway",
+  savedRouteKind: "gateway",
+  savedUserServiceId: null,
+  savedServiceSlug: null,
   effectiveRoute: USER_LLM_ROUTE_GATEWAY,
   effectiveRouteLabel: "Company LLM Gateway",
   routeFallbackActive: false,
@@ -27,8 +31,9 @@ const llmSettings = {
       status: "ready",
       allowed: true,
       ready: true,
-      serviceId: null,
+      userServiceId: null,
       serviceSlug: null,
+      defaultModel: null,
       description: null,
     },
     {
@@ -38,8 +43,9 @@ const llmSettings = {
       status: "ready",
       allowed: true,
       ready: true,
-      serviceId: "svc-anthropic",
+      userServiceId: "us-anthropic",
       serviceSlug: "anthropic-team",
+      defaultModel: "claude-3-haiku",
       description: null,
     },
   ],
@@ -66,6 +72,10 @@ const llmSettings = {
 };
 
 describe("buildConversationRouteOptions", () => {
+  it("uses the explicit Gateway route for conversation overrides", () => {
+    expect(USER_LLM_ROUTE_GATEWAY).toBe("/api/v1/llm/gateway/v1");
+  });
+
   it("uses backend route options without deriving routes from provider slugs", () => {
     expect(buildConversationRouteOptions(llmSettings).map((option) => option.label)).toEqual([
       "Company LLM Gateway",
@@ -102,6 +112,32 @@ describe("buildConversationRouteOptions", () => {
     expect(options.map((option) => option.value)).not.toContain(
       "/api/v1/proxy/s/retired-team"
     );
+  });
+
+  it("keeps conversation overrides route-based when exact services share a route", () => {
+    const sharedRoute = "/api/v1/proxy/s/shared-anthropic";
+    const options = buildConversationRouteOptions({
+      ...llmSettings,
+      routeOptions: [
+        llmSettings.routeOptions[0],
+        {
+          ...llmSettings.routeOptions[1],
+          routeValue: sharedRoute,
+          label: "Anthropic alpha",
+          userServiceId: "us-alpha",
+        },
+        {
+          ...llmSettings.routeOptions[1],
+          routeValue: sharedRoute,
+          label: "Anthropic beta",
+          userServiceId: "us-beta",
+        },
+      ],
+    });
+
+    expect(options.filter((option) => option.value === sharedRoute)).toEqual([
+      { label: "Anthropic alpha", value: sharedRoute },
+    ]);
   });
 });
 

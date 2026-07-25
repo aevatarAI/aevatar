@@ -430,9 +430,14 @@ public sealed class ScheduledAgentCreatorToolTests
         var ownerLLMQueryPort = new RecordingOwnerLLMEvidenceQueryPort(
             new ScheduledInvocationOwnerLLMEvidence(
                 17,
-                "svc-chrono",
-                "chrono-llm",
-                AuthorizationGrantRequirement.Required));
+                new ScheduledInvocationOwnerLLMSelection
+                {
+                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteValue = "/api/v1/proxy/s/chrono-llm",
+                    NyxIdUserServiceId = "svc-chrono",
+                    ServiceSlugSnapshot = "chrono-llm",
+                    Model = "gpt-5.5",
+                }));
         var harness = CreateHarness(
             handler: handler,
             authorizationSnapshot: CreateSnapshot(
@@ -464,16 +469,19 @@ public sealed class ScheduledAgentCreatorToolTests
     public async Task ExecuteAsync_WhenOwnerUsesGatewayRoute_ShouldNotWidenScopedKeyAllowlist()
     {
         // The shared gateway route uses the bearer token directly and needs no per-service grant,
-        // so a gateway/empty PreferredLlmRoute must leave the scoped allowlist unchanged.
+        // so an explicit typed Gateway selection must leave the scoped allowlist unchanged.
         var handler = CreateSuccessHandler();
         var harness = CreateHarness(
             handler: handler,
             ownerLLMQueryPort: new RecordingOwnerLLMEvidenceQueryPort(
                 new ScheduledInvocationOwnerLLMEvidence(
                     18,
-                    string.Empty,
-                    string.Empty,
-                    AuthorizationGrantRequirement.NotRequired)));
+                    new ScheduledInvocationOwnerLLMSelection
+                    {
+                        RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+                        RouteValue = ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+                        Model = "gpt-5.5",
+                    })));
 
         await WithToolContext(async () =>
         {
@@ -1248,9 +1256,14 @@ public sealed class ScheduledAgentCreatorToolTests
             ownerLLMQueryPort: ownerLLMQueryPort ?? new RecordingOwnerLLMEvidenceQueryPort(
                 new ScheduledInvocationOwnerLLMEvidence(
                     29,
-                    "svc-llm",
-                    "chrono-llm-public",
-                    AuthorizationGrantRequirement.Required)));
+                    new ScheduledInvocationOwnerLLMSelection
+                    {
+                        RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                        RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                        NyxIdUserServiceId = "svc-llm",
+                        ServiceSlugSnapshot = "chrono-llm-public",
+                        Model = "gpt-5.5",
+                    })));
         var tool = new ScheduledAgentCreatorTool(
             provider.GetRequiredService<IScheduledWorkflowAgentCreationPort>(),
             provider.GetRequiredService<ICallerScopeResolver>(),
@@ -1525,7 +1538,6 @@ public sealed class ScheduledAgentCreatorToolTests
 
         public Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
             string scopeId,
-            AuthenticatedAuthorizationOwnerContext? ownerContext = null,
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();

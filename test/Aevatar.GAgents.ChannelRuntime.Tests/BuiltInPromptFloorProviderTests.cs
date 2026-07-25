@@ -37,6 +37,8 @@ public sealed class BuiltInPromptFloorProviderTests
     [InlineData("organization-scoped sharing mechanism")]
     [InlineData("provider-specific typed sharing tool")]
     [InlineData("use_skill(skill=\"nyxid\")")]
+    [InlineData("call `nyxid_service_inventory` directly")]
+    [InlineData("Do not run `nyxid service list`")]
     [InlineData("ornn_search_skills")]
     [InlineData("api-github-pat")]
     [InlineData("provider-backed relay registration")]

@@ -16,7 +16,6 @@ public sealed record UserConfigSaveReceipt(
 
 public sealed record SaveUserConfigCommand(
     string? DefaultModel = null,
-    string? PreferredLlmRoute = null,
     string? RuntimeMode = null,
     string? LocalRuntimeBaseUrl = null,
     string? RemoteRuntimeBaseUrl = null,

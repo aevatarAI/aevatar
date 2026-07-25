@@ -10,6 +10,7 @@ using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Credentials;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Tests;
 
@@ -64,9 +65,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         var chat = invocation.Payload.Unpack<ChatRequestEvent>();
         chat.Prompt.Should().Be("run digest");
         chat.ScopeId.Should().Be("scope-1");
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         invocation.AuthorizationFact.Should().NotBeNull();
         var fact = invocation.AuthorizationFact!;
         fact.PermissionDigest.Should().Be(RecordingAuthorizationPlanner.Digest);
+        fact.OwnerLLMSelection.Should().BeEquivalentTo(planner.Result.Plan!.OwnerLlmSelection);
         fact.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         fact.ServiceGrants.Should().ContainSingle().Which.Should().BeEquivalentTo(
             new ScheduledInvocationAuthorizationServiceGrant("nyx-service-alpha", ["nyx-node-alpha"], false));
@@ -78,6 +82,34 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             "scope-plan-contract/v1",
             "scope-plan-policy/v1",
             DateTimeOffset.Parse("2026-07-01T00:00:00Z")));
+        configuration.CredentialRequirementTargetKind.Should()
+            .Be(ScheduledDispatchCredentialRequirementTargetKind.WorkflowService);
+        var decision = scheduleService.BeginOperation!.ActivationDecision;
+        decision.ScheduleId.Should().Be(configuration.ScheduleId);
+        decision.DisplayName.Should().Be(configuration.DisplayName);
+        decision.Owner.Should().Be(configuration.TeamAutomationOwner);
+        decision.ServiceIdentity.Should().BeEquivalentTo(invocation.Identity);
+        decision.ServiceIdentity.Should().NotBeSameAs(invocation.Identity);
+        decision.EndpointId.Should().Be(invocation.EndpointId);
+        decision.Payload.Should().Be(invocation.Payload);
+        decision.Payload.Should().NotBeSameAs(invocation.Payload);
+        decision.CallerAuthority.Should().BeEquivalentTo(invocation.Auth!.CallerAuthority);
+        decision.CallerAuthority.Should().NotBeSameAs(invocation.Auth.CallerAuthority);
+        decision.AuthorizationFact.Should().BeEquivalentTo(fact);
+        decision.AuthorizationFact.Should().NotBeSameAs(fact);
+        decision.AuthorizationFact.OwnerLLMSelection.Should().NotBeSameAs(fact.OwnerLLMSelection);
+        decision.CronExpression.Should().Be(configuration.CronExpression);
+        decision.Timezone.Should().Be(configuration.Timezone);
+        decision.Enabled.Should().Be(configuration.Enabled);
+        decision.ScheduleKind.Should().Be(configuration.ScheduleKind);
+        decision.Headers.Should().Equal(configuration.Headers);
+        decision.Headers.Should().NotBeSameAs(configuration.Headers);
+        decision.ScheduleMode.Should().Be(configuration.ScheduleMode);
+        decision.OneShotFireAt.Should().Be(configuration.OneShotFireAt);
+        decision.CredentialRequirementTargetKind.Should()
+            .Be(configuration.CredentialRequirementTargetKind);
+        scheduleService.BeginOperation.PermissionDigest.Should().Be(decision.AuthorizationFact.PermissionDigest);
+        scheduleService.BeginOperation.PolicyVersion.Should().Be(decision.AuthorizationFact.PolicyVersion);
     }
 
     [Fact]
@@ -88,8 +120,19 @@ public sealed class StudioMemberWorkflowSchedulePortTests
 
         await ScheduleAsync(sut, Request("scope-1", "member-1") with
         {
-            CallerSubjectPlatform = " Lark ",
-            CallerSubjectTenant = " tenant-1 ",
+            CallerSubjectPlatform = " unverified-platform ",
+            CallerSubjectTenant = " unverified-tenant ",
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                " lark ",
+                " tenant-alpha ",
+                " sender-alpha ",
+                " bnd-owner-alpha "),
         });
 
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
@@ -102,8 +145,104 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         auth.SenderNyxId.Should().BeNull();
         auth.Durable.Should().BeNull();
         auth.ScopeOwnerNyxId.Should().BeNull();
+        auth.CallerAuthority.Should().BeEquivalentTo(new ScheduledCallerNyxIdAuthority
+        {
+            Platform = "lark",
+            Tenant = "tenant-alpha",
+            ExternalUserId = "sender-alpha",
+            Scope = "proxy",
+            BindingId = "bnd-owner-alpha",
+        });
         scheduleService.Configuration.TeamAutomationOwner.Should()
             .Be(new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"));
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldExposeOwnerLLMRuntimeEvidenceFromScheduleReadModel()
+    {
+        var detail = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMRouteKind", "nyx_id_user_service");
+        SetRequiredStringProperty(
+            detail.Schedule,
+            "OwnerLLMRoute",
+            "/api/v1/proxy/s/chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMUserServiceId", "us-chrono");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMServiceSlug", "chrono-llm-public");
+        SetRequiredStringProperty(detail.Schedule, "OwnerLLMModel", "gpt-5.5");
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = detail,
+        };
+        var port = NewPort(scheduleService);
+
+        var result = await port.GetAsync("scope-1", "team-1", "member-1", "schedule-1");
+
+        result.Should().NotBeNull();
+        ReadRequiredStringProperty(result!, "OwnerLLMRouteKind").Should().Be("nyx_id_user_service");
+        ReadRequiredStringProperty(result, "OwnerLLMRoute").Should()
+            .Be("/api/v1/proxy/s/chrono-llm-public");
+        ReadRequiredStringProperty(result, "OwnerLLMUserServiceId").Should().Be("us-chrono");
+        ReadRequiredStringProperty(result, "OwnerLLMServiceSlug").Should().Be("chrono-llm-public");
+        ReadRequiredStringProperty(result, "OwnerLLMModel").Should().Be("gpt-5.5");
+        ReadRequiredStringProperty(result, "NyxIdRevocationStatus").Should().BeEmpty();
+        ReadRequiredStringProperty(result, "VaultRevocationStatus").Should().BeEmpty();
+        result.StateVersion.Should().Be(detail.Schedule.StateVersion);
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldPreserveDistinctRevocationTrackStatusesFromScheduleReadModel()
+    {
+        var detail = CreateTeamAutomationDetail(
+            RecordingAuthorizationPlanner.Digest,
+            RecordingAuthorizationPlanner.PolicyVersion);
+        SetRequiredStringProperty(detail.Schedule, "NyxIdRevocationStatus", "nyx-track-terminal");
+        SetRequiredStringProperty(detail.Schedule, "VaultRevocationStatus", "vault-track-terminal");
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = detail,
+        };
+        var port = NewPort(scheduleService);
+
+        var result = await port.GetAsync("scope-1", "team-1", "member-1", "schedule-1");
+
+        result.Should().NotBeNull();
+        ReadRequiredStringProperty(result!, "NyxIdRevocationStatus").Should().Be("nyx-track-terminal");
+        ReadRequiredStringProperty(result, "VaultRevocationStatus").Should().Be("vault-track-terminal");
+        result.RevocationPending.Should().Be(detail.Schedule.RevocationPending);
+    }
+
+    [Fact]
+    public async Task EnsureAsync_WhenVerifiedOwnerBindingMissing_ShouldFailClosed()
+    {
+        var scheduleService = new RecordingScheduleService();
+        var materializer = new RecordingCredentialMaterializer();
+        var sut = NewPort(scheduleService, materializer: materializer);
+        var request = Request("scope-1", "member-1") with
+        {
+            AuthenticatedOwner = new AuthenticatedAuthorizationOwnerContext(
+                new AuthorizationOwnerIdentity
+                {
+                    Authority = NyxIdAuthorizationAuthorities.NyxId,
+                    OwnerKind = AuthorizationOwnerKind.Personal,
+                    OwnerSubject = "nyx-owner-alpha",
+                },
+                "lark",
+                "tenant-alpha",
+                "sender-alpha",
+                " "),
+        };
+
+        var act = () => ScheduleAsync(sut, request);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("authenticated_authorization_owner_binding_missing");
+        materializer.MaterializeCallCount.Should().Be(0);
+        materializer.RevokeCallCount.Should().Be(0);
+        scheduleService.BeginCallCount.Should().Be(0);
+        scheduleService.CandidateCallCount.Should().Be(0);
+        scheduleService.Configurations.Should().BeEmpty();
     }
 
     [Fact]
@@ -366,7 +505,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
-                BindingId = "binding-alpha",
+                BindingId = "bnd-owner-alpha",
             });
     }
 
@@ -514,7 +653,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 Tenant = "tenant-alpha",
                 ExternalUserId = "sender-alpha",
                 Scope = "proxy",
-                BindingId = "binding-alpha",
+                BindingId = "bnd-owner-alpha",
             });
         materializer.BearerToken.Should().Be("issued-bearer-alpha");
         var auth = scheduleService.Configuration!.Target.ServiceInvocation!.Auth;
@@ -569,6 +708,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         fact.ServiceGrants[1].ServiceId.Should().Be("nyx-service-direct");
         fact.ServiceGrants[1].NodeIds.Should().BeEmpty();
         fact.ServiceGrants[1].NodeGrantsNotRequired.Should().BeTrue();
+        fact.OwnerLLMSelection.Should().BeEquivalentTo(plan.OwnerLlmSelection);
+        fact.OwnerLLMSelection.Should().NotBeSameAs(plan.OwnerLlmSelection);
         fact.GetType().GetProperties().Should()
             .NotContain(property => property.Name == "NodeGrants");
     }
@@ -871,18 +1012,53 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task CreateAsync_WhenBeginCommitsNewOperation_ShouldReportNewOperationCommitted()
+    {
+        var result = await ScheduleAsync(
+            NewPort(new RecordingScheduleService()),
+            Request("scope-1", "member-1"));
+
+        result.NewOperationCommitted.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task CreateAsync_WhenBeginReplayDoesNotOwnEffect_ShouldNotMaterializeCredential()
     {
-        var scheduleService = new RecordingScheduleService { BeginOwnsEffectAttempt = false };
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginOwnsEffectAttempt = false,
+            BeginNewOperationCommitted = false,
+        };
         var materializer = new RecordingCredentialMaterializer();
         var port = NewPort(scheduleService, materializer: materializer);
 
         var result = await ScheduleAsync(port, Request("scope-1", "member-1"));
 
         result.Status.Should().Be("pending");
+        result.NewOperationCommitted.Should().BeFalse();
         scheduleService.BeginCallCount.Should().Be(1);
         scheduleService.EnsureCallCount.Should().Be(0);
         materializer.MaterializeCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenExpiredBeginReplayOwnsEffect_ShouldNotReportNewOperationCommitted()
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            BeginOwnsEffectAttempt = true,
+            BeginNewOperationCommitted = false,
+        };
+        var materializer = new RecordingCredentialMaterializer();
+
+        var result = await ScheduleAsync(
+            NewPort(scheduleService, materializer: materializer),
+            Request("scope-1", "member-1"));
+
+        result.Success.Should().BeTrue();
+        result.NewOperationCommitted.Should().BeFalse();
+        scheduleService.BeginCallCount.Should().Be(1);
+        materializer.MaterializeCallCount.Should().Be(1);
     }
 
     [Fact]
@@ -1001,6 +1177,135 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task RetryRevocationAsync_WhenBothTracksCommit_ShouldEmitAllowlistedCompletionEvidenceOnce()
+    {
+        var scheduleService = new RecordingScheduleService { ReturnPendingRevocationOnRetry = true };
+        var materializer = new RecordingCredentialMaterializer();
+        var logs = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logs));
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
+            auditLoggerFactory: loggerFactory);
+        var request = Request("scope-1", "member-1");
+        var command = new StudioMemberAutomationActionCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
+        {
+            AuthenticatedOwner = request.AuthenticatedOwner,
+            ProvisioningBearerToken = "fresh-bearer-sensitive",
+        };
+
+        await port.RetryRevocationAsync(command);
+
+        var entry = logs.Entries
+            .Where(static candidate => candidate.EventId.Name ==
+                "StudioMemberAutomationRevocationCompleted")
+            .Should().ContainSingle().Subject;
+        entry.Category.Should().Be("Aevatar.Studio.MemberAutomation");
+        entry.LogLevel.Should().Be(LogLevel.Information);
+        entry.EventId.Id.Should().Be(6202);
+        entry.Exception.Should().BeNull();
+
+        var properties = entry.State
+            .Where(static item => item.Key != "{OriginalFormat}")
+            .ToDictionary(static item => item.Key, static item => item.Value);
+        properties.Should().HaveCount(9);
+        properties.Keys.Should().BeEquivalentTo(
+        [
+            "ScopeId",
+            "TeamId",
+            "MemberId",
+            "ScheduleId",
+            "OperationId",
+            "NyxIdRevocationStatus",
+            "VaultRevocationStatus",
+            "StateVersion",
+            "ObservedAtUtc",
+        ]);
+        properties["ScopeId"].Should().Be("scope-1");
+        properties["TeamId"].Should().Be("team-1");
+        properties["MemberId"].Should().Be("member-1");
+        properties["ScheduleId"].Should().Be("schedule-1");
+        properties["OperationId"].Should().Be("operation-delete");
+        properties["NyxIdRevocationStatus"].Should().Be("Completed");
+        properties["VaultRevocationStatus"].Should().Be("Completed");
+        properties["StateVersion"].Should().Be(1L);
+        properties["ObservedAtUtc"].Should().Be(TestNow);
+
+        var capturedContent = string.Join(
+            '\n',
+            entry.State.Select(static item => $"{item.Key}={item.Value}").Append(entry.Message));
+        foreach (var forbidden in new[]
+                 {
+                     "fresh-bearer-sensitive",
+                     "key-alpha",
+                     "secret-alpha",
+                     "idempotency-delete",
+                     "nyx-owner-alpha",
+                     "PermissionDigest",
+                     "ApiKey",
+                     "SecretReference",
+                     "VaultReference",
+                     "CallerAuthority",
+                 })
+        {
+            capturedContent.Should().NotContain(forbidden);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false, true, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, true, false, true)]
+    public async Task RetryRevocationAsync_WhenCompletionIsNotOwnedAndSuccessful_ShouldNotEmitCompletionEvidence(
+        bool pending,
+        bool ownsEffectAttempt,
+        bool nyxIdRevoked,
+        bool vaultRevoked)
+    {
+        var scheduleService = new RecordingScheduleService
+        {
+            ReturnPendingRevocationOnRetry = pending,
+            RetryOwnsEffectAttempt = ownsEffectAttempt,
+        };
+        var materializer = new RecordingCredentialMaterializer
+        {
+            NyxIdRevoked = nyxIdRevoked,
+            VaultRevoked = vaultRevoked,
+        };
+        var logs = new RecordingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddProvider(logs));
+        var port = NewPort(
+            scheduleService,
+            materializer: materializer,
+            logger: loggerFactory.CreateLogger<StudioMemberWorkflowSchedulePort>(),
+            auditLoggerFactory: loggerFactory);
+        var request = Request("scope-1", "member-1");
+
+        await port.RetryRevocationAsync(new StudioMemberAutomationActionCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
+        {
+            AuthenticatedOwner = request.AuthenticatedOwner,
+            ProvisioningBearerToken = "fresh-bearer-sensitive",
+        });
+
+        logs.Entries.Should().NotContain(static candidate =>
+            candidate.EventId.Name == "StudioMemberAutomationRevocationCompleted");
+    }
+
+    [Fact]
     public async Task ReauthorizeAsync_WhenPermissionDigestChanged_ShouldNotDispatch()
     {
         var scheduleService = new RecordingScheduleService();
@@ -1011,6 +1316,35 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         await action.Should().ThrowAsync<StudioMemberAutomationPlanConflictException>()
             .WithMessage("authorization_plan_changed");
         scheduleService.EnsureCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ReauthorizeAsync_WhenAuthorized_ShouldCarryFreshOwnerLLMSelection()
+    {
+        var planner = new RecordingAuthorizationPlanner();
+        var scheduleService = new RecordingScheduleService
+        {
+            TeamAutomationDetail = CreateTeamAutomationDetail(
+                RecordingAuthorizationPlanner.Digest,
+                RecordingAuthorizationPlanner.PolicyVersion),
+        };
+        var port = NewPort(scheduleService, planner: planner);
+        var request = Request("scope-1", "member-1") with
+        {
+            ScheduleId = "schedule-1",
+            OperationId = "operation-reauthorize",
+            IdempotencyKey = "idempotency-reauthorize",
+        };
+
+        var result = await port.ReauthorizeAsync(request, RecordingAuthorizationPlanner.Digest);
+
+        result.Success.Should().BeTrue();
+        var configuration = scheduleService.Configuration!;
+        configuration.Target.ServiceInvocation!.AuthorizationFact!.OwnerLLMSelection
+            .Should().BeEquivalentTo(planner.Result.Plan!.OwnerLlmSelection);
+        var chat = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
     }
 
     [Theory]
@@ -1141,6 +1475,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         revalidator.Requests.Should().HaveCount(2);
         revalidator.Requests[1].ExpiresAtUtc.Should().Be(existingCredentialExpiry);
         scheduleService.UpdateCallCount.Should().Be(1);
+        var configuration = scheduleService.Configuration!;
+        configuration.Target.ServiceInvocation!.AuthorizationFact!.OwnerLLMSelection
+            .Should().BeEquivalentTo(RecordingAuthorizationPlanner.SuccessResult().Plan!.OwnerLlmSelection);
+        var chat = configuration.Target.ServiceInvocation.Payload.Unpack<ChatRequestEvent>();
+        chat.LlmControl.ModelOverride.Should().Be("gpt-5.5");
+        chat.LlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/chrono-llm-public");
         calls.Should().Equal("revalidate", "refresh", "revalidate");
     }
 
@@ -1323,11 +1663,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldDigestNormalizedSemanticMutationWithoutCredentialMaterial()
+    public async Task CreateAsync_ShouldDigestNormalizedSemanticMutationIncludingTeamAssignmentWithoutCredentialMaterial()
     {
         var first = new RecordingScheduleService();
         var replay = new RecordingScheduleService();
         var drifted = new RecordingScheduleService();
+        var otherTeam = new RecordingScheduleService();
         var request = Request("scope-1", "member-1") with
         {
             DisplayName = " Daily digest ",
@@ -1337,12 +1678,41 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         await ScheduleAsync(NewPort(first), request);
         await ScheduleAsync(NewPort(replay), request);
         await ScheduleAsync(NewPort(drifted), request with { Prompt = "summarize something else" });
+        await ScheduleAsync(
+            NewPort(
+                otherTeam,
+                new RecordingMemberService { Detail = CreateWorkflowMemberDetail(teamId: "team-2") }),
+            request with { TeamId = "team-2" });
 
         first.BeginOperation!.MutationDigest.Should().MatchRegex("^[a-f0-9]{64}$");
         replay.BeginOperation!.MutationDigest.Should().Be(first.BeginOperation.MutationDigest);
         drifted.BeginOperation!.MutationDigest.Should().NotBe(first.BeginOperation.MutationDigest);
+        otherTeam.BeginOperation!.MutationDigest.Should().NotBe(first.BeginOperation.MutationDigest);
         first.BeginOperation.CredentialEffectLocator.CredentialOwner.Should().Be(
             new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "nyx-owner-alpha"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenVerifiedBindingDriftsUnderSameMutationKey_ShouldRejectBeforeSecondCredentialEffect()
+    {
+        var scheduleService = new RecordingScheduleService { RejectMutationDigestDrift = true };
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(scheduleService, materializer: materializer);
+        var request = Request("scope-1", "member-1");
+        await ScheduleAsync(port, request);
+        var driftedOwner = request.AuthenticatedOwner with
+        {
+            VerifiedBindingId = "bnd-owner-beta",
+        };
+
+        var act = () => ScheduleAsync(port, request with { AuthenticatedOwner = driftedOwner });
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_mutation_conflict");
+        scheduleService.BeginCallCount.Should().Be(2);
+        materializer.MaterializeCallCount.Should().Be(1);
+        scheduleService.CandidateCallCount.Should().Be(1);
+        scheduleService.Configurations.Should().ContainSingle();
     }
 
     private static StudioMemberWorkflowScheduleRequest Request(string scopeId, string memberId) => new(
@@ -1360,7 +1730,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 "lark",
                 "tenant-alpha",
                 "sender-alpha",
-                "binding-alpha"))
+                "bnd-owner-alpha"))
         {
             TeamId = "team-1",
             OperationId = "operation-alpha",
@@ -1370,6 +1740,20 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             ConfirmedPolicyVersion = RecordingAuthorizationPlanner.PolicyVersion,
         };
 
+    private static void SetRequiredStringProperty(object target, string propertyName, string value)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        property!.SetValue(target, value);
+    }
+
+    private static string ReadRequiredStringProperty(object value, string propertyName)
+    {
+        var property = value.GetType().GetProperty(propertyName);
+        property.Should().NotBeNull($"{propertyName} is part of the runtime evidence contract");
+        return property!.GetValue(value).Should().BeOfType<string>().Which;
+    }
+
     private static StudioMemberWorkflowSchedulePort NewPort(
         RecordingScheduleService schedule,
         RecordingMemberService? memberService = null,
@@ -1378,6 +1762,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         IStudioScheduledCredentialMaterializer? materializer = null,
         INyxIdAuthorizationCatalogRefreshPort? catalogRefresh = null,
         TimeProvider? timeProvider = null,
+        ILogger<StudioMemberWorkflowSchedulePort>? logger = null,
+        ILoggerFactory? auditLoggerFactory = null,
         IWorkflowCallerAccessTokenProvider? callerAccessTokenProvider = null)
     {
         var resolvedPlanner = planner ?? new RecordingAuthorizationPlanner();
@@ -1389,6 +1775,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             materializer ?? new RecordingCredentialMaterializer(),
             timeProvider ?? new FixedTimeProvider(TestNow),
             catalogRefresh,
+            logger,
+            auditLoggerFactory,
             callerAccessTokenProvider: callerAccessTokenProvider);
     }
 
@@ -1602,6 +1990,14 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     PolicyVersion = "scope-plan-policy/v1",
                     EvaluatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-01T00:00:00Z")),
                 },
+                OwnerLlmSelection = new ScheduledInvocationOwnerLLMSelection
+                {
+                    RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                    RouteValue = "/api/v1/proxy/s/chrono-llm-public",
+                    NyxIdUserServiceId = "nyx-llm-service-alpha",
+                    ServiceSlugSnapshot = "chrono-llm-public",
+                    Model = "gpt-5.5",
+                },
             };
             plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
             {
@@ -1783,6 +2179,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public ScheduledCredentialEffectLocator? EffectLocator { get; private set; }
         public StudioScheduledCredential? Credential { get; init; }
         public Exception? MaterializeException { get; init; }
+        public bool NyxIdRevoked { get; init; } = true;
+        public bool VaultRevoked { get; init; } = true;
 
         public ScheduledCredentialEffectLocator CreateEffectLocator(
             string scheduleId,
@@ -1827,9 +2225,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         {
             RevokeCallCount++;
             return Task.FromResult(new StudioScheduledCredentialRevocationResult(
-                NyxIdRevoked: true,
-                VaultRevoked: true,
-                ErrorCode: string.Empty));
+                NyxIdRevoked,
+                VaultRevoked,
+                ErrorCode: NyxIdRevoked && VaultRevoked ? string.Empty : "revocation_failed"));
         }
     }
 
@@ -1859,9 +2257,12 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int TombstonedAttempts { get; init; }
         public Exception? EnsureException { get; init; }
         public bool BeginOwnsEffectAttempt { get; init; } = true;
+        public bool BeginNewOperationCommitted { get; init; } = true;
         public Exception? CandidateException { get; init; }
         public bool CommitCandidateBeforeException { get; init; }
         public bool ReturnPendingRevocationOnRetry { get; init; }
+        public bool RetryOwnsEffectAttempt { get; init; } = true;
+        public bool RejectMutationDigestDrift { get; init; }
         public ScheduledDispatchConfiguration? Configuration { get; private set; }
         public List<ScheduledDispatchConfiguration> Configurations { get; } = [];
         public ScheduledDispatchDetail? TeamAutomationDetail { get; init; }
@@ -1873,6 +2274,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         private ScheduledInvocationAgentKeyCredentialReference? _candidateCredential;
         private ScheduledInvocationAuthorizationOwner? _candidateOwner;
         private bool _candidateExceptionThrown;
+        private string? _acceptedMutationDigest;
 
         public Task<TeamAutomationCommittedMutationReceipt> BeginTeamAutomationCredentialOperationAsync(
             TeamAutomationCredentialOperation operation,
@@ -1881,6 +2283,15 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             BeginCallCount++;
             Calls?.Add("begin");
             BeginOperation = operation;
+            if (RejectMutationDigestDrift &&
+                _acceptedMutationDigest != null &&
+                !string.Equals(_acceptedMutationDigest, operation.MutationDigest, StringComparison.Ordinal))
+            {
+                throw new ScheduledDispatchConflictException(
+                    operation.ScheduleId,
+                    "team_automation_mutation_conflict");
+            }
+            _acceptedMutationDigest ??= operation.MutationDigest;
             return Task.FromResult(Committed(
                 operation.ScheduleId,
                 operation.OperationId,
@@ -1891,7 +2302,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 effectAttemptId: BeginOwnsEffectAttempt ? "attempt-alpha" : string.Empty,
                 candidateCredential: _candidateCredential,
                 candidateOwner: _candidateOwner,
-                credentialEffectLocator: operation.CredentialEffectLocator));
+                credentialEffectLocator: operation.CredentialEffectLocator,
+                newOperationCommitted: BeginNewOperationCommitted));
         }
 
         public Task<TeamAutomationCommittedMutationReceipt> RecordTeamAutomationCredentialCandidateAsync(
@@ -1993,9 +2405,11 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 operationId,
                 idempotencyKey,
                 TeamAutomationOperationObservationStages.Delete,
-                ownsEffectAttempt: ReturnPendingRevocationOnRetry,
+                ownsEffectAttempt: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt,
                 "cmd-retry-revocation",
-                effectAttemptId: ReturnPendingRevocationOnRetry ? "attempt-revocation" : string.Empty,
+                effectAttemptId: ReturnPendingRevocationOnRetry && RetryOwnsEffectAttempt
+                    ? "attempt-revocation"
+                    : string.Empty,
                 pendingRevocationCredential: ReturnPendingRevocationOnRetry
                     ? new ScheduledInvocationAgentKeyCredentialReference(
                         credential.SecretReference,
@@ -2025,7 +2439,10 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 "idempotency-delete",
                 TeamAutomationOperationObservationStages.Revocation,
                 ownsEffectAttempt: false,
-                "cmd-complete-revocation"));
+                "cmd-complete-revocation",
+                errorCode,
+                nyxIdRevocationPending: !nyxIdRevoked,
+                vaultRevocationPending: !vaultRevoked));
         }
 
         public Task<ScheduledDispatchMutationReceipt> EnsureAsync(
@@ -2043,6 +2460,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             UpdateCallCount++;
+            Configuration = configuration;
+            Configurations.Add(configuration);
             return Task.FromResult(Accepted(scheduleId, "cmd-update"));
         }
 
@@ -2124,7 +2543,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             ScheduledInvocationAgentKeyCredentialReference? pendingRevocationCredential = null,
             ScheduledInvocationAuthorizationOwner? pendingRevocationOwner = null,
             bool nyxIdRevocationPending = false,
-            bool vaultRevocationPending = false) =>
+            bool vaultRevocationPending = false,
+            bool newOperationCommitted = false) =>
             new(
                 Accepted(scheduleId, commandId),
                 new TeamAutomationOperationCommittedOutcome(
@@ -2146,6 +2566,54 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                     EffectAttemptExpiresAtUtc: ownsEffectAttempt ? TestNow.AddMinutes(5) : null,
                     CandidateCredential: candidateCredential,
                     CandidateOwner: candidateOwner,
-                    CredentialEffectLocator: credentialEffectLocator));
+                    CredentialEffectLocator: credentialEffectLocator,
+                    NewOperationCommitted: newOperationCommitted));
     }
+
+    private sealed class RecordingLoggerProvider : ILoggerProvider
+    {
+        private readonly List<RecordedLogEntry> _entries = [];
+
+        public IReadOnlyList<RecordedLogEntry> Entries => _entries;
+
+        public ILogger CreateLogger(string categoryName) => new RecordingLogger(categoryName, _entries);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class RecordingLogger(
+            string category,
+            List<RecordedLogEntry> entries) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                var structuredState = state as IEnumerable<KeyValuePair<string, object?>>;
+                entries.Add(new RecordedLogEntry(
+                    category,
+                    logLevel,
+                    eventId,
+                    structuredState?.ToArray() ?? [],
+                    formatter(state, exception),
+                    exception));
+            }
+        }
+    }
+
+    private sealed record RecordedLogEntry(
+        string Category,
+        LogLevel LogLevel,
+        EventId EventId,
+        IReadOnlyList<KeyValuePair<string, object?>> State,
+        string Message,
+        Exception? Exception);
 }

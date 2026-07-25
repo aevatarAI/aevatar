@@ -173,6 +173,70 @@ public class NyxIdConnectedServiceToolSourceTests
     }
 
     [Fact]
+    public async Task InventorySource_WithUserToken_ExposesOnlyInventoryWithoutFetchingSpecs()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            Instance("us-personal-7", "api-shop", "svc-shop"));
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var apiClient = new NyxIdApiClient(options, new HttpClient(handler));
+        var source = new NyxIdConnectedServiceInventoryToolSource(
+            options,
+            new NyxIdServiceInstanceClient(apiClient));
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().ContainSingle().Which.Name.Should().Be("nyxid_service_inventory");
+        handler.DiscoveryRequests.Should().Be(1);
+        handler.SpecRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InventorySource_WithNoConnections_ExposesInventoryReturningEmptyResult()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys();
+        var source = CreateInventorySource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+        var inventory = tools.Should().ContainSingle().Subject;
+        using var schemaDocument = JsonDocument.Parse(inventory.ParametersSchema);
+        schemaDocument.RootElement.GetProperty("properties")
+            .TryGetProperty("user_service_id", out _)
+            .Should()
+            .BeFalse("an empty enum is not a valid model-facing selection contract");
+        var result = await inventory.ExecuteAsync("{}");
+
+        using var resultDocument = JsonDocument.Parse(result);
+        resultDocument.RootElement.GetProperty("instances").EnumerateArray().Should().BeEmpty();
+        handler.DiscoveryRequests.Should().Be(1);
+        handler.SpecRequests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InventorySource_ConnectedInstanceWithoutOpenApiSpec_IncludesConnection()
+    {
+        var handler = new FakeNyxIdHandler();
+        handler.KeysByToken["user-token"] = Keys(
+            InstanceWithOpenApiUrl(
+                "us-personal-7",
+                "api-shop",
+                "svc-shop",
+                string.Empty));
+        var source = CreateInventorySource(handler);
+
+        using var scope = PushContext("user-token");
+        var tools = await source.DiscoverToolsAsync();
+        var result = await tools.Should().ContainSingle().Subject.ExecuteAsync("{}");
+
+        result.Should().Contain("us-personal-7");
+        handler.DiscoveryRequests.Should().Be(1);
+        handler.SpecRequests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task DiscoverToolsAsync_ExposesFixedToolsAndMarkedOperationsForExactInstances()
     {
         var handler = new FakeNyxIdHandler();
@@ -687,6 +751,19 @@ public class NyxIdConnectedServiceToolSourceTests
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
             new HttpClient(handler));
         return new NyxIdConnectedServiceToolSource(options, new NyxIdServiceInstanceClient(client));
+    }
+
+    private static NyxIdConnectedServiceInventoryToolSource CreateInventorySource(
+        FakeNyxIdHandler handler,
+        string? baseUrl = "https://nyx.test")
+    {
+        var options = new NyxIdToolOptions { BaseUrl = baseUrl };
+        var client = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
+            new HttpClient(handler));
+        return new NyxIdConnectedServiceInventoryToolSource(
+            options,
+            new NyxIdServiceInstanceClient(client));
     }
 
     private static AgentToolContextScope PushContext(

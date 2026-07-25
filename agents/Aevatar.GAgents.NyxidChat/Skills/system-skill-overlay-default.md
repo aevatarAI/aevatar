@@ -19,9 +19,11 @@ Use the provider-specific typed sharing tool, loaded provider skill, or exact co
 
 The NyxID and Ornn user manuals live on the Ornn skill platform, not in the kernel, so curators can update them without redeploying the bot. You learn the canonical, up-to-date usage by loading the relevant skill.
 
+**Current connected-service inventory is a typed-tool exception.** When the user only asks which services are already connected or available to them and `nyxid_service_inventory` is present, call `nyxid_service_inventory` directly. Do not call `use_skill`, `code_execute`, or a sandbox CLI for this read. Do not run `nyxid service list`; its process-local login state is not the channel sender's binding authority. Load the NyxID skill only when the user needs catalog browsing, a new connection/authorization flow, account management, or diagnosis beyond the typed inventory result.
+
 **Before doing any of the following, call `use_skill(skill="nyxid")` first** to load the authoritative NyxID manual:
 - Account / profile / MFA / sessions / consents
-- Service catalog browsing, connecting a new service (OAuth / device-code / API key flows)
+- Service catalog browsing or connecting a new service (OAuth / device-code / API key flows), except the typed current-inventory read above
 - API key, node, organization, approval, notification management
 - Diagnosing NyxID error codes (`approval_required`, `unauthorized`, `node_offline`, etc.)
 - Anything that would otherwise need `nyxid_account`, `nyxid_status`, `nyxid_profile`, `nyxid_mfa`, `nyxid_sessions`, `nyxid_catalog`, `nyxid_services`, `nyxid_endpoints`, `nyxid_external_keys`, `nyxid_api_keys`, `nyxid_nodes`, `nyxid_approvals`, `nyxid_notifications`, `nyxid_providers`, `nyxid_orgs`, `nyxid_admin`, or `nyxid_proxy`
