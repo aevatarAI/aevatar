@@ -10,19 +10,16 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox;
 
-internal sealed class NyxIdChronoSandboxCodexClient(
+internal sealed class NyxIdManagedCodexChronoTransport(
     IOptions<ManagedCodexOptions> options,
     INyxIdApiClientFactory clientFactory,
-    IManagedCodexCredentialQueryPort credentialQuery,
     ISecretVault secretVault,
-    TimeProvider timeProvider) : IChronoSandboxCodexClient
+    TimeProvider timeProvider) : IManagedCodexChronoTransport
 {
     private readonly ManagedCodexOptions _options =
         options?.Value ?? throw new ArgumentNullException(nameof(options));
     private readonly INyxIdApiClientFactory _clientFactory =
         clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
-    private readonly IManagedCodexCredentialQueryPort _credentialQuery =
-        credentialQuery ?? throw new ArgumentNullException(nameof(credentialQuery));
     private readonly ISecretVault _secretVault =
         secretVault ?? throw new ArgumentNullException(nameof(secretVault));
     private readonly TimeProvider _timeProvider =
@@ -30,11 +27,11 @@ internal sealed class NyxIdChronoSandboxCodexClient(
 
     public async Task<CodexExecutionResult> ExecuteAsync(
         CodexExecutionRequest request,
+        ManagedCodexCredentialDescriptor credential,
         CancellationToken ct = default)
     {
         var owner = ValidateRequest(request);
-        var snapshot = await _credentialQuery.ResolveAsync(owner, ct).ConfigureAwait(false);
-        var credential = ValidateCredential(snapshot?.Credential, owner);
+        credential = ValidateCredential(credential, owner);
         var reference = credential.SecretReference;
 
         ResolveSecretResult resolved;
@@ -161,6 +158,11 @@ internal sealed class NyxIdChronoSandboxCodexClient(
                     ManagedCodexOptions.ChronoSandboxServiceSlug,
                     StringComparison.Ordinal) ||
                 string.IsNullOrWhiteSpace(credential.ChronoSandboxUserServiceId) ||
+                string.IsNullOrWhiteSpace(credential.ChronoLlmUserServiceId) ||
+                string.Equals(
+                    credential.ChronoSandboxUserServiceId,
+                    credential.ChronoLlmUserServiceId,
+                    StringComparison.Ordinal) ||
                 credential.SecretReference is null ||
                 string.IsNullOrWhiteSpace(credential.SecretReference.Ref) ||
                 !string.Equals(
@@ -253,7 +255,7 @@ internal sealed class NyxIdChronoSandboxCodexClient(
             }
             return new CodexExecutionResult(text, exitCode, diagnosticId, elapsed);
         }
-        catch (ManagedCodexExecutionException)
+        catch (ManagedCodexTransportException)
         {
             throw;
         }
@@ -266,7 +268,7 @@ internal sealed class NyxIdChronoSandboxCodexClient(
         }
     }
 
-    private static ManagedCodexExecutionException ProxyFailure(int status) => status switch
+    private static ManagedCodexTransportException ProxyFailure(int status) => status switch
     {
         401 or 403 => Failure(
             CodexExecutionFailureKind.AdmissionDenied,
@@ -293,7 +295,7 @@ internal sealed class NyxIdChronoSandboxCodexClient(
     private static string? Redact(string? value, string rawKey) =>
         value?.Replace(rawKey, "[REDACTED]", StringComparison.Ordinal);
 
-    private static ManagedCodexExecutionException Failure(
+    private static ManagedCodexTransportException Failure(
         CodexExecutionFailureKind kind,
         string code,
         string message,

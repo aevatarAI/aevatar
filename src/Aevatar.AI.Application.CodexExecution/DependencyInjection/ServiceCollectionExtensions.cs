@@ -1,3 +1,4 @@
+using Aevatar.AI.Abstractions.CodexExecution;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -22,6 +23,9 @@ public static class ServiceCollectionExtensions
             ManagedCodexOptionsValidator>());
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IManagedCodexCredentialLifecycle, ManagedCodexCredentialLifecycle>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            ICodexExecutionPort,
+            ManagedCodexExecutionCoordinator>());
         return services;
     }
 }

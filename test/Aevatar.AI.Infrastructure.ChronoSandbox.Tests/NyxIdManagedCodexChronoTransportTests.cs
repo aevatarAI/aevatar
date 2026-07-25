@@ -14,7 +14,7 @@ using NSubstitute;
 
 namespace Aevatar.AI.Infrastructure.ChronoSandbox.Tests;
 
-public sealed class NyxIdChronoSandboxCodexClientTests
+public sealed class NyxIdManagedCodexChronoTransportTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-07-21T12:00:00Z");
     private const string RawKey = "nyx_k_raw-agent-key-must-remain-secret";
@@ -35,9 +35,10 @@ public sealed class NyxIdChronoSandboxCodexClientTests
               "diagnostic_id": "chrono-1"
             }
             """);
-        var (client, vault) = CreateClient(handler);
+        var descriptor = Descriptor();
+        var (transport, vault) = CreateTransport(handler);
 
-        var result = await client.ExecuteAsync(Request());
+        var result = await transport.ExecuteAsync(Request(), descriptor);
 
         result.Output.Should().Be("CODEX_EXEC_READY");
         result.ExitCode.Should().Be(0);
@@ -68,11 +69,11 @@ public sealed class NyxIdChronoSandboxCodexClientTests
         var handler = new RecordingHandler("{}");
         var descriptor = Descriptor();
         descriptor.SecretReference.Purpose = "wrong-purpose";
-        var (client, vault) = CreateClient(handler, descriptor);
+        var (transport, vault) = CreateTransport(handler);
 
-        var act = () => client.ExecuteAsync(Request());
+        var act = () => transport.ExecuteAsync(Request(), descriptor);
 
-        var exception = (await act.Should().ThrowAsync<ManagedCodexExecutionException>()).Which;
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Code.Should().Be("managed_credential_invalid");
         handler.CallCount.Should().Be(0);
         await vault.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
@@ -82,11 +83,12 @@ public sealed class NyxIdChronoSandboxCodexClientTests
     public async Task ExecuteAsync_WhenCredentialOwnerDoesNotMatchCaller_FailsBeforeVaultOrProxy()
     {
         var handler = new RecordingHandler("{}");
-        var (client, vault) = CreateClient(handler);
+        var descriptor = Descriptor();
+        var (transport, vault) = CreateTransport(handler);
 
-        var act = () => client.ExecuteAsync(Request("user-b"));
+        var act = () => transport.ExecuteAsync(Request("user-b"), descriptor);
 
-        var exception = (await act.Should().ThrowAsync<ManagedCodexExecutionException>()).Which;
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Code.Should().Be("managed_credential_invalid");
         handler.CallCount.Should().Be(0);
         await vault.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
@@ -108,11 +110,11 @@ public sealed class NyxIdChronoSandboxCodexClientTests
         }
         if (revoked)
             descriptor.Status = ManagedCodexCredentialStatus.Revoked;
-        var (client, vault) = CreateClient(handler, descriptor);
+        var (transport, vault) = CreateTransport(handler);
 
-        var act = () => client.ExecuteAsync(Request());
+        var act = () => transport.ExecuteAsync(Request(), descriptor);
 
-        var exception = (await act.Should().ThrowAsync<ManagedCodexExecutionException>()).Which;
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Code.Should().Be("managed_credential_invalid");
         handler.CallCount.Should().Be(0);
         await vault.DidNotReceiveWithAnyArgs().ResolveAsync(default!, default);
@@ -126,13 +128,14 @@ public sealed class NyxIdChronoSandboxCodexClientTests
         SecretResolutionFailureReason failureReason)
     {
         var handler = new RecordingHandler("{}");
-        var (client, vault) = CreateClient(handler);
+        var descriptor = Descriptor();
+        var (transport, vault) = CreateTransport(handler);
         vault.ResolveAsync(Arg.Any<ResolveSecretRequest>(), Arg.Any<CancellationToken>())
             .Returns(new ResolveSecretResult(null, null, failureReason));
 
-        var act = () => client.ExecuteAsync(Request());
+        var act = () => transport.ExecuteAsync(Request(), descriptor);
 
-        var exception = (await act.Should().ThrowAsync<ManagedCodexExecutionException>()).Which;
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Code.Should().Be("managed_credential_unavailable");
         handler.CallCount.Should().Be(0);
     }
@@ -142,11 +145,11 @@ public sealed class NyxIdChronoSandboxCodexClientTests
     {
         var handler = new RecordingHandler(
             $$"""{"error":true,"status":403,"body":"denied {{RawKey}}"}""");
-        var (client, _) = CreateClient(handler);
+        var (transport, _) = CreateTransport(handler);
 
-        var act = () => client.ExecuteAsync(Request());
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
 
-        var exception = (await act.Should().ThrowAsync<ManagedCodexExecutionException>()).Which;
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.AdmissionDenied);
         exception.Failure.Code.Should().Be("managed_proxy_authorization_denied");
         exception.Message.Should().NotContain(RawKey);
@@ -166,9 +169,9 @@ public sealed class NyxIdChronoSandboxCodexClientTests
               }
             }
             """);
-        var (client, _) = CreateClient(handler);
+        var (transport, _) = CreateTransport(handler);
 
-        var result = await client.ExecuteAsync(Request());
+        var result = await transport.ExecuteAsync(Request(), Descriptor());
 
         result.Output.Should().Be("unexpected [REDACTED]");
         result.Output.Should().NotContain(RawKey);
@@ -189,41 +192,31 @@ public sealed class NyxIdChronoSandboxCodexClientTests
               "diagnostic_id": "chrono-failed"
             }
             """);
-        var (client, _) = CreateClient(handler);
+        var (transport, _) = CreateTransport(handler);
 
-        var act = () => client.ExecuteAsync(Request());
+        var act = () => transport.ExecuteAsync(Request(), Descriptor());
 
-        var exception = (await act.Should().ThrowAsync<ManagedCodexExecutionException>()).Which;
+        var exception = (await act.Should().ThrowAsync<ManagedCodexTransportException>()).Which;
         exception.Failure.Kind.Should().Be(CodexExecutionFailureKind.TerminalFailure);
         exception.Failure.Code.Should().Be("managed_execution_nonzero_exit");
         exception.Failure.DiagnosticId.Should().Be("chrono-failed");
         exception.Message.Should().NotContain("command failed");
     }
 
-    private static (NyxIdChronoSandboxCodexClient Client, ISecretVault Vault) CreateClient(
-        HttpMessageHandler handler,
-        ManagedCodexCredentialDescriptor? descriptor = null)
+    private static (NyxIdManagedCodexChronoTransport Transport, ISecretVault Vault) CreateTransport(
+        HttpMessageHandler handler)
     {
-        descriptor ??= Descriptor();
-        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
-        query.ResolveAsync(Arg.Any<ExternalSubjectRef>(), Arg.Any<CancellationToken>())
-            .Returns(new ManagedCodexCredentialSnapshot
-            {
-                Credential = descriptor.Clone(),
-                StateVersion = 3,
-                LastEventId = "event-3",
-            });
         var vault = Substitute.For<ISecretVault>();
+        var reference = Descriptor().SecretReference.Clone();
         vault.ResolveAsync(Arg.Any<ResolveSecretRequest>(), Arg.Any<CancellationToken>())
-            .Returns(new ResolveSecretResult(descriptor.SecretReference.Clone(), RawKey));
+            .Returns(new ResolveSecretResult(reference, RawKey));
         var nyxClient = new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
             new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
         return (
-            new NyxIdChronoSandboxCodexClient(
+            new NyxIdManagedCodexChronoTransport(
                 Options.Create(ManagedCodexOptionsValidatorTests.ValidOptions()),
                 new TestNyxIdApiClientFactory(nyxClient),
-                query,
                 vault,
                 new FakeTimeProvider(Now)),
             vault);
