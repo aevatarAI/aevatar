@@ -1,4 +1,5 @@
 using Aevatar.GAgents.ChatHistory;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using FluentAssertions;
@@ -21,5 +22,20 @@ public sealed class StudioInfrastructureServiceCollectionExtensionsTests
             .ContainSingle()
             .Which.ImplementationType.Should()
             .Be(typeof(ProjectionChatConversationContinuationAdmissionReader));
+    }
+
+    [Fact]
+    public void AddStudioInfrastructure_ShouldRegisterNyxIdChatReadModelQueryPort()
+    {
+        var services = new ServiceCollection();
+
+        services.AddStudioInfrastructure(new ConfigurationBuilder().Build());
+
+        services.Where(x =>
+                x.ServiceType == typeof(INyxIdChatConversationStateQueryPort))
+            .Should()
+            .ContainSingle()
+            .Which.ImplementationType.Should()
+            .Be(typeof(ProjectionNyxIdChatConversationStateQueryPort));
     }
 }

@@ -54,7 +54,9 @@ using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
+using Aevatar.Studio.Projection.ReadModels;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.Runs;
@@ -63,6 +65,7 @@ using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using System.Net;
 using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -111,6 +114,10 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .BeOfType<StudioScheduledCredentialMaterializer>();
         app.Services.GetRequiredService<INyxIdAuthorizationCatalogRefreshPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<INyxIdChatConversationStateQueryPort>().Should().NotBeNull();
+        app.Services.GetRequiredService<IProjectionDocumentReader<
+            NyxIdChatConversationCurrentStateDocument,
+            string>>().Should().NotBeNull();
         app.Services.GetRequiredService<TimeProvider>().Should().BeSameAs(customTimeProvider);
     }
 
@@ -241,6 +248,10 @@ public sealed class MainnetHostCompositionTests
             options.EnableConnectorBootstrap = false;
             options.EnableCors = false;
         });
+        builder.Services
+            .AddHttpClient("NyxIdAssistantActionRegistry")
+            .ConfigurePrimaryHttpMessageHandler(static () =>
+                new NyxIdAssistantActionRegistryHandler());
 
         await using var app = builder.Build();
         app.MapAevatarMainnetHost();
@@ -1287,6 +1298,88 @@ public sealed class MainnetHostCompositionTests
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    private sealed class NyxIdAssistantActionRegistryHandler : HttpMessageHandler
+    {
+        private const string RegistryJson = """
+            {
+              "schema_version": 4,
+              "revision": "nyxid-assistant-actions.v4",
+              "actions": [
+                {
+                  "action": "service.connect",
+                  "description": "Connect a service through the NyxID browser journey.",
+                  "params_schema": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["catalogService"],
+                        "properties": {
+                          "catalogService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["serviceSlug"],
+                            "properties": {
+                              "serviceSlug": {"type": "string"},
+                              "requestedScopes": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                              },
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["customService"],
+                        "properties": {
+                          "customService": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["name", "endpointUrl", "authMethod"],
+                            "properties": {
+                              "name": {"type": "string"},
+                              "endpointUrl": {"type": "string"},
+                              "authMethod": {"type": "string"},
+                              "authKeyName": {"type": "string"},
+                              "viaNodeId": {"type": "string"},
+                              "targetOrgId": {"type": "string"}
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "risk": "grant",
+                  "tier": "v1",
+                  "remember_eligible": true
+                }
+              ]
+            }
+            """;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.Method != HttpMethod.Get ||
+                request.RequestUri?.AbsolutePath != "/api/v1/assistant/actions" ||
+                request.Headers.Authorization is not null)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest));
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(RegistryJson),
+            });
+        }
     }
 
     private sealed class TemporaryAevatarHomeScope : IDisposable

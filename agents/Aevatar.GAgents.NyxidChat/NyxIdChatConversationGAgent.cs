@@ -18,6 +18,8 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class NyxIdChatConversationGAgent
     : GAgentBase<NyxIdChatConversationGAgentState>
 {
+    public static string ProjectionKind => "nyxid-chat-conversation";
+
     private readonly IActorRuntime _actorRuntime;
     private readonly IActorDispatchPort _actorDispatchPort;
     private readonly TimeProvider _timeProvider;

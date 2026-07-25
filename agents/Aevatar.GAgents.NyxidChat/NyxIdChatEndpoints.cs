@@ -31,6 +31,7 @@ public static partial class NyxIdChatEndpoints
         group.MapPost("/{scopeId}/nyxid-chat/conversations", HandleCreateConversationAsync);
         group.MapGet("/{scopeId}/nyxid-chat/conversations", HandleListConversationsAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:stream", HandleStreamMessageAsync);
+        group.MapGet("/{scopeId}/nyxid-chat/conversations/{actorId}/state", HandleGetStateAsync);
         group.MapDelete("/{scopeId}/nyxid-chat/conversations/{actorId}", HandleDeleteConversationAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
         MapControlEndpoints(group);
