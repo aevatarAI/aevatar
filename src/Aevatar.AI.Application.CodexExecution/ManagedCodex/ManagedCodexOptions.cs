@@ -22,6 +22,13 @@ public sealed class ManagedCodexOptions
     public const string ChronoSandboxServiceSlug = "chrono-sandbox";
     public const string ChronoLlmServiceSlug = "chrono-llm-public";
     public const string ChronoExecutionPath = "/codex/execute";
+    internal const int MutationLeaseSafetySeconds = 10;
+    internal const int MutationCompensationReserveSeconds = 10;
+    internal const int MutationRecordingReserveSeconds = 10;
+    internal const int RequiredMutationLeaseMarginSeconds =
+        MutationLeaseSafetySeconds +
+        MutationCompensationReserveSeconds +
+        MutationRecordingReserveSeconds;
 
     public bool Enabled { get; set; }
     public ManagedCodexEligibilityOptions Eligibility { get; set; } = new();
@@ -69,11 +76,13 @@ public sealed class ManagedCodexOptionsValidator : IValidateOptions<ManagedCodex
             failures.Add("MaxResponseBytes must be between 16384 and 1048576.");
         if (options.MutationCompletionSeconds is < 30 or > 600)
             failures.Add("MutationCompletionSeconds must be between 30 and 600.");
-        if (options.MutationLeaseSeconds <= options.MutationCompletionSeconds ||
+        if (options.MutationLeaseSeconds <
+            options.MutationCompletionSeconds +
+            ManagedCodexOptions.RequiredMutationLeaseMarginSeconds ||
             options.MutationLeaseSeconds > 900)
         {
             failures.Add(
-                "MutationLeaseSeconds must be greater than MutationCompletionSeconds and no more than 900.");
+                $"MutationLeaseSeconds must be at least MutationCompletionSeconds + {ManagedCodexOptions.RequiredMutationLeaseMarginSeconds} and no more than 900.");
         }
 
         return failures.Count == 0

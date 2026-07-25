@@ -76,6 +76,20 @@ public sealed class ManagedCodexOptionsValidatorTests
             .Should().BeNull();
     }
 
+    [Fact]
+    public void Validate_WhenLeaseMarginCannotCoverSafetyCompensationAndRecording_Fails()
+    {
+        var insufficient = ValidOptions();
+        insufficient.MutationCompletionSeconds = 60;
+        insufficient.MutationLeaseSeconds = 89;
+        var sufficient = ValidOptions();
+        sufficient.MutationCompletionSeconds = 60;
+        sufficient.MutationLeaseSeconds = 90;
+
+        _validator.Validate(null, insufficient).Failed.Should().BeTrue();
+        _validator.Validate(null, sufficient).Succeeded.Should().BeTrue();
+    }
+
     internal static ManagedCodexOptions ValidOptions() => new()
     {
         Enabled = true,

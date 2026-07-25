@@ -1074,6 +1074,11 @@ Review hardening also extends the existing typed Identity contracts and Actor:
 - duplicate provision/rotation/policy commands emit
   `CurrentStateConfirmed`;
 - Application repair paths explicitly confirm `RemoteValidated`.
+- rotation commands and events carry typed `previous_credential_cleanup`, so
+  the Actor commits the replacement descriptor and exact prior-key/prior-Vault
+  cleanup fact atomically;
+- generic cleanup commands are rejected when a pending track targets the
+  active API key or active Vault locator.
 
 - [ ] **Step 1: Write failing same-call readiness tests**
 
@@ -1506,13 +1511,22 @@ For reacquisition, it selects the re-read only when its authoritative
 otherwise the triggering snapshot is the fallback. It then requires and
 verifies the bearer owner.
 
-Create one absolute outcome deadline when lease ownership or the lease-busy wait
-begins. Before irreversible mutation, derive a token bounded by both caller
-cancellation and that deadline. After mutation begins, derive mutation,
-compensation, cleanup-recording, confirmation, and observation tokens only from
-the remaining time to the same deadline. No phase receives a fresh full
-`MutationCompletionSeconds` budget, so the fixed Garnet lease remains valid for
-every external side effect.
+Create one absolute outcome deadline immediately before every distributed lease
+acquisition attempt. The initial attempt and the Force caller's one
+reacquisition attempt therefore have separate anchors, and delayed acquisition
+cannot extend work beyond the fixed Garnet TTL. `MutationCompletionSeconds`
+bounds primary work. The lease configuration must additionally reserve ten
+seconds for compensation, ten seconds for durable Actor recording, and ten
+seconds of lease-safety margin, so
+`MutationLeaseSeconds >= MutationCompletionSeconds + 30`.
+
+Before irreversible mutation, derive a token bounded by both caller cancellation
+and the primary deadline. After mutation begins, compensation and cleanup
+recording use their later reserved absolute boundaries; no phase receives a
+fresh full-duration timeout. The same pre-acquisition anchor and phased
+boundaries apply to the explicit Provision, Rotate, and Revoke APIs, including
+ambiguous-dispatch reconciliation and compensation, while their accepted-only
+receipt semantics remain unchanged.
 
 A Normal owner that only retries obsolete cleanup releases the mutation lease
 before dispatching `CurrentStateConfirmed`. Its cleanup attempt reserves the
@@ -1534,19 +1548,29 @@ Under the lease:
 5. update a recoverable single-service key in place;
 6. replace expired, revoked, missing-secret, or irreconcilable credentials;
 7. for every non-current orphan reserved key, derive its deterministic Vault
-   reference, attempt both NyxID and Vault cleanup tracks, and record any
-   incomplete track with the exact `SecretRef` and typed pending flags;
-8. dispatch provision, rotation, or policy reconciliation;
+   reference, attempt both NyxID and Vault cleanup tracks, and record that
+   orphan's incomplete tracks immediately before moving to the next orphan;
+8. dispatch provision or policy reconciliation directly; when rotating,
+   include the exact previous API-key ID, previous Vault locator, and
+   independent pending-track flags as typed `previous_credential_cleanup`; the
+   Actor rejects a mismatch and commits the new descriptor plus prior cleanup
+   atomically;
 9. explicitly dispatch `ConfirmReadiness(RemoteValidated)` for the expected
    complete active descriptor after remote validation, including duplicate/no-op
    command cases;
-10. retire a prior Vault reference only after an exactly matching provision,
-    rotation, or reconciliation descriptor is observed committed, and never
-    retire the active locator;
+10. after an exactly matching provision, rotation, or reconciliation descriptor
+    is observed committed, retry the Actor-owned previous-key and previous-Vault
+    cleanup tracks best-effort and complete each successful track explicitly;
+    timeout or rejected cleanup completion never suppresses the committed ready
+    credential in Normal or Force mode;
 11. map Vault `Unauthorized`, `AuthenticationFailed`, `KeyringMismatch`, and
     `UnsupportedAlgorithm` to `managed_credential_vault_unavailable` without
     revoking, creating, or updating NyxID keys;
-12. return only `WaitForReadyAsync(...)` after sufficient committed evidence
+12. when the same API key and deterministic Vault locator resolve to newer
+    reference metadata than the committed descriptor, select replacement and
+    complete readiness in the same call rather than certifying the stale
+    descriptor or timing out;
+13. return only `WaitForReadyAsync(...)` after sufficient committed evidence
     for the exact expected descriptor.
 
 Change pending cleanup handling to return a result instead of always throwing:

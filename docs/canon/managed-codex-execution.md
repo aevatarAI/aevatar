@@ -46,11 +46,17 @@ The issued key must have exactly:
 
 - scope `proxy`
 - `allow_all_services=false`
-- one `allowed_service_ids` entry: that user's directly owned, active `chrono-sandbox` UserService ID
+- `allowed_service_ids` equal, order-independently, to that user's directly
+  owned active `chrono-sandbox` UserService ID and usable
+  `chrono-llm-public` UserService ID
 - `allow_all_nodes=false` and no node grants
 - a finite configured expiry
 
-`chrono-llm-public` is checked only as readiness evidence and is never granted to the persistent key. NyxID's `chrono-sandbox` UserService must set `forward_access_token=false`, `inject_delegation_token=true`, and the temporary internal-canary `delegation_token_scope=proxy:*`. Aevatar validates these settings during provisioning and rotation.
+No extra service grant is accepted. NyxID's `chrono-sandbox` UserService must
+set `forward_access_token=false`, `inject_delegation_token=true`, and the
+temporary internal-canary `delegation_token_scope=proxy:*`. Aevatar validates
+these settings during provisioning, rotation, and transparent readiness
+repair.
 
 The only persistent raw-key copy is stored in `ISecretVault`. Actor state, events, read models, APIs, logs, workflow state, and chrono request bodies contain only typed non-secret facts such as the key ID and `SecretReference`. Execution resolves the raw value immediately before the NyxID request and uses it only as that request's Authorization value. Aevatar never intentionally serializes or forwards it to chrono-sandbox or codex-runner.
 
@@ -94,11 +100,42 @@ The authenticated self-service API is:
 
 Mutation responses are accepted-only receipts. They do not claim that actor commit or projection observation has completed. Clients re-read `GET` to observe the current state.
 
-Provision, rotation, and revocation are serialized per NyxID authority by a cluster-shared Garnet lease in production. Development and Testing may use the explicitly scoped in-memory lease. Caller cancellation is honored before the mutation critical section; once it begins, one independent token bounded by `MutationCompletionSeconds` carries external tracks and Actor dispatch toward a recorded or compensating outcome.
+Provision, rotation, revocation, and transparent readiness repair are
+serialized per NyxID authority by a cluster-shared Garnet lease in production.
+Development and Testing may use the explicitly scoped in-memory lease. Every
+lease holder anchors one absolute deadline immediately before acquisition.
+`MutationCompletionSeconds` bounds primary work, while fixed later reserves
+cover compensation and durable Actor recording and a final safety margin keeps
+all work inside the Garnet TTL. Configuration requires
+`MutationLeaseSeconds >= MutationCompletionSeconds + 30`. Caller cancellation
+is honored before irreversible mutation; afterward, outcome completion uses
+only those lease-bound phase deadlines.
 
-Every issued NyxID key has its own deterministic Vault reference. Rotation stores the new key at a new reference, submits a compare-and-set Actor transition, then retires the previous reference as an independent cleanup track. It never overwrites the secret referenced by the committed descriptor. Provision and rotation re-read NyxID to verify the persisted key's active state, exact grants, platform, and expiry before Vault persistence. A later lifecycle call reconciles a valid active remote key and deterministic Vault reference after an ambiguous Actor dispatch instead of issuing another key blindly.
+Every issued NyxID key has its own deterministic Vault reference. Rotation
+stores the new key at a new reference and submits a compare-and-set Actor
+transition carrying typed cleanup for the exact previous API-key ID and Vault
+locator. The Actor atomically commits the replacement descriptor and prior
+cleanup fact, and rejects generic cleanup that targets the active key or active
+Vault locator. Application retries those Actor-owned tracks only after the
+exact replacement is observed committed. It never overwrites or retires the
+secret referenced by the active descriptor before commit. Provision and
+rotation re-read NyxID to verify the persisted key's active state, exact
+grants, platform, and expiry before Vault persistence. A later lifecycle call
+reconciles a valid active remote key and deterministic Vault reference after an
+ambiguous Actor dispatch instead of issuing another key blindly. Same-key,
+same-locator reference drift selects replacement and completes readiness in the
+same call rather than certifying stale reference metadata.
 
-Revocation runs the NyxID and Vault tracks independently. Failed external cleanup is recorded as non-secret Actor-owned work and retried before a later lifecycle mutation. Status derives `expired` from an active descriptor whose committed expiry has passed, without writing from the query path.
+Revocation runs the NyxID and Vault tracks independently. Cleanup of
+non-current orphan keys derives each deterministic Vault reference and records
+each orphan's known incomplete tracks before advancing, so cancellation cannot
+discard earlier outcomes or the Vault-only remainder of a partially completed
+orphan. Failed external cleanup is recorded as non-secret Actor-owned work and
+retried before a later lifecycle mutation. Once a ready credential is committed,
+cleanup timeout or rejected track-completion admission is best effort in both
+Normal and Force validation modes and does not suppress readiness. Status
+derives `expired` from an active descriptor whose committed expiry has passed,
+without writing from the query path.
 
 The global `Enabled` option is the kill switch. It blocks managed execution, provisioning, and rotation while leaving status and revocation available.
 

@@ -95,6 +95,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _commands.CommitRotatedAsync(
                 Arg.Any<string>(),
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
                 Arg.Any<CancellationToken>())
             .Returns(_ => Dispatch());
         _commands.CommitPolicyReconciledAsync(
@@ -166,6 +167,45 @@ public sealed class ManagedCodexCredentialReadinessTests
         await _lease.Received(1).TryAcquireAsync(
             "managed-codex-credential:nyxid::user-a",
             Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenLeaseAcquisitionConsumesPrimaryBudget_DoesNotStartRemoteWork()
+    {
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 120;
+        var leaseHandle =
+            Substitute.For<IManagedCodexCredentialMutationLeaseHandle>();
+        _lease.TryAcquireAsync(
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                _time.Advance(TimeSpan.FromSeconds(60));
+                return leaseHandle;
+            });
+        _nyxId.GetCurrentUserIdAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return "user-a";
+            });
+        PublishConfirmedCredential(stateVersion: 1);
+        var lifecycle = CreateLifecycle(options: options);
+
+        var act = () => lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        await _nyxId.DidNotReceiveWithAnyArgs()
+            .ListApiKeysAsync(default!, default);
+        await _nyxId.DidNotReceiveWithAnyArgs()
+            .CreateApiKeyAsync(default!, default!, default);
     }
 
     [Fact]
@@ -375,6 +415,11 @@ public sealed class ManagedCodexCredentialReadinessTests
             "key-a",
             Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
                 descriptor.ApiKeyId == "key-fresh"),
+            Arg.Is<ManagedCodexCredentialCleanup>(cleanup =>
+                cleanup.ApiKeyId == "key-a" &&
+                cleanup.SecretRef == expired.SecretReference.Ref &&
+                cleanup.NyxIdPending &&
+                cleanup.VaultPending),
             Arg.Any<CancellationToken>());
     }
 
@@ -458,7 +503,7 @@ public sealed class ManagedCodexCredentialReadinessTests
     }
 
     [Fact]
-    public async Task EnsureReadyAsync_WhenSameKeyVaultReferenceDrifts_DoesNotCertifyOrRetireActiveLocator()
+    public async Task EnsureReadyAsync_WhenSameKeyVaultReferenceDrifts_ReplacesAndReturnsCommittedCredential()
     {
         var projected = Snapshot(ReadyDescriptor(), stateVersion: 3);
         projected.Credential.SecretReference.Ref = DeterministicSecretRef(
@@ -467,45 +512,36 @@ public sealed class ManagedCodexCredentialReadinessTests
         var validated = projected.Credential.Clone();
         validated.SecretReference.Version++;
         validated.SecretReference.Fingerprint = "newer-fingerprint";
-        ManagedCodexCredentialDescriptor? confirmedCredential = null;
         _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
             .Returns(projected);
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
-            .Returns(Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+            .Returns(
+                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
+                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+        _nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-replacement"));
         _vault.ResolveAsync(
                 Arg.Any<ResolveSecretRequest>(),
                 Arg.Any<CancellationToken>())
             .Returns(new ResolveSecretResult(
                 validated.SecretReference.Clone(),
                 RawKey));
-        _commands.ConfirmReadinessAsync(
-                Owner("user-a"),
-                Arg.Any<ManagedCodexCredentialDescriptor>(),
-                ManagedCodexCredentialReadinessEvidence.RemoteValidated,
-                Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                confirmedCredential =
-                    call.Arg<ManagedCodexCredentialDescriptor>().Clone();
-                _observation.Publish(
-                    Snapshot(
-                        projected.Credential,
-                        stateVersion: 4,
-                        ManagedCodexCredentialReadinessEvidence.RemoteValidated));
-                _observation.Complete();
-                return Admission();
-            });
+        PublishConfirmedCredential(stateVersion: 4);
 
-        var act = () => _lifecycle.EnsureReadyAsync(
+        var ready = await _lifecycle.EnsureReadyAsync(
             Owner("user-a"),
             "user-bearer",
             ManagedCodexCredentialReadinessMode.ForceRemoteValidation);
 
-        (await act.Should()
-            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
-            .Which.Code.Should().Be("managed_credential_commit_timeout");
-        confirmedCredential.Should().BeEquivalentTo(validated);
-        await _vault.DidNotReceive().RevokeAsync(
+        ready.ApiKeyId.Should().Be("key-replacement");
+        await _nyxId.Received(1).RevokeApiKeyAsync(
+            "user-bearer",
+            projected.Credential.ApiKeyId,
+            Arg.Any<CancellationToken>());
+        await _vault.Received(1).RevokeAsync(
             Arg.Is<RevokeSecretRequest>(request =>
                 request.Ref == projected.Credential.SecretReference.Ref),
             Arg.Any<CancellationToken>());
@@ -564,6 +600,10 @@ public sealed class ManagedCodexCredentialReadinessTests
             Arg.Is<RevokeSecretRequest>(request =>
                 request.Ref == projected.Credential.SecretReference.Ref),
             Arg.Any<CancellationToken>());
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            projected.Credential.ApiKeyId,
+            Arg.Any<CancellationToken>());
         releaseConfirmation.TrySetResult();
         _observation.Publish(
             Snapshot(
@@ -577,6 +617,132 @@ public sealed class ManagedCodexCredentialReadinessTests
         await _vault.Received(1).RevokeAsync(
             Arg.Is<RevokeSecretRequest>(request =>
                 request.Ref == projected.Credential.SecretReference.Ref),
+            Arg.Any<CancellationToken>());
+        await _nyxId.Received(1).RevokeApiKeyAsync(
+            "user-bearer",
+            projected.Credential.ApiKeyId,
+            Arg.Any<CancellationToken>());
+        await _commands.Received(1).CompleteCleanupTrackAsync(
+            Owner("user-a"),
+            projected.Credential.ApiKeyId,
+            ManagedCodexCredentialCleanupTrack.NyxId,
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+        await _commands.Received(1).CompleteCleanupTrackAsync(
+            Owner("user-a"),
+            projected.Credential.ApiKeyId,
+            ManagedCodexCredentialCleanupTrack.Vault,
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenPostCommitCleanupTimesOut_ReturnsCommittedCredential()
+    {
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 120;
+        var lifecycle = CreateLifecycle(options: options);
+        var cleanupEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverDeleted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var testTimeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(5));
+        var projected = Snapshot(ReadyDescriptor(), stateVersion: 3);
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(projected);
+        _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
+                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+        _nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-replacement"));
+        _vault.ResolveAsync(
+                Arg.Any<ResolveSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ResolveSecretResult(
+                null,
+                null,
+                SecretResolutionFailureReason.NotFound));
+        _nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-a",
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                cleanupEntered.TrySetResult();
+                return neverDeleted.Task.WaitAsync(call.Arg<CancellationToken>());
+            });
+        PublishConfirmedCredential(stateVersion: 4);
+
+        var readiness = lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.ForceRemoteValidation);
+        await cleanupEntered.Task;
+        _time.Advance(TimeSpan.FromSeconds(100));
+
+        var ready = await readiness.WaitAsync(testTimeout.Token);
+
+        ready.ApiKeyId.Should().Be("key-replacement");
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenPostCommitCleanupCompletionIsRejected_ReturnsCommittedCredential()
+    {
+        var projected = Snapshot(ReadyDescriptor(), stateVersion: 3);
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(projected);
+        _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                Keys(Key("key-a", ["us-sandbox", "us-llm"])),
+                Keys(Key("key-replacement", ["us-sandbox", "us-llm"])));
+        _nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(IssuedKey("key-replacement"));
+        _vault.ResolveAsync(
+                Arg.Any<ResolveSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ResolveSecretResult(
+                null,
+                null,
+                SecretResolutionFailureReason.NotFound));
+        _commands.CompleteCleanupTrackAsync(
+                Owner("user-a"),
+                "key-a",
+                Arg.Any<ManagedCodexCredentialCleanupTrack>(),
+                Arg.Any<DateTimeOffset>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new DispatchAdmission(
+                false,
+                "command-rejected",
+                Now,
+                "managed-codex-credential:nyxid::user-a",
+                "command-rejected"));
+        PublishConfirmedCredential(stateVersion: 4);
+
+        var ready = await _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.ForceRemoteValidation);
+
+        ready.ApiKeyId.Should().Be("key-replacement");
+        await _commands.Received(2).CompleteCleanupTrackAsync(
+            Owner("user-a"),
+            "key-a",
+            Arg.Any<ManagedCodexCredentialCleanupTrack>(),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+        await _commands.DidNotReceive().QueueCleanupAsync(
+            Owner("user-a"),
+            Arg.Is<ManagedCodexCredentialCleanup>(cleanup =>
+                cleanup.ApiKeyId == "key-a"),
             Arg.Any<CancellationToken>());
     }
 
@@ -746,6 +912,127 @@ public sealed class ManagedCodexCredentialReadinessTests
     }
 
     [Fact]
+    public async Task EnsureReadyAsync_WhenLaterOrphanCleanupCancels_RecordsEveryKnownOutcome()
+    {
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 120;
+        var lifecycle = CreateLifecycle(options: options);
+        var recorded = new List<ManagedCodexCredentialCleanup>();
+        _nyxId.ListApiKeysAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns(Keys(
+                Key("key-orphan-a", ["wrong-service"]),
+                Key("key-orphan-b", ["wrong-service"])));
+        _nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-orphan-a",
+                Arg.Any<CancellationToken>())
+            .Returns(false);
+        _nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-orphan-b",
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                _time.Advance(TimeSpan.FromSeconds(60));
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return false;
+            });
+        _vault.RevokeAsync(
+                Arg.Is<RevokeSecretRequest>(request =>
+                    request.Ref == DeterministicSecretRef(
+                        Owner("user-a"),
+                        "key-orphan-a")),
+                Arg.Any<CancellationToken>())
+            .Returns(new RevokeSecretResult(false));
+        _commands.QueueCleanupAsync(
+                Owner("user-a"),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                recorded.Add(call.Arg<ManagedCodexCredentialCleanup>().Clone());
+                return Admission();
+            });
+
+        var act = () => lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        recorded.Should().HaveCount(2);
+        recorded.Should().Contain(cleanup =>
+            cleanup.ApiKeyId == "key-orphan-a" &&
+            cleanup.NyxIdPending &&
+            cleanup.VaultPending);
+        recorded.Should().Contain(cleanup =>
+            cleanup.ApiKeyId == "key-orphan-b" &&
+            cleanup.NyxIdPending &&
+            cleanup.VaultPending);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenCancellationOccursBetweenOrphanTracks_RecordsVaultOnly()
+    {
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 120;
+        var lifecycle = CreateLifecycle(options: options);
+        ManagedCodexCredentialCleanup? recorded = null;
+        var expectedSecretRef = DeterministicSecretRef(
+            Owner("user-a"),
+            "key-orphan");
+        _nyxId.ListApiKeysAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns(Keys(Key("key-orphan", ["wrong-service"])));
+        _nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-orphan",
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                _time.Advance(TimeSpan.FromSeconds(60));
+                return true;
+            });
+        _vault.RevokeAsync(
+                Arg.Is<RevokeSecretRequest>(request =>
+                    request.Ref == expectedSecretRef),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return new RevokeSecretResult(false);
+            });
+        _commands.QueueCleanupAsync(
+                Owner("user-a"),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                recorded = call.Arg<ManagedCodexCredentialCleanup>().Clone();
+                return Admission();
+            });
+
+        var act = () => lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        recorded.Should().NotBeNull();
+        recorded!.ApiKeyId.Should().Be("key-orphan");
+        recorded.SecretRef.Should().Be(expectedSecretRef);
+        recorded.NyxIdPending.Should().BeFalse();
+        recorded.VaultPending.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task EnsureReadyAsync_WhenProjectedKeyIsValidAmongReservedKeys_RetainsItAndCleansOnlyOrphan()
     {
         _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
@@ -908,6 +1195,84 @@ public sealed class ManagedCodexCredentialReadinessTests
             Arg.Any<CancellationToken>());
         await _commands.DidNotReceiveWithAnyArgs()
             .ConfirmReadinessAsync(default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenCallerCancelsAtReadyCleanupBoundary_PropagatesBeforeMutation()
+    {
+        using var callerCancellation = new CancellationTokenSource();
+        var mutationStarted = false;
+        var snapshot = Snapshot(ReadyDescriptor(), stateVersion: 4);
+        snapshot.PendingRevocations.Add(Cleanup("key-old"));
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(snapshot);
+        _nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-old",
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                callerCancellation.Cancel();
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                mutationStarted = true;
+                return true;
+            });
+        PublishConfirmedCredential(stateVersion: 5);
+
+        var act = () => _lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.Normal,
+            callerCancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        mutationStarted.Should().BeFalse();
+        await _commands.DidNotReceiveWithAnyArgs()
+            .ConfirmReadinessAsync(default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task EnsureReadyAsync_WhenForceCleanupHitsInternalTimeout_ReturnsCommittedCredential()
+    {
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 120;
+        var lifecycle = CreateLifecycle(options: options);
+        var cleanupEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverDeleted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var testTimeout = new CancellationTokenSource(
+            TimeSpan.FromSeconds(5));
+        var snapshot = Snapshot(ReadyDescriptor(), stateVersion: 4);
+        snapshot.PendingRevocations.Add(Cleanup("key-old"));
+        _query.ResolveAsync(Owner("user-a"), Arg.Any<CancellationToken>())
+            .Returns(snapshot);
+        _nyxId.ListApiKeysAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns(Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+        _nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                "key-old",
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                cleanupEntered.TrySetResult();
+                return neverDeleted.Task.WaitAsync(call.Arg<CancellationToken>());
+            });
+        PublishConfirmedCredential(stateVersion: 5);
+
+        var readiness = lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.ForceRemoteValidation);
+        await cleanupEntered.Task;
+        _time.Advance(TimeSpan.FromSeconds(100));
+
+        var ready = await readiness.WaitAsync(testTimeout.Token);
+
+        ready.ApiKeyId.Should().Be("key-a");
     }
 
     [Fact]
@@ -1251,6 +1616,65 @@ public sealed class ManagedCodexCredentialReadinessTests
     }
 
     [Fact]
+    public async Task EnsureReadyAsync_WhenForceReacquiresNearInitialWaitBoundary_UsesFreshLeaseAnchor()
+    {
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 120;
+        var firstAttempted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var acquiredLease =
+            Substitute.For<IManagedCodexCredentialMutationLeaseHandle>();
+        var attempt = 0;
+        _lease.TryAcquireAsync(
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                attempt++;
+                if (attempt == 1)
+                {
+                    firstAttempted.TrySetResult();
+                    return (IManagedCodexCredentialMutationLeaseHandle?)null;
+                }
+
+                _time.Advance(TimeSpan.FromSeconds(20));
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return acquiredLease;
+            });
+        var trigger = Snapshot(
+            ReadyDescriptor(),
+            stateVersion: 5,
+            ManagedCodexCredentialReadinessEvidence.CurrentStateConfirmed);
+        _query.ResolveAsync(
+                Owner("user-a"),
+                Arg.Any<CancellationToken>())
+            .Returns(
+                (ManagedCodexCredentialSnapshot?)null,
+                (ManagedCodexCredentialSnapshot?)null,
+                trigger);
+        _nyxId.ListApiKeysAsync(
+                "user-bearer",
+                Arg.Any<CancellationToken>())
+            .Returns(Keys(Key("key-a", ["us-sandbox", "us-llm"])));
+        PublishConfirmedCredential(stateVersion: 6);
+        var lifecycle = CreateLifecycle(options: options);
+
+        var readiness = lifecycle.EnsureReadyAsync(
+            Owner("user-a"),
+            "user-bearer",
+            ManagedCodexCredentialReadinessMode.ForceRemoteValidation);
+        await firstAttempted.Task;
+        _time.Advance(TimeSpan.FromSeconds(50));
+        _observation.Publish(trigger);
+
+        var ready = await readiness;
+
+        ready.ApiKeyId.Should().Be("key-a");
+        attempt.Should().Be(2);
+    }
+
+    [Fact]
     public async Task EnsureReadyAsync_WhenReplacementCleanupPublishesOldKey_BusyCallerWaitsForFinalCredential()
     {
         var lifecycle = CreateLifecycle(
@@ -1357,6 +1781,7 @@ public sealed class ManagedCodexCredentialReadinessTests
         _commands.CommitRotatedAsync(
                 "key-a",
                 Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
                 Arg.Any<CancellationToken>())
             .Returns<Task<DispatchAdmission>>(_ =>
                 throw new InvalidOperationException("dispatch unavailable"));
@@ -1393,6 +1818,19 @@ public sealed class ManagedCodexCredentialReadinessTests
         (await busyAct.Should()
             .ThrowAsync<ManagedCodexCredentialLifecycleException>())
             .Which.Code.Should().Be("managed_credential_commit_timeout");
+        await _nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            "key-a",
+            Arg.Any<CancellationToken>());
+        await _vault.DidNotReceive().RevokeAsync(
+            Arg.Is<RevokeSecretRequest>(request =>
+                request.Ref == ReadyDescriptor().SecretReference.Ref),
+            Arg.Any<CancellationToken>());
+        await _commands.DidNotReceive().QueueCleanupAsync(
+            Owner("user-a"),
+            Arg.Is<ManagedCodexCredentialCleanup>(cleanup =>
+                cleanup.ApiKeyId == "key-a"),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -1458,13 +1896,14 @@ public sealed class ManagedCodexCredentialReadinessTests
     }
 
     [Fact]
-    public async Task EnsureReadyAsync_WhenMutationTimesOutDuringVaultStore_DoesNotExtendOutcomeDeadline()
+    public async Task EnsureReadyAsync_WhenPrimaryMutationTimesOut_ReservesLiveCompensationAndRecording()
     {
         var vaultEntered = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var neverStored = new TaskCompletionSource<StoreSecretResult>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         ManagedCodexCredentialCleanup? queued = null;
+        CancellationToken compensationToken = default;
         CancellationToken cleanupToken = default;
         _nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(
@@ -1482,7 +1921,12 @@ public sealed class ManagedCodexCredentialReadinessTests
                 "user-bearer",
                 "key-new",
                 Arg.Any<CancellationToken>())
-            .Returns(false);
+            .Returns(call =>
+            {
+                compensationToken = call.Arg<CancellationToken>();
+                compensationToken.ThrowIfCancellationRequested();
+                return false;
+            });
         _vault.RevokeAsync(
                 Arg.Any<RevokeSecretRequest>(),
                 Arg.Any<CancellationToken>())
@@ -1495,6 +1939,7 @@ public sealed class ManagedCodexCredentialReadinessTests
             {
                 queued = call.Arg<ManagedCodexCredentialCleanup>().Clone();
                 cleanupToken = call.Arg<CancellationToken>();
+                cleanupToken.ThrowIfCancellationRequested();
                 return Admission();
             });
 
@@ -1512,12 +1957,14 @@ public sealed class ManagedCodexCredentialReadinessTests
         queued!.ApiKeyId.Should().Be("key-new");
         queued.NyxIdPending.Should().BeTrue();
         queued.VaultPending.Should().BeTrue();
+        compensationToken.CanBeCanceled.Should().BeTrue();
+        compensationToken.IsCancellationRequested.Should().BeFalse();
         cleanupToken.CanBeCanceled.Should().BeTrue();
-        cleanupToken.IsCancellationRequested.Should().BeTrue();
+        cleanupToken.IsCancellationRequested.Should().BeFalse();
     }
 
     [Fact]
-    public async Task EnsureReadyAsync_WhenCancellationCompensationStartsAfterElapsedWork_UsesRemainingOutcomeDeadline()
+    public async Task EnsureReadyAsync_WhenCancellationCompensationStartsAfterElapsedWork_UsesLeaseBoundReserve()
     {
         var options = ManagedCodexOptionsValidatorTests.ValidOptions();
         options.MutationCompletionSeconds = 60;
@@ -1558,17 +2005,20 @@ public sealed class ManagedCodexCredentialReadinessTests
             ManagedCodexCredentialReadinessMode.Normal);
         await compensationEntered.Task;
         _time.Advance(TimeSpan.FromSeconds(20));
-        var cancelledAtSharedDeadline =
-            compensationToken.IsCancellationRequested;
+        var liveBeforeCompensationBoundary =
+            !compensationToken.IsCancellationRequested;
         _time.Advance(TimeSpan.FromSeconds(40));
+        var cancelledAtCompensationBoundary =
+            compensationToken.IsCancellationRequested;
         var act = async () => await readiness;
 
         await act.Should().ThrowAsync<OperationCanceledException>();
-        cancelledAtSharedDeadline.Should().BeTrue();
+        liveBeforeCompensationBoundary.Should().BeTrue();
+        cancelledAtCompensationBoundary.Should().BeTrue();
     }
 
     [Fact]
-    public async Task EnsureReadyAsync_WhenCleanupRecordingStartsAfterElapsedWork_UsesRemainingOutcomeDeadline()
+    public async Task EnsureReadyAsync_WhenCleanupRecordingStartsAfterElapsedWork_UsesFinalLeaseReserve()
     {
         var options = ManagedCodexOptionsValidatorTests.ValidOptions();
         options.MutationCompletionSeconds = 60;
@@ -1617,13 +2067,15 @@ public sealed class ManagedCodexCredentialReadinessTests
             "user-bearer",
             ManagedCodexCredentialReadinessMode.Normal);
         await recordingEntered.Task;
-        _time.Advance(TimeSpan.FromSeconds(20));
-        var cancelledAtSharedDeadline = recordingToken.IsCancellationRequested;
-        _time.Advance(TimeSpan.FromSeconds(40));
+        _time.Advance(TimeSpan.FromSeconds(60));
+        var liveBeforeRecordingBoundary = !recordingToken.IsCancellationRequested;
+        _time.Advance(TimeSpan.FromSeconds(10));
+        var cancelledAtRecordingBoundary = recordingToken.IsCancellationRequested;
         var act = async () => await readiness;
 
         await act.Should().ThrowAsync<OperationCanceledException>();
-        cancelledAtSharedDeadline.Should().BeTrue();
+        liveBeforeRecordingBoundary.Should().BeTrue();
+        cancelledAtRecordingBoundary.Should().BeTrue();
     }
 
     [Fact]

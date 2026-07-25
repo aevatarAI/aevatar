@@ -154,6 +154,14 @@ two-service authorization fact while preserving the same API-key ID and Vault
 reference when NyxID updates the existing key in place. Provision, rotation,
 revocation, and policy reconciliation remain separate typed transitions.
 
+Rotation also carries typed `previous_credential_cleanup`. The Actor validates
+that its API-key ID and Vault locator exactly match the authoritative prior
+descriptor, derives the only valid independent pending-track flags, and commits
+the replacement descriptor plus cleanup fact in one event. Generic cleanup
+commands cannot target the active API key or active Vault locator. Consequently,
+manual rotation and ambiguous-dispatch reconciliation remain accepted-only APIs
+without losing durable ownership of the previous credential's retirement.
+
 The read side gains a protobuf readiness snapshot carrying the committed
 descriptor, pending cleanup facts, authoritative state version, committed
 event ID, and typed readiness evidence. `CurrentStateConfirmed` means the
@@ -230,12 +238,15 @@ the already-required usable UserServices.
     and dispatches the typed actor command.
 11. After remote validation, dispatch the narrow typed
     `ConfirmReadiness(RemoteValidated)` command for the complete validated
-    descriptor and wait for an exactly matching committed descriptor. A prior
-    Vault reference is retired only after that matching transition is observed
-    committed, and a reference whose locator equals the committed active
-    locator is never retired. A Normal cleanup owner releases its mutation
-    lease before dispatching `CurrentStateConfirmed`, making that committed
-    event the event-driven handoff to a waiting Force caller.
+    descriptor and wait for an exactly matching committed descriptor. Rotation
+    has already atomically committed the exact previous-key and previous-Vault
+    pending cleanup. Only after matching observation does Application retry
+    those Actor-owned tracks and explicitly complete successful tracks.
+    Cleanup timeout or rejected completion remains best effort and cannot
+    suppress the committed ready credential in Normal or Force mode. A Normal
+    cleanup owner releases its mutation lease before dispatching
+    `CurrentStateConfirmed`, making that committed event the event-driven
+    handoff to a waiting Force caller.
 12. Release the observation and any remaining mutation lease.
 13. Pass the observed committed descriptor to the chrono transport and continue
     the original `codex_exec`.
@@ -243,13 +254,21 @@ the already-required usable UserServices.
 There is no `Task.Delay` loop, query-time replay, read-model priming, or use of
 an uncommitted method-local descriptor as execution authority.
 
-One absolute outcome deadline starts when lease ownership or the lease-busy
-wait begins. Pre-mutation work is bounded by that deadline and caller
-cancellation. After the first irreversible external mutation, the mutation,
-compensation, Actor cleanup recording, confirmation, and committed observation
-use only the time remaining before that same deadline; no phase receives a new
-full timeout. The fixed-TTL Garnet lease therefore remains valid for every
-external side effect performed by that owner.
+One absolute outcome deadline is anchored immediately before each distributed
+lease acquisition attempt. A Force reacquisition gets a fresh anchor, but a
+slow lease response consumes its own primary budget rather than extending work
+past the Garnet TTL. `MutationCompletionSeconds` bounds primary work. The fixed
+lease additionally reserves ten seconds for compensation, ten seconds for
+durable Actor recording, and ten seconds of lease-safety margin; configuration
+therefore requires
+`MutationLeaseSeconds >= MutationCompletionSeconds + 30`.
+
+Pre-mutation work is bounded by the primary deadline and caller cancellation.
+After the first irreversible external mutation, compensation and Actor cleanup
+recording use their later absolute reserves; no phase receives a new
+full-duration timeout. The explicit Provision, Rotate, and Revoke APIs use the
+same pre-acquisition anchor and phase boundaries, including reconciliation and
+compensation, while preserving their accepted-only response contract.
 
 ## Automatic Repair
 
@@ -265,6 +284,11 @@ The lifecycle automatically handles these states:
 - **Missing Vault secret:** when a current user bearer is available, rotate or
   replace the remote key, store the new one-time secret, commit it, and
   continue.
+- **Same-locator reference drift:** if the same API key and deterministic Vault
+  locator resolve to newer reference metadata than the committed descriptor,
+  replace the credential and become ready in the same call. The stale
+  descriptor is never certified, and the active key/reference is untouched
+  before replacement commit.
 - **Vault authority unavailable:** `Unauthorized`, `AuthenticationFailed`,
   `KeyringMismatch`, and `UnsupportedAlgorithm` are typed availability
   failures. They stop repair with `managed_credential_vault_unavailable` and
@@ -274,15 +298,20 @@ The lifecycle automatically handles these states:
 - **Duplicate or orphaned Aevatar-managed keys:** keep an unambiguous committed
   valid key when possible; otherwise derive each orphan key's deterministic
   Vault reference, attempt both NyxID and Vault cleanup tracks, and create one
-  fresh credential. Any incomplete track is recorded as an Actor-owned cleanup
-  fact with the exact `SecretRef` and independent `NyxIdPending` /
-  `VaultPending` flags.
+  fresh credential. Each orphan's known outcome is recorded before cleanup
+  advances to the next orphan. Cancellation between tracks records the exact
+  completed/pending split for that orphan. Any incomplete track is an
+  Actor-owned cleanup fact with the exact `SecretRef` and independent
+  `NyxIdPending` / `VaultPending` flags.
 - **Pending cleanup with a ready current credential:** retry cleanup
   best-effort, but do not block Codex execution solely because an obsolete key
   or Vault record is still pending deletion. The internal cleanup attempt
   reserves the final ten seconds of the shared outcome deadline for structural
   confirmation and committed handoff. Reaching that cleanup boundary leaves the
-  cleanup pending and still emits `CurrentStateConfirmed`.
+  cleanup pending and still emits `CurrentStateConfirmed`. The same
+  best-effort rule applies after Force validation and after a committed
+  replacement; caller cancellation at the cleanup boundary remains distinct
+  from the internal cleanup timeout.
 
 NyxID mutations are re-read and validated before Actor dispatch. Policy
 comparison is order-independent and requires exactly the two expected IDs.

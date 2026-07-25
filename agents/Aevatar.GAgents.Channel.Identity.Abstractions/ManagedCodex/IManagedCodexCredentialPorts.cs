@@ -51,10 +51,14 @@ public interface IManagedCodexCredentialCommandPort
         ManagedCodexCredentialDescriptor credential,
         CancellationToken ct = default);
 
-    /// <summary>Admits a rotation guarded by the expected current NyxID API key ID.</summary>
+    /// <summary>
+    /// Admits a rotation guarded by the exact Actor-owned previous-credential
+    /// cleanup that must be committed atomically with the new descriptor.
+    /// </summary>
     Task<DispatchAdmission> CommitRotatedAsync(
         string expectedPreviousApiKeyId,
         ManagedCodexCredentialDescriptor credential,
+        ManagedCodexCredentialCleanup previousCredentialCleanup,
         CancellationToken ct = default);
 
     /// <summary>Admits policy reconciliation while preserving the current API key and Vault reference.</summary>

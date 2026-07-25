@@ -28,16 +28,19 @@ internal sealed class ManagedCodexCredentialCommandPort(
     public Task<DispatchAdmission> CommitRotatedAsync(
         string expectedPreviousApiKeyId,
         ManagedCodexCredentialDescriptor credential,
+        ManagedCodexCredentialCleanup previousCredentialCleanup,
         CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedPreviousApiKeyId);
         ArgumentNullException.ThrowIfNull(credential);
+        ArgumentNullException.ThrowIfNull(previousCredentialCleanup);
         return DispatchAsync(
             credential.Owner,
             new CommitManagedCodexCredentialRotatedCommand
             {
                 ExpectedPreviousApiKeyId = expectedPreviousApiKeyId.Trim(),
                 Credential = credential.Clone(),
+                PreviousCredentialCleanup = previousCredentialCleanup.Clone(),
             },
             ct);
     }
