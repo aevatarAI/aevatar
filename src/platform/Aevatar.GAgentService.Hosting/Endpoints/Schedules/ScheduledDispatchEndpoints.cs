@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
+using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -78,6 +79,8 @@ public static class ScheduledDispatchEndpoints
         {
             context = ResolveMutationContext(http);
             owner = input.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             if (owner != null)
                 context = context with { TeamAutomationOwner = owner };
             configuration = (await input.ToConfigurationAsync(
@@ -123,6 +126,8 @@ public static class ScheduledDispatchEndpoints
         {
             context = ResolveMutationContext(http);
             owner = input.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             if (owner != null)
                 context = context with { TeamAutomationOwner = owner };
             configuration = (await input.ToConfigurationAsync(
@@ -153,6 +158,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> Enable(
+        HttpContext http,
         string scheduleId,
         ScheduledDispatchStateChangeHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
@@ -161,6 +167,8 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             var receipt = owner == null
                 ? await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
                 : await schedules.EnableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
@@ -173,6 +181,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> Disable(
+        HttpContext http,
         string scheduleId,
         ScheduledDispatchStateChangeHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
@@ -181,6 +190,8 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             var receipt = owner == null
                 ? await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
                 : await schedules.DisableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
@@ -193,6 +204,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> Delete(
+        HttpContext http,
         string scheduleId,
         [FromQuery] string? reason,
         [FromBody] ScheduledDispatchStateChangeHttpRequest? input,
@@ -202,6 +214,8 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             var deleteReason = reason ?? input?.Reason ?? string.Empty;
             var receipt = owner == null
                 ? await schedules.DeleteAsync(scheduleId, deleteReason, ct)
@@ -215,6 +229,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> List(
+        HttpContext http,
         [FromServices] IScheduledDispatchApplicationService schedules,
         string? ownerKind = null,
         string? ownerScopeId = null,
@@ -235,6 +250,8 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var owner = ResolveOwnerFromQuery(ownerKind, ownerScopeId, ownerTeamId, ownerMemberId);
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             query = owner == null
                 ? new ScheduledDispatchListQuery(
                     Take: take,
@@ -255,6 +272,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> Get(
+        HttpContext http,
         string scheduleId,
         [FromServices] IScheduledDispatchApplicationService schedules,
         string? ownerKind = null,
@@ -272,6 +290,8 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var owner = ResolveOwnerFromQuery(ownerKind, ownerScopeId, ownerTeamId, ownerMemberId);
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             var schedule = owner == null
                 ? await schedules.GetAsync(scheduleId, ct)
                 : await schedules.GetTeamAutomationAsync(scheduleId, owner, ct);
@@ -304,6 +324,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> RunNow(
+        HttpContext http,
         string scheduleId,
         ScheduledDispatchRunNowHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
@@ -312,6 +333,8 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
             var receipt = owner == null
                 ? await schedules.RunNowAsync(scheduleId, ct)
                 : await schedules.RunTeamAutomationNowAsync(scheduleId, owner, ct);
@@ -321,6 +344,20 @@ public static class ScheduledDispatchEndpoints
         {
             return result;
         }
+    }
+
+    private static bool TryCreateOwnerScopeAccessDeniedResult(
+        HttpContext http,
+        TeamMemberAutomationOwner? owner,
+        out IResult denied)
+    {
+        if (owner == null)
+        {
+            denied = Results.Empty;
+            return false;
+        }
+
+        return AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, owner.ScopeId, out denied);
     }
 
     private static string BuildScheduleLocation(string scheduleId, TeamMemberAutomationOwner? owner)

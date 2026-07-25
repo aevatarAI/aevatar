@@ -665,6 +665,43 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task DeleteTeamAutomationAsync_WithCredentialLifecycle_ShouldRequireRevocationContext()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.None);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamId = owner.TeamId,
+                TeamOwnerMemberId = owner.MemberId,
+                TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.Active,
+                CredentialGeneration = 1,
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.DeleteTeamAutomationAsync("sch-alpha", owner, "cleanup");
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_delete_requires_revocation_context");
+        actorPort.TeamDeleted.Should().BeEmpty();
+        actorPort.Deleted.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task UpdateAsync_WhenScheduleMissing_ShouldThrowNotFoundWithoutEnsuringActor()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();

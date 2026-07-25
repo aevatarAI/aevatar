@@ -22,7 +22,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Integration.Tests;
@@ -119,6 +121,28 @@ public sealed class ScheduledDispatchEndpointsTests
         var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
         service.Created.Should().ContainSingle().Which.TeamAutomationOwner.Should().Be(owner);
         service.CreateContexts.Should().ContainSingle().Which!.TeamAutomationOwner.Should().Be(owner);
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectTypedOwnerWhenAuthenticatedScopeDiffers()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateEnvelopeRequest(scheduleId: "sch-alpha") with
+        {
+            Owner = StudioMemberAutomationOwnerRequest(),
+        };
+
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(scopeId: "scope-beta", authenticationEnabled: true));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.Created.Should().BeEmpty();
+        service.CreateContexts.Should().BeEmpty();
     }
 
     [Fact]
@@ -612,6 +636,7 @@ public sealed class ScheduledDispatchEndpointsTests
         };
 
         var result = await ScheduledDispatchEndpoints.Enable(
+            CreateHttpContext(),
             "missing",
             new ScheduledDispatchStateChangeHttpRequest { Reason = "resume" },
             service);
@@ -631,7 +656,7 @@ public sealed class ScheduledDispatchEndpointsTests
             EnableException = new ArgumentException("invalid id"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Enable("invalid/id", null, service);
+        var result = await ScheduledDispatchEndpoints.Enable(CreateHttpContext(), "invalid/id", null, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -649,6 +674,7 @@ public sealed class ScheduledDispatchEndpointsTests
         };
 
         var result = await ScheduledDispatchEndpoints.Disable(
+            CreateHttpContext(),
             "schedule-1",
             new ScheduledDispatchStateChangeHttpRequest { Reason = "pause" },
             service);
@@ -665,7 +691,7 @@ public sealed class ScheduledDispatchEndpointsTests
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
-        var result = await ScheduledDispatchEndpoints.Disable("schedule-1", null, service);
+        var result = await ScheduledDispatchEndpoints.Disable(CreateHttpContext(), "schedule-1", null, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -684,11 +710,13 @@ public sealed class ScheduledDispatchEndpointsTests
         };
 
         var accepted = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(),
             "schedule-1",
             "cleanup",
             null,
             acceptedService);
         var notFound = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(),
             "missing",
             null,
             new ScheduledDispatchStateChangeHttpRequest { Reason = "body" },
@@ -713,19 +741,23 @@ public sealed class ScheduledDispatchEndpointsTests
         var expectedOwner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
 
         var enable = await ScheduledDispatchEndpoints.Enable(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "sch-alpha",
             new ScheduledDispatchStateChangeHttpRequest { Reason = "resume", Owner = owner },
             service);
         var disable = await ScheduledDispatchEndpoints.Disable(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "sch-alpha",
             new ScheduledDispatchStateChangeHttpRequest { Reason = "pause", Owner = owner },
             service);
         var delete = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "sch-alpha",
             null,
             new ScheduledDispatchStateChangeHttpRequest { Reason = "cleanup", Owner = owner },
             service);
         var runNow = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "sch-alpha",
             new ScheduledDispatchRunNowHttpRequest { Owner = owner },
             service);
@@ -755,11 +787,30 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task OwnerAction_ShouldRejectTypedOwnerWhenAuthenticatedScopeDiffers()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(scopeId: "scope-beta", authenticationEnabled: true),
+            "sch-alpha",
+            new ScheduledDispatchRunNowHttpRequest { Owner = StudioMemberAutomationOwnerRequest() },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.TeamRunNow.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task List_ShouldForwardTypedOwnerAndPageQueryParameters()
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             service,
             ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
             ownerScopeId: "scope-alpha",
@@ -786,6 +837,7 @@ public sealed class ScheduledDispatchEndpointsTests
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(),
             service,
             scopeId: null,
             take: 25,
@@ -808,11 +860,13 @@ public sealed class ScheduledDispatchEndpointsTests
         var service = new RecordingScheduledDispatchApplicationService();
 
         var list = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(),
             service,
             scopeId: "scope-alpha",
             teamId: "team-alpha",
             memberId: "m-alpha");
         var get = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(),
             "sch-alpha",
             service,
             scopeId: "scope-alpha",
@@ -841,6 +895,7 @@ public sealed class ScheduledDispatchEndpointsTests
 
         var notFoundService = new RecordingScheduledDispatchApplicationService();
         var ok = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "schedule-1",
             service,
             ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
@@ -848,6 +903,7 @@ public sealed class ScheduledDispatchEndpointsTests
             ownerTeamId: "team-alpha",
             ownerMemberId: "m-alpha");
         var notFound = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "missing",
             notFoundService,
             ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
@@ -878,7 +934,7 @@ public sealed class ScheduledDispatchEndpointsTests
             Detail = CreateDetail("schedule-1"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Get("schedule-1", service, scopeId: null);
+        var result = await ScheduledDispatchEndpoints.Get(CreateHttpContext(), "schedule-1", service, scopeId: null);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -897,6 +953,7 @@ public sealed class ScheduledDispatchEndpointsTests
         };
 
         var result = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "invalid/id",
             service,
             ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
@@ -962,10 +1019,12 @@ public sealed class ScheduledDispatchEndpointsTests
     public async Task RunNow_ShouldAcceptAndMapNotFound()
     {
         var accepted = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(),
             "schedule-1",
             null,
             new RecordingScheduledDispatchApplicationService());
         var notFound = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(),
             "missing",
             null,
             new RecordingScheduledDispatchApplicationService
@@ -990,7 +1049,7 @@ public sealed class ScheduledDispatchEndpointsTests
             RunNowException = new ScheduledDispatchConflictException("schedule-1", "Schedule is disabled."),
         };
 
-        var result = await ScheduledDispatchEndpoints.RunNow("schedule-1", null, service);
+        var result = await ScheduledDispatchEndpoints.RunNow(CreateHttpContext(), "schedule-1", null, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1810,14 +1869,23 @@ public sealed class ScheduledDispatchEndpointsTests
         string? uid = null,
         string? sub = null,
         string? nameIdentifier = null,
-        string? userId = null)
+        string? userId = null,
+        bool authenticationEnabled = false)
     {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddOptions();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:Authentication:Enabled"] = authenticationEnabled ? "true" : "false",
+            })
+            .Build());
+        services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+
         var http = new DefaultHttpContext
         {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddOptions()
-                .BuildServiceProvider(),
+            RequestServices = services.BuildServiceProvider(),
         };
         var claims = new List<Claim>();
         if (!string.IsNullOrWhiteSpace(scopeId))
@@ -1840,6 +1908,17 @@ public sealed class ScheduledDispatchEndpointsTests
 
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+
+        public string ApplicationName { get; set; } = nameof(ScheduledDispatchEndpointsTests);
+
+        public string ContentRootPath { get; set; } = Directory.GetCurrentDirectory();
+
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 
     private sealed class ScheduleEndpointTestHost : IAsyncDisposable

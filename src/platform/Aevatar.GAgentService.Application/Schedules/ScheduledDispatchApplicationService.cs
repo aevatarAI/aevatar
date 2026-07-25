@@ -476,18 +476,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var existing = await GetTeamMutableScheduleAsync(normalizedScheduleId, normalizedOwner, ct);
         if (HasTeamCredentialLifecycle(existing.Schedule))
         {
-            var credentialOwner = ResolveActiveCredentialOwner(existing.Schedule);
-            var operationId = BuildBackendOperationId(normalizedScheduleId, "delete");
-            var idempotencyKey = BuildBackendIdempotencyKey(normalizedScheduleId, operationId);
-            var committed = await DeleteTeamAutomationAsync(
-                normalizedScheduleId,
-                normalizedOwner,
-                operationId,
-                idempotencyKey,
-                reason,
-                credentialOwner,
-                ct);
-            return committed.Admission;
+            throw new InvalidOperationException("team_automation_delete_requires_revocation_context");
         }
 
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
