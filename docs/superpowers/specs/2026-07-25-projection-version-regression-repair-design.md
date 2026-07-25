@@ -42,21 +42,24 @@ exact orphaned replica and then rebuild from an authoritative source.
 
 ### Exact conditional replica deletion
 
-Add a narrow conditional-delete capability beside the existing projection
-document reader/writer abstractions. It accepts an exact semantic fingerprint:
+Add a narrow, Elasticsearch-specific repair lease beside the existing projection
+store implementation. It accepts an exact semantic fingerprint:
 
 - document ID;
 - actor ID;
 - `StateVersion`;
 - `LastEventId`.
 
-The Elasticsearch implementation reads the current document, verifies the full
-fingerprint, captures `_index`, `_seq_no`, and `_primary_term`, and deletes from
-the concrete index with optimistic concurrency. A changed document returns a
-typed conflict and is never deleted.
+The repair lease reads the current document, verifies the full fingerprint,
+captures `_index`, `_seq_no`, and `_primary_term`, and deletes from the concrete
+index with optimistic concurrency. A changed document returns a typed conflict
+and is never deleted.
 
-The in-memory provider implements the same semantic comparison atomically under
-its existing store gate so local composition and tests use the same contract.
+Repair-store registration is explicit and opt-in. It is enabled only for
+`StudioWorkspaceCurrentStateDocument` and
+`NyxIdAuthorizationCatalogDocument`. The ordinary projection writer contract is
+unchanged, the in-memory provider receives no repair capability, and other
+Elasticsearch read models cannot resolve this maintenance interface.
 
 This capability is not a general reset API. It cannot delete by actor ID alone,
 cannot accept a version range, and cannot bypass fingerprint matching.
@@ -68,22 +71,22 @@ orchestration remains in Application services behind typed ports.
 
 The Studio repair service depends on:
 
-- a Studio Infrastructure port that inspects the workspace EventStore version
-  and workspace read-model fingerprint;
-- the conditional replica delete port;
+- a Studio Infrastructure store port that inspects the workspace EventStore
+  version and uses the opt-in Elasticsearch repair lease;
 - a Studio Infrastructure command port that dispatches a typed workspace
   projection-repair command.
 
 The NyxID catalog repair service depends on:
 
-- a GAgentService Infrastructure port that inspects the catalog EventStore
-  version and catalog read-model fingerprint;
-- the conditional replica delete port;
+- a GAgentService Infrastructure store port that inspects the catalog
+  EventStore version and uses the opt-in Elasticsearch repair lease;
 - the existing authenticated catalog refresh port;
 - the existing catalog visibility port.
 
-Infrastructure may read `IEventStore.GetVersionAsync` only inside this explicit
-maintenance path. Normal query services continue to read only read models.
+Application owns inspect/delete/recovery ordering. Infrastructure contains only
+the EventStore/Elasticsearch/actor-dispatch adapters. Infrastructure may read
+`IEventStore.GetVersionAsync` only inside this explicit maintenance path.
+Normal query services continue to read only read models.
 
 ### Workspace recovery
 
@@ -159,6 +162,7 @@ contents are never logged or returned.
 
 - A healthy document is never deleted.
 - A document with another actor ID is always a conflict.
+- EventStore version `0` is never repairable.
 - Any source-version or fingerprint change between dry-run and apply is a
   conflict.
 - Elasticsearch deletion is guarded by `_seq_no` and `_primary_term`.
