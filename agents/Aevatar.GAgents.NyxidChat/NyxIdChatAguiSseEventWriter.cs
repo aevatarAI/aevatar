@@ -200,6 +200,26 @@ internal static class NyxIdChatAguiSseEventWriter
             return true;
         }
 
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.ContinuationChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatContinuationAdmissionState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatContinuationAdmissionState>();
+            return true;
+        }
+
+        if (string.Equals(
+                customEvent.Name,
+                NyxIdChatConversationAguiFrameBuilder.StepControlChangedEventName,
+                StringComparison.Ordinal) &&
+            customEvent.Payload.Is(NyxIdChatStepControlResultState.Descriptor))
+        {
+            payload = customEvent.Payload.Unpack<NyxIdChatStepControlResultState>();
+            return true;
+        }
+
         return false;
     }
 

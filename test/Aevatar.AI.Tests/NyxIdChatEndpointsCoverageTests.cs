@@ -84,6 +84,12 @@ public partial class NyxIdChatEndpointsCoverageTests
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations");
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stream");
         routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:approve");
+        routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:stop");
+        routes.Should().Contain("/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}:steer");
+        routes.Should().Contain(
+            "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:retry");
+        routes.Should().Contain(
+            "/api/scopes/{scopeId}/nyxid-chat/conversations/{actorId}/turns/{turnId}/steps/{stepId}:skip");
         routes.Should().Contain("/api/webhooks/nyxid-relay");
         routes.Should().Contain("/api/webhooks/nyxid-relay/diag");
     }
@@ -1692,6 +1698,8 @@ public partial class NyxIdChatEndpointsCoverageTests
             .Should().BeOfType<NyxIdChatObservationLifecycle<NyxIdChatCommand>>();
         services.GetRequiredService<INyxIdRelayIngressPort>()
             .Should().BeOfType<NyxIdRelayIngressPort>();
+        services.GetRequiredService<INyxIdChatControlCommandPort>()
+            .Should().BeOfType<NyxIdChatControlCommandPort>();
     }
 
     [Fact]

@@ -1216,6 +1216,221 @@ public sealed class NyxIdChatProjectionSessionTests
     }
 
     [Fact]
+    public async Task Projector_ActiveTurnAdmissionRejection_ShouldEmitExactSteeringRequiredError()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = new NyxIdChatSessionProjectionContext
+        {
+            RootActorId = "conversation-alpha",
+            SessionId = "turn-beta",
+            ProjectionKind = "nyxid-chat-session",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatTurnAdmissionRejectedEvent
+                {
+                    ConversationActorId = context.RootActorId,
+                    RequestedTurnId = context.SessionId,
+                    ActiveTurnId = "turn-alpha",
+                    CommandId = "command-beta",
+                    CorrelationId = "correlation-beta",
+                    ReasonCode = NyxIdChatControlCommands.ActiveTurnRequiresSteering,
+                    SafeMessage = NyxIdChatControlCommands.ActiveTurnRequiresSteeringMessage,
+                },
+                stateVersion: 19),
+            CancellationToken.None);
+
+        var terminal = hub.Published.Should().ContainSingle().Which.Event;
+        terminal.Sequence.Should().Be(19);
+        terminal.EventCase.Should().Be(AGUIEvent.EventOneofCase.RunError);
+        terminal.RunError.RunId.Should().Be("turn-beta");
+        terminal.RunError.Code.Should().Be("ACTIVE_TURN_REQUIRES_STEERING");
+        terminal.RunError.Message.Should().Be(
+            NyxIdChatControlCommands.ActiveTurnRequiresSteeringMessage);
+    }
+
+    [Fact]
+    public async Task Projector_SteeringAdmission_ShouldEmitTypedContinuationFrameForOriginTurn()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(NyxIdChatTaskStatus.Stopped, NyxIdChatTurnStatus.Stopped);
+        var admission = new NyxIdChatContinuationAdmissionState
+        {
+            Kind = NyxIdChatContinuationKind.Steering,
+            RequestId = "steering-alpha",
+            ClientRequestId = "client-steering-alpha",
+            OriginTurnId = "turn-alpha",
+            ContinuationTurnId = "turn-beta",
+            Status = NyxIdChatContinuationAdmissionStatus.AcceptedForLater,
+            ReasonCode = NyxIdChatControlCommands.SteeringAcceptedForLater,
+            SafeMessage = "Accepted for later.",
+            Instruction = "Use a safer path.",
+        };
+        state.ContinuationAdmission = admission.Clone();
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatContinuationAdmissionCommittedEvent
+                {
+                    Admission = admission,
+                    State = state,
+                },
+                stateVersion: 20),
+            CancellationToken.None);
+
+        var frame = hub.Published.Should().ContainSingle().Which.Event;
+        frame.Sequence.Should().Be(20);
+        frame.EventCase.Should().Be(AGUIEvent.EventOneofCase.Custom);
+        frame.Custom.Name.Should().Be("nyxid.continuation.changed");
+        frame.Custom.Payload.Unpack<NyxIdChatContinuationAdmissionState>()
+            .Should().BeEquivalentTo(admission);
+    }
+
+    [Fact]
+    public async Task Projector_LateToolEvidence_ShouldRefineStepWithoutRepeatingTerminal()
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(NyxIdChatTaskStatus.Stopped, NyxIdChatTurnStatus.Stopped);
+        var step = state.ActiveTask.Steps.Single();
+        step.Kind = NyxIdChatStepKind.Tool;
+        step.Status = NyxIdChatStepStatus.Uncertain;
+        step.ExternalEffect = NyxIdChatEffectEvidence.Confirmed;
+        step.Operation.Kind = NyxIdChatStepKind.Tool;
+        step.Operation.Phase = NyxIdChatOperationPhase.Succeeded;
+        state.ProgressSequence = 10;
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatLateOperationEvidenceCommittedEvent
+                {
+                    Key = step.Operation.Key.Clone(),
+                    OperationPhase = NyxIdChatOperationPhase.Succeeded,
+                    ExternalEffect = NyxIdChatEffectEvidence.Confirmed,
+                    ToolReceipt = new AgentToolReceipt
+                    {
+                        CallId = "call-alpha",
+                        ToolName = "repository_update",
+                        Status = AgentToolReceiptStatus.Success,
+                    },
+                    ProgressSequence = state.ProgressSequence,
+                    State = state,
+                },
+                stateVersion: 21),
+            CancellationToken.None);
+
+        hub.Published.Should().ContainSingle(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
+            entry.Event.Custom.Name ==
+                NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName);
+        var changed = hub.Published.Should().ContainSingle(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
+            entry.Event.Custom.Name ==
+                NyxIdChatConversationAguiFrameBuilder.TaskStepChangedEventName).Which;
+        changed.Event.Custom.Payload.Unpack<NyxIdChatTaskStepState>()
+            .ExternalEffect.Should().Be(NyxIdChatEffectEvidence.Confirmed);
+        hub.Published.Should().ContainSingle(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.ToolCallEnd &&
+            entry.Event.ToolCallEnd.ToolCallId == "call-alpha");
+        hub.Published.Should().NotContain(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.RunFinished ||
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.RunError ||
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.TextMessageEnd,
+            "the stop fence already emitted the origin turn terminal");
+    }
+
+    [Theory]
+    [InlineData(NyxIdChatStepControlKind.Retry, NyxIdChatTaskStatus.Active,
+        NyxIdChatTurnStatus.Active, NyxIdChatStepStatus.Running, false)]
+    [InlineData(NyxIdChatStepControlKind.Skip, NyxIdChatTaskStatus.Succeeded,
+        NyxIdChatTurnStatus.Succeeded, NyxIdChatStepStatus.Skipped, true)]
+    public async Task Projector_StepControl_ShouldEmitTerminalOnlyWhenControlMakesTurnTerminal(
+        NyxIdChatStepControlKind kind,
+        NyxIdChatTaskStatus taskStatus,
+        NyxIdChatTurnStatus turnStatus,
+        NyxIdChatStepStatus stepStatus,
+        bool shouldEmitTerminal)
+    {
+        var hub = new RecordingSessionEventHub();
+        var projector = new NyxIdChatSessionEventProjector(hub);
+        var context = ControllerContext();
+        var state = ControllerState(taskStatus, turnStatus);
+        state.ActiveTask.Steps.Single().Status = stepStatus;
+        state.ProgressSequence = 11;
+        var result = new NyxIdChatStepControlResultState
+        {
+            Kind = kind,
+            RequestId = kind == NyxIdChatStepControlKind.Retry
+                ? "retry-alpha"
+                : "skip-alpha",
+            ClientRequestId = "client-control-alpha",
+            ScopeId = "scope-alpha",
+            ConversationActorId = context.RootActorId,
+            TurnId = context.SessionId,
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ExpectedOperationGeneration = 1,
+            OperationGeneration = kind == NyxIdChatStepControlKind.Retry ? 2 : 1,
+            Outcome = NyxIdChatTransitionOutcome.Accepted,
+        };
+        state.LatestStepControlResult = result.Clone();
+
+        await projector.ProjectAsync(
+            context,
+            CommittedEnvelope(
+                context.RootActorId,
+                new NyxIdChatStepControlCommittedEvent
+                {
+                    Result = result,
+                    State = state,
+                },
+                stateVersion: 22),
+            CancellationToken.None);
+
+        var control = hub.Published.Should().ContainSingle(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
+            entry.Event.Custom.Name ==
+                NyxIdChatConversationAguiFrameBuilder.StepControlChangedEventName).Which.Event;
+        control.Sequence.Should().Be(22);
+        control.Custom.Payload.Unpack<NyxIdChatStepControlResultState>()
+            .Should().BeEquivalentTo(result);
+        hub.Published.Should().ContainSingle(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
+            entry.Event.Custom.Name ==
+                NyxIdChatConversationAguiFrameBuilder.TaskSnapshotEventName);
+        hub.Published.Should().ContainSingle(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.Custom &&
+            entry.Event.Custom.Name ==
+                NyxIdChatConversationAguiFrameBuilder.TaskStepChangedEventName);
+        var terminals = hub.Published.Where(entry =>
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.RunFinished ||
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.RunError ||
+            entry.Event.EventCase == AGUIEvent.EventOneofCase.TextMessageEnd).ToArray();
+        if (!shouldEmitTerminal)
+        {
+            terminals.Should().BeEmpty();
+            return;
+        }
+
+        terminals.Select(entry => entry.Event.EventCase).Should().Equal(
+            AGUIEvent.EventOneofCase.TextMessageEnd,
+            AGUIEvent.EventOneofCase.RunFinished);
+        terminals[^1].Event.RunFinished.RunId.Should().Be(context.SessionId);
+        terminals[^1].Event.RunFinished.Status.Should().Be(RunCompletionStatus.Completed);
+    }
+
+    [Fact]
     public async Task Projector_ShouldEmitCommandAttemptRejectionWithoutSessionProgress()
     {
         var hub = new RecordingSessionEventHub();

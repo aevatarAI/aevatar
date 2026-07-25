@@ -33,6 +33,7 @@ public static partial class NyxIdChatEndpoints
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:stream", HandleStreamMessageAsync);
         group.MapDelete("/{scopeId}/nyxid-chat/conversations/{actorId}", HandleDeleteConversationAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
+        MapControlEndpoints(group);
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages. NyxID drives
         // this callback and authenticates it with the dedicated X-NyxID-Callback-Token JWT, so

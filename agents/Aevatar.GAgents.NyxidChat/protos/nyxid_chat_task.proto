@@ -104,6 +104,12 @@ enum NyxIdChatContinuationAdmissionStatus {
   NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_STARTED = 5;
 }
 
+enum NyxIdChatStepControlKind {
+  NYX_ID_CHAT_STEP_CONTROL_KIND_UNSPECIFIED = 0;
+  NYX_ID_CHAT_STEP_CONTROL_KIND_RETRY = 1;
+  NYX_ID_CHAT_STEP_CONTROL_KIND_SKIP = 2;
+}
+
 enum NyxIdChatTransitionOutcome {
   NYX_ID_CHAT_TRANSITION_OUTCOME_UNSPECIFIED = 0;
   NYX_ID_CHAT_TRANSITION_OUTCOME_ACCEPTED = 1;
@@ -222,6 +228,10 @@ message NyxIdChatTaskStepState {
   bool safe_to_skip = 15;
   NyxIdChatAvailableActions available_actions = 16;
   google.protobuf.Timestamp updated_at = 17;
+  // True only when this step's execution input can be rebuilt from typed,
+  // credential-free conversation state plus a newly supplied transient
+  // capability. V1 sets this for initial LLM steps, never for tool calls.
+  bool retry_input_rebuildable = 18;
 }
 
 message NyxIdChatTaskState {
@@ -291,6 +301,30 @@ message NyxIdChatContinuationAdmissionState {
   string reason_code = 7;
   string safe_message = 8;
   google.protobuf.Timestamp committed_at = 9;
+  // Safe, durable steering intent. Runtime credentials remain only on the
+  // transient command and are never copied into state or committed events.
+  string instruction = 10;
+  repeated aevatar.ai.ChatContentPart input_parts = 11;
+}
+
+message NyxIdChatStepControlResultState {
+  NyxIdChatStepControlKind kind = 1;
+  string request_id = 2;
+  string client_request_id = 3;
+  string turn_id = 4;
+  string task_id = 5;
+  string step_id = 6;
+  int64 expected_operation_generation = 7;
+  int64 operation_generation = 8;
+  NyxIdChatTransitionOutcome outcome = 9;
+  string reason_code = 10;
+  string safe_message = 11;
+  string command_id = 12;
+  string correlation_id = 13;
+  google.protobuf.Timestamp committed_at = 14;
+  int64 expected_state_version = 15;
+  string scope_id = 16;
+  string conversation_actor_id = 17;
 }
 
 message NyxIdCatalogServiceConnectParams {
@@ -472,6 +506,13 @@ message NyxIdChatConversationGAgentState {
   NyxIdChatContinuationAdmissionState continuation_admission = 12;
   int64 progress_sequence = 13;
   google.protobuf.Timestamp updated_at = 14;
+  // Most recently committed control outcome. A rejected replay never replaces
+  // the accepted execution fence that still guards the old plan.
+  NyxIdChatControlFenceState latest_control_result = 15;
+  // Bounded actor-owned replay/conflict facts for retry and skip request
+  // identities. Runtime credentials never enter these results.
+  repeated NyxIdChatStepControlResultState recent_step_control_results = 16;
+  NyxIdChatStepControlResultState latest_step_control_result = 17;
 }
 
 // One atomic controller commit for a newly admitted turn. The snapshot already
@@ -665,6 +706,10 @@ message NyxIdChatSteeringCommand {
   string instruction = 8;
   repeated aevatar.ai.ChatContentPart input_parts = 9;
   int64 expected_state_version = 10;
+  // Transient execution capability for a later continuation. These fields are
+  // deliberately absent from NyxIdChatContinuationAdmissionState.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 11;
+  aevatar.ai.LLMControlContextPayload llm_control = 12;
 }
 
 message NyxIdChatRetryStepCommand {
@@ -679,6 +724,10 @@ message NyxIdChatRetryStepCommand {
   string correlation_id = 9;
   int64 expected_operation_generation = 10;
   int64 expected_state_version = 11;
+  // Transient capability used only if the actor authorizes dispatch. These
+  // values are absent from state and committed step-control events.
+  aevatar.ai.AgentToolExecutionContextPayload tool_context = 12;
+  aevatar.ai.LLMControlContextPayload llm_control = 13;
 }
 
 message NyxIdChatSkipStepCommand {
@@ -730,14 +779,50 @@ message NyxIdChatOperationReconciledEvent {
   NyxIdChatConversationGAgentState state = 5;
 }
 
+// A fenced exact tool operation may still report typed terminal evidence. The
+// evidence can refine that operation's effect/phase, but it cannot remove the
+// fence, change the stopped task/turn terminal, or authorize a successor.
+// Raw tool results and invocation arguments are deliberately absent.
+message NyxIdChatLateOperationEvidenceCommittedEvent {
+  NyxIdChatOperationKey key = 1;
+  NyxIdChatOperationPhase operation_phase = 2;
+  NyxIdChatEffectEvidence external_effect = 3;
+  aevatar.ai.AgentToolReceipt tool_receipt = 4;
+  string terminal_code = 5;
+  string safe_message = 6;
+  int64 progress_sequence = 7;
+  google.protobuf.Timestamp committed_at = 8;
+  NyxIdChatConversationGAgentState state = 9;
+}
+
 message NyxIdChatControlFenceCommittedEvent {
   NyxIdChatControlFenceState fence = 1;
   NyxIdChatTaskState task = 2;
   NyxIdChatTurnState turn = 3;
+  NyxIdChatConversationGAgentState state = 4;
 }
 
 message NyxIdChatContinuationAdmissionCommittedEvent {
   NyxIdChatContinuationAdmissionState admission = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+message NyxIdChatStepControlCommittedEvent {
+  NyxIdChatStepControlResultState result = 1;
+  NyxIdChatConversationGAgentState state = 2;
+}
+
+// An ordinary start command cannot silently queue behind active work. The
+// actor commits this typed fact for the requested turn so the same Projection
+// Pipeline can return ACTIVE_TURN_REQUIRES_STEERING to its live observer.
+message NyxIdChatTurnAdmissionRejectedEvent {
+  string conversation_actor_id = 1;
+  string requested_turn_id = 2;
+  string active_turn_id = 3;
+  string command_id = 4;
+  string correlation_id = 5;
+  string reason_code = 6;
+  string safe_message = 7;
 }
 
 message NyxIdChatActionRequestedEvent {

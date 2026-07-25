@@ -14,6 +14,8 @@ internal static class NyxIdChatConversationAguiFrameBuilder
     public const string TaskStepChangedEventName = "nyxid.task.step.changed";
     public const string ControlChangedEventName = "nyxid.control.changed";
     public const string ActionRequestEventName = "nyxid.action.request";
+    public const string ContinuationChangedEventName = "nyxid.continuation.changed";
+    public const string StepControlChangedEventName = "nyxid.step.control.changed";
 
     private const string TerminalStateConflictCode = "NYXID_CHAT_TERMINAL_STATE_CONFLICT";
     private const string TerminalStateConflictMessage =
@@ -156,6 +158,124 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         return frames;
     }
 
+    public static IReadOnlyList<AGUIEvent> BuildContinuationChanged(
+        NyxIdChatContinuationAdmissionCommittedEvent committed,
+        long sequence)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        if (committed.Admission is null || sequence <= 0)
+            return [];
+
+        return
+        [
+            Custom(ContinuationChangedEventName, committed.Admission, sequence),
+        ];
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildLateOperationEvidence(
+        NyxIdChatLateOperationEvidenceCommittedEvent committed,
+        long sequence)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        if (committed.Key is null ||
+            committed.State?.ActiveTask is null ||
+            committed.State.ActiveTurn is null ||
+            sequence <= 0)
+        {
+            return [];
+        }
+
+        var step = committed.State.ActiveTask.Steps.FirstOrDefault(candidate =>
+            KeysEqual(candidate.Operation?.Key, committed.Key));
+        if (step is null)
+            return [];
+
+        var frames = BuildTaskFrames(committed.State.ActiveTask, [step], sequence);
+        if (committed.ToolReceipt is { CallId.Length: > 0 } receipt)
+        {
+            frames.Add(new AGUIEvent
+            {
+                Sequence = sequence,
+                ToolCallEnd = new ToolCallEndEvent
+                {
+                    ToolCallId = receipt.CallId,
+                    Result = receipt.Status ==
+                        Aevatar.AI.Abstractions.AgentToolReceiptStatus.Success
+                        ? "completed"
+                        : string.IsNullOrWhiteSpace(receipt.ErrorMessage)
+                            ? "not completed"
+                            : receipt.ErrorMessage,
+                },
+            });
+        }
+
+        return frames;
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildStepControlChanged(
+        NyxIdChatStepControlCommittedEvent committed,
+        long sequence)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        if (committed.Result is null ||
+            committed.State?.ActiveTask is null ||
+            committed.State.ActiveTurn is null ||
+            sequence <= 0)
+        {
+            return [];
+        }
+
+        var frames = new List<AGUIEvent>
+        {
+            Custom(StepControlChangedEventName, committed.Result, sequence),
+        };
+        var step = committed.State.ActiveTask.Steps.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.StepId,
+                committed.Result.StepId,
+                StringComparison.Ordinal));
+        if (step is not null)
+            frames.AddRange(BuildTaskFrames(committed.State.ActiveTask, [step], sequence));
+        if (committed.Result.Outcome == NyxIdChatTransitionOutcome.Accepted)
+        {
+            AppendTerminalIfNeeded(
+                frames,
+                committed.State.ConversationActorId,
+                committed.Result.TurnId,
+                committed.State.ActiveTask,
+                committed.State.ActiveTurn,
+                sequence);
+        }
+        return frames;
+    }
+
+    public static IReadOnlyList<AGUIEvent> BuildTurnAdmissionRejected(
+        NyxIdChatTurnAdmissionRejectedEvent rejected,
+        long sequence)
+    {
+        ArgumentNullException.ThrowIfNull(rejected);
+        if (string.IsNullOrWhiteSpace(rejected.RequestedTurnId) ||
+            string.IsNullOrWhiteSpace(rejected.ReasonCode) ||
+            sequence <= 0)
+        {
+            return [];
+        }
+
+        return
+        [
+            new AGUIEvent
+            {
+                Sequence = sequence,
+                RunError = new RunErrorEvent
+                {
+                    RunId = rejected.RequestedTurnId,
+                    Code = rejected.ReasonCode,
+                    Message = rejected.SafeMessage,
+                },
+            },
+        ];
+    }
+
     private static List<AGUIEvent> BuildTaskFrames(
         NyxIdChatTaskState task,
         IEnumerable<NyxIdChatTaskStepState> changedSteps,
@@ -186,6 +306,16 @@ internal static class NyxIdChatConversationAguiFrameBuilder
         }
         return changed;
     }
+
+    private static bool KeysEqual(NyxIdChatOperationKey? left, NyxIdChatOperationKey? right) =>
+        left is not null &&
+        right is not null &&
+        string.Equals(left.ConversationActorId, right.ConversationActorId, StringComparison.Ordinal) &&
+        string.Equals(left.TurnId, right.TurnId, StringComparison.Ordinal) &&
+        string.Equals(left.TaskId, right.TaskId, StringComparison.Ordinal) &&
+        string.Equals(left.StepId, right.StepId, StringComparison.Ordinal) &&
+        string.Equals(left.OperationId, right.OperationId, StringComparison.Ordinal) &&
+        left.OperationGeneration == right.OperationGeneration;
 
     private static IEnumerable<NyxIdChatTaskStepState> ResolveActiveOrLast(
         NyxIdChatTaskState task)

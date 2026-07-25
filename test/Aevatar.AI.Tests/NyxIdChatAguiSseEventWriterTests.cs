@@ -233,6 +233,49 @@ public class NyxIdChatAguiSseEventWriterTests
     }
 
     [Fact]
+    public async Task WriteAsync_ShouldMapTypedStepControlCustomEventToStableJson()
+    {
+        var sink = new SseFrameSink();
+        var result = new NyxIdChatStepControlResultState
+        {
+            Kind = NyxIdChatStepControlKind.Retry,
+            RequestId = "retry-alpha",
+            ClientRequestId = "client-retry-alpha",
+            ScopeId = "scope-alpha",
+            ConversationActorId = "conversation-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ExpectedOperationGeneration = 1,
+            OperationGeneration = 2,
+            Outcome = NyxIdChatTransitionOutcome.Accepted,
+            ReasonCode = NyxIdChatControlCommands.StepRetryAccepted,
+        };
+
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 19,
+            Custom = new CustomEvent
+            {
+                Name = NyxIdChatConversationAguiFrameBuilder.StepControlChangedEventName,
+                Payload = Any.Pack(result),
+            },
+        }, "turn-alpha");
+
+        var frame = sink.ReadFrames().Should().ContainSingle().Which;
+        frame.GetProperty("type").GetString().Should().Be("CUSTOM");
+        frame.GetProperty("sequence").GetInt64().Should().Be(19);
+        var custom = frame.GetProperty("custom");
+        custom.GetProperty("name").GetString().Should().Be("nyxid.step.control.changed");
+        var payload = custom.GetProperty("payload");
+        payload.GetProperty("kind").GetString().Should().Be("retry");
+        payload.GetProperty("outcome").GetString().Should().Be("accepted");
+        payload.GetProperty("requestId").GetString().Should().Be("retry-alpha");
+        payload.GetProperty("operationGeneration").GetString().Should().Be("2");
+        frame.GetRawText().Should().NotContain("@type");
+    }
+
+    [Fact]
     public async Task WriteAsync_ShouldMapRunErrorAndReturnTerminalStatus()
     {
         var sink = new SseFrameSink();

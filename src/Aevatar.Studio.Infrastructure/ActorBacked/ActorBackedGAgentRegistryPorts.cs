@@ -273,6 +273,7 @@ internal sealed class ActorBackedGAgentRegistryPorts :
             ScopeResourceOperation.Join => GAgentRegistryOperation.Join,
             ScopeResourceOperation.ListParticipants => GAgentRegistryOperation.ListParticipants,
             ScopeResourceOperation.DraftRunReuse => GAgentRegistryOperation.DraftRunReuse,
+            ScopeResourceOperation.Control => GAgentRegistryOperation.Control,
             _ => GAgentRegistryOperation.Unknown,
         };
 

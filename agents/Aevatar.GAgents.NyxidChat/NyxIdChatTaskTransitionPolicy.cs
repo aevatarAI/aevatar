@@ -161,12 +161,6 @@ public static class NyxIdChatTaskTransitionPolicy
         var effectAllowsRetry = step.ExternalEffect is
             NyxIdChatEffectEvidence.NotStarted or
             NyxIdChatEffectEvidence.NotApplied;
-        var idempotentRetry = step.ExternalEffect == NyxIdChatEffectEvidence.MayHaveChanged &&
-                              step.Operation is
-                              {
-                                  Idempotent: true,
-                                  IdempotencyKey.Length: > 0,
-                              };
         var recoverableStatus = step.Status is
             NyxIdChatStepStatus.Waiting or
             NyxIdChatStepStatus.Failed or
@@ -175,7 +169,10 @@ public static class NyxIdChatTaskTransitionPolicy
 
         return new NyxIdChatAvailableActions
         {
-            Retry = retryableStatus && (effectAllowsRetry || idempotentRetry),
+            Retry = step.Kind == NyxIdChatStepKind.Llm &&
+                    step.RetryInputRebuildable &&
+                    retryableStatus &&
+                    effectAllowsRetry,
             Skip = recoverableStatus && (!step.Required || step.SafeToSkip),
             Stop = step.Status is
                 NyxIdChatStepStatus.Planned or
@@ -407,7 +404,8 @@ public static class NyxIdChatTaskTransitionPolicy
             step.Required && step.Status is
                 NyxIdChatStepStatus.Failed or
                 NyxIdChatStepStatus.Cancelled or
-                NyxIdChatStepStatus.Uncertain);
+                NyxIdChatStepStatus.Uncertain &&
+            !HasRecoveryAction(step));
         if (requiredFailure is not null)
         {
             SetTerminalOutcome(
@@ -416,6 +414,18 @@ public static class NyxIdChatTaskTransitionPolicy
                 NyxIdChatTurnStatus.Failed,
                 requiredFailure.FailureCode,
                 requiredFailure.SafeMessage);
+            return;
+        }
+
+        var recoverableStep = state.ActiveTask.Steps.FirstOrDefault(step =>
+            step.Status is
+                NyxIdChatStepStatus.Failed or
+                NyxIdChatStepStatus.Cancelled or
+                NyxIdChatStepStatus.Uncertain &&
+            HasRecoveryAction(step));
+        if (recoverableStep is not null)
+        {
+            SetRecoverableOutcome(state, recoverableStep);
             return;
         }
 
@@ -438,6 +448,27 @@ public static class NyxIdChatTaskTransitionPolicy
             NyxIdChatTurnStatus.Succeeded,
             string.Empty,
             string.Empty);
+    }
+
+    private static bool HasRecoveryAction(NyxIdChatTaskStepState step)
+    {
+        var actions = ResolveAvailableActions(step);
+        return actions.Retry || actions.Skip;
+    }
+
+    private static void SetRecoverableOutcome(
+        NyxIdChatConversationGAgentState state,
+        NyxIdChatTaskStepState step)
+    {
+        state.ActiveTask.Status = NyxIdChatTaskStatus.Active;
+        state.ActiveTask.ActiveStepId = step.StepId;
+        state.ActiveTask.ActiveOperationId = string.Empty;
+        state.ActiveTask.FailureCode = step.FailureCode;
+        state.ActiveTask.SafeMessage = step.SafeMessage;
+        state.ActiveTurn.Status = NyxIdChatTurnStatus.Active;
+        state.ActiveTurn.FailureCode = step.FailureCode;
+        state.ActiveTurn.SafeMessage = step.SafeMessage;
+        MirrorLatestTurn(state);
     }
 
     private static void SetTerminalOutcome(

@@ -225,6 +225,62 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
     }
 
     [Fact]
+    public void ReconcileOperation_WithRetryableLlmFailure_ShouldKeepTurnActiveForControl()
+    {
+        var started = Start(
+            CreateState(kind: NyxIdChatStepKind.Llm),
+            NyxIdChatStepKind.Llm,
+            mayChangeExternalState: false);
+        var signal = new NyxIdChatOperationResultSignal
+        {
+            Key = CreateKey(),
+            Failure = new NyxIdChatOperationFailure
+            {
+                FailureCode = "MODEL_FAILED",
+                SafeMessage = "The model attempt failed.",
+                ExternalEffect = NyxIdChatEffectEvidence.NotApplied,
+            },
+        };
+
+        var decision = NyxIdChatTaskTransitionPolicy.ReconcileOperation(started, signal);
+
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        var step = decision.State.ActiveTask.Steps.Single();
+        step.Status.Should().Be(NyxIdChatStepStatus.Failed);
+        step.AvailableActions.Retry.Should().BeTrue();
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        decision.State.ActiveTask.ActiveStepId.Should().Be(step.StepId);
+        decision.State.ActiveTask.ActiveOperationId.Should().BeEmpty();
+        decision.State.ActiveTask.FailureCode.Should().Be("MODEL_FAILED");
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+        decision.State.ActiveTurn.FailureCode.Should().Be("MODEL_FAILED");
+    }
+
+    [Fact]
+    public void ReconcileOperation_WithSkippableOptionalFailure_ShouldKeepTurnActiveForControl()
+    {
+        var started = Start(
+            CreateState(required: false),
+            NyxIdChatStepKind.Tool,
+            mayChangeExternalState: false);
+
+        var decision = NyxIdChatTaskTransitionPolicy.ReconcileOperation(
+            started,
+            ToolSignal(
+                AgentToolReceiptStatus.Error,
+                NyxIdChatEffectEvidence.NotApplied,
+                errorCode: "OPTIONAL_FAILED"));
+
+        decision.Outcome.Should().Be(NyxIdChatTransitionOutcome.Accepted);
+        var step = decision.State.ActiveTask.Steps.Single();
+        step.Status.Should().Be(NyxIdChatStepStatus.Failed);
+        step.AvailableActions.Skip.Should().BeTrue();
+        decision.State.ActiveTask.Status.Should().Be(NyxIdChatTaskStatus.Active);
+        decision.State.ActiveTask.ActiveStepId.Should().Be(step.StepId);
+        decision.State.ActiveTurn.Status.Should().Be(NyxIdChatTurnStatus.Active);
+    }
+
+    [Fact]
     public void ReconcileOperation_WithUncertainEffect_ShouldNeverSucceedRequiredTask()
     {
         var started = Start(CreateState(), NyxIdChatStepKind.Tool, mayChangeExternalState: true);
@@ -375,7 +431,7 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
     }
 
     [Fact]
-    public void ResolveAvailableActions_ForFailedNotAppliedStep_ShouldAllowSafeRetry()
+    public void ResolveAvailableActions_ForFailedNotAppliedToolWithoutRebuildContract_ShouldRejectRetry()
     {
         var step = CreateState(
                 status: NyxIdChatStepStatus.Failed,
@@ -384,7 +440,25 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
 
         var actions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
 
-        actions.Retry.Should().BeTrue();
+        actions.Retry.Should().BeFalse(
+            "effect safety does not reconstruct transient tool arguments or capability");
+        actions.Skip.Should().BeFalse();
+        actions.Stop.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResolveAvailableActions_ForFailedNotAppliedLlmStep_ShouldAllowRetry()
+    {
+        var step = CreateState(
+                status: NyxIdChatStepStatus.Failed,
+                effect: NyxIdChatEffectEvidence.NotApplied,
+                kind: NyxIdChatStepKind.Llm)
+            .ActiveTask.Steps.Single();
+
+        var actions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
+
+        actions.Retry.Should().BeTrue(
+            "the typed turn prompt/input can rebuild an LLM attempt with new transient capability");
         actions.Skip.Should().BeFalse();
         actions.Stop.Should().BeFalse();
     }
@@ -411,7 +485,7 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
     }
 
     [Fact]
-    public void ResolveAvailableActions_ForPotentiallyChangedIdempotentStep_ShouldRequireStableKey()
+    public void ResolveAvailableActions_ForPotentiallyChangedIdempotentToolWithoutRebuildContract_ShouldRejectRetry()
     {
         var step = CreateState(
                 status: NyxIdChatStepStatus.Uncertain,
@@ -428,7 +502,8 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
 
         var actions = NyxIdChatTaskTransitionPolicy.ResolveAvailableActions(step);
 
-        actions.Retry.Should().BeTrue();
+        actions.Retry.Should().BeFalse(
+            "an idempotency key does not by itself reconstruct intentionally non-durable tool input");
     }
 
     [Theory]
@@ -580,6 +655,7 @@ public sealed class NyxIdChatTaskTransitionPolicyTests
             Status = status,
             Required = required,
             SafeToSkip = safeToSkip,
+            RetryInputRebuildable = kind == NyxIdChatStepKind.Llm,
             ExternalEffect = effect,
         });
         return state;

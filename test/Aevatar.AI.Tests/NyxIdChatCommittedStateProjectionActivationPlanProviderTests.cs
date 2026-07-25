@@ -203,6 +203,13 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         ];
         yield return
         [
+            new NyxIdChatLateOperationEvidenceCommittedEvent
+            {
+                Key = OperationKey("turn-1"),
+            },
+        ];
+        yield return
+        [
             new NyxIdChatControlFenceCommittedEvent
             {
                 Fence = new NyxIdChatControlFenceState { TurnId = "turn-1" },
@@ -219,6 +226,37 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
                 },
             },
         ];
+        yield return
+        [
+            new NyxIdChatContinuationAdmissionCommittedEvent
+            {
+                Admission = new NyxIdChatContinuationAdmissionState
+                {
+                    OriginTurnId = "turn-1",
+                },
+            },
+        ];
+        yield return
+        [
+            new NyxIdChatStepControlCommittedEvent
+            {
+                Result = new NyxIdChatStepControlResultState
+                {
+                    ConversationActorId = "conv-a",
+                    TurnId = "turn-1",
+                },
+            },
+        ];
+        yield return
+        [
+            new NyxIdChatTurnAdmissionRejectedEvent
+            {
+                ConversationActorId = "conv-a",
+                RequestedTurnId = "turn-1",
+                ActiveTurnId = "turn-active",
+                ReasonCode = NyxIdChatControlCommands.ActiveTurnRequiresSteering,
+            },
+        ];
     }
 
     public static IEnumerable<object[]> SessionlessStateEvents()
@@ -227,8 +265,12 @@ public sealed class NyxIdChatCommittedStateProjectionActivationPlanProviderTests
         yield return [new NyxIdChatOperationDispatchedEvent()];
         yield return [new NyxIdChatOperationProgressedEvent()];
         yield return [new NyxIdChatOperationReconciledEvent()];
+        yield return [new NyxIdChatLateOperationEvidenceCommittedEvent()];
         yield return [new NyxIdChatControlFenceCommittedEvent()];
         yield return [new NyxIdChatActionRequestedEvent()];
+        yield return [new NyxIdChatContinuationAdmissionCommittedEvent()];
+        yield return [new NyxIdChatStepControlCommittedEvent()];
+        yield return [new NyxIdChatTurnAdmissionRejectedEvent()];
         yield return
         [
             new NyxIdChatConversationCreationStartedEvent

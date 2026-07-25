@@ -297,6 +297,7 @@ internal sealed class NyxIdChatSseWriter
         string[] prefixes =
         [
             "NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_",
+            "NYX_ID_CHAT_STEP_CONTROL_KIND_",
             "NYX_ID_CHAT_ACTION_DISPOSITION_",
             "NYX_ID_CHAT_OPERATION_PHASE_",
             "NYX_ID_CHAT_EFFECT_EVIDENCE_",
