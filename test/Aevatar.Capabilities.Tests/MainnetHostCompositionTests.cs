@@ -300,10 +300,12 @@ public sealed class MainnetHostCompositionTests
             .Should()
             .NotBeNull();
         app.Services.GetRequiredService<IManagedCodexCredentialLifecycle>().Should().NotBeNull();
-        app.Services.GetServices<ICodexExecutionPort>()
+        var managedCodexPort = app.Services.GetServices<ICodexExecutionPort>()
             .Should()
             .ContainSingle(static port =>
-                port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox);
+                port.TargetKind == CodexExecutionTarget.TargetOneofCase.ManagedSandbox)
+            .Which;
+        managedCodexPort.Should().BeOfType<ManagedCodexExecutionCoordinator>();
         app.Services.GetServices<IHealthProbeExecutor>()
             .Select(static executor => executor.Kind)
             .Should()

@@ -15,10 +15,29 @@ The targets share parsing, lifecycle events, terminal result semantics, and work
 
 ## Layering
 
-`Aevatar.AI.Abstractions` owns the typed target/workspace contracts and `ICodexExecutionPort`. `Aevatar.AI.ToolProviders.NyxId` owns tool argument admission and target selection. Target adapters own infrastructure behavior:
+`Aevatar.AI.Abstractions` owns the typed target/workspace contracts and
+`ICodexExecutionPort`. `Aevatar.AI.ToolProviders.NyxId` owns tool argument
+admission and target selection. Application owns managed readiness
+orchestration, while Infrastructure owns only external transport:
 
 - `PrivateSshCodexExecutionAdapter` maps `private_ssh` to the typed NyxID SSH executor.
-- `ChronoSandboxCodexExecutionAdapter` maps `managed_sandbox` to the fixed NyxID proxy route for `chrono-sandbox`.
+- `ManagedCodexExecutionCoordinator` is the managed-sandbox
+  `ICodexExecutionPort`; it ensures committed per-user credential readiness
+  before executing and performs at most one authorization-repair retry.
+- `NyxIdManagedCodexChronoTransport` receives an already-authoritative
+  credential descriptor and maps it to the fixed NyxID proxy route for
+  `chrono-sandbox`. It does not query credential state or own lifecycle
+  orchestration.
+
+The normal managed path is:
+
+```text
+codex_exec
+  -> Application EnsureReadyAsync
+  -> committed credential observation
+  -> chrono transport
+  -> terminal Codex result
+```
 
 The workflow run actor remains the authority for step lifecycle and terminal state. A per-user `ManagedCodexCredentialGAgent` separately owns durable, non-secret invocation-credential facts. Its current-state projection is the only query source. No process-local identity or execution registry is introduced.
 
@@ -38,9 +57,23 @@ The prompt is capped at 6000 UTF-8 bytes by the tool. Aevatar sends it as data i
 
 ## Managed credential boundary
 
-The temporary internal path uses one constrained NyxID agent key per enabled NyxID user. It is an invocation credential for NyxID proxy access, not an LLM provider credential.
+The temporary internal path uses one constrained NyxID agent key per eligible
+NyxID user. It is an invocation credential for NyxID proxy access, not an LLM
+provider credential.
 
-Provisioning is authenticated self-service because NyxID permits a user to create personal API keys only for that same user. The endpoint derives the subject from authenticated claims, then the lifecycle service verifies that subject against NyxID `/api/v1/users/me`. Request bodies cannot nominate another user.
+Readiness is transparent to `codex_exec`. On the first eligible interactive
+call, Application uses the caller's current NyxID bearer only when it must
+create or repair that user's key. It derives the NyxID subject from the native
+authority, never from `scope_id`, and verifies the bearer owner against NyxID
+`/api/v1/users/me`. Once a ready descriptor is committed, later interactive or
+background execution resolves the Vault-backed key without requiring a current
+bearer. Request bodies and tool arguments cannot nominate another user or
+provide credential/provisioning controls.
+
+Eligibility is a typed policy. `Allowlist` admits only configured NyxID user
+IDs. `All` admits native NyxID users whose personal `chrono-sandbox` and usable
+`chrono-llm-public` UserServices already exist; Aevatar does not create missing
+UserServices.
 
 The issued key must have exactly:
 
@@ -91,14 +124,30 @@ Aevatar parses only the fixed terminal response containing success, bounded outp
 
 ## Credential lifecycle
 
-The authenticated self-service API is:
+The normal execution path does not call a provisioning endpoint. It binds a
+credential Projection Session before mutation, observes only committed Actor
+state, and continues the original `codex_exec` call with the observed
+descriptor. A proxy authorization denial or missing Vault credential may
+trigger one bearer-authorized forced repair and one transport retry; other
+failures do not loop.
+
+The authenticated lifecycle API remains available for diagnostics and
+emergency operations:
 
 - `GET /api/managed-codex/credential`: read projected status
 - `POST /api/managed-codex/credential`: provision
 - `POST /api/managed-codex/credential/rotate`: rotate
 - `DELETE /api/managed-codex/credential`: revoke
 
-Mutation responses are accepted-only receipts. They do not claim that actor commit or projection observation has completed. Clients re-read `GET` to observe the current state.
+`GET` is read-only and reports `enabled`, `eligible`, projected status,
+authoritative state version, and pending cleanup count. Its credential owner is
+resolved from `uid`, `sub`, `ClaimTypes.NameIdentifier`, or `user_id`;
+`scope_id` is never treated as a NyxID subject.
+
+Manual mutation responses are accepted-only receipts. They do not claim that
+Actor commit or projection observation has completed. Diagnostic clients may
+re-read `GET` to observe the current state, but the normal workflow path does
+not poll.
 
 Provision, rotation, revocation, and transparent readiness repair are
 serialized per NyxID authority by a cluster-shared Garnet lease in production.
@@ -185,4 +234,4 @@ The immutable runner image remains built from `containers/codex-runner`, but it 
 
 This internal-only design intentionally uses a persistent per-user invocation key and trusts mutable NyxID forwarding policy. Issue #2899's remaining scope replaces the key with a short-lived caller capability and adds immutable or request-level caller-credential non-forwarding, without changing workflow arguments.
 
-The delegation token deliberately lives in the sandbox environment for the run (ADR-0044, #2921). It is single-user and expires in five minutes, but the current `proxy:*` scope is not service-scoped: runner code can use it against other NyxID REST proxy services available to that user during the token lifetime. This is accepted only for explicitly allowlisted, trusted internal canaries. Broad rollout remains blocked until NyxID either authorizes `llm:proxy` for the fixed `chrono-llm-public` proxy route or enforces a service-specific delegation scope, after which chrono-sandbox and Aevatar must reject `proxy:*`. The formerly planned OpenSandbox Credential Vault substitution is rejected, not deferred: satisfying it forces the weaker-isolation runc runtime.
+The delegation token deliberately lives in the sandbox environment for the run (ADR-0044, #2921). It is single-user and expires in five minutes, but the current `proxy:*` scope is not service-scoped: runner code can use it against other NyxID REST proxy services available to that user during the token lifetime. This is accepted only for eligible, trusted internal users. Broad rollout remains blocked until NyxID either authorizes `llm:proxy` for the fixed `chrono-llm-public` proxy route or enforces a service-specific delegation scope, after which chrono-sandbox and Aevatar must reject `proxy:*`. The formerly planned OpenSandbox Credential Vault substitution is rejected, not deferred: satisfying it forces the weaker-isolation runc runtime.
