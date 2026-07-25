@@ -5,6 +5,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
+using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.ChatHistory.DependencyInjection;
 using Aevatar.Studio.Infrastructure.Authoring;
@@ -48,6 +49,9 @@ public static class ServiceCollectionExtensions
         //   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts
         //   New principle: workspace facts authoritatively owned by StudioWorkspaceGAgent (per CLAUDE.md "权威状态" + Auric 2026-05-19 "架构级清晰")
         services.AddSingleton<IStudioWorkspaceCommandPort, ActorDispatchStudioWorkspaceCommandPort>();
+        services.TryAddSingleton<
+            IStudioWorkspaceProjectionRepublishPort,
+            ActorDispatchStudioWorkspaceProjectionRepublishPort>();
         services.AddSingleton<IUserConfigDefaults, ConfiguredUserConfigDefaults>();
         services.AddSingleton<IConnectorCatalogImportParser, ConnectorCatalogImportParser>();
         services.AddSingleton<IRoleCatalogImportParser, RoleCatalogImportParser>();
