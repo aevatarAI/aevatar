@@ -6,12 +6,12 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairService
     : INyxIdAuthorizationCatalogVersionRegressionRepairService
 {
     private readonly INyxIdAuthorizationCatalogVersionRegressionStorePort _store;
-    private readonly INyxIdAuthorizationCatalogRefreshPort _refreshPort;
+    private readonly INyxIdAuthorizationCatalogRepairRefreshPort _refreshPort;
     private readonly INyxIdAuthorizationCatalogVisibilityPort _visibilityPort;
 
     public NyxIdAuthorizationCatalogVersionRegressionRepairService(
         INyxIdAuthorizationCatalogVersionRegressionStorePort store,
-        INyxIdAuthorizationCatalogRefreshPort refreshPort,
+        INyxIdAuthorizationCatalogRepairRefreshPort refreshPort,
         INyxIdAuthorizationCatalogVisibilityPort visibilityPort)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -125,7 +125,9 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairService
             .RefreshPersonalAsync(
                 normalized.VerifiedOwnerSubject,
                 normalized.BearerToken,
-                ct)
+                normalized.ExpectedSourceStateVersion,
+                normalized.RepairRequestId,
+                CancellationToken.None)
             .ConfigureAwait(false);
         if (!refresh.Success)
         {

@@ -288,7 +288,7 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
     }
 
     [Fact]
-    public async Task RepairPersonalAsync_ShouldPassExactVerifiedOwnerAndBearerToRefresh()
+    public async Task RepairPersonalAsync_ShouldPassRepairIdentityAndMinimumToRepairRefresh()
     {
         var store = new FakeStorePort
         {
@@ -310,7 +310,34 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
         await service.RepairPersonalAsync(Request());
 
         refresh.Calls.Should().ContainSingle().Which.Should().Be(
-            (VerifiedOwnerSubject, BearerToken));
+            (VerifiedOwnerSubject, BearerToken, 1, "repair-alpha", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RepairPersonalAsync_AfterDelete_ShouldUseNonRequestCancellationForRepairRefresh()
+    {
+        using var requestCancellation = new CancellationTokenSource();
+        var store = new FakeStorePort
+        {
+            Inspection = Inspection(sourceVersion: 1, documentVersion: 4),
+            OnDelete = requestCancellation.Cancel,
+        };
+        var refresh = new FakeRefreshPort
+        {
+            Result = NyxIdAuthorizationCatalogRefreshResult.ObservedAt(7),
+        };
+        var service = new NyxIdAuthorizationCatalogVersionRegressionRepairService(
+            store,
+            refresh,
+            new FakeVisibilityPort());
+
+        var act = () => service.RepairPersonalAsync(
+            Request(),
+            requestCancellation.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        refresh.Calls.Should().ContainSingle().Which.Should().Be(
+            (VerifiedOwnerSubject, BearerToken, 1, "repair-alpha", CancellationToken.None));
     }
 
     [Fact]
@@ -551,6 +578,8 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
 
         public List<NyxIdAuthorizationCatalogVersionRegressionRepairRequest> DeleteRequests { get; } = [];
 
+        public Action? OnDelete { get; init; }
+
         public Task<NyxIdAuthorizationCatalogVersionRegressionInspection> InspectPersonalAsync(
             string verifiedOwnerSubject,
             CancellationToken ct = default)
@@ -566,30 +595,37 @@ public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairServiceTests
         {
             ct.ThrowIfCancellationRequested();
             DeleteRequests.Add(request);
+            OnDelete?.Invoke();
             return Task.FromResult(DeleteDisposition);
         }
     }
 
-    private sealed class FakeRefreshPort : INyxIdAuthorizationCatalogRefreshPort
+    private sealed class FakeRefreshPort : INyxIdAuthorizationCatalogRepairRefreshPort
     {
         public NyxIdAuthorizationCatalogRefreshResult Result { get; set; } =
             new(NyxIdAuthorizationCatalogRefreshStatus.Failed, "not-configured");
 
-        public List<(string VerifiedOwnerSubject, string BearerToken)> Calls { get; } = [];
-
-        public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
-            AuthorizationOwnerIdentity owner,
-            string bearerToken,
-            CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public List<(
+            string VerifiedOwnerSubject,
+            string BearerToken,
+            long MinimumSourceStateVersion,
+            string RepairRequestId,
+            CancellationToken CancellationToken)> Calls { get; } = [];
 
         public Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
             string verifiedOwnerSubject,
             string bearerToken,
+            long minimumSourceStateVersion,
+            string repairRequestId,
             CancellationToken ct = default)
         {
+            Calls.Add((
+                verifiedOwnerSubject,
+                bearerToken,
+                minimumSourceStateVersion,
+                repairRequestId,
+                ct));
             ct.ThrowIfCancellationRequested();
-            Calls.Add((verifiedOwnerSubject, bearerToken));
             return Task.FromResult(Result);
         }
     }

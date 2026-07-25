@@ -5,7 +5,9 @@ using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 
-public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCatalogCommandPort
+public sealed class NyxIdAuthorizationCatalogCommandPort
+    : INyxIdAuthorizationCatalogCommandPort,
+      INyxIdAuthorizationCatalogRepairCommandPort
 {
     private const string PublisherId = "gagent-service.nyxid-authorization-catalog";
     private readonly IActorRuntime _runtime;
@@ -29,6 +31,22 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             RefreshId = refreshId ?? string.Empty,
             StartedAt = Timestamp.FromDateTimeOffset(startedAtUtc),
             ExpectedLifecycleFence = expectedLifecycleFence,
+        }, ct);
+
+    public Task BeginRepairRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset startedAtUtc,
+        long minimumSourceStateVersion,
+        string repairRequestId,
+        CancellationToken ct = default) =>
+        DispatchAsync(owner, new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
+        {
+            Owner = owner.Clone(),
+            RefreshId = refreshId ?? string.Empty,
+            StartedAt = Timestamp.FromDateTimeOffset(startedAtUtc),
+            MinimumSourceStateVersion = minimumSourceStateVersion,
+            RepairRequestId = repairRequestId ?? string.Empty,
         }, ct);
 
     public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default)

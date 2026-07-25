@@ -139,6 +139,33 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             .Which.ExpectedLifecycleFence.Should().Be(7);
     }
 
+    [Fact]
+    public async Task RepairRefreshPersonalAsync_ShouldSkipCatalogQueryAndDispatchRepairBegin()
+    {
+        var commands = new RecordingCommandPort();
+        var catalog = new RecordingCatalogQueryPort(lifecycleFence: 7);
+        var repairRefresh = (INyxIdAuthorizationCatalogRepairRefreshPort)Create(
+            commands,
+            new RoutingJsonHandler(Ok(UserServicesJson()), Ok(ScopePlanJson())),
+            catalogQuery: catalog);
+
+        var result = await repairRefresh.RefreshPersonalAsync(
+            " owner-alpha ",
+            "bearer-secret",
+            minimumSourceStateVersion: 3,
+            repairRequestId: " repair-alpha ");
+
+        result.Success.Should().BeTrue();
+        catalog.Owners.Should().BeEmpty();
+        commands.Beginnings.Should().BeEmpty();
+        var beginning = commands.RepairBeginnings.Should().ContainSingle().Subject;
+        beginning.Owner.Should().BeEquivalentTo(Owner());
+        beginning.MinimumSourceStateVersion.Should().Be(3);
+        beginning.RepairRequestId.Should().Be("repair-alpha");
+        beginning.RefreshId.Should().NotBeNullOrWhiteSpace();
+        beginning.At.Should().Be(Now);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -925,6 +952,7 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             httpClient);
         return new NyxIdAuthorizationCatalogRefreshPort(
             commands,
+            commands,
             catalogQuery ?? new RecordingCatalogQueryPort(),
             new TestNyxIdApiClientFactory(client),
             observation,
@@ -1333,13 +1361,21 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             throw new InvalidOperationException("logger-failure");
     }
 
-    private sealed class RecordingCommandPort : INyxIdAuthorizationCatalogCommandPort
+    private sealed class RecordingCommandPort
+        : INyxIdAuthorizationCatalogCommandPort,
+          INyxIdAuthorizationCatalogRepairCommandPort
     {
         public List<(
             AuthorizationOwnerIdentity Owner,
             string RefreshId,
             DateTimeOffset At,
             long ExpectedLifecycleFence)> Beginnings { get; } = [];
+        public List<(
+            AuthorizationOwnerIdentity Owner,
+            string RefreshId,
+            DateTimeOffset At,
+            long MinimumSourceStateVersion,
+            string RepairRequestId)> RepairBeginnings { get; } = [];
         public List<NyxIdAuthorizationCatalogObservation> Observations { get; } = [];
         public List<(AuthorizationOwnerIdentity Owner, string RefreshId, DateTimeOffset At, string Code)> Failures { get; } = [];
         public List<(
@@ -1361,7 +1397,8 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
         public NyxIdAuthorizationCatalogRefreshOutcomeStatus BeginOutcomeStatus { get; init; } =
             NyxIdAuthorizationCatalogRefreshOutcomeStatus.Started;
 
-        public int AllCalls => Beginnings.Count + Observations.Count + Failures.Count +
+        public int AllCalls => Beginnings.Count + RepairBeginnings.Count +
+                               Observations.Count + Failures.Count +
                                Invalidations.Count + Cleanups.Count;
 
         public Task BeginRefreshAsync(
@@ -1372,6 +1409,30 @@ public sealed class NyxIdAuthorizationCatalogRefreshPortTests
             CancellationToken ct = default)
         {
             Beginnings.Add((owner.Clone(), refreshId, startedAtUtc, expectedLifecycleFence));
+            Observation?.Publish(
+                refreshId,
+                BeginOutcomeStatus,
+                BeginOutcomeStatus == NyxIdAuthorizationCatalogRefreshOutcomeStatus.Superseded
+                    ? "nyxid_catalog_refresh_superseded"
+                    : string.Empty,
+                startedAtUtc: startedAtUtc);
+            return Task.CompletedTask;
+        }
+
+        public Task BeginRepairRefreshAsync(
+            AuthorizationOwnerIdentity owner,
+            string refreshId,
+            DateTimeOffset startedAtUtc,
+            long minimumSourceStateVersion,
+            string repairRequestId,
+            CancellationToken ct = default)
+        {
+            RepairBeginnings.Add((
+                owner.Clone(),
+                refreshId,
+                startedAtUtc,
+                minimumSourceStateVersion,
+                repairRequestId));
             Observation?.Publish(
                 refreshId,
                 BeginOutcomeStatus,
