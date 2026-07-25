@@ -74,8 +74,11 @@ public sealed class StudioWorkspaceGAgent : GAgentBase<StudioWorkspaceState>, IP
         ValidateWorkspace(command.WorkspaceId, command.ScopeId);
         var currentVersion = EventSourcing?.CurrentVersion
             ?? throw new InvalidOperationException("Workspace event sourcing is unavailable.");
-        if (currentVersion <= 0 || currentVersion != command.ExpectedStateVersion)
+        if (command.MinimumStateVersion <= 0 ||
+            currentVersion < command.MinimumStateVersion)
+        {
             throw new InvalidOperationException("Workspace projection repair source version changed.");
+        }
         if (string.IsNullOrWhiteSpace(State.WorkspaceId) ||
             !string.Equals(State.WorkspaceId, command.WorkspaceId, StringComparison.Ordinal) ||
             !string.Equals(State.ScopeId, command.ScopeId, StringComparison.Ordinal))

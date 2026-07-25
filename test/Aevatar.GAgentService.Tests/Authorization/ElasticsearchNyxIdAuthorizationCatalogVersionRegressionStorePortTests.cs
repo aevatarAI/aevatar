@@ -198,6 +198,28 @@ public sealed class ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStore
         repairStore.DeleteLeases.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task DeleteIfMatchesAsync_WhenAuthorityChangesAfterLeaseValidation_ShouldNotDelete()
+    {
+        var eventStore = new RecordingEventStore
+        {
+            Versions = new Queue<long>([1, 2]),
+        };
+        var repairStore = new RecordingRepairStore
+        {
+            Lease = Lease(Document()),
+        };
+        var port = new ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStorePort(
+            eventStore,
+            repairStore);
+
+        var result = await port.DeleteIfMatchesAsync(Request());
+
+        result.Should().Be(NyxIdAuthorizationCatalogReplicaDeleteDisposition.SourceChanged);
+        eventStore.VersionRequests.Should().Equal(ActorId, ActorId);
+        repairStore.DeleteLeases.Should().BeEmpty();
+    }
+
     private static NyxIdAuthorizationCatalogVersionRegressionRepairRequest Request() =>
         new(
             VerifiedOwnerSubject,
@@ -253,13 +275,15 @@ public sealed class ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStore
     {
         public long Version { get; init; }
 
+        public Queue<long> Versions { get; init; } = [];
+
         public List<string> VersionRequests { get; } = [];
 
         public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             VersionRequests.Add(agentId);
-            return Task.FromResult(Version);
+            return Task.FromResult(Versions.Count == 0 ? Version : Versions.Dequeue());
         }
 
         public Task<EventStoreCommitResult> AppendAsync(

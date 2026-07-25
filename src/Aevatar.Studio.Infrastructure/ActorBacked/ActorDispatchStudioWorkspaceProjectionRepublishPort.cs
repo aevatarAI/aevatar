@@ -23,16 +23,16 @@ internal sealed class ActorDispatchStudioWorkspaceProjectionRepublishPort
 
     public async Task<StudioWorkspaceProjectionRepublishReceipt> DispatchAsync(
         string scopeId,
-        long expectedStateVersion,
+        long minimumStateVersion,
         string repairRequestId,
         CancellationToken ct = default)
     {
         var normalizedScopeId = StudioWorkspaceConventions.NormalizeScopeId(scopeId);
-        if (expectedStateVersion <= 0)
+        if (minimumStateVersion <= 0)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(expectedStateVersion),
-                "Expected state version must be positive.");
+                nameof(minimumStateVersion),
+                "Minimum state version must be positive.");
         }
 
         var normalizedRepairRequestId = repairRequestId?.Trim() ?? string.Empty;
@@ -47,7 +47,7 @@ internal sealed class ActorDispatchStudioWorkspaceProjectionRepublishPort
             {
                 WorkspaceId = actorId,
                 ScopeId = normalizedScopeId,
-                ExpectedStateVersion = expectedStateVersion,
+                MinimumStateVersion = minimumStateVersion,
                 RepairRequestId = normalizedRepairRequestId,
             },
             PublisherId,

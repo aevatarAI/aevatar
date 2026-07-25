@@ -26,7 +26,7 @@ public interface IStudioWorkspaceProjectionRepublishPort
 {
     Task<StudioWorkspaceProjectionRepublishReceipt> DispatchAsync(
         string scopeId,
-        long expectedStateVersion,
+        long minimumStateVersion,
         string repairRequestId,
         CancellationToken ct = default);
 }

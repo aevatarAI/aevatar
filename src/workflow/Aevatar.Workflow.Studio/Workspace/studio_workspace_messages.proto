@@ -49,7 +49,7 @@ message StudioWorkflowDraft {
 message RepairStudioWorkspaceProjectionCommand {
   string workspace_id = 1;
   string scope_id = 2;
-  int64 expected_state_version = 3;
+  int64 minimum_state_version = 3;
   string repair_request_id = 4;
 }
 

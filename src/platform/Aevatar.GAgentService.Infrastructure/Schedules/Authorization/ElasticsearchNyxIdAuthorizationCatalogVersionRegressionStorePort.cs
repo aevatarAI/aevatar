@@ -77,6 +77,10 @@ public sealed class ElasticsearchNyxIdAuthorizationCatalogVersionRegressionStore
         if (!FingerprintMatches(lease.Document, actorId, request))
             return NyxIdAuthorizationCatalogReplicaDeleteDisposition.DocumentChanged;
 
+        sourceVersion = await _eventStore.GetVersionAsync(actorId, ct).ConfigureAwait(false);
+        if (sourceVersion != request.ExpectedSourceStateVersion)
+            return NyxIdAuthorizationCatalogReplicaDeleteDisposition.SourceChanged;
+
         var deleteDisposition = await _repairStore
             .DeleteIfUnchangedAsync(lease, ct)
             .ConfigureAwait(false);

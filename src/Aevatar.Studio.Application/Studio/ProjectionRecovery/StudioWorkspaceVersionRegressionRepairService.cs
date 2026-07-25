@@ -86,7 +86,7 @@ public sealed class StudioWorkspaceVersionRegressionRepairService
             normalized.ScopeId,
             normalized.ExpectedSourceStateVersion,
             normalized.RepairRequestId,
-            ct);
+            CancellationToken.None);
         return StudioWorkspaceVersionRegressionRepairResult.Accepted(
             inspection,
             normalized.RepairRequestId,
@@ -161,6 +161,13 @@ public sealed class StudioWorkspaceVersionRegressionRepairService
             throw new ArgumentOutOfRangeException(
                 nameof(request),
                 "Expected document state version must be positive.");
+        }
+
+        if (request.ExpectedDocumentStateVersion <= request.ExpectedSourceStateVersion)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "Expected document state version must exceed the expected source state version.");
         }
 
         return request with

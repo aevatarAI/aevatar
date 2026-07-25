@@ -31,12 +31,14 @@ public sealed class StudioWorkspaceProjectionRebuildTests
             "GAgentBase.CommittedStateEventPublisher was not found.");
 
     [Fact]
-    public async Task RepairProjection_ShouldRepublishCurrentCommittedStateWithoutAppendingEvent()
+    public async Task RepairProjection_WhenCurrentVersionExceedsMinimum_ShouldRepublishLatestCommittedState()
     {
         var eventStore = new InMemoryEventStore();
         var fixture = await CreateActorAsync(eventStore);
         await using var subscription = fixture.Subscription;
         var actor = fixture.Actor;
+        await SaveDraftAsync(actor);
+        _ = await fixture.Publications.Reader.ReadAsync();
         await SaveDraftAsync(actor);
         _ = await fixture.Publications.Reader.ReadAsync();
         var eventsBefore = await eventStore.GetEventsAsync(actor.Id);
@@ -45,21 +47,21 @@ public sealed class StudioWorkspaceProjectionRebuildTests
         {
             WorkspaceId = actor.Id,
             ScopeId = ScopeId,
-            ExpectedStateVersion = 1,
+            MinimumStateVersion = 1,
             RepairRequestId = "repair-alpha",
         }));
 
         var eventsAfter = await eventStore.GetEventsAsync(actor.Id);
         eventsAfter.Should().HaveCount(eventsBefore.Count);
         var publication = await fixture.Publications.Reader.ReadAsync();
-        publication.StateEvent.Version.Should().Be(1);
-        publication.StateEvent.EventId.Should().Be($"rebuild:{actor.Id}:1");
+        publication.StateEvent.Version.Should().Be(2);
+        publication.StateEvent.EventId.Should().Be($"rebuild:{actor.Id}:2");
         publication.StateRoot.Unpack<StudioWorkspaceState>()
             .Drafts.Should().ContainKey(WorkflowId);
     }
 
     [Fact]
-    public async Task RepairProjection_WhenExpectedVersionChanged_ShouldRejectWithoutPublishingOrAppending()
+    public async Task RepairProjection_WhenMinimumExceedsCurrentVersion_ShouldRejectWithoutPublishingOrAppending()
     {
         var eventStore = new InMemoryEventStore();
         var fixture = await CreateActorAsync(eventStore);
@@ -75,7 +77,7 @@ public sealed class StudioWorkspaceProjectionRebuildTests
             {
                 WorkspaceId = actor.Id,
                 ScopeId = ScopeId,
-                ExpectedStateVersion = 2,
+                MinimumStateVersion = 2,
                 RepairRequestId = "repair-stale",
             }));
 

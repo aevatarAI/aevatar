@@ -213,6 +213,51 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
         republish.Dispatches.Should().ContainSingle();
     }
 
+    [Theory]
+    [InlineData(4)]
+    [InlineData(3)]
+    public async Task RepairAsync_WhenMissingDocumentContinuationIsNotARegression_ShouldRejectBeforeDeleteOrDispatch(
+        long expectedDocumentStateVersion)
+    {
+        var store = new FakeStorePort
+        {
+            Inspection = Inspection(sourceVersion: 4, documentVersion: null),
+        };
+        var republish = new FakeRepublishPort();
+        var service = new StudioWorkspaceVersionRegressionRepairService(store, republish);
+        var request = Request() with
+        {
+            ExpectedSourceStateVersion = 4,
+            ExpectedDocumentStateVersion = expectedDocumentStateVersion,
+        };
+
+        var act = () => service.RepairAsync(request);
+
+        await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        store.DeleteRequests.Should().BeEmpty();
+        republish.Dispatches.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RepairAsync_AfterDelete_ShouldDispatchWithNonRequestCancellation()
+    {
+        using var requestCancellation = new CancellationTokenSource();
+        var store = new FakeStorePort
+        {
+            Inspection = Inspection(sourceVersion: 1, documentVersion: 4),
+            DeleteDisposition = StudioWorkspaceReplicaDeleteDisposition.Deleted,
+            OnDelete = requestCancellation.Cancel,
+        };
+        var republish = new FakeRepublishPort();
+        var service = new StudioWorkspaceVersionRegressionRepairService(store, republish);
+
+        var result = await service.RepairAsync(Request(), requestCancellation.Token);
+
+        result.Status.Should().Be(StudioWorkspaceVersionRegressionRepairStatus.Accepted);
+        republish.DispatchCancellationTokens.Should().ContainSingle()
+            .Which.CanBeCanceled.Should().BeFalse();
+    }
+
     [Fact]
     public async Task RepairAsync_WhenDeleteRevisionConflicts_ShouldNotDispatch()
     {
@@ -302,6 +347,8 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
 
         public List<StudioWorkspaceVersionRegressionRepairRequest> DeleteRequests { get; } = [];
 
+        public Action? OnDelete { get; init; }
+
         public Task<StudioWorkspaceVersionRegressionInspection> InspectAsync(
             string scopeId,
             CancellationToken ct = default)
@@ -317,6 +364,7 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
         {
             ct.ThrowIfCancellationRequested();
             DeleteRequests.Add(request);
+            OnDelete?.Invoke();
             return Task.FromResult(DeleteDisposition);
         }
     }
@@ -326,16 +374,19 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
         public StudioWorkspaceProjectionRepublishReceipt Receipt { get; set; } =
             new(ActorId, "command-alpha", "correlation-alpha");
 
-        public List<(string ScopeId, long ExpectedVersion, string RepairRequestId)> Dispatches { get; } = [];
+        public List<(string ScopeId, long MinimumVersion, string RepairRequestId)> Dispatches { get; } = [];
+
+        public List<CancellationToken> DispatchCancellationTokens { get; } = [];
 
         public Task<StudioWorkspaceProjectionRepublishReceipt> DispatchAsync(
             string scopeId,
-            long expectedStateVersion,
+            long minimumStateVersion,
             string repairRequestId,
             CancellationToken ct = default)
         {
+            DispatchCancellationTokens.Add(ct);
             ct.ThrowIfCancellationRequested();
-            Dispatches.Add((scopeId, expectedStateVersion, repairRequestId));
+            Dispatches.Add((scopeId, minimumStateVersion, repairRequestId));
             return Task.FromResult(Receipt);
         }
     }

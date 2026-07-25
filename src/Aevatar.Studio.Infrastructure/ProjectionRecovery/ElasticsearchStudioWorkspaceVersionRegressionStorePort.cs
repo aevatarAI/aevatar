@@ -64,6 +64,10 @@ public sealed class ElasticsearchStudioWorkspaceVersionRegressionStorePort
         if (!FingerprintMatches(lease.Document, actorId, request))
             return StudioWorkspaceReplicaDeleteDisposition.DocumentChanged;
 
+        sourceVersion = await _eventStore.GetVersionAsync(actorId, ct);
+        if (sourceVersion != request.ExpectedSourceStateVersion)
+            return StudioWorkspaceReplicaDeleteDisposition.SourceChanged;
+
         var deleteDisposition = await _repairStore.DeleteIfUnchangedAsync(lease, ct);
         return deleteDisposition switch
         {
