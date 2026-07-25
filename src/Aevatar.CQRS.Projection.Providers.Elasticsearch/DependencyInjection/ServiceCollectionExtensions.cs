@@ -9,6 +9,15 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 
 public static class ElasticsearchProjectionServiceCollectionExtensions
 {
+    public static IServiceCollection AddElasticsearchDocumentProjectionRepairStore<TReadModel, TKey>(
+        this IServiceCollection services)
+        where TReadModel : class, IProjectionReadModel<TReadModel>, new()
+    {
+        services.AddSingleton<IElasticsearchProjectionDocumentRepairStore<TReadModel, TKey>>(provider =>
+            provider.GetRequiredService<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>());
+        return services;
+    }
+
     public static IServiceCollection AddElasticsearchDocumentProjectionStore<TReadModel, TKey>(
         this IServiceCollection services,
         Func<IServiceProvider, ElasticsearchProjectionDocumentStoreOptions> optionsFactory,
