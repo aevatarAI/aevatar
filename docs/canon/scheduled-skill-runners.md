@@ -202,8 +202,13 @@ personal owner subject. The repair must not republish empty actor state, copy
 catalog contents out of Elasticsearch, or hydrate the actor from the read
 model. A refresh result of `observed` proves the actor committed a terminal
 refresh outcome; it is distinct from read-model `ready`. Until visibility
-reports `ready` at the required authoritative version, scheduled Agent Key
-preflight and canary execution must remain stopped.
+reports `ready` at the required authoritative version, automation mutation,
+Agent Key creation, and canary execution must remain stopped. After the
+non-credential workflow/Team/member/published-service scaffold exists, the
+canonical Team automation preflight may be used as a bounded, pure read-only
+readiness probe: it must observe the required catalog actor state version and
+the exact expected non-wildcard service grant. It must not refresh, apply
+repair again, create a schedule, or provision a credential.
 
 The full-catalog scope plan is durable planning evidence, not a reusable key-creation precondition. Its opaque `normalized_grant_digest` is selection-scoped and is deliberately not persisted in the catalog. It is distinct from both the catalog `ContentDigest` and the authorization plan `PermissionDigest`; a digest produced for all eligible services cannot authorize a workflow that selected only a subset.
 

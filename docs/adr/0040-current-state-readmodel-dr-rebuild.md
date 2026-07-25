@@ -67,10 +67,13 @@ classes. Neither case makes the read model authoritative:
 4. Projection version-regression repair is opt-in for a named read-model type,
    outside normal query/readiness paths, and fences the exact actor ID,
    authoritative version, document version, document last event ID, repair
-   request ID, operator identity, and reason. A missing document may be treated
-   as an idempotent continuation only by reusing a previously inspected strict
-   manifest whose expected document version is greater than its positive
-   expected source version.
+   request ID, operator identity, and reason. Once a document is absent, the
+   service cannot reconstruct or cryptographically verify its prior
+   actor/version/event fingerprint. A missing-document continuation therefore
+   requires the operator to reuse the exact protected incident manifest,
+   request ID, and reason as an audit control; code still enforces the current
+   canonical actor, a positive unchanged source version, and strict expected
+   document version greater than expected source version.
 
 ## Consequences
 
@@ -93,6 +96,9 @@ classes. Neither case makes the read model authoritative:
 - Elasticsearch contents never hydrate or redefine actor state. The guarded
   delete only removes an exact, unchanged query replica so an authoritative
   source can materialize a replacement.
+- Reusing a prior manifest after deletion does not prove prior-document
+  provenance. Enforceable provenance would require a future signed or leased
+  inspection token that the service can validate during apply and retry.
 
 ## Alternatives rejected
 
