@@ -285,11 +285,12 @@ The lifecycle automatically handles these states:
 - **Legacy single-service key:** update the existing NyxID key to the exact
   sandbox-plus-LLM grant, verify the persisted policy, commit a policy
   reconciliation event, observe it, and continue.
-- **Expired or revoked key:** revoke remaining Aevatar-managed artifacts when
-  possible, create a fresh finite key, commit it, and continue.
+- **Expired or revoked key:** create a fresh finite key, atomically commit it
+  with cleanup intents for the observed obsolete artifacts, then retry only the
+  Actor-owned tracks and continue.
 - **Missing Vault secret:** when a current user bearer is available, rotate or
-  replace the remote key, store the new one-time secret, commit it, and
-  continue.
+  replace the remote key, store the new one-time secret, atomically commit the
+  replacement plus cleanup for the observed key/reference, and continue.
 - **Same-locator reference drift:** if the same API key and deterministic Vault
   locator resolve to newer reference metadata than the committed descriptor,
   replace the credential and become ready in the same call. The stale
@@ -301,6 +302,10 @@ The lifecycle automatically handles these states:
   never authorize revoking or replacing the recoverable NyxID key.
 - **Ambiguous prior dispatch:** reconcile the exact remote key and deterministic
   Vault reference before issuing another key.
+- **Manual reconciliation replacement:** manual provision/rotation never routes
+  a remotely listed validation-failed or deterministic-Vault-missing key through
+  issuance compensation. It carries that observed key as typed cleanup on the
+  subsequent credential command, and a rejected command deletes nothing.
 - **Duplicate or orphaned Aevatar-managed keys:** keep an unambiguous committed
   valid key when possible; otherwise derive each orphan key's deterministic
   Vault reference, create one fresh credential, and atomically commit the new
@@ -327,7 +332,9 @@ The lifecycle automatically handles these states:
   its phase boundary, unknown and unattempted tracks are classified as pending
   and dispatched with the independent durable-recording reserve. Rejected or
   expired cleanup recording returns the stable persistence-pending failure
-  instead of discarding the external outcome.
+  instead of discarding the external outcome. Manual revoke also maps a thrown
+  recording port, recording-token cancellation, or rejected admission to that
+  same failure after destructive work.
 
 NyxID mutations are re-read and validated before Actor dispatch. Policy
 comparison is order-independent and requires exactly the two expected IDs.

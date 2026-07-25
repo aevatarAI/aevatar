@@ -124,6 +124,11 @@ Vault locator before that atomic credential commit is observed. After commit,
 it retries only the Actor-owned pending tracks and completes each track by the
 exact `(ApiKeyId, SecretRef)` identity.
 
+Manual provision/rotation reconciliation follows the same rule. A remotely
+listed key that fails validation or lacks its deterministic Vault reference is
+carried as obsolete cleanup on the subsequent credential command; a rejected
+command deletes nothing.
+
 For one API key with multiple historical Vault locators, exactly one cleanup
 fact owns `NyxIdPending`, while every distinct locator may independently own
 `VaultPending`. Rotation gives NyxID ownership to the exact previous Actor
@@ -148,7 +153,9 @@ never ignored: if an uncommitted compensation outcome cannot be durably
 recorded, the lifecycle returns
 `managed_credential_persistence_pending`. Manual revoke likewise catches
 compensation-boundary expiry, marks unknown or unattempted tracks pending, and
-uses the still-live recording reserve to commit the revoked state. Once a ready
+uses the still-live recording reserve to commit the revoked state. Cancellation,
+exception, or rejected admission while recording that post-destruction revoked
+state also returns `managed_credential_persistence_pending`. Once a ready
 credential is committed, cleanup timeout or rejected track-completion admission
 is best effort in both Normal and Force validation modes and does not suppress
 readiness. Status derives `expired` from an active descriptor whose committed

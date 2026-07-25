@@ -1558,7 +1558,9 @@ Under the lease:
 7. for every remotely observed obsolete reserved key, derive its deterministic
    Vault reference and carry a typed cleanup intent in the provision, rotation,
    or policy-reconciliation command; do not delete any observed key or locator
-   before the exact incoming credential is committed;
+   before the exact incoming credential is committed; manual provision/rotation
+   reconciliation candidates that fail validation or deterministic Vault
+   resolution follow this same atomic path rather than issuance compensation;
 8. dispatch provision or policy reconciliation directly; when rotating,
    include the exact previous API-key ID, previous Vault locator, and
    independent pending-track flags as typed `previous_credential_cleanup`; the
@@ -1591,7 +1593,9 @@ recording reserve, return `managed_credential_persistence_pending`. Manual
 pending-cleanup calls use the caller-linked pre-mutation token at the actual
 external boundary. Manual revoke catches compensation expiry, leaves unknown
 or unattempted tracks pending, and commits them with the independent recording
-reserve.
+reserve. Cancellation, exception, or rejected admission from that
+post-destruction revoked-state recording also returns
+`managed_credential_persistence_pending`.
 
 Change pending cleanup handling to return a result instead of always throwing:
 

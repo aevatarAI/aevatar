@@ -172,6 +172,49 @@ public sealed class ManagedCodexCredentialGAgentTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HandleProvisioned_WithExistingAndIncomingSameKeyLocators_AssignsNyxIdToSortedLocator()
+    {
+        var owner = Subject("tenant-a", "user-a");
+        await _agent.HandleCleanupQueued(new QueueManagedCodexCredentialCleanupCommand
+        {
+            Owner = owner.Clone(),
+            Cleanup = new ManagedCodexCredentialCleanup
+            {
+                ApiKeyId = "key-obsolete",
+                SecretRef = "sec-obsolete-z",
+                NyxIdPending = true,
+                VaultPending = true,
+            },
+        });
+        var descriptor = Descriptor("key-current", "sec-current", version: 1);
+        var command = new CommitManagedCodexCredentialProvisionedCommand
+        {
+            Credential = descriptor,
+        };
+        command.ObsoleteCredentialCleanups.Add(new ManagedCodexCredentialCleanup
+        {
+            ApiKeyId = "key-obsolete",
+            SecretRef = "sec-obsolete-a",
+            NyxIdPending = true,
+            VaultPending = true,
+        });
+
+        await _agent.HandleProvisioned(command);
+
+        _agent.State.PendingRevocations.Should().HaveCount(2);
+        var sortedOwner = _agent.State.PendingRevocations.Should()
+            .ContainSingle(cleanup => cleanup.SecretRef == "sec-obsolete-a")
+            .Which;
+        sortedOwner.NyxIdPending.Should().BeTrue();
+        sortedOwner.VaultPending.Should().BeTrue();
+        var otherLocator = _agent.State.PendingRevocations.Should()
+            .ContainSingle(cleanup => cleanup.SecretRef == "sec-obsolete-z")
+            .Which;
+        otherLocator.NyxIdPending.Should().BeFalse();
+        otherLocator.VaultPending.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleProvisioned_WhenObsoleteCleanupTargetsIncomingCredential_RejectsActivation()
     {
         var descriptor = Descriptor("key-current", "sec-current", version: 1);

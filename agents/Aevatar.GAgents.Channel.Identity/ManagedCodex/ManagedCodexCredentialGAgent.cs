@@ -504,7 +504,7 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
                 cleanup.NyxIdPending = false;
             }
 
-            AddOrMergeCleanup(result, cleanup);
+            MergeCleanupFact(result, cleanup);
         }
 
         normalized = result;
@@ -581,11 +581,10 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
         var next = current.Clone();
         next.Credential = evt.Credential?.Clone();
         next.RevokedAt = null;
-        AddOrMergeCleanup(
+        AddOrMergeCleanups(
             next,
-            evt.PreviousCredentialCleanup,
-            preferNyxIdTrack: true);
-        AddOrMergeCleanups(next, evt.ObsoleteCredentialCleanups);
+            evt.ObsoleteCredentialCleanups,
+            evt.PreviousCredentialCleanup);
         return next;
     }
 
@@ -643,30 +642,30 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
 
     private static void AddOrMergeCleanup(
         ManagedCodexCredentialState state,
-        ManagedCodexCredentialCleanup? cleanup,
-        bool preferNyxIdTrack = false)
+        ManagedCodexCredentialCleanup? cleanup)
     {
         if (cleanup is null)
             return;
 
-        AddOrMergeCleanup(
-            state.PendingRevocations,
-            cleanup,
-            preferNyxIdTrack);
+        MergeCleanupFact(state.PendingRevocations, cleanup);
+        NormalizeNyxIdOwnership(state.PendingRevocations, preferred: null);
     }
 
     private static void AddOrMergeCleanups(
         ManagedCodexCredentialState state,
-        IEnumerable<ManagedCodexCredentialCleanup> cleanups)
+        IEnumerable<ManagedCodexCredentialCleanup> cleanups,
+        ManagedCodexCredentialCleanup? preferred = null)
     {
+        if (preferred is not null)
+            MergeCleanupFact(state.PendingRevocations, preferred);
         foreach (var cleanup in cleanups)
-            AddOrMergeCleanup(state, cleanup);
+            MergeCleanupFact(state.PendingRevocations, cleanup);
+        NormalizeNyxIdOwnership(state.PendingRevocations, preferred);
     }
 
-    private static void AddOrMergeCleanup(
+    private static void MergeCleanupFact(
         IList<ManagedCodexCredentialCleanup> cleanups,
-        ManagedCodexCredentialCleanup cleanup,
-        bool preferNyxIdTrack = false)
+        ManagedCodexCredentialCleanup cleanup)
     {
         if (cleanup is null || string.IsNullOrWhiteSpace(cleanup.ApiKeyId) ||
             (!cleanup.NyxIdPending && !cleanup.VaultPending))
@@ -674,14 +673,6 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
             return;
         }
 
-        var nyxIdOwner = cleanup.NyxIdPending
-            ? cleanups.FirstOrDefault(item =>
-                item.NyxIdPending &&
-                string.Equals(
-                    item.ApiKeyId,
-                    cleanup.ApiKeyId,
-                    StringComparison.Ordinal))
-            : null;
         var existing = cleanups.FirstOrDefault(item =>
             MatchesCleanupIdentity(
                 item,
@@ -689,35 +680,55 @@ public sealed class ManagedCodexCredentialGAgent : GAgentBase<ManagedCodexCreden
                 cleanup.SecretRef));
         if (existing is null)
         {
-            var added = cleanup.Clone();
-            if (nyxIdOwner is not null)
-            {
-                if (preferNyxIdTrack)
-                    nyxIdOwner.NyxIdPending = false;
-                else
-                    added.NyxIdPending = false;
-            }
-            if (added.NyxIdPending || added.VaultPending)
-                cleanups.Add(added);
+            cleanups.Add(cleanup.Clone());
             return;
         }
 
-        if (cleanup.NyxIdPending)
-        {
-            if (preferNyxIdTrack && nyxIdOwner is not null &&
-                !ReferenceEquals(nyxIdOwner, existing))
-            {
-                nyxIdOwner.NyxIdPending = false;
-            }
-            existing.NyxIdPending |=
-                nyxIdOwner is null ||
-                ReferenceEquals(nyxIdOwner, existing) ||
-                preferNyxIdTrack;
-        }
+        existing.NyxIdPending |= cleanup.NyxIdPending;
         existing.VaultPending |= cleanup.VaultPending;
         if (string.IsNullOrWhiteSpace(existing.SecretRef))
             existing.SecretRef = cleanup.SecretRef;
         existing.RequestedAt ??= cleanup.RequestedAt?.Clone();
+    }
+
+    private static void NormalizeNyxIdOwnership(
+        IList<ManagedCodexCredentialCleanup> cleanups,
+        ManagedCodexCredentialCleanup? preferred)
+    {
+        var groups = cleanups
+            .GroupBy(static cleanup => cleanup.ApiKeyId, StringComparer.Ordinal)
+            .Where(static group => group.Any(static cleanup => cleanup.NyxIdPending))
+            .ToArray();
+        foreach (var group in groups)
+        {
+            var owner = preferred is { NyxIdPending: true } &&
+                        string.Equals(
+                            preferred.ApiKeyId,
+                            group.Key,
+                            StringComparison.Ordinal)
+                ? group.FirstOrDefault(cleanup =>
+                    MatchesCleanupIdentity(
+                        cleanup,
+                        preferred.ApiKeyId,
+                        preferred.SecretRef))
+                : null;
+            owner ??= group
+                .OrderBy(
+                    static cleanup => cleanup.SecretRef ?? string.Empty,
+                    StringComparer.Ordinal)
+                .First();
+            foreach (var cleanup in group)
+                cleanup.NyxIdPending = ReferenceEquals(cleanup, owner);
+        }
+
+        for (var index = cleanups.Count - 1; index >= 0; index--)
+        {
+            if (!cleanups[index].NyxIdPending &&
+                !cleanups[index].VaultPending)
+            {
+                cleanups.RemoveAt(index);
+            }
+        }
     }
 
     private static bool MatchesCleanupIdentity(

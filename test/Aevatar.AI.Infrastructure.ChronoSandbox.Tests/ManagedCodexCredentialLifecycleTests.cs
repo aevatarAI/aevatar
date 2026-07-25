@@ -594,6 +594,222 @@ public sealed class ManagedCodexCredentialLifecycleTests
     }
 
     [Fact]
+    public async Task RevokeAsync_WhenRecordingAdmissionIsRejected_ReturnsPersistencePending()
+    {
+        var current = Descriptor("key-current", "sec-current", version: 1);
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(
+                Arg.Any<RevokeSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new RevokeSecretResult(true));
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                current.ApiKeyId,
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        CancellationToken recordingToken = default;
+        commands.CommitRevokedAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                current.ApiKeyId,
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<DateTimeOffset>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                recordingToken = call.Arg<CancellationToken>();
+                recordingToken.ThrowIfCancellationRequested();
+                return new DispatchAdmission(
+                    false,
+                    "command-rejected",
+                    Now,
+                    "managed-codex-credential:nyxid::user-a",
+                    "command-rejected");
+            });
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            query,
+            nyxIdPort: nyxId);
+
+        var act = () => lifecycle.RevokeAsync("user-bearer", "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_credential_persistence_pending");
+        recordingToken.CanBeCanceled.Should().BeTrue();
+        recordingToken.IsCancellationRequested.Should().BeFalse();
+        await vault.Received(1).RevokeAsync(
+            Arg.Any<RevokeSecretRequest>(),
+            Arg.Any<CancellationToken>());
+        await nyxId.Received(1).RevokeApiKeyAsync(
+            "user-bearer",
+            current.ApiKeyId,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RevokeAsync_WhenRecordingPortThrows_ReturnsPersistencePending()
+    {
+        var current = Descriptor("key-current", "sec-current", version: 1);
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(
+                Arg.Any<RevokeSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new RevokeSecretResult(true));
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                current.ApiKeyId,
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        CancellationToken recordingToken = default;
+        commands.CommitRevokedAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                current.ApiKeyId,
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<DateTimeOffset>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<DispatchAdmission>>(call =>
+            {
+                recordingToken = call.Arg<CancellationToken>();
+                recordingToken.ThrowIfCancellationRequested();
+                throw new InvalidOperationException("recording unavailable");
+            });
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            query,
+            nyxIdPort: nyxId);
+
+        var act = () => lifecycle.RevokeAsync("user-bearer", "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_credential_persistence_pending");
+        recordingToken.CanBeCanceled.Should().BeTrue();
+        recordingToken.IsCancellationRequested.Should().BeFalse();
+        await vault.Received(1).RevokeAsync(
+            Arg.Any<RevokeSecretRequest>(),
+            Arg.Any<CancellationToken>());
+        await nyxId.Received(1).RevokeApiKeyAsync(
+            "user-bearer",
+            current.ApiKeyId,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RevokeAsync_WhenRecordingReserveExpires_ReturnsPersistencePending()
+    {
+        var time = new FakeTimeProvider(Now);
+        var options = ManagedCodexOptionsValidatorTests.ValidOptions();
+        options.MutationCompletionSeconds = 60;
+        options.MutationLeaseSeconds = 90;
+        var current = Descriptor("key-current", "sec-current", version: 1);
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
+        var vault = Substitute.For<ISecretVault>();
+        vault.RevokeAsync(
+                Arg.Any<RevokeSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                time.Advance(TimeSpan.FromSeconds(80));
+                return new RevokeSecretResult(true);
+            });
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                current.ApiKeyId,
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<CancellationToken>().ThrowIfCancellationRequested();
+                return true;
+            });
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        CancellationToken recordingToken = default;
+        commands.CommitRevokedAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                current.ApiKeyId,
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<DateTimeOffset>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                recordingToken = call.Arg<CancellationToken>();
+                recordingToken.ThrowIfCancellationRequested();
+                return Admission();
+            });
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            query,
+            options,
+            new InMemoryManagedCodexCredentialMutationLease(),
+            nyxId,
+            time);
+
+        var act = () => lifecycle.RevokeAsync("user-bearer", "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_credential_persistence_pending");
+        recordingToken.CanBeCanceled.Should().BeTrue();
+        recordingToken.IsCancellationRequested.Should().BeTrue();
+        await vault.Received(1).RevokeAsync(
+            Arg.Any<RevokeSecretRequest>(),
+            Arg.Any<CancellationToken>());
+        await commands.Received(1).CommitRevokedAsync(
+            Arg.Any<ExternalSubjectRef>(),
+            current.ApiKeyId,
+            Arg.Is<ManagedCodexCredentialCleanup>(cleanup =>
+                cleanup.NyxIdPending &&
+                !cleanup.VaultPending),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ProvisionAsync_WhenCancellationCleanupAdmissionIsRejected_ReturnsPersistencePending()
     {
         var time = new FakeTimeProvider(Now);
@@ -737,7 +953,7 @@ public sealed class ManagedCodexCredentialLifecycleTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_WhenReconciliationCleanupStartsAtPrimaryDeadline_UsesLiveReserves()
+    public async Task ProvisionAsync_WhenReconciliationReachesPrimaryDeadline_DoesNotDeleteObservedKey()
     {
         var time = new FakeTimeProvider(Now);
         var options = ManagedCodexOptionsValidatorTests.ValidOptions();
@@ -754,17 +970,11 @@ public sealed class ManagedCodexCredentialLifecycleTests
             .Returns(EligibleServices());
         nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
             .Returns(new[] { activeKey });
-        CancellationToken compensationToken = default;
         nyxId.RevokeApiKeyAsync(
                 "user-bearer",
                 activeKey.Id,
                 Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                compensationToken = call.Arg<CancellationToken>();
-                compensationToken.ThrowIfCancellationRequested();
-                return false;
-            });
+            .Returns(false);
         var vault = Substitute.For<ISecretVault>();
         vault.ResolveAsync(
                 Arg.Any<ResolveSecretRequest>(),
@@ -778,17 +988,6 @@ public sealed class ManagedCodexCredentialLifecycleTests
                     SecretResolutionFailureReason.NotFound);
             });
         var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
-        CancellationToken recordingToken = default;
-        commands.QueueCleanupAsync(
-                Arg.Any<ExternalSubjectRef>(),
-                Arg.Any<ManagedCodexCredentialCleanup>(),
-                Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                recordingToken = call.Arg<CancellationToken>();
-                recordingToken.ThrowIfCancellationRequested();
-                return Admission();
-            });
         var lifecycle = CreateLifecycle(
             new RoutingHandler(),
             vault,
@@ -800,19 +999,14 @@ public sealed class ManagedCodexCredentialLifecycleTests
 
         var act = () => lifecycle.ProvisionAsync("user-bearer", "user-a");
 
-        var exception = (await act.Should()
-            .ThrowAsync<ManagedCodexCredentialLifecycleException>()).Which;
-        exception.Code.Should().Be("managed_credential_cleanup_pending");
-        compensationToken.CanBeCanceled.Should().BeTrue();
-        compensationToken.IsCancellationRequested.Should().BeFalse();
-        recordingToken.CanBeCanceled.Should().BeTrue();
-        recordingToken.IsCancellationRequested.Should().BeFalse();
-        await commands.Received(1).QueueCleanupAsync(
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        await nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            activeKey.Id,
+            Arg.Any<CancellationToken>());
+        await commands.DidNotReceive().QueueCleanupAsync(
             Arg.Any<ExternalSubjectRef>(),
-            Arg.Is<ManagedCodexCredentialCleanup>(cleanup =>
-                cleanup.ApiKeyId == activeKey.Id &&
-                cleanup.NyxIdPending &&
-                !cleanup.VaultPending),
+            Arg.Any<ManagedCodexCredentialCleanup>(),
             Arg.Any<CancellationToken>());
     }
 
@@ -1546,6 +1740,189 @@ public sealed class ManagedCodexCredentialLifecycleTests
                 descriptor.ApiKeyId == "key-recover" &&
                 descriptor.SecretReference.Ref.StartsWith("sec_managed_codex_", StringComparison.Ordinal)),
             Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_WhenStaleProjectionHidesValidationFailedActorKey_DoesNotDeleteItBeforeRejectedCommit()
+    {
+        var expiresAt = Now.AddDays(30);
+        var observedActorKey = RemoteKey(
+            "key-actor-current",
+            expiresAt,
+            ["us-sandbox"]);
+        var replacement = IssuedKey("key-replacement", expiresAt);
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.ListUserServicesAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(EligibleServices());
+        nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                [observedActorKey],
+                [replacement.Key]);
+        nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(replacement);
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+        var vault = Substitute.For<ISecretVault>();
+        vault.PutAsync(
+                Arg.Any<StoreSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => new StoreSecretResult(
+                Reference(
+                    call.Arg<StoreSecretRequest>(),
+                    call.Arg<StoreSecretRequest>().RequestedRef!,
+                    version: 1)));
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        commands.CommitProvisionedAsync(
+                Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new DispatchAdmission(
+                false,
+                "command-rejected",
+                Now,
+                "managed-codex-credential:nyxid::user-a",
+                "command-rejected"));
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            mutationLease: new InMemoryManagedCodexCredentialMutationLease(),
+            nyxIdPort: nyxId);
+
+        var act = () => lifecycle.ProvisionAsync("user-bearer", "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_credential_persistence_pending");
+        await nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            observedActorKey.Id,
+            Arg.Any<CancellationToken>());
+        await commands.Received(1).CommitProvisionedAsync(
+            Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
+                descriptor.ApiKeyId == replacement.Key.Id),
+            Arg.Is<IReadOnlyList<ManagedCodexCredentialCleanup>>(cleanups =>
+                cleanups.Count == 1 &&
+                cleanups[0].ApiKeyId == observedActorKey.Id &&
+                cleanups[0].SecretRef.StartsWith(
+                    "sec_managed_codex_",
+                    StringComparison.Ordinal) &&
+                cleanups[0].NyxIdPending &&
+                cleanups[0].VaultPending),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RotateAsync_WhenStaleProjectionHidesVaultFailedActorKey_DoesNotDeleteItBeforeRejectedCommit()
+    {
+        var current = Descriptor("key-projected", "sec-projected", version: 1);
+        var expiresAt = current.ExpiresAt.ToDateTimeOffset();
+        var observedActorKey = RemoteKey(
+            "key-actor-current",
+            expiresAt,
+            ["us-sandbox", "us-llm"]);
+        var replacement = IssuedKey("key-replacement", expiresAt);
+        var query = Substitute.For<IManagedCodexCredentialQueryPort>();
+        query.ResolveAsync(
+                Arg.Any<ExternalSubjectRef>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new ManagedCodexCredentialSnapshot
+            {
+                Credential = current.Clone(),
+                StateVersion = 4,
+                LastEventId = "event-4",
+            });
+        var nyxId = Substitute.For<IManagedCodexNyxIdCredentialPort>();
+        nyxId.GetCurrentUserIdAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns("user-a");
+        nyxId.ListUserServicesAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(EligibleServices());
+        nyxId.ListApiKeysAsync("user-bearer", Arg.Any<CancellationToken>())
+            .Returns(
+                [observedActorKey],
+                [replacement.Key]);
+        nyxId.CreateApiKeyAsync(
+                "user-bearer",
+                Arg.Any<ManagedCodexNyxIdApiKeyIssueRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(replacement);
+        nyxId.RevokeApiKeyAsync(
+                "user-bearer",
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+        string? observedSecretRef = null;
+        var vault = Substitute.For<ISecretVault>();
+        vault.ResolveAsync(
+                Arg.Any<ResolveSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                observedSecretRef = call.Arg<ResolveSecretRequest>().Ref;
+                return new ResolveSecretResult(
+                    null,
+                    null,
+                    SecretResolutionFailureReason.NotFound);
+            });
+        vault.PutAsync(
+                Arg.Any<StoreSecretRequest>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => new StoreSecretResult(
+                Reference(
+                    call.Arg<StoreSecretRequest>(),
+                    call.Arg<StoreSecretRequest>().RequestedRef!,
+                    version: 1)));
+        var commands = Substitute.For<IManagedCodexCredentialCommandPort>();
+        commands.CommitRotatedAsync(
+                Arg.Any<string>(),
+                Arg.Any<ManagedCodexCredentialDescriptor>(),
+                Arg.Any<ManagedCodexCredentialCleanup>(),
+                Arg.Any<IReadOnlyList<ManagedCodexCredentialCleanup>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(new DispatchAdmission(
+                false,
+                "command-rejected",
+                Now,
+                "managed-codex-credential:nyxid::user-a",
+                "command-rejected"));
+        var lifecycle = CreateLifecycle(
+            new RoutingHandler(),
+            vault,
+            commands,
+            query,
+            mutationLease: new InMemoryManagedCodexCredentialMutationLease(),
+            nyxIdPort: nyxId);
+
+        var act = () => lifecycle.RotateAsync("user-bearer", "user-a");
+
+        (await act.Should()
+            .ThrowAsync<ManagedCodexCredentialLifecycleException>())
+            .Which.Code.Should().Be("managed_credential_persistence_pending");
+        await nyxId.DidNotReceive().RevokeApiKeyAsync(
+            "user-bearer",
+            observedActorKey.Id,
+            Arg.Any<CancellationToken>());
+        observedSecretRef.Should().NotBeNullOrWhiteSpace();
+        await commands.Received(1).CommitRotatedAsync(
+            current.ApiKeyId,
+            Arg.Is<ManagedCodexCredentialDescriptor>(descriptor =>
+                descriptor.ApiKeyId == replacement.Key.Id),
+            Arg.Any<ManagedCodexCredentialCleanup>(),
+            Arg.Is<IReadOnlyList<ManagedCodexCredentialCleanup>>(cleanups =>
+                cleanups.Count == 1 &&
+                cleanups[0].ApiKeyId == observedActorKey.Id &&
+                cleanups[0].SecretRef == observedSecretRef &&
+                cleanups[0].NyxIdPending &&
+                cleanups[0].VaultPending),
             Arg.Any<CancellationToken>());
     }
 

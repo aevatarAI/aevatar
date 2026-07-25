@@ -110,6 +110,10 @@ public sealed class ManagedCodexCredentialLifecycle(
     private sealed record ReadinessRepairOutcome(
         ManagedCodexCredentialDescriptor ExpectedCredential);
 
+    private sealed record ManualReconciliationOutcome(
+        ManagedCodexCredentialMutationResult? AcceptedResult,
+        string? ObsoleteApiKeyId);
+
     private abstract record ConcurrentReadinessOutcome;
 
     private sealed record ConcurrentCredentialCommitted(
@@ -541,9 +545,10 @@ public sealed class ManagedCodexCredentialLifecycle(
                 preMutationCt)
             .ConfigureAwait(false);
         EnsureAtMostOneActiveKey(activeKeys);
+        string? obsoleteApiKeyId = null;
         if (activeKeys.Count == 1)
         {
-            var recovered = await TryReconcileProvisionAsync(
+            var reconciliation = await TryReconcileProvisionAsync(
                 bearerToken,
                 owner,
                 activeKeys[0],
@@ -551,8 +556,10 @@ public sealed class ManagedCodexCredentialLifecycle(
                 outcomeDeadline,
                 preMutationCt,
                 ct).ConfigureAwait(false);
-            if (recovered is not null)
-                return recovered;
+            if (reconciliation.AcceptedResult is not null)
+                return reconciliation.AcceptedResult;
+            if (!string.IsNullOrWhiteSpace(reconciliation.ObsoleteApiKeyId))
+                obsoleteApiKeyId = reconciliation.ObsoleteApiKeyId;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -664,11 +671,18 @@ public sealed class ManagedCodexCredentialLifecycle(
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             expiresAt);
+        var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
+            owner,
+            string.IsNullOrWhiteSpace(obsoleteApiKeyId)
+                ? []
+                : [obsoleteApiKeyId],
+            descriptor);
         return await CommitManualProvisionAsync(
                 descriptor,
                 actorId,
                 persistedKey.Id,
                 expiresAt,
+                obsoleteCredentialCleanups,
                 outcomeDeadline)
             .ConfigureAwait(false);
     }
@@ -678,6 +692,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         string actorId,
         string apiKeyId,
         DateTimeOffset expiresAt,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
         OutcomeDeadline outcomeDeadline)
     {
         DispatchAdmission admission;
@@ -686,7 +701,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             using var recording = outcomeDeadline.BeginRecording();
             admission = await _commandPort.CommitProvisionedAsync(
                     descriptor,
-                    [],
+                    obsoleteCredentialCleanups,
                     recording.Token)
                 .ConfigureAwait(false);
         }
@@ -749,13 +764,14 @@ public sealed class ManagedCodexCredentialLifecycle(
                 preMutationCt)
             .ConfigureAwait(false);
         EnsureAtMostOneActiveKey(activeKeys);
+        string? obsoleteApiKeyId = null;
         if (activeKeys.Count == 1 &&
             !string.Equals(
                 activeKeys[0].Id,
                 current.Credential.ApiKeyId,
                 StringComparison.Ordinal))
         {
-            var recovered = await TryReconcileRotationAsync(
+            var reconciliation = await TryReconcileRotationAsync(
                 bearerToken,
                 owner,
                 current.Credential,
@@ -764,8 +780,10 @@ public sealed class ManagedCodexCredentialLifecycle(
                 outcomeDeadline,
                 preMutationCt,
                 ct).ConfigureAwait(false);
-            if (recovered is not null)
-                return recovered;
+            if (reconciliation.AcceptedResult is not null)
+                return reconciliation.AcceptedResult;
+            if (!string.IsNullOrWhiteSpace(reconciliation.ObsoleteApiKeyId))
+                obsoleteApiKeyId = reconciliation.ObsoleteApiKeyId;
             activeKeys = [];
         }
 
@@ -880,17 +898,43 @@ public sealed class ManagedCodexCredentialLifecycle(
             eligibility.ChronoSandboxUserServiceId,
             eligibility.ChronoLlmUserServiceId,
             expiresAt);
+        var obsoleteCredentialCleanups = BuildObservedObsoleteCleanups(
+            owner,
+            string.IsNullOrWhiteSpace(obsoleteApiKeyId)
+                ? []
+                : [obsoleteApiKeyId],
+            descriptor);
+        return await CommitManualRotationAsync(
+                current.Credential,
+                descriptor,
+                obsoleteCredentialCleanups,
+                actorId,
+                persistedKey.Id,
+                expiresAt,
+                outcomeDeadline)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<ManagedCodexCredentialMutationResult> CommitManualRotationAsync(
+        ManagedCodexCredentialDescriptor current,
+        ManagedCodexCredentialDescriptor descriptor,
+        IReadOnlyList<ManagedCodexCredentialCleanup> obsoleteCredentialCleanups,
+        string actorId,
+        string apiKeyId,
+        DateTimeOffset expiresAt,
+        OutcomeDeadline outcomeDeadline)
+    {
         DispatchAdmission admission;
         try
         {
             using var recording = outcomeDeadline.BeginRecording();
             admission = await _commandPort.CommitRotatedAsync(
-                current.Credential.ApiKeyId,
+                current.ApiKeyId,
                 descriptor,
                 BuildPreviousCredentialCleanup(
-                    current.Credential,
+                    current,
                     descriptor),
-                [],
+                obsoleteCredentialCleanups,
                 recording.Token).ConfigureAwait(false);
         }
         catch (Exception)
@@ -906,7 +950,7 @@ public sealed class ManagedCodexCredentialLifecycle(
                 "Managed Codex credential persistence is pending reconciliation.");
         }
 
-        return Result("rotation_accepted", actorId, persistedKey.Id, expiresAt, admission);
+        return Result("rotation_accepted", actorId, apiKeyId, expiresAt, admission);
     }
 
     public async Task<ManagedCodexCredentialMutationResult> RevokeAsync(
@@ -975,18 +1019,12 @@ public sealed class ManagedCodexCredentialLifecycle(
                 now,
                 recording.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch
         {
-            throw;
-        }
-        catch (Exception)
-        {
-            throw Failure(
-                "managed_credential_command_failed",
-                "The managed Codex revocation could not be submitted for persistence.");
+            throw PersistencePending();
         }
         if (!admission.Accepted)
-            throw Failure("managed_credential_command_rejected", "The managed Codex revocation was not accepted for persistence.");
+            throw PersistencePending();
 
         return Result(
             "revocation_accepted",
@@ -2028,7 +2066,7 @@ public sealed class ManagedCodexCredentialLifecycle(
             "Multiple active managed Codex keys exist in NyxID and must be reconciled.");
     }
 
-    private async Task<ManagedCodexCredentialMutationResult?> TryReconcileProvisionAsync(
+    private async Task<ManualReconciliationOutcome> TryReconcileProvisionAsync(
         string bearerToken,
         ExternalSubjectRef owner,
         ManagedCodexNyxIdApiKey activeKey,
@@ -2045,12 +2083,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         catch (ManagedCodexCredentialLifecycleException)
         {
             requestCt.ThrowIfCancellationRequested();
-            _ = await CompensateRejectedIssuanceWithinOutcomeAsync(
-                bearerToken,
-                owner,
-                activeKey.Id,
-                outcomeDeadline).ConfigureAwait(false);
-            throw;
+            return new ManualReconciliationOutcome(null, activeKey.Id);
         }
 
         SecretReference? reference;
@@ -2070,19 +2103,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         }
         requestCt.ThrowIfCancellationRequested();
         if (reference is null)
-        {
-            if (!await CompensateRejectedIssuanceWithinOutcomeAsync(
-                    bearerToken,
-                    owner,
-                    activeKey.Id,
-                    outcomeDeadline).ConfigureAwait(false))
-            {
-                throw Failure(
-                    "managed_credential_cleanup_pending",
-                    "The untracked managed Codex key could not be revoked; retry later.");
-            }
-            return null;
-        }
+            return new ManualReconciliationOutcome(null, activeKey.Id);
 
         var descriptor = BuildDescriptor(
             owner,
@@ -2097,15 +2118,17 @@ public sealed class ManagedCodexCredentialLifecycle(
                 [],
                 recording.Token)
             .ConfigureAwait(false);
-        return Result(
-            "provisioning_reconciliation_accepted",
-            ManagedCodexCredentialActorIdentity.From(owner),
-            activeKey.Id,
-            activeKey.ExpiresAt.Value,
-            admission);
+        return new ManualReconciliationOutcome(
+            Result(
+                "provisioning_reconciliation_accepted",
+                ManagedCodexCredentialActorIdentity.From(owner),
+                activeKey.Id,
+                activeKey.ExpiresAt.Value,
+                admission),
+            null);
     }
 
-    private async Task<ManagedCodexCredentialMutationResult?> TryReconcileRotationAsync(
+    private async Task<ManualReconciliationOutcome> TryReconcileRotationAsync(
         string bearerToken,
         ExternalSubjectRef owner,
         ManagedCodexCredentialDescriptor current,
@@ -2123,12 +2146,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         catch (ManagedCodexCredentialLifecycleException)
         {
             requestCt.ThrowIfCancellationRequested();
-            _ = await CompensateRejectedIssuanceWithinOutcomeAsync(
-                bearerToken,
-                owner,
-                activeKey.Id,
-                outcomeDeadline).ConfigureAwait(false);
-            throw;
+            return new ManualReconciliationOutcome(null, activeKey.Id);
         }
 
         SecretReference? reference;
@@ -2148,19 +2166,7 @@ public sealed class ManagedCodexCredentialLifecycle(
         }
         requestCt.ThrowIfCancellationRequested();
         if (reference is null)
-        {
-            if (!await CompensateRejectedIssuanceWithinOutcomeAsync(
-                    bearerToken,
-                    owner,
-                    activeKey.Id,
-                    outcomeDeadline).ConfigureAwait(false))
-            {
-                throw Failure(
-                    "managed_credential_cleanup_pending",
-                    "The unrecoverable managed Codex key could not be revoked; retry later.");
-            }
-            return null;
-        }
+            return new ManualReconciliationOutcome(null, activeKey.Id);
 
         var descriptor = BuildDescriptor(
             owner,
@@ -2175,12 +2181,14 @@ public sealed class ManagedCodexCredentialLifecycle(
             descriptor,
             [],
             recording.Token).ConfigureAwait(false);
-        return Result(
-            "rotation_reconciliation_accepted",
-            ManagedCodexCredentialActorIdentity.From(owner),
-            activeKey.Id,
-            activeKey.ExpiresAt.Value,
-            admission);
+        return new ManualReconciliationOutcome(
+            Result(
+                "rotation_reconciliation_accepted",
+                ManagedCodexCredentialActorIdentity.From(owner),
+                activeKey.Id,
+                activeKey.ExpiresAt.Value,
+                admission),
+            null);
     }
 
     private async Task<ManagedCodexCredentialDescriptor> ReconcilePolicyAsync(
