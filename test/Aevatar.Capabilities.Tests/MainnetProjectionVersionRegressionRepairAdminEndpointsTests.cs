@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Aevatar.Authentication.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -5,6 +6,7 @@ using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 
 namespace Aevatar.Capabilities.Tests;
@@ -140,6 +142,8 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
 
         await handle.Should().ThrowAsync<OperationCanceledException>()
             .WithMessage("workspace identity canceled");
+        await authorizer.Received(1)
+            .ResolveCallerAsync(BearerSentinel, cancellation.Token);
     }
 
     [Fact]
@@ -159,7 +163,7 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             service,
             CancellationToken.None);
 
-        AssertSanitizedServiceUnavailable(result);
+        await AssertSanitizedServiceUnavailableAsync(result);
     }
 
     [Fact]
@@ -363,7 +367,7 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             service,
             CancellationToken.None);
 
-        AssertSanitizedServiceUnavailable(result);
+        await AssertSanitizedServiceUnavailableAsync(result);
         await service.DidNotReceiveWithAnyArgs().RepairAsync(default!, default);
     }
 
@@ -384,7 +388,7 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             service,
             CancellationToken.None);
 
-        AssertSanitizedServiceUnavailable(result);
+        await AssertSanitizedServiceUnavailableAsync(result);
     }
 
     [Fact]
@@ -403,7 +407,7 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             service,
             CancellationToken.None);
 
-        AssertSanitizedServiceUnavailable(result);
+        await AssertSanitizedServiceUnavailableAsync(result);
         await service.DidNotReceiveWithAnyArgs().RepairPersonalAsync(default!, default);
     }
 
@@ -424,7 +428,7 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
             service,
             CancellationToken.None);
 
-        AssertSanitizedServiceUnavailable(result);
+        await AssertSanitizedServiceUnavailableAsync(result);
     }
 
     [Fact]
@@ -729,15 +733,24 @@ public sealed class MainnetProjectionVersionRegressionRepairAdminEndpointsTests
     private static string SerializedBody(IResult result) =>
         JsonSerializer.Serialize(((IValueHttpResult)result).Value);
 
-    private static string SerializedBodyOrEmpty(IResult result) =>
-        result is IValueHttpResult value
-            ? JsonSerializer.Serialize(value.Value)
-            : string.Empty;
-
-    private static void AssertSanitizedServiceUnavailable(IResult result)
+    private static async Task AssertSanitizedServiceUnavailableAsync(IResult result)
     {
-        StatusCode(result).Should().Be(StatusCodes.Status503ServiceUnavailable);
-        SerializedBodyOrEmpty(result).Should()
+        using var requestServices = new ServiceCollection()
+            .AddLogging()
+            .BuildServiceProvider();
+        using var responseBody = new MemoryStream();
+        var context = new DefaultHttpContext
+        {
+            RequestServices = requestServices,
+        };
+        context.Response.Body = responseBody;
+
+        await result.ExecuteAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        var body = Encoding.UTF8.GetString(responseBody.ToArray());
+        body.Should().BeEmpty();
+        body.Should()
             .NotContain(ExceptionSentinel)
             .And.NotContain(BearerSentinel)
             .And.NotContain(CredentialSentinel)

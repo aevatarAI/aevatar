@@ -89,7 +89,7 @@ The NyxID catalog repair service depends on:
 
 - a GAgentService Infrastructure store port that inspects the catalog
   EventStore version and uses the opt-in Elasticsearch repair lease;
-- the existing authenticated catalog refresh port;
+- the repair-specific authenticated Catalog refresh port and adapter;
 - the existing catalog visibility port.
 
 Application owns inspect/delete/recovery ordering. Infrastructure contains only
