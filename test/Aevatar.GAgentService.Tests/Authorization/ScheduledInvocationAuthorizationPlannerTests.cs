@@ -432,11 +432,12 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task ComputeDigest_ShouldCoverTargetOwnerAuthorityPolicySourceAndDisclosure()
+    public async Task ComputeDigest_ShouldCoverTargetOwnerAuthorityPolicySourceDisclosureAndOwnerLlmSelection()
     {
         var planner = NewPlanner(new MutableCatalogQueryPort(Snapshot(
             Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))));
         var original = (await planner.PlanAsync(Request(["svc-a"]))).Plan!;
+        original.OwnerLlmSelection.Should().NotBeNull();
         var originalDigest = ScheduledInvocationAuthorizationPlanner.ComputeDigest(original);
         Action<ScheduledInvocationAuthorizationPlan>[] mutations =
         [
@@ -457,6 +458,11 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             static plan => plan.CredentialPolicy.PolicyVersion = "policy-other",
             static plan => plan.CredentialPolicy.AllowAllServices = true,
             static plan => plan.Disclosures[0] = ScheduledInvocationDisclosure.BrowserNeverReceivesSecret,
+            static plan => plan.OwnerLlmSelection.RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+            static plan => plan.OwnerLlmSelection.RouteValue = "/api/v1/proxy/s/provider-other",
+            static plan => plan.OwnerLlmSelection.NyxIdUserServiceId = "us-other",
+            static plan => plan.OwnerLlmSelection.ServiceSlugSnapshot = "provider-other",
+            static plan => plan.OwnerLlmSelection.Model = "gpt-other",
         ];
 
         foreach (var mutate in mutations)
@@ -601,15 +607,36 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
     }
 
     [Fact]
-    public async Task PlanAsync_ForScheduledAgent_ShouldComposeExactOwnerLlmEvidenceFromExecutionScope()
+    public async Task PlanAsync_ForScheduledAgentGateway_ShouldBindSelectionWithoutAddingServiceGrant()
     {
+        var selection = GatewaySelection();
         var evidence = new StudioEvidencePorts
         {
-            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
-                11,
-                "svc-b",
-                "provider-b",
-                AuthorizationGrantRequirement.Required),
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(11, selection),
+        };
+        var planner = new ScheduledInvocationAuthorizationPlanner(
+            new MutableCatalogQueryPort(Snapshot(
+                Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired))),
+            ownerLLMQueryPort: evidence);
+
+        var result = await planner.PlanAsync(Request(["svc-a"]));
+
+        result.Success.Should().BeTrue();
+        result.Plan!.NyxIdServiceGrants.Select(static grant => grant.UserServiceId)
+            .Should().Equal("svc-a");
+        result.Plan.OwnerLlmSelection.Should().BeEquivalentTo(selection);
+        result.Plan.OwnerLlmSelection.Should().NotBeSameAs(selection);
+        result.Plan.PermissionDigest.Should().Be(
+            ScheduledInvocationAuthorizationPlanIntegrity.ComputeDigest(result.Plan));
+    }
+
+    [Fact]
+    public async Task PlanAsync_ForScheduledAgent_ShouldComposeExactOwnerLlmEvidenceFromExecutionScope()
+    {
+        var selection = ServiceSelection("svc-b", "provider-b");
+        var evidence = new StudioEvidencePorts
+        {
+            OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(11, selection),
         };
         var planner = new ScheduledInvocationAuthorizationPlanner(
             new MutableCatalogQueryPort(Snapshot(
@@ -626,24 +653,42 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             .Should().Equal(
                 (AuthorizationSourceKind.ScheduledAgentRegistration, "agent-alpha", 0),
                 (AuthorizationSourceKind.OwnerLlmRoute, "scope-execution", 11));
+        result.Plan.OwnerLlmSelection.Should().BeEquivalentTo(selection);
+        result.Plan.OwnerLlmSelection.Should().NotBeSameAs(selection);
         evidence.LastOwnerLLMScopeId.Should().Be("scope-execution");
     }
 
-    [Fact]
-    public async Task PlanAsync_ForScheduledAgent_ShouldNeverResolveOwnerLlmIdentityFromSlug()
+    [Theory]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Unspecified, "", "", "", "")]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, "/api/v1/llm/gateway/v1", "", "", "")]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.Gateway, " /api/v1/llm/gateway/v1", "", "", "gpt-5.5")]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "", "provider-b", "gpt-5.5")]
+    [InlineData(ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService, "/api/v1/proxy/s/provider-b", "svc-b", "provider-other", "gpt-5.5")]
+    public async Task PlanAsync_ForScheduledAgent_ShouldRejectInvalidOwnerLlmSelectionBeforeCatalogAccess(
+        ScheduledInvocationOwnerLLMRouteKind routeKind,
+        string routeValue,
+        string serviceId,
+        string serviceSlug,
+        string model)
     {
         var evidence = new StudioEvidencePorts
         {
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
                 11,
-                string.Empty,
-                "provider-b",
-                AuthorizationGrantRequirement.Required),
+                new ScheduledInvocationOwnerLLMSelection
+                {
+                    RouteKind = routeKind,
+                    RouteValue = routeValue,
+                    NyxIdUserServiceId = serviceId,
+                    ServiceSlugSnapshot = serviceSlug,
+                    Model = model,
+                }),
         };
+        var catalog = new MutableCatalogQueryPort(Snapshot(
+            Service("svc-a", "provider-a", AuthorizationGrantRequirement.NotRequired),
+            Service("svc-b", "provider-b", AuthorizationGrantRequirement.NotRequired)));
         var planner = new ScheduledInvocationAuthorizationPlanner(
-            new MutableCatalogQueryPort(Snapshot(
-                Service("svc-b-one", "provider-b", AuthorizationGrantRequirement.NotRequired),
-                Service("svc-b-two", "provider-b", AuthorizationGrantRequirement.NotRequired))),
+            catalog,
             ownerLLMQueryPort: evidence);
 
         var result = await planner.PlanAsync(Request(["svc-a"]));
@@ -651,7 +696,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         result.Success.Should().BeFalse();
         result.FailureCode.Should().Be(
             ScheduledInvocationAuthorizationFailureCode.DurableAuthorizationUnavailable);
-        result.Detail.Should().Be("owner_llm_exact_service_identity_unavailable");
+        result.Detail.Should().Be("owner_llm_selection_invalid");
+        catalog.QueryCount.Should().Be(0);
     }
 
     [Fact]
@@ -671,9 +717,7 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             Connector = new ScheduledInvocationConnectorEvidence(7, ["calendar"]),
             OwnerLLM = new ScheduledInvocationOwnerLLMEvidence(
                 11,
-                "nyx-service-b",
-                "provider-b",
-                AuthorizationGrantRequirement.Required),
+                ServiceSelection("nyx-service-b", "provider-b")),
         };
         var planner = new ScheduledInvocationAuthorizationPlanner(
             new MutableCatalogQueryPort(Snapshot(
@@ -695,6 +739,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
                 (AuthorizationSourceKind.WorkflowRevision, "rev-alpha", 5),
                 (AuthorizationSourceKind.ConnectorCatalog, "scope-alpha", 7),
                 (AuthorizationSourceKind.OwnerLlmRoute, "scope-alpha", 11));
+        result.Plan.OwnerLlmSelection.Should().BeEquivalentTo(
+            ServiceSelection("nyx-service-b", "provider-b"));
     }
 
     [Fact]
@@ -800,6 +846,24 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         UserServiceId = serviceId,
         ServiceSlugSnapshot = slug,
     };
+
+    private static ScheduledInvocationOwnerLLMSelection GatewaySelection() => new()
+    {
+        RouteKind = ScheduledInvocationOwnerLLMRouteKind.Gateway,
+        RouteValue = ScheduledInvocationOwnerLLMSelectionPolicy.GatewayRoute,
+        Model = "gpt-5.5",
+    };
+
+    private static ScheduledInvocationOwnerLLMSelection ServiceSelection(
+        string serviceId,
+        string serviceSlug) => new()
+        {
+            RouteKind = ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+            RouteValue = $"{ScheduledInvocationOwnerLLMSelectionPolicy.NyxIdProxyRoutePrefix}{serviceSlug}",
+            NyxIdUserServiceId = serviceId,
+            ServiceSlugSnapshot = serviceSlug,
+            Model = "gpt-5.5",
+        };
 
     private static ExternalWorkflowCapabilityRef NyxIdCapability(string serviceId, string slug) => new()
     {
@@ -921,7 +985,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
         }
 
         Task<ScheduledInvocationOwnerLLMEvidence?> IScheduledInvocationOwnerLLMEvidenceQueryPort.GetAsync(
-            string scopeId, CancellationToken ct)
+            string scopeId,
+            CancellationToken ct)
         {
             OwnerLLMQueries++;
             LastOwnerLLMScopeId = scopeId;
@@ -950,7 +1015,8 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             string scopeId, CancellationToken ct) => Task.FromResult<ScheduledInvocationConnectorEvidence?>(null);
 
         Task<ScheduledInvocationOwnerLLMEvidence?> IScheduledInvocationOwnerLLMEvidenceQueryPort.GetAsync(
-            string scopeId, CancellationToken ct) => Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
+            string scopeId,
+            CancellationToken ct) => Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(null);
     }
 
     private sealed class NoServiceOwnerLLMEvidencePort : IScheduledInvocationOwnerLLMEvidenceQueryPort
@@ -962,8 +1028,6 @@ public sealed class ScheduledInvocationAuthorizationPlannerTests
             CancellationToken ct = default) =>
             Task.FromResult<ScheduledInvocationOwnerLLMEvidence?>(new ScheduledInvocationOwnerLLMEvidence(
                 0,
-                string.Empty,
-                string.Empty,
-                AuthorizationGrantRequirement.NotRequired));
+                GatewaySelection()));
     }
 }

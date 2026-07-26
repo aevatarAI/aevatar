@@ -183,10 +183,13 @@ public sealed record AgentToolChannelContext(
     string? PlatformMessageId,
     string? DeliveryTargetId = null,
     ChannelWorkflowResultDeliveryCredential? WorkflowResultDeliveryCredential = null,
-    string? BotRegistrationId = null)
+    string? BotRegistrationId = null,
+    IReadOnlyList<AgentToolChannelIdentityHint>? IdentityHints = null)
 {
-    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null);
+    public static AgentToolChannelContext Empty { get; } = new(null, null, null, null, null, null, null, null, []);
 }
+
+public sealed record AgentToolChannelIdentityHint(string Subject, string Kind, string Value);
 
 public sealed record AgentToolSenderBindingContext(string? BindingId, string? NyxUserId = null, string? SenderTenant = null)
 {

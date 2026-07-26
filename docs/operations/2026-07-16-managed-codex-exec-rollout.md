@@ -6,7 +6,7 @@ This runbook enables Aevatar's NyxID-to-chrono-sandbox managed Codex path. The f
 
 Aevatar owns the typed tool contract, per-user credential actor/projection, `ISecretVault` storage, authenticated self-service lifecycle API, fixed NyxID proxy request, and sanitized failure mapping.
 
-NyxID owns agent-key scope enforcement and the five-minute `llm:proxy` delegation token injected into calls to `chrono-sandbox`.
+NyxID owns agent-key scope enforcement and the temporary five-minute `proxy:*` delegation token injected into internal-canary calls to `chrono-sandbox`.
 
 Chrono-sandbox owns the deployed OpenSandbox control plane, immutable runner image, fixed Codex command, request-local delegation-token environment mapping, resource limits, output bounds, cancellation, cleanup, and live execution proof. Operations owns the gVisor tenant and its IP-level egress NetworkPolicy (ADR-0044), deploys and configures NyxID and chrono-sandbox, and does not receive or store users' agent keys.
 
@@ -16,9 +16,10 @@ Before enabling Aevatar, operations must confirm:
 
 - the `chrono-sandbox` service is deployed and exposes `POST /codex/execute`
 - its NyxID service definition is active with `forward_access_token=false`
-- `inject_delegation_token=true` and `delegation_token_scope=llm:proxy`
+- `inject_delegation_token=true` and `delegation_token_scope=proxy:*`
 - each canary user directly owns an active `chrono-sandbox` UserService
 - each canary user has a usable `chrono-llm-public` route
+- chrono-sandbox sets `NYXID_LLM_PROXY_URL=https://nyx-api.chrono-ai.fun/api/v1/proxy/s/chrono-llm-public`; it does not use `/api/v1/llm/gateway/v1` or `/api/v1/llm/chrono-llm-public/v1`
 - chrono-sandbox can pull the approved `containers/codex-runner` image digest
 - runner pods are scheduled under the `gvisor` RuntimeClass with Codex's inner sandbox disabled per ADR-0044; there is no Landlock preflight, and the sandbox create call requests no `networkPolicy` and no `credentialProxy`
 - chrono-sandbox validates the injected token before sandbox creation and passes it only as request-local `NYXID_LLM_TOKEN` through execd's native environment map
@@ -27,7 +28,7 @@ Before enabling Aevatar, operations must confirm:
 
 The runner image itself must contain no provider, NyxID, OpenSandbox control-plane, or user credential. The P0 delegation token must not be written to a shell wrapper, profile, workspace, persisted session, logs, or result. Aevatar no longer needs an OpenSandbox endpoint or API key.
 
-The internal P0 relies on mutable NyxID UserService policy. Aevatar validates `forward_access_token=false` during credential provisioning and rotation, but cannot prevent the service owner from changing it later. Keep the rollout restricted to trusted internal users and operators. Do not broaden eligibility until #2899 adds immutable/version-bound policy or request-level fail-closed caller-credential non-forwarding.
+The internal P0 relies on mutable NyxID UserService policy. Aevatar validates `forward_access_token=false` and exact `proxy:*` delegation during credential provisioning and rotation, but cannot prevent the service owner from changing it later. The five-minute token can access other NyxID REST proxy services available to the same user, so keep the rollout restricted to trusted internal users and operators. Do not broaden eligibility until #2899 adds immutable/version-bound caller-credential non-forwarding and NyxID replaces `proxy:*` with authorization limited to `chrono-llm-public`.
 
 ## Configure Aevatar
 
@@ -79,6 +80,8 @@ curl -i -X DELETE \
 ## Workflow proof
 
 After status is active, run the public Ornn skill `aevatar-codex-exec-workflow-sample` and its `codex-exec-check` workflow as that user. Configuration checks and a standalone chrono smoke do not prove workflow identity propagation.
+
+The public skill invoke endpoint uses the same trusted caller-credential extraction path as workflow chat. It resolves the authenticated NyxID subject and binding into typed `WorkflowCallerNyxIdAuthority` independently of the observatory `scopeId`; a bearer-only workflow credential is a deployment regression.
 
 The workflow must finish with:
 

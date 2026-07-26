@@ -2,11 +2,11 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Application.CodexExecution;
-using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AgentCatalog.AgentProfiles;
-using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -19,42 +19,45 @@ using Aevatar.AI.ToolProviders.Telegram;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.AI.ToolProviders.Web;
 using Aevatar.AI.ToolProviders.Workflow;
+using Aevatar.Audit.Core.DependencyInjection;
+using Aevatar.Audit.Hosting;
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Authentication.ScopeServiceTokens;
-using Aevatar.Audit.Core.DependencyInjection;
-using Aevatar.Audit.Hosting;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.ChatRouting.Core;
-using Aevatar.GAgentService.Abstractions.Responses;
-using Aevatar.GAgentService.Application.Responses;
-using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Foundation.Runtime.Hosting.Maintenance;
+using Aevatar.Foundation.VoicePresence;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.Identity.DependencyInjection;
 using Aevatar.GAgents.Channel.Identity.Endpoints;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
-using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.ChatbotClassifier;
+using Aevatar.GAgents.ChatRouting;
 using Aevatar.GAgents.Device;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.Platform.Lark;
 using Aevatar.GAgents.Platform.Telegram;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.DependencyInjection;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.GAgents.StreamingProxy;
-using Aevatar.Foundation.Runtime.Hosting.Maintenance;
-using Aevatar.Foundation.VoicePresence;
+using Aevatar.GAgentService.Abstractions.Responses;
+using Aevatar.GAgentService.Application.Responses;
+using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
 using Aevatar.Mainnet.Host.Api.ChatCompletions;
 using Aevatar.Mainnet.Host.Api.ChatRouting;
 using Aevatar.Mainnet.Host.Api.Cqrs;
-using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.ManagedCodex;
+using Aevatar.Mainnet.Host.Api.Messages;
+using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -157,7 +160,12 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddNyxIdAuthentication();
         builder.AddAevatarAuthentication();
         builder.AddNyxIdIdentityAssertionAuthentication();
+        var agentProfileRolloutSelector = MainnetAgentProfileRolloutSelector.Create(
+            builder.Configuration,
+            builder.Environment.ContentRootPath);
+        builder.Services.AddSingleton(agentProfileRolloutSelector);
         builder.Services.AddNyxIdChat(builder.Configuration);
+        AddNyxIdChatAgentProfile(builder);
         builder.Services.AddStreamingProxy(builder.Configuration);
         builder.Services.AddChatbotClassifier();
         builder.Services.AddRetiredActorCleanup();
@@ -371,6 +379,7 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<CreateStudioMemberToolSource>,
                     CreateToolSource<StudioMemberQueryToolSource>,
                     CreateToolSource<StudioScheduleQueryToolSource>,
+                    CreateToolSource<StudioWorkflowQueryToolSource>,
                     CreateToolSource<BindStudioMemberWorkflowToolSource>,
                     CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
@@ -402,6 +411,21 @@ public static class MainnetHostBuilderExtensions
         });
 
         return builder;
+    }
+
+    private static void AddNyxIdChatAgentProfile(WebApplicationBuilder builder)
+    {
+        builder.Services
+            .AddOptions<NyxIdChatAgentProfileOptions>()
+            .Bind(builder.Configuration.GetSection(NyxIdChatAgentProfileOptions.SectionName))
+            .ValidateOnStart();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<NyxIdChatAgentProfileOptions>,
+                NyxIdChatAgentProfileOptionsValidator>());
+        builder.Services.TryAddSingleton<MainnetNyxIdChatAgentProfileBindingSource>();
+        builder.Services.Replace(
+            ServiceDescriptor.Singleton<INyxIdChatAgentProfileBindingSource>(serviceProvider =>
+                serviceProvider.GetRequiredService<MainnetNyxIdChatAgentProfileBindingSource>()));
     }
 
     private static IAgentToolSource CreateToolSource<TSource>(IServiceProvider serviceProvider)

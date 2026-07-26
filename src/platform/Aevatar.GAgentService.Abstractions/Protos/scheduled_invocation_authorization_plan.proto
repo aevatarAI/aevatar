@@ -53,6 +53,12 @@ enum ScheduledInvocationAuthorizationFailureCode {
   SCHEDULED_INVOCATION_AUTHORIZATION_FAILURE_CODE_CATALOG_PROJECTION_PENDING = 14;
 }
 
+enum ScheduledInvocationOwnerLLMRouteKind {
+  SCHEDULED_INVOCATION_OWNER_LLM_ROUTE_KIND_UNSPECIFIED = 0;
+  SCHEDULED_INVOCATION_OWNER_LLM_ROUTE_KIND_GATEWAY = 1;
+  SCHEDULED_INVOCATION_OWNER_LLM_ROUTE_KIND_NYX_ID_USER_SERVICE = 2;
+}
+
 message StudioMemberInvocationTarget {
   string scope_id = 1;
   string team_id = 2;
@@ -120,6 +126,14 @@ message ScheduledInvocationCredentialPolicy {
   string policy_version = 7;
 }
 
+message ScheduledInvocationOwnerLLMSelection {
+  ScheduledInvocationOwnerLLMRouteKind route_kind = 1;
+  string route_value = 2;
+  string nyx_id_user_service_id = 3;
+  string service_slug_snapshot = 4;
+  string model = 5;
+}
+
 message ScheduledInvocationAuthorizationPlan {
   reserved 5;
   reserved "nyx_id_node_grants";
@@ -134,6 +148,7 @@ message ScheduledInvocationAuthorizationPlan {
   repeated ScheduledInvocationDisclosure disclosures = 9;
   string permission_digest = 10;
   AuthorizationOwnerIdentity authenticated_actor = 11;
+  ScheduledInvocationOwnerLLMSelection owner_llm_selection = 12;
 }
 
 message ScheduledInvocationAuthorizationConfirmation {

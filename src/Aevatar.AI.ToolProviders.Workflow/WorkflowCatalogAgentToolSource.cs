@@ -4,7 +4,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 
 namespace Aevatar.AI.ToolProviders.Workflow;
 
-/// <summary>Provides selectively composable tools for the global runnable workflow catalog.</summary>
+/// <summary>Provides selectively composable tools for the public workflow template library.</summary>
 public sealed class WorkflowCatalogAgentToolSource : IAgentToolSource
 {
     private readonly IWorkflowCatalogPort? _catalog;
@@ -20,6 +20,10 @@ public sealed class WorkflowCatalogAgentToolSource : IAgentToolSource
         return Task.FromResult<IReadOnlyList<IAgentTool>>(
             _catalog is null
                 ? []
-                : [new ListAevatarWorkflowsTool(_catalog), new GetAevatarWorkflowTool(_catalog)]);
+                :
+                [
+                    new ListAevatarWorkflowTemplatesTool(_catalog),
+                    new GetAevatarWorkflowTemplateTool(_catalog),
+                ]);
     }
 }

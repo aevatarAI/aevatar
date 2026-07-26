@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.ToolSetRegistry;
@@ -82,6 +83,36 @@ internal static class GAgentServiceTestKit
                 Mode = AgentProfileToolPolicyMode.InheritRouteMaximum,
             },
         };
+
+    public static RenderedProfileLayerBoundary CreateRenderedProfileLayerBoundary(
+        int extraRenderedByte = 0)
+    {
+        const int materializedProfileLayerMaxUtf8Bytes = 65_536;
+        const string profileInstructions = "profile";
+        const string firstProcedure = "first";
+        const string opening = "<always-skill-procedure>\n";
+        const string closing = "\n</always-skill-procedure>";
+        const string separator = "\n\n";
+        var fixedRendered = string.Concat(
+            profileInstructions,
+            separator,
+            opening,
+            firstProcedure,
+            closing,
+            separator,
+            opening,
+            closing);
+        var secondProcedureBytes = materializedProfileLayerMaxUtf8Bytes -
+            Encoding.UTF8.GetByteCount(fixedRendered) +
+            extraRenderedByte;
+        return new RenderedProfileLayerBoundary(
+            profileInstructions,
+            [firstProcedure, new string('b', secondProcedureBytes)]);
+    }
+
+    internal sealed record RenderedProfileLayerBoundary(
+        string ProfileInstructions,
+        IReadOnlyList<string> AlwaysProcedures);
 
     public static AgentProfileOperationFact CreateAgentProfileOperation(
         string operationId,

@@ -29,7 +29,7 @@ public sealed class AevatarInvocationDispatcher
     private const string DeletedGAgentActorNameAlias = "actor_name";
     private const string WorkflowBackgroundDeliveryBindingDegradedCode = "binding_degraded";
     private const string ChannelWorkflowDeliveryUnavailableMessage =
-        "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. No Lark developer-console changes are required. You can also start the workflow from a surface that can observe its result.";
+        "This channel bot is not provisioned for workflow result delivery, so the workflow was not started. Open /channels, select this registration, and choose Repair workflow replies. This repairs Aevatar's workflow result delivery binding; provider webhook settings usually do not need changes. You can also start the workflow from a surface that can observe its result.";
     private const string WorkflowBackgroundDeliveryReservationFailedMessage =
         "Workflow result delivery could not be prepared, so the workflow was not started. Retry from this chat, or start the workflow from a surface that can observe its result.";
     private static readonly TimeSpan WorkflowBackgroundDeliveryReservationLifetime = TimeSpan.FromDays(30);

@@ -60,7 +60,7 @@ namespace Aevatar.GAgentService.Integration.Tests;
 public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddGAgentServiceCapability_ShouldRegisterCorePortsAndAdapters()
+    public async Task AddGAgentServiceCapability_ShouldRegisterCorePortsAndAdapters()
     {
         var services = new ServiceCollection();
         var configuration = new ConfigurationBuilder()
@@ -152,8 +152,16 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
             .Which.Should().BeOfType<SystemAgentProfileReadinessService>();
         provider.GetServices<ISystemAgentProfileOrnnAccessTokenProvider>().Should().ContainSingle()
             .Which.Should().BeOfType<UnavailableSystemAgentProfileOrnnAccessTokenProvider>();
-        provider.GetServices<ISystemAgentProfileBootstrapSignal>().Should().ContainSingle()
-            .Which.Should().BeOfType<SystemAgentProfileBootstrapSignal>();
+        var bootstrapSignal = provider.GetServices<ISystemAgentProfileBootstrapSignal>()
+            .Should().ContainSingle().Which;
+        bootstrapSignal.Should().BeOfType<SystemAgentProfileBootstrapSignal>();
+        var materializationObserver = provider
+            .GetServices<IAgentProfileReadModelMaterializationObserver>()
+            .Should().ContainSingle(observer =>
+                observer is SystemAgentProfileBootstrapMaterializationObserver)
+            .Which;
+        materializationObserver.OnAgentProfileReadModelMaterialized();
+        await bootstrapSignal.WaitAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
         provider.GetServices<IHostedService>().Count(service =>
             service is SystemAgentProfileBootstrapHostedService).Should().Be(1);
         provider.GetServices<AgentProfileDraftValidator>().Should().ContainSingle();

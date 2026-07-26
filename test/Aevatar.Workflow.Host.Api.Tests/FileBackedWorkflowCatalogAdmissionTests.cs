@@ -50,6 +50,8 @@ public sealed class FileBackedWorkflowCatalogAdmissionTests
             .Unpack<BindWorkflowDefinitionEvent>();
         bind.WorkflowName.Should().Be("repo_install");
         bind.WorkflowYaml.Should().Be("name: repo_install");
+        bind.HasScopeId.Should().BeTrue();
+        bind.ScopeId.Should().BeEmpty();
         bind.SourceKind.Should().Be("repo");
         bind.CapabilityAdmissionPlan.AdmissionDigest.Should().Be("startup-admission-digest");
     }

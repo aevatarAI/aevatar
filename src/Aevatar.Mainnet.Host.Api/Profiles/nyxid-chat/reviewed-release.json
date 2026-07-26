@@ -1,0 +1,45 @@
+{
+  "releaseId": "nyxid-chat-core-1.2",
+  "stage": "shadow-canary",
+  "profileReference": {
+    "ownerHandle": "system",
+    "profileSlug": "nyxid-chat"
+  },
+  "activationMode": "AGENT_PROFILE_ROLLOUT_ACTIVATION_MODE_SHADOW",
+  "cohortSalt": "nyxid-chat-core-1.2-shadow-canary",
+  "cohortBasisPoints": 500,
+  "expectedPublishedRevision": "17",
+  "expectedPublishedSnapshotSha256": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  "expectedExactSkillClosure": [
+    {
+      "skillGuid": "00000000-0000-0000-0000-000000000001",
+      "literalVersion": "1.2",
+      "expectedName": "nyxid-service-discovery",
+      "expectedPublisherId": "5d0d7b72-acff-49af-bb1b-9f30bbb7c102"
+    },
+    {
+      "skillGuid": "00000000-0000-0000-0000-000000000002",
+      "literalVersion": "1.2",
+      "expectedName": "nyxid-service-connect",
+      "expectedPublisherId": "5d0d7b72-acff-49af-bb1b-9f30bbb7c102"
+    },
+    {
+      "skillGuid": "00000000-0000-0000-0000-000000000003",
+      "literalVersion": "1.2",
+      "expectedName": "nyxid-service-call",
+      "expectedPublisherId": "5d0d7b72-acff-49af-bb1b-9f30bbb7c102"
+    },
+    {
+      "skillGuid": "00000000-0000-0000-0000-000000000004",
+      "literalVersion": "1.2",
+      "expectedName": "nyxid-service-maintenance",
+      "expectedPublisherId": "5d0d7b72-acff-49af-bb1b-9f30bbb7c102"
+    }
+  ],
+  "runtimeBounds": {
+    "maxPlanSteps": 4,
+    "handoffTtlSeconds": 900,
+    "classifierTimeoutMs": 600,
+    "maxSelectedSkillBytes": 24576
+  }
+}

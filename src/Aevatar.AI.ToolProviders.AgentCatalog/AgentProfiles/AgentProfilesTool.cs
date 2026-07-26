@@ -90,6 +90,26 @@ public sealed class AgentProfilesTool : IAgentTool
               "required": ["mode", "tool_names", "tool_set_refs"],
               "description": "Complete Profile tool policy. Required by create and update_draft."
             },
+            "recovery_tool_policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["EXPLICIT_ALLOWLIST"]
+                },
+                "tool_names": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "tool_set_refs": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["mode", "tool_names", "tool_set_refs"],
+              "description": "Optional fail-closed recovery tool policy for create and update_draft."
+            },
             "etag": {
               "type": "string",
               "description": "Strong owner Profile ETag from get. Required by update_draft, upsert_skill, remove_skill, and publish."
@@ -114,6 +134,43 @@ public sealed class AgentProfilesTool : IAgentTool
               },
               "required": ["skill_guid", "literal_version", "expected_name", "expected_publisher_id"],
               "description": "Exact Ornn skill reference. Required only by upsert_skill."
+            },
+            "routing_policy": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "intent_id": { "type": "string" },
+                "routing_description": { "type": "string" },
+                "explicit_trigger_aliases": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "task_tool_policy": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": ["EXPLICIT_ALLOWLIST"]
+                    },
+                    "tool_names": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "tool_set_refs": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": ["mode", "tool_names", "tool_set_refs"]
+                },
+                "side_effect_class": {
+                  "type": "string",
+                  "enum": ["READ_ONLY", "EXTERNAL_HANDOFF", "SERVICE_CALL", "MAINTENANCE"]
+                }
+              },
+              "required": ["intent_id", "routing_description", "explicit_trigger_aliases", "task_tool_policy", "side_effect_class"],
+              "description": "Typed routing policy required by routed and default skill bindings."
             },
             "idempotency_key": {
               "type": "string",
@@ -192,7 +249,8 @@ public sealed class AgentProfilesTool : IAgentTool
                 request.DisplayName!,
                 request.Purpose!,
                 request.Instructions!,
-                request.ToolPolicy!.ToContract()),
+                request.ToolPolicy!.ToContract(),
+                request.RecoveryToolPolicy?.ToContract()),
             idempotencyKey,
             ct);
     }
@@ -220,7 +278,8 @@ public sealed class AgentProfilesTool : IAgentTool
                 request.DisplayName!,
                 request.Purpose!,
                 request.Instructions!,
-                request.ToolPolicy!.ToContract()),
+                request.ToolPolicy!.ToContract(),
+                request.RecoveryToolPolicy?.ToContract()),
             ResolveIdempotencyKey(request, required: false),
             ct);
 
@@ -235,7 +294,8 @@ public sealed class AgentProfilesTool : IAgentTool
             request.ExpectedAuthorityStateVersion!.Value,
             new UpsertAgentProfileSkillBindingRequest(
                 request.ActivationMode!.Value,
-                request.Skill!.ToContract()),
+                request.Skill!.ToContract(),
+                request.RoutingPolicy?.ToContract()),
             ResolveIdempotencyKey(request, required: false),
             ct);
 
@@ -383,6 +443,10 @@ public sealed class AgentProfilesTool : IAgentTool
     private static object MapContent(AgentProfileContent content)
     {
         var policy = content.ToolPolicy ?? new AgentProfileToolPolicy();
+        var recoveryPolicy = content.RecoveryToolPolicy ?? new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+        };
         return new
         {
             content.DisplayName,
@@ -393,15 +457,30 @@ public sealed class AgentProfilesTool : IAgentTool
                 binding.BindingId,
                 ActivationMode = ActivationMode(binding.ActivationMode),
                 Skill = MapExactReference(binding.Skill),
+                RoutingPolicy = binding.RoutingPolicy is null
+                    ? null
+                    : MapRoutingPolicy(binding.RoutingPolicy),
             }).ToArray(),
-            ToolPolicy = new
-            {
-                Mode = ToolPolicyMode(policy.Mode),
-                ToolNames = policy.ToolNames.ToArray(),
-                ToolSetRefs = policy.ToolSetRefs.ToArray(),
-            },
+            ToolPolicy = MapToolPolicy(policy),
+            RecoveryToolPolicy = MapToolPolicy(recoveryPolicy),
         };
     }
+
+    private static object MapRoutingPolicy(AgentProfileSkillRoutingPolicy policy) => new
+    {
+        policy.IntentId,
+        policy.RoutingDescription,
+        ExplicitTriggerAliases = policy.ExplicitTriggerAliases.ToArray(),
+        TaskToolPolicy = MapToolPolicy(policy.TaskToolPolicy ?? new AgentProfileToolPolicy()),
+        SideEffectClass = SideEffectClass(policy.SideEffectClass),
+    };
+
+    private static object MapToolPolicy(AgentProfileToolPolicy policy) => new
+    {
+        Mode = ToolPolicyMode(policy.Mode),
+        ToolNames = policy.ToolNames.ToArray(),
+        ToolSetRefs = policy.ToolSetRefs.ToArray(),
+    };
 
     private static object MapMutation(AgentProfileMutationOutcome mutation)
     {
@@ -473,6 +552,15 @@ public sealed class AgentProfilesTool : IAgentTool
         _ => "UNSPECIFIED",
     };
 
+    private static string SideEffectClass(AgentProfileSkillSideEffectClass value) => value switch
+    {
+        AgentProfileSkillSideEffectClass.ReadOnly => "READ_ONLY",
+        AgentProfileSkillSideEffectClass.ExternalHandoff => "EXTERNAL_HANDOFF",
+        AgentProfileSkillSideEffectClass.ServiceCall => "SERVICE_CALL",
+        AgentProfileSkillSideEffectClass.Maintenance => "MAINTENANCE",
+        _ => "UNSPECIFIED",
+    };
+
     private static string MutationStatus(AgentProfileMutationStatus value) => value switch
     {
         AgentProfileMutationStatus.Applied => "APPLIED",
@@ -521,10 +609,12 @@ internal sealed record AgentProfilesToolRequest(string Action, string ProfileSlu
     public string? Purpose { get; init; }
     public string? Instructions { get; init; }
     public AgentProfilesToolPolicyInput? ToolPolicy { get; init; }
+    public AgentProfilesToolPolicyInput? RecoveryToolPolicy { get; init; }
     public long? ExpectedAuthorityStateVersion { get; init; }
     public string? BindingId { get; init; }
     public AgentProfileSkillActivationMode? ActivationMode { get; init; }
     public ExactOrnnSkillReferenceInput? Skill { get; init; }
+    public AgentProfileSkillRoutingPolicyInput? RoutingPolicy { get; init; }
     public string? IdempotencyKey { get; init; }
 
     public static AgentProfilesToolRequest Parse(string argumentsJson)
@@ -551,7 +641,8 @@ internal sealed record AgentProfilesToolRequest(string Action, string ProfileSlu
                 DisplayName = ReadRequiredString(root, "display_name"),
                 Purpose = ReadRequiredString(root, "purpose"),
                 Instructions = ReadRequiredString(root, "instructions"),
-                ToolPolicy = ReadToolPolicy(root),
+                ToolPolicy = ReadToolPolicy(root, "tool_policy", required: true),
+                RecoveryToolPolicy = ReadToolPolicy(root, "recovery_tool_policy", required: false),
                 IdempotencyKey = ReadOptionalIdempotencyKey(root),
             },
             "update_draft" => request with
@@ -559,7 +650,8 @@ internal sealed record AgentProfilesToolRequest(string Action, string ProfileSlu
                 DisplayName = ReadRequiredString(root, "display_name"),
                 Purpose = ReadRequiredString(root, "purpose"),
                 Instructions = ReadRequiredString(root, "instructions"),
-                ToolPolicy = ReadToolPolicy(root),
+                ToolPolicy = ReadToolPolicy(root, "tool_policy", required: true),
+                RecoveryToolPolicy = ReadToolPolicy(root, "recovery_tool_policy", required: false),
                 ExpectedAuthorityStateVersion = ReadEtag(root),
                 IdempotencyKey = ReadOptionalIdempotencyKey(root),
             },
@@ -572,6 +664,7 @@ internal sealed record AgentProfilesToolRequest(string Action, string ProfileSlu
                     "invalid_agent_profile_arguments"),
                 ActivationMode = ReadActivationMode(root),
                 Skill = ReadExactSkill(root),
+                RoutingPolicy = ReadRoutingPolicy(root),
                 IdempotencyKey = ReadOptionalIdempotencyKey(root),
             },
             "remove_skill" => request with
@@ -600,18 +693,18 @@ internal sealed record AgentProfilesToolRequest(string Action, string ProfileSlu
         "create" =>
         [
             "action", "profile_slug", "owner_handle", "display_name", "purpose",
-            "instructions", "tool_policy", "idempotency_key",
+            "instructions", "tool_policy", "recovery_tool_policy", "idempotency_key",
         ],
         "get" or "validate" => ["action", "profile_slug"],
         "update_draft" =>
         [
             "action", "profile_slug", "etag", "display_name", "purpose", "instructions",
-            "tool_policy", "idempotency_key",
+            "tool_policy", "recovery_tool_policy", "idempotency_key",
         ],
         "upsert_skill" =>
         [
             "action", "profile_slug", "etag", "binding_id", "activation_mode", "skill",
-            "idempotency_key",
+            "routing_policy", "idempotency_key",
         ],
         "remove_skill" =>
         ["action", "profile_slug", "etag", "binding_id", "idempotency_key"],
@@ -682,13 +775,19 @@ internal sealed record AgentProfilesToolRequest(string Action, string ProfileSlu
         return value;
     }
 
-    private static AgentProfilesToolPolicyInput ReadToolPolicy(JsonElement root)
+    private static AgentProfilesToolPolicyInput? ReadToolPolicy(
+        JsonElement root,
+        string name,
+        bool required)
     {
-        if (!root.TryGetProperty("tool_policy", out var policy) ||
-            policy.ValueKind != JsonValueKind.Object)
+        if (!root.TryGetProperty(name, out var policy))
         {
+            if (!required)
+                return null;
             throw new JsonException("Agent Profile tool policy is required.");
         }
+        if (policy.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Agent Profile tool policy must be an object.");
 
         RejectDuplicateProperties(policy);
         RejectUnknownFields(policy, ["mode", "tool_names", "tool_set_refs"]);
@@ -702,6 +801,36 @@ internal sealed record AgentProfilesToolRequest(string Action, string ProfileSlu
             mode,
             ReadStringArray(policy, "tool_names"),
             ReadStringArray(policy, "tool_set_refs"));
+    }
+
+    private static AgentProfileSkillRoutingPolicyInput? ReadRoutingPolicy(JsonElement root)
+    {
+        if (!root.TryGetProperty("routing_policy", out var policy))
+            return null;
+        if (policy.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Agent Profile routing policy must be an object.");
+
+        RejectDuplicateProperties(policy);
+        RejectUnknownFields(
+            policy,
+            [
+                "intent_id", "routing_description", "explicit_trigger_aliases",
+                "task_tool_policy", "side_effect_class",
+            ]);
+        var sideEffectClass = ReadRequiredString(policy, "side_effect_class") switch
+        {
+            "READ_ONLY" => AgentProfileSkillSideEffectClass.ReadOnly,
+            "EXTERNAL_HANDOFF" => AgentProfileSkillSideEffectClass.ExternalHandoff,
+            "SERVICE_CALL" => AgentProfileSkillSideEffectClass.ServiceCall,
+            "MAINTENANCE" => AgentProfileSkillSideEffectClass.Maintenance,
+            _ => throw new JsonException("Invalid Agent Profile skill side-effect class."),
+        };
+        return new AgentProfileSkillRoutingPolicyInput(
+            ReadRequiredString(policy, "intent_id"),
+            ReadRequiredString(policy, "routing_description"),
+            ReadStringArray(policy, "explicit_trigger_aliases"),
+            ReadToolPolicy(policy, "task_tool_policy", required: true)!,
+            sideEffectClass);
     }
 
     private static IReadOnlyList<string> ReadStringArray(JsonElement root, string name)
@@ -796,6 +925,27 @@ internal sealed record AgentProfilesToolPolicyInput(
         var policy = new AgentProfileToolPolicy { Mode = Mode };
         policy.ToolNames.Add(ToolNames);
         policy.ToolSetRefs.Add(ToolSetRefs);
+        return policy;
+    }
+}
+
+internal sealed record AgentProfileSkillRoutingPolicyInput(
+    string IntentId,
+    string RoutingDescription,
+    IReadOnlyList<string> ExplicitTriggerAliases,
+    AgentProfilesToolPolicyInput TaskToolPolicy,
+    AgentProfileSkillSideEffectClass SideEffectClass)
+{
+    public AgentProfileSkillRoutingPolicy ToContract()
+    {
+        var policy = new AgentProfileSkillRoutingPolicy
+        {
+            IntentId = IntentId,
+            RoutingDescription = RoutingDescription,
+            TaskToolPolicy = TaskToolPolicy.ToContract(),
+            SideEffectClass = SideEffectClass,
+        };
+        policy.ExplicitTriggerAliases.Add(ExplicitTriggerAliases);
         return policy;
     }
 }

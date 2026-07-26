@@ -279,13 +279,26 @@ public sealed class AgentProfileGAgent : GAgentBase<AgentProfileState>
                 command.ExpectedAuthorityStateVersion))
             return;
 
-        var candidate = State.Draft.Clone();
-        var existingIndex = FindBindingIndex(candidate, binding.BindingId);
-        if (existingIndex >= 0)
-            candidate.SkillBindings.RemoveAt(existingIndex);
-        candidate.SkillBindings.Add(binding.Clone());
-        candidate = AgentProfileDeterminism.NormalizeContent(candidate);
-        var draftSha256 = AgentProfileDeterminism.ComputeDraftSha256(candidate);
+        AgentProfileContent candidate;
+        ByteString draftSha256;
+        try
+        {
+            candidate = State.Draft.Clone();
+            var existingIndex = FindBindingIndex(candidate, binding.BindingId);
+            if (existingIndex >= 0)
+                candidate.SkillBindings.RemoveAt(existingIndex);
+            candidate.SkillBindings.Add(binding.Clone());
+            candidate = AgentProfileDeterminism.NormalizeContent(candidate);
+            draftSha256 = AgentProfileDeterminism.ComputeDraftSha256(candidate);
+        }
+        catch (AgentProfileContractValidationException exception)
+        {
+            await PersistNewRejectionAsync(
+                operation,
+                AgentProfileActorInvariants.FirstDiagnostic(exception),
+                replayAuthority);
+            return;
+        }
         if (State.Draft.Equals(candidate))
         {
             await PersistNoChangeAsync(operation, replayAuthority);

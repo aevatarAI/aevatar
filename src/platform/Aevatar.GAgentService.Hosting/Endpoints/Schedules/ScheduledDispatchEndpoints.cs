@@ -119,7 +119,7 @@ public static class ScheduledDispatchEndpoints
                 catalogReader,
                 revisionCatalogReader,
                 context.AuthenticatedNyxIdOwnerSubject,
-                defaultMissingWorkflowScheduleAuth: false,
+                defaultMissingWorkflowScheduleAuth: true,
                 ct);
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
@@ -192,22 +192,43 @@ public static class ScheduledDispatchEndpoints
 
     internal static async Task<IResult> List(
         [FromServices] IScheduledDispatchApplicationService schedules,
+        string? scopeId = null,
+        string? teamId = null,
+        string? memberId = null,
         int take = 50,
         string? cursor = null,
         bool includeTotalCount = false,
         CancellationToken ct = default)
     {
-        return Results.Ok(await schedules.ListAsync(take, cursor, includeTotalCount, ct));
+        var query = string.IsNullOrWhiteSpace(scopeId)
+            ? new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount)
+            : new ScheduledDispatchListQuery(
+                Take: take,
+                Cursor: cursor,
+                IncludeTotalCount: includeTotalCount,
+                TeamAutomationScopeId: scopeId,
+                TeamAutomationTeamId: teamId,
+                TeamAutomationMemberId: memberId);
+
+        return Results.Ok(await schedules.ListAsync(query, ct));
     }
 
     internal static async Task<IResult> Get(
         string scheduleId,
         [FromServices] IScheduledDispatchApplicationService schedules,
+        string? scopeId = null,
+        string? teamId = null,
+        string? memberId = null,
         CancellationToken ct = default)
     {
         try
         {
-            var schedule = await schedules.GetAsync(scheduleId, ct);
+            var schedule = string.IsNullOrWhiteSpace(scopeId)
+                ? await schedules.GetAsync(scheduleId, ct)
+                : await schedules.GetTeamScheduleAsync(scheduleId, scopeId, teamId, memberId, ct);
             return schedule == null ? Results.NotFound() : Results.Ok(schedule);
         }
         catch (ArgumentException ex)
@@ -381,7 +402,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
         IServiceCatalogQueryReader catalogReader,
         IServiceRevisionCatalogQueryReader revisionCatalogReader,
         ScheduledServiceInvocationNyxIdSubjectRef? authenticatedOwnerSubject = null,
-        bool defaultMissingWorkflowScheduleAuth = true,
+        bool defaultMissingWorkflowScheduleAuth = false,
         CancellationToken ct = default)
     {
         var resolvedTarget = await ResolveTargetAsync(catalogReader, revisionCatalogReader, authenticatedOwnerSubject, ct);

@@ -27,8 +27,8 @@ public class WorkflowCatalogToolsTests
 
         var tools = await source.DiscoverToolsAsync();
         tools.Select(tool => tool.Name).Should().Equal(
-            "aevatar_list_workflows",
-            "aevatar_get_workflow");
+            "aevatar_list_workflow_templates",
+            "aevatar_get_workflow_template");
     }
 
     [Fact]
@@ -39,8 +39,8 @@ public class WorkflowCatalogToolsTests
         var tools = await source.DiscoverToolsAsync();
 
         tools.Select(tool => tool.Name).Should().Equal(
-            "aevatar_list_workflows",
-            "aevatar_get_workflow");
+            "aevatar_list_workflow_templates",
+            "aevatar_get_workflow_template");
         tools.Should().OnlyContain(tool => tool.IsReadOnly && !tool.IsDestructive);
     }
 
@@ -55,26 +55,26 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
-    public async Task ListWorkflows_ShouldReturnCatalogFreshness()
+    public async Task ListWorkflowTemplates_ShouldReturnCatalogFreshness()
     {
         var port = new RecordingWorkflowCatalogPort();
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_list_workflows");
+            .Single(item => item.Name == "aevatar_list_workflow_templates");
 
         var output = await tool.ExecuteAsync("{}");
 
         using var document = JsonDocument.Parse(output);
         document.RootElement.GetProperty("count").GetInt32().Should().Be(1);
-        var workflow = document.RootElement.GetProperty("workflows")[0];
-        workflow.GetProperty("name").GetString().Should().Be("daily_digest");
-        workflow.GetProperty("authority_state_version").GetInt64().Should().Be(7);
-        workflow.GetProperty("projection_watermark").GetDateTimeOffset().Should().Be(ProjectionWatermark);
-        workflow.GetProperty("last_event_id").GetString().Should().Be("event-7");
+        var template = document.RootElement.GetProperty("templates")[0];
+        template.GetProperty("name").GetString().Should().Be("daily_digest");
+        template.GetProperty("authority_state_version").GetInt64().Should().Be(7);
+        template.GetProperty("projection_watermark").GetDateTimeOffset().Should().Be(ProjectionWatermark);
+        template.GetProperty("last_event_id").GetString().Should().Be("event-7");
         port.Calls.Should().Equal("ListWorkflowCatalog");
     }
 
     [Fact]
-    public async Task ListWorkflows_ShouldEnumerateOnlyPublicLibraryTemplates()
+    public async Task ListWorkflowTemplates_ShouldEnumerateOnlyPublicLibraryTemplates()
     {
         var port = new RecordingWorkflowCatalogPort
         {
@@ -99,13 +99,13 @@ public class WorkflowCatalogToolsTests
             ],
         };
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_list_workflows");
+            .Single(item => item.Name == "aevatar_list_workflow_templates");
 
         var output = await tool.ExecuteAsync("{}");
 
         using var document = JsonDocument.Parse(output);
         document.RootElement.GetProperty("count").GetInt32().Should().Be(1);
-        var names = document.RootElement.GetProperty("workflows")
+        var names = document.RootElement.GetProperty("templates")
             .EnumerateArray()
             .Select(item => item.GetProperty("name").GetString())
             .ToArray();
@@ -121,10 +121,10 @@ public class WorkflowCatalogToolsTests
         using var callerCancellation = new CancellationTokenSource();
         var callerToken = callerCancellation.Token;
 
-        await tools.Single(item => item.Name == "aevatar_list_workflows")
+        await tools.Single(item => item.Name == "aevatar_list_workflow_templates")
             .ExecuteAsync("{}", callerToken);
-        await tools.Single(item => item.Name == "aevatar_get_workflow")
-            .ExecuteAsync("""{"workflow_name":"daily_digest"}""", callerToken);
+        await tools.Single(item => item.Name == "aevatar_get_workflow_template")
+            .ExecuteAsync("""{"template_name":"daily_digest"}""", callerToken);
 
         port.CancellationTokens.Should().Equal(callerToken, callerToken);
         port.CancellationTokens.Should().OnlyContain(token =>
@@ -132,19 +132,19 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
-    public async Task ListWorkflows_ShouldExposeExactPropertySets()
+    public async Task ListWorkflowTemplates_ShouldExposeExactPropertySets()
     {
-        AssertWireTypeExists("WorkflowCatalogListJson");
-        AssertWireTypeExists("WorkflowCatalogItemJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogListJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogItemJson");
         var port = new RecordingWorkflowCatalogPort();
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_list_workflows");
+            .Single(item => item.Name == "aevatar_list_workflow_templates");
 
         var output = await tool.ExecuteAsync("{}");
 
         using var document = JsonDocument.Parse(output);
-        PropertyNames(document.RootElement).Should().Equal("workflows", "count");
-        PropertyNames(document.RootElement.GetProperty("workflows")[0]).Should().Equal(
+        PropertyNames(document.RootElement).Should().Equal("templates", "count");
+        PropertyNames(document.RootElement.GetProperty("templates")[0]).Should().Equal(
             "name",
             "description",
             "category",
@@ -163,11 +163,11 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
-    public async Task ListWorkflows_WhenArgumentsContainUnknownProperty_ShouldReturnInvalidArguments()
+    public async Task ListWorkflowTemplates_WhenArgumentsContainUnknownProperty_ShouldReturnInvalidArguments()
     {
         var port = new RecordingWorkflowCatalogPort();
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_list_workflows");
+            .Single(item => item.Name == "aevatar_list_workflow_templates");
 
         var output = await tool.ExecuteAsync("""{"member_id":"m-alpha"}""");
 
@@ -176,11 +176,11 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
-    public async Task ListWorkflows_WhenJsonIsMalformed_ShouldReturnInvalidArguments()
+    public async Task ListWorkflowTemplates_WhenJsonIsMalformed_ShouldReturnInvalidArguments()
     {
         var port = new RecordingWorkflowCatalogPort();
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_list_workflows");
+            .Single(item => item.Name == "aevatar_list_workflow_templates");
 
         var output = await tool.ExecuteAsync("{");
 
@@ -189,17 +189,17 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
-    public async Task GetWorkflow_ShouldReturnYamlDefinitionAndEdges()
+    public async Task GetWorkflowTemplate_ShouldReturnYamlDefinitionAndEdges()
     {
         var port = new RecordingWorkflowCatalogPort();
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_get_workflow");
+            .Single(item => item.Name == "aevatar_get_workflow_template");
 
-        var output = await tool.ExecuteAsync("""{"workflow_name":"  daily_digest  "}""");
+        var output = await tool.ExecuteAsync("""{"template_name":"  daily_digest  "}""");
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
-        root.GetProperty("catalog").GetProperty("name").GetString().Should().Be("daily_digest");
+        root.GetProperty("template").GetProperty("name").GetString().Should().Be("daily_digest");
         root.GetProperty("yaml").GetString().Should().Contain("name: daily_digest");
         root.GetProperty("definition").GetProperty("closed_world_mode").GetBoolean().Should().BeTrue();
         root.GetProperty("definition").GetProperty("roles")[0]
@@ -212,24 +212,24 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
-    public async Task GetWorkflow_ShouldExposeExactNestedPropertySets()
+    public async Task GetWorkflowTemplate_ShouldExposeExactNestedPropertySets()
     {
-        AssertWireTypeExists("WorkflowCatalogDetailJson");
-        AssertWireTypeExists("WorkflowCatalogDefinitionJson");
-        AssertWireTypeExists("WorkflowCatalogRoleJson");
-        AssertWireTypeExists("WorkflowCatalogStepJson");
-        AssertWireTypeExists("WorkflowCatalogChildStepJson");
-        AssertWireTypeExists("WorkflowCatalogEdgeJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogDetailJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogDefinitionJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogRoleJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogStepJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogChildStepJson");
+        AssertWireTypeExists("WorkflowTemplateCatalogEdgeJson");
         var port = new RecordingWorkflowCatalogPort();
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_get_workflow");
+            .Single(item => item.Name == "aevatar_get_workflow_template");
 
-        var output = await tool.ExecuteAsync("""{"workflow_name":"daily_digest"}""");
+        var output = await tool.ExecuteAsync("""{"template_name":"daily_digest"}""");
 
         using var document = JsonDocument.Parse(output);
         var root = document.RootElement;
-        PropertyNames(root).Should().Equal("catalog", "yaml", "definition", "edges");
-        PropertyNames(root.GetProperty("catalog")).Should().Equal(
+        PropertyNames(root).Should().Equal("template", "yaml", "definition", "edges");
+        PropertyNames(root.GetProperty("template")).Should().Equal(
             "name",
             "description",
             "category",
@@ -282,28 +282,41 @@ public class WorkflowCatalogToolsTests
     }
 
     [Fact]
-    public async Task GetWorkflow_WhenNameMissing_ShouldReturnInvalidArguments()
+    public async Task GetWorkflowTemplate_WhenNameMissing_ShouldReturnInvalidArguments()
     {
         var port = new RecordingWorkflowCatalogPort();
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_get_workflow");
+            .Single(item => item.Name == "aevatar_get_workflow_template");
 
-        var output = await tool.ExecuteAsync("""{"workflow_name":"   "}""");
+        var output = await tool.ExecuteAsync("""{"template_name":"   "}""");
+
+        AssertError(output, "invalid_arguments", "template_name");
+        port.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetWorkflowTemplate_WhenArgumentsUseLegacyWorkflowName_ShouldReturnInvalidArguments()
+    {
+        var port = new RecordingWorkflowCatalogPort();
+        var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
+            .Single(item => item.Name == "aevatar_get_workflow_template");
+
+        var output = await tool.ExecuteAsync("""{"workflow_name":"daily_digest"}""");
 
         AssertError(output, "invalid_arguments", "workflow_name");
         port.Calls.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task GetWorkflow_WhenMissing_ShouldReturnWorkflowNotFound()
+    public async Task GetWorkflowTemplate_WhenMissing_ShouldReturnWorkflowTemplateNotFound()
     {
         var port = new RecordingWorkflowCatalogPort { Detail = null };
         var tool = (await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync())
-            .Single(item => item.Name == "aevatar_get_workflow");
+            .Single(item => item.Name == "aevatar_get_workflow_template");
 
-        var output = await tool.ExecuteAsync("""{"workflow_name":"missing"}""");
+        var output = await tool.ExecuteAsync("""{"template_name":"missing"}""");
 
-        AssertError(output, "workflow_not_found", "missing");
+        AssertError(output, "workflow_template_not_found", "missing");
         port.Calls.Should().Equal("GetWorkflowDetail:missing");
     }
 
@@ -316,10 +329,10 @@ public class WorkflowCatalogToolsTests
         };
         var tools = await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync();
 
-        var listAct = () => tools.Single(item => item.Name == "aevatar_list_workflows")
+        var listAct = () => tools.Single(item => item.Name == "aevatar_list_workflow_templates")
             .ExecuteAsync("{}");
-        var getAct = () => tools.Single(item => item.Name == "aevatar_get_workflow")
-            .ExecuteAsync("""{"workflow_name":"daily_digest"}""");
+        var getAct = () => tools.Single(item => item.Name == "aevatar_get_workflow_template")
+            .ExecuteAsync("""{"template_name":"daily_digest"}""");
 
         await listAct.Should().ThrowAsync<OperationCanceledException>();
         await getAct.Should().ThrowAsync<OperationCanceledException>();
@@ -334,13 +347,13 @@ public class WorkflowCatalogToolsTests
         };
         var tools = await new WorkflowCatalogAgentToolSource(port).DiscoverToolsAsync();
 
-        var listOutput = await tools.Single(item => item.Name == "aevatar_list_workflows")
+        var listOutput = await tools.Single(item => item.Name == "aevatar_list_workflow_templates")
             .ExecuteAsync("{}");
-        var getOutput = await tools.Single(item => item.Name == "aevatar_get_workflow")
-            .ExecuteAsync("""{"workflow_name":"daily_digest"}""");
+        var getOutput = await tools.Single(item => item.Name == "aevatar_get_workflow_template")
+            .ExecuteAsync("""{"template_name":"daily_digest"}""");
 
-        AssertError(listOutput, "workflow_query_failed", nameof(InvalidOperationException));
-        AssertError(getOutput, "workflow_query_failed", nameof(InvalidOperationException));
+        AssertError(listOutput, "workflow_template_query_failed", nameof(InvalidOperationException));
+        AssertError(getOutput, "workflow_template_query_failed", nameof(InvalidOperationException));
         listOutput.Should().NotContain("sensitive backend details");
         getOutput.Should().NotContain("sensitive backend details");
     }

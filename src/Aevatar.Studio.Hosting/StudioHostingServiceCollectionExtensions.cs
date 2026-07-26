@@ -1,4 +1,3 @@
-using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
@@ -31,6 +30,7 @@ internal static class StudioHostingServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.TryAddSingleton(configuration);
         services.Configure<StudioHostingOptions>(configuration.GetSection(StudioHostingOptions.SectionName));
         services.Configure<UserLlmSettingsOptions>(configuration.GetSection("Aevatar:Studio:UserLlmSettings"));
         services.AddControllers()
@@ -59,14 +59,6 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddStudioInfrastructure(configuration);
         services.AddStudioProjectionComponents(configuration);
         services.AddStudioProjectionReadModelProviders(configuration);
-        services.AddOptions<ScheduledInvocationOwnerLLMRouteOptions>()
-            .Configure(options =>
-            {
-                var configuredRoute = configuration["Aevatar:NyxId:DefaultRoute"];
-                options.DefaultRoutePreference = string.IsNullOrWhiteSpace(configuredRoute)
-                    ? LlmDefaults.NyxIdRoute
-                    : configuredRoute.Trim();
-            });
         services.AddNyxIdAuthorizationCatalogHosting(configuration);
         services.TryAddSingleton<INyxIdCatalogAccessLifecyclePort>(sp => new NyxIdCatalogAccessLifecyclePort(
             sp.GetRequiredService<INyxIdAuthorizationCatalogCommandPort>(),

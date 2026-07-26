@@ -11,12 +11,15 @@ owner: architecture
 An Agent Profile is an owner-scoped, versioned resource for an agent's purpose,
 instructions, tool-policy restriction, and exact Ornn skill bindings. It is not
 a workflow identity, a service identity, a channel registration, or a credential
-container.
+container. Host rollout data does not own its content.
 
-This canon describes the Phase 1 authority and management delivery. Phase 1
-does not make Chat, WebSocket, NyxID conversation, Studio, member, or channel
-runtime paths select a Profile. Those integrations remain later rollout phases
-and must reuse the authority and read models defined here.
+This canon describes the Profile authority, management, projection, and runtime
+binding boundaries. Direct NyxID conversation creation may bind the published
+`system/nyxid-chat` Profile through the declared read models. The binding is a
+one-time create input and becomes immutable conversation-owned state; turns do
+not query Profile authority or fetch Profile content remotely. Other runtime
+consumers must reuse this authority and binding model rather than introduce a
+second Profile pipeline.
 
 ## 2. Identity And Authority
 
@@ -45,6 +48,9 @@ After caller and entry normalization, an ordinary user Profile is visible only
 when the caller scope equals the entry's `owningScopeId` using ordinal equality.
 The query path does not read the protected execution model for a hidden entry.
 A fully valid `system/*` Profile remains globally discoverable.
+For NyxID chat, the human reference is exactly the typed `system/nyxid-chat`
+reference. Its opaque Profile id is resolved from the namespace read model and
+is never derived from that string.
 
 ## 3. Architecture
 
@@ -61,6 +67,10 @@ flowchart LR
     X --> R1["Namespace catalog"]
     X --> R2["Owner management"]
     X --> R3["Protected execution"]
+    R1 --> B["Create-time binder"]
+    R3 --> B
+    S["Host release and admission pins"] --> B
+    B --> G["Conversation-owned execution binding"]
 ```
 
 Host endpoints parse HTTP, authenticate, and map boundary contracts. Application
@@ -68,6 +78,11 @@ normalizes input, resolves read-side identity, validates or seals publish input,
 builds typed commands, and returns an honest dispatch receipt. Actors alone
 commit Profile facts. The existing Projection Pipeline fans those facts out to
 the declared read models and audit artifacts.
+
+The exact Ornn adapter belongs only to Profile publication. The create-time
+binder reads namespace and protected execution replicas, intersects their facts
+with Host release/admission pins, and seals an `AgentProfileExecutionBinding`.
+The Host neither owns nor reconstructs Profile content.
 
 The five Application-originated mutation commands carry a typed signed ingress
 proof. Infrastructure signs after the final target Actor id is known; Core
@@ -103,7 +118,7 @@ block body, the canonical pre-authority statements, the exact authority call,
 and the immediate operation parse. Source-like text in strings, inactive code,
 nested types, local functions, or other classes is not valid evidence.
 
-## 4. Phase 1 Management Contract
+## 4. Management Contract
 
 ### HTTP API
 
@@ -128,6 +143,16 @@ and skill upsert may commit more than one
 and repaired. `:validate` and `:publish` reject that shape with
 `MULTIPLE_DEFAULT_SKILLS`; publish performs no Ornn resolution for it, and the
 Profile Actor repeats the same defense before accepting sealed content.
+
+The three published activation modes retain distinct semantics:
+
+- `ALWAYS` procedures enter every Profile prompt in authoritative published
+  order. They have no routing authority and cannot widen tools.
+- `ROUTED` members participate in exact-alias and bounded-classifier selection
+  and take precedence over the default member.
+- `DEFAULT_FOR_UNMATCHED_TURN` is eligible only on a true no-match or when there
+  are zero routed candidates. Classifier failure, timeout, alias collision, or
+  unknown intent remains fail-closed and does not select the default.
 
 ### `agent_profiles` tool
 
@@ -170,6 +195,11 @@ The path never calls skill search, `IRemoteSkillFetcher`, or the name-capable
 `GetSkillJsonAsync`. It does not fall back to another version. A missing token,
 inaccessible exact version, identity mismatch, publisher mismatch, or invalid
 package produces a bounded safe diagnostic and no publish commit.
+
+This is an authoring-time publication path. Conversation creation consumes the
+already-sealed execution read model, and turn execution consumes the immutable
+conversation binding. Neither runtime path calls Ornn, HTTP, skill search, or an
+exact-skill fetcher.
 
 ## 6. Accepted And Observed Semantics
 
@@ -221,7 +251,7 @@ current identity, uniqueness, and expected-version invariants.
 |---|---|---|
 | Namespace catalog | Owner lookup, discovery resolution, provisioning, and system readiness. | Reference, typed owner, owning scope, provisioning status, Profile id, and safe published summary. |
 | Owner management | Authenticated management API/tool and system reconciliation. | Canonical draft, exact references, revisions, digests, safe diagnostics, and authority state version. |
-| Protected execution | Future shared runtime resolver and current system readiness. | Server-sealed published snapshot, exact packages, published revision, digest, and authority state version. It is not returned by public management or discovery APIs. |
+| Protected execution | Create-time runtime binder and system readiness. | Server-sealed published snapshot, exact packages, published revision, digest, and authority state version. It is not returned by public management or discovery APIs. |
 
 All three models are actor-scoped current-state replicas. Namespace events feed
 the namespace catalog. Profile events feed owner management and protected
@@ -256,13 +286,55 @@ retaining an unvalidated user identity. Query and export access to the partition
 always requires platform-admin authorization, even when a caller's `scope_id`
 claim has the same literal value.
 
-## 8. System Profile Bootstrap And Health
+## 8. Create-Time Binding And Turn Execution
+
+The Mainnet binder receives only the typed `system/nyxid-chat` reference from a
+strict `AgentProfileRolloutReleaseSpec`. For a selected new conversation it:
+
+1. reads the namespace current-state model once by typed reference;
+2. obtains the opaque Profile id and reads the execution current-state model
+   once by that id;
+3. validates namespace/execution identity, authority versions, published
+   revision/digest, exact closure, runtime bounds, route admission, and release
+   pins; and
+4. seals one deterministic `AgentProfileExecutionBinding` before Actor creation.
+
+The binder never creates or primes a projection, replays events, reads an Actor
+or event store, or performs remote skill I/O. Only `NotSelected` permits
+unprofiled Actor creation. `ProfileUnavailable` and `AdmissionMismatch` fail
+before Actor creation. A bound Actor commits the complete binding once and
+rejects removal or replacement. Later turns, restart recovery, and replay use
+that persisted binding with zero Profile queries and zero Ornn reads.
+
+The binding contains the sealed Profile instructions and member bodies from the
+authoritative execution replica plus separate Host admission provenance. It is
+not Host-authored Profile content. SHADOW may classify and observe a routed
+candidate but uses recovery authority and never injects its selected body.
+ENFORCED may inject the selected sealed body. In both modes, Profile-level
+instructions and every `ALWAYS` procedure remain in the Profile prompt.
+
+Effective tools can only narrow. Route-owned and caller-visible capabilities,
+the Host admission ceiling, and the Profile maximum form the outer
+intersection. Recovery policy applies on the recovery branch; an ENFORCED
+selected branch may add the selected task policy within those same ceilings.
+No Profile text or policy grants tools, credentials, OAuth scopes, or approval
+bypass. An empty intersection remains restricted-empty.
+
+Raw Profile `instructions` are limited to exactly 32,768 UTF-8 bytes. The
+materialized Profile prompt layer is limited to exactly 65,536 UTF-8 bytes,
+including canonical wrappers and separators for all `ALWAYS` procedures.
+
+## 9. System Profile Bootstrap And Health
 
 Hosts may contribute `ISystemAgentProfileDefinitionSource` implementations.
 The bootstrap hosted service performs one reconciliation pass at startup and
 then wakes on a bounded signal. Each pass rereads definitions and all three read
-models and dispatches at most the next required command. The signal is only a
-wake mechanism; no service-level id-to-state registry becomes authoritative.
+models and dispatches at most the next required command. Successful committed
+namespace, owner-management, and execution current-state materializations pulse
+the bounded, coalescing process-local signal after their upserts are accepted.
+The signal carries no Profile facts, owns no state, and never primes a
+projection; it is only a wake hint for a fresh reconciliation read. No
+service-level id-to-state registry becomes authoritative.
 
 Reconciliation mutation and publish operation ids include
 `authority-version:<observedVersion>`. Repeating a pass against the same
@@ -279,15 +351,17 @@ The readiness service independently compares each required definition with its
 namespace, owner, and protected execution replicas. A required Profile is ready
 only when the desired draft and published digests match and the protected
 execution snapshot has the same published revision and digest. No registered
-definitions means ready, so Phase 1 does not change startup behavior by itself.
+definitions means ready, so Profile registration does not change startup
+behavior by itself.
 Capability health reports bounded reference/status/reason details and never
 reports credentials, sealed content, or raw remote errors.
 
-## 9. Security And Observability Boundary
+## 10. Security And Observability Boundary
 
 - Internal state, commands, events, snapshots, and read models use Protobuf.
 - Profile and skill content cannot grant tools, OAuth scopes, permissions, or
-  credentials. Tool policy only intersects the caller and route maximum.
+  credentials. Tool policy only narrows the caller/route capability and Host
+  admission ceiling.
 - Owner-authored draft text is returned only on the authorized management
   surface. Protected sealed content remains server-side.
 - Audit and health use allowlisted safe fields; raw diagnostics are excluded.
@@ -302,15 +376,15 @@ reports credentials, sealed content, or raw remote errors.
 - Core and Projection do not reference Ornn/HTTP implementations. Application
   depends on exact typed ports. Concrete provider selection belongs to Host.
 
-## 10. Rollout Boundary
+## 11. Rollout Boundary
 
 | Phase | Status in this canon | Included | Explicitly not active |
 |---|---|---|---|
-| Phase 1: authority and management | Current | Typed contracts, two authorities, three read models, HTTP/tool management, exact Ornn publish adapter, committed audit, telemetry surface, system bootstrap/readiness, and boundary guards. | No existing runtime ingress consumes a Profile. |
-| Phase 2: unified runtime and Studio | Later | Shared resolver, immutable turn stamp, prompt/tool composition, typed Chat/NyxID inputs, and `system/studio`. | Not implemented or implied by Phase 1 routes, DI, or health. |
-| Phase 3: channel binding and migration | Later | Typed channel binding, stop-new-write policy, and durable migration from legacy default-skill data. | No channel/member binding or legacy inference exists in Phase 1. |
-| Phase 4: removal and enforcement | Later | Resolve migration blocks, remove and reserve legacy fields, enable later-phase forbidden-term checks, and update runtime canon. | Phase 1 guards do not prematurely forbid legacy paths still owned by later migrations. |
+| Profile authority and management | Current | Typed contracts, explicit Namespace ownership, one Profile content authority, three read models, HTTP/tool management, exact Ornn publish adapter, committed audit, telemetry, system bootstrap/readiness, and boundary guards. | Host rollout data never becomes Profile content authority. |
+| Direct NyxID conversation binding | Current contract; disabled by default | One create-time namespace/execution resolution, immutable Actor-owned execution binding, deterministic prompt/routing/tool narrowing, SHADOW/ENFORCED admission, and the 64-case evaluation pipeline. | No per-turn Profile query, event replay, Actor side read, runtime Ornn read, lazy rebind, or hot upgrade. |
+| Additional runtime consumers and migration | Later | Shared typed binding semantics for explicitly selected consumers and durable migration where required. | No consumer may infer a Profile id from a human reference or define a second content artifact. |
+| Legacy removal and enforcement | Later | Resolve migration blocks, reserve removed fields, and enable later forbidden-term checks. | Current guards do not prematurely forbid legacy paths still owned by later migrations. |
 
-Every later phase must consume the Phase 1 identity, authority, exact publish,
-and read-model contracts. It must not introduce a second Profile model, infer
-identity from strings, or restore runtime Ornn lookup.
+Every later phase must consume the same identity, Actor authority, exact publish,
+read-model, and immutable binding contracts. It must not introduce a second
+Profile model, infer identity from strings, or restore runtime Ornn lookup.

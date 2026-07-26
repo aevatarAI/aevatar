@@ -277,7 +277,8 @@ internal static class AgentProfileActorInvariants
         if (!string.Equals(snapshot.DisplayName, draft.DisplayName, StringComparison.Ordinal) ||
             !string.Equals(snapshot.Purpose, draft.Purpose, StringComparison.Ordinal) ||
             !string.Equals(snapshot.Instructions, draft.Instructions, StringComparison.Ordinal) ||
-            snapshot.ToolPolicy?.Equals(draft.ToolPolicy) != true)
+            !Equals(snapshot.ToolPolicy, draft.ToolPolicy) ||
+            !Equals(snapshot.RecoveryToolPolicy, draft.RecoveryToolPolicy))
         {
             return PublishSourceChanged();
         }
@@ -291,7 +292,8 @@ internal static class AgentProfileActorInvariants
             var sealedBinding = snapshot.SkillBindings[index];
             if (!string.Equals(authored.BindingId, sealedBinding.BindingId, StringComparison.Ordinal) ||
                 authored.ActivationMode != sealedBinding.ActivationMode ||
-                sealedBinding.Skill?.ExactReference?.Equals(authored.Skill) != true)
+                sealedBinding.Skill?.ExactReference?.Equals(authored.Skill) != true ||
+                !Equals(sealedBinding.RoutingPolicy, authored.RoutingPolicy))
             {
                 return BindingConflict();
             }

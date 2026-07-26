@@ -252,7 +252,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         scopeResolver.ResolveScopeIdByApiKeyAsync("api-key-1", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<string?>("owner-scope-1"));
         var userConfigQueryPort = Substitute.For<IUserConfigQueryPort>();
-        userConfigQueryPort.GetAsync("owner-scope-1", Arg.Any<CancellationToken>())
+        userConfigQueryPort.GetAsync(
+                UserConfigResourceKey.ForOwnerScope("owner-scope-1"),
+                Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new StudioConfig(
                 DefaultModel: " owner-model ",
                 PreferredLlmRoute: " /api/v1/proxy/s/owner ",
@@ -314,7 +316,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
         generator.CapturedLlmControl.NyxIdRoutePreference.Should().Be("/api/v1/proxy/s/incoming");
         generator.CapturedLlmControl.MaxToolRoundsOverride.Should().Be(3);
         AgentRunReplyStepMappers.LlmControlFromProto(state).Should().Be(generator.CapturedLlmControl);
-        await userConfigQueryPort.DidNotReceiveWithAnyArgs().GetAsync(default!, default);
+        await userConfigQueryPort.DidNotReceive().GetAsync(
+            Arg.Any<UserConfigResourceKey>(),
+            Arg.Any<CancellationToken>());
     }
 
     private static AgentRunReplyGenerationExecutor CreateExecutor(
@@ -406,9 +410,9 @@ public sealed class AgentRunReplyGenerationExecutorSenderTokenTests
                 history: new ChatHistory(),
                 toolLoop: new ToolCallLoop(new ToolManager()),
                 hooks: null,
-                requestBuilder: static () => new LLMRequest { Messages = [] });
+                requestBuilder: static _ => new LLMRequest { Messages = [] });
             var plan = new AgentRunReplyStepPlan(
-                runtime.CreateStepExecutor(),
+                runtime.CreateStepExecutor(turnCatalog: null),
                 new Dictionary<string, string>(metadata, StringComparer.Ordinal),
                 control,
                 projectedToolContext,

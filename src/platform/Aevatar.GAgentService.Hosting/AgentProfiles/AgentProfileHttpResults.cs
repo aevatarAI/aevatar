@@ -132,7 +132,10 @@ internal static class AgentProfileHttpResults
 
     private static AgentProfileContentHttpResponse MapContent(AgentProfileContent content)
     {
-        var policy = content.ToolPolicy ?? new AgentProfileToolPolicy();
+        var recoveryPolicy = content.RecoveryToolPolicy ?? new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+        };
         return new AgentProfileContentHttpResponse(
             content.DisplayName,
             content.Purpose,
@@ -141,12 +144,29 @@ internal static class AgentProfileHttpResults
                 new AgentProfileSkillBindingHttpResponse(
                     binding.BindingId,
                     ActivationMode(binding.ActivationMode),
-                    MapExactReference(binding.Skill))).ToArray(),
-            new AgentProfileToolPolicyHttpResponse(
-                ToolPolicyMode(policy.Mode),
-                policy.ToolNames.ToArray(),
-                policy.ToolSetRefs.ToArray()));
+                    MapExactReference(binding.Skill),
+                    binding.RoutingPolicy is null
+                        ? null
+                        : MapRoutingPolicy(binding.RoutingPolicy))).ToArray(),
+            MapToolPolicy(content.ToolPolicy ?? new AgentProfileToolPolicy()),
+            MapToolPolicy(recoveryPolicy));
     }
+
+    private static AgentProfileSkillRoutingPolicyHttpResponse MapRoutingPolicy(
+        AgentProfileSkillRoutingPolicy policy) =>
+        new(
+            policy.IntentId,
+            policy.RoutingDescription,
+            policy.ExplicitTriggerAliases.ToArray(),
+            MapToolPolicy(policy.TaskToolPolicy ?? new AgentProfileToolPolicy()),
+            SideEffectClass(policy.SideEffectClass));
+
+    private static AgentProfileToolPolicyHttpResponse MapToolPolicy(
+        AgentProfileToolPolicy policy) =>
+        new(
+            ToolPolicyMode(policy.Mode),
+            policy.ToolNames.ToArray(),
+            policy.ToolSetRefs.ToArray());
 
     private static AgentProfileMutationHttpResponse MapMutation(
         AgentProfileMutationOutcome mutation)
@@ -194,6 +214,15 @@ internal static class AgentProfileHttpResults
     {
         AgentProfileToolPolicyMode.InheritRouteMaximum => "INHERIT_ROUTE_MAXIMUM",
         AgentProfileToolPolicyMode.ExplicitAllowlist => "EXPLICIT_ALLOWLIST",
+        _ => "UNSPECIFIED",
+    };
+
+    private static string SideEffectClass(AgentProfileSkillSideEffectClass value) => value switch
+    {
+        AgentProfileSkillSideEffectClass.ReadOnly => "READ_ONLY",
+        AgentProfileSkillSideEffectClass.ExternalHandoff => "EXTERNAL_HANDOFF",
+        AgentProfileSkillSideEffectClass.ServiceCall => "SERVICE_CALL",
+        AgentProfileSkillSideEffectClass.Maintenance => "MAINTENANCE",
         _ => "UNSPECIFIED",
     };
 

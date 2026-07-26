@@ -6,6 +6,7 @@ namespace Aevatar.GAgents.WorkOrder;
 public static class WorkOrderConventions
 {
     public const string ActorIdPrefix = "work-order";
+    public const string ExecutionWorkerPublisherActorId = "studio.work-order-execution-worker";
 
     public static string BuildWorkOrderId(string scopeId, string dedupKey)
     {
@@ -17,9 +18,6 @@ public static class WorkOrderConventions
 
     public static string BuildActorId(string scopeId, string workOrderId) =>
         $"{ActorIdPrefix}:{NormalizeScopeId(scopeId)}:{NormalizeWorkOrderId(workOrderId)}";
-
-    public static string BuildApprovalId(string workOrderId) =>
-        $"approval-{NormalizeWorkOrderId(workOrderId)}";
 
     public static string BuildDispatchCommandId(string workOrderId) =>
         $"work-order-dispatch-{NormalizeWorkOrderId(workOrderId)}";

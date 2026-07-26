@@ -118,6 +118,8 @@ public sealed class WorkspaceControllerWorkflowDraftCreateTests
 
         public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null) =>
             false;
+
+        public bool HasHttpRequestContext(HttpContext? httpContext = null) => false;
     }
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService

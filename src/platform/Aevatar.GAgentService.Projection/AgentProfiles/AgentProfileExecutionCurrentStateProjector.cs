@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
 
 namespace Aevatar.GAgentService.Projection.AgentProfiles;
@@ -10,13 +11,16 @@ public sealed class AgentProfileExecutionCurrentStateProjector
 {
     private readonly IProjectionWriteDispatcher<AgentProfileExecutionDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
+    private readonly IReadOnlyList<IAgentProfileReadModelMaterializationObserver> _materializationObservers;
 
     public AgentProfileExecutionCurrentStateProjector(
         IProjectionWriteDispatcher<AgentProfileExecutionDocument> writeDispatcher,
-        IProjectionClock clock)
+        IProjectionClock clock,
+        IEnumerable<IAgentProfileReadModelMaterializationObserver>? materializationObservers = null)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _materializationObservers = materializationObservers?.ToArray() ?? [];
     }
 
     public async ValueTask ProjectAsync(
@@ -52,5 +56,7 @@ public sealed class AgentProfileExecutionCurrentStateProjector
 
         var result = await _writeDispatcher.UpsertAsync(document, ct);
         AgentProfileProjectionWritePolicy.EnsureAccepted(result, document.Id);
+        foreach (var observer in _materializationObservers)
+            observer.OnAgentProfileReadModelMaterialized();
     }
 }

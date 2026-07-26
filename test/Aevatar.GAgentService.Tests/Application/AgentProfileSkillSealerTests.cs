@@ -5,6 +5,7 @@ using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.AgentProfiles;
+using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 
 namespace Aevatar.GAgentService.Tests.Application;
@@ -32,6 +33,11 @@ public sealed class AgentProfileSkillSealerTests
             return ExactOrnnSkillResolutionResult.Success(package);
         });
         var content = Content();
+        content.RecoveryToolPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "recovery-tool" },
+        };
         content.SkillBindings.Add(
         [
             Binding("bind-zeta", AgentProfileSkillActivationMode.Routed, ExactReference(3, "skill-zeta")),
@@ -58,11 +64,14 @@ public sealed class AgentProfileSkillSealerTests
             AgentProfileSkillActivationMode.Always,
             AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
             AgentProfileSkillActivationMode.Routed);
+        snapshot.RecoveryToolPolicy.Should().BeEquivalentTo(content.RecoveryToolPolicy);
 
         foreach (var sealedBinding in snapshot.SkillBindings)
         {
-            sealedBinding.Skill.ExactReference.Should().BeEquivalentTo(
-                content.SkillBindings.Single(binding => binding.BindingId == sealedBinding.BindingId).Skill);
+            var sourceBinding = content.SkillBindings.Single(binding =>
+                binding.BindingId == sealedBinding.BindingId);
+            sealedBinding.Skill.ExactReference.Should().BeEquivalentTo(sourceBinding.Skill);
+            sealedBinding.RoutingPolicy.Should().BeEquivalentTo(sourceBinding.RoutingPolicy);
             sealedBinding.Skill.ContentSha256.Should().Equal(
                 AgentProfileDeterminism.ComputeSealedSkillSha256(sealedBinding.Skill));
         }
@@ -342,8 +351,10 @@ public sealed class AgentProfileSkillSealerTests
         AgentProfileValidationLimits.ExplicitToolNameMaxCount.Should().Be(128);
         AgentProfileValidationLimits.ToolSetRefMaxCount.Should().Be(32);
         AgentProfileValidationLimits.ProfileInstructionsMaxUtf8Bytes.Should().Be(32_768);
-        AgentProfileValidationLimits.AggregatePromptMaxUtf8Bytes.Should().Be(65_536);
-        AgentProfileValidationLimits.AggregatePromptMaxTokens.Should().Be(65_536);
+        AgentProfileValidationLimits.RawAuthoritativeAggregateContentMaxUtf8Bytes.Should().Be(65_536);
+        AgentProfileValidationLimits.RawAuthoritativeAggregateContentMaxEstimatedTokens.Should().Be(65_536);
+        AgentProfileValidationLimits.MaterializedProfileLayerMaxUtf8Bytes.Should().Be(65_536);
+        AgentProfileValidationLimits.MaterializedProfileLayerMaxEstimatedTokens.Should().Be(65_536);
         AgentProfileValidationLimits.TextAssetMaxUtf8Bytes.Should().Be(262_144);
         AgentProfileValidationLimits.SealedSkillMaxSerializedBytes.Should().Be(1_048_576);
         AgentProfileValidationLimits.PublishedSnapshotMaxSerializedBytes.Should().Be(4_194_304);
@@ -409,6 +420,49 @@ public sealed class AgentProfileSkillSealerTests
         result.IsSuccess.Should().BeFalse();
         result.Diagnostics.Should().Contain(diagnostic => diagnostic.Code == "AGGREGATE_PROMPT_BYTES_EXCEEDED");
         result.Diagnostics.Should().Contain(diagnostic => diagnostic.Code == "AGGREGATE_PROMPT_TOKENS_EXCEEDED");
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    public async Task ResolveAndSealAsync_ShouldEnforceExactMaterializedProfileLayerLimit(
+        int extraRenderedByte,
+        bool expectedSuccess)
+    {
+        var boundary = GAgentServiceTestKit.CreateRenderedProfileLayerBoundary(extraRenderedByte);
+        var resolver = new RecordingResolver(reference =>
+        {
+            var package = PackageFor(reference);
+            var index = reference.SkillGuid.EndsWith("000001", StringComparison.Ordinal) ? 0 : 1;
+            package.Description = string.Empty;
+            package.Instructions = boundary.AlwaysProcedures[index];
+            package.Arguments = string.Empty;
+            package.WhenToUse = string.Empty;
+            return ExactOrnnSkillResolutionResult.Success(package);
+        });
+        var content = Content();
+        content.Instructions = boundary.ProfileInstructions;
+        content.SkillBindings.Add(
+        [
+            Binding("bind-1", AgentProfileSkillActivationMode.Always, ExactReference(1)),
+            Binding("bind-2", AgentProfileSkillActivationMode.Always, ExactReference(2)),
+        ]);
+
+        var result = await CreateSealer(resolver).ResolveAndSealAsync(Identity(), content, "token");
+
+        result.IsSuccess.Should().Be(expectedSuccess);
+        if (expectedSuccess)
+        {
+            result.Diagnostics.Should().NotContain(diagnostic =>
+                diagnostic.Code == "MATERIALIZED_PROFILE_LAYER_BYTES_EXCEEDED");
+        }
+        else
+        {
+            result.Diagnostics.Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "MATERIALIZED_PROFILE_LAYER_BYTES_EXCEEDED");
+        }
+        result.Diagnostics.Should().NotContain(diagnostic =>
+            diagnostic.Code == "AGGREGATE_PROMPT_BYTES_EXCEEDED");
     }
 
     [Fact]
@@ -561,13 +615,31 @@ public sealed class AgentProfileSkillSealerTests
     private static AgentProfileSkillBinding Binding(
         string bindingId,
         AgentProfileSkillActivationMode activationMode,
-        ExactOrnnSkillReference reference) =>
-        new()
+        ExactOrnnSkillReference reference)
+    {
+        var binding = new AgentProfileSkillBinding
         {
             BindingId = bindingId,
             ActivationMode = activationMode,
             Skill = reference,
         };
+        if (activationMode is AgentProfileSkillActivationMode.Routed or
+            AgentProfileSkillActivationMode.DefaultForUnmatchedTurn)
+        {
+            binding.RoutingPolicy = new AgentProfileSkillRoutingPolicy
+            {
+                IntentId = bindingId,
+                RoutingDescription = $"Route requests for {bindingId}.",
+                TaskToolPolicy = new AgentProfileToolPolicy
+                {
+                    Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                },
+                SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+            };
+            binding.RoutingPolicy.ExplicitTriggerAliases.Add(bindingId);
+        }
+        return binding;
+    }
 
     private static ExactOrnnSkillReference ExactReference(
         int identity = 1,

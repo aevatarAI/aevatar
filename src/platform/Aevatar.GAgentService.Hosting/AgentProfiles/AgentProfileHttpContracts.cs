@@ -16,7 +16,8 @@ public sealed record CreateAgentProfileHttpRequest(
     [property: JsonRequired]
     string Instructions,
     [property: JsonRequired]
-    AgentProfileToolPolicyHttpRequest ToolPolicy);
+    AgentProfileToolPolicyHttpRequest ToolPolicy,
+    AgentProfileToolPolicyHttpRequest? RecoveryToolPolicy = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateAgentProfileDraftHttpRequest(
@@ -27,7 +28,8 @@ public sealed record UpdateAgentProfileDraftHttpRequest(
     [property: JsonRequired]
     string Instructions,
     [property: JsonRequired]
-    AgentProfileToolPolicyHttpRequest ToolPolicy);
+    AgentProfileToolPolicyHttpRequest ToolPolicy,
+    AgentProfileToolPolicyHttpRequest? RecoveryToolPolicy = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AgentProfileSkillBindingHttpRequest(
@@ -35,7 +37,22 @@ public sealed record AgentProfileSkillBindingHttpRequest(
     [property: JsonConverter(typeof(AgentProfileSkillActivationModeJsonConverter))]
     AgentProfileSkillActivationMode ActivationMode,
     [property: JsonRequired]
-    ExactOrnnSkillReferenceHttpRequest Skill);
+    ExactOrnnSkillReferenceHttpRequest Skill,
+    AgentProfileSkillRoutingPolicyHttpRequest? RoutingPolicy = null);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record AgentProfileSkillRoutingPolicyHttpRequest(
+    [property: JsonRequired]
+    string IntentId,
+    [property: JsonRequired]
+    string RoutingDescription,
+    [property: JsonRequired]
+    IReadOnlyList<string> ExplicitTriggerAliases,
+    [property: JsonRequired]
+    AgentProfileToolPolicyHttpRequest TaskToolPolicy,
+    [property: JsonRequired]
+    [property: JsonConverter(typeof(AgentProfileSkillSideEffectClassJsonConverter))]
+    AgentProfileSkillSideEffectClass SideEffectClass);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ExactOrnnSkillReferenceHttpRequest(
@@ -70,7 +87,8 @@ internal static class AgentProfileHttpRequestMapper
             request.DisplayName is null ||
             request.Purpose is null ||
             request.Instructions is null ||
-            !TryMap(request.ToolPolicy, out var toolPolicy))
+            !TryMap(request.ToolPolicy, out var toolPolicy) ||
+            !TryMapOptional(request.RecoveryToolPolicy, out var recoveryToolPolicy))
         {
             return false;
         }
@@ -81,7 +99,8 @@ internal static class AgentProfileHttpRequestMapper
             request.DisplayName,
             request.Purpose,
             request.Instructions,
-            toolPolicy);
+            toolPolicy,
+            recoveryToolPolicy);
         return true;
     }
 
@@ -94,7 +113,8 @@ internal static class AgentProfileHttpRequestMapper
             request.DisplayName is null ||
             request.Purpose is null ||
             request.Instructions is null ||
-            !TryMap(request.ToolPolicy, out var toolPolicy))
+            !TryMap(request.ToolPolicy, out var toolPolicy) ||
+            !TryMapOptional(request.RecoveryToolPolicy, out var recoveryToolPolicy))
         {
             return false;
         }
@@ -103,7 +123,8 @@ internal static class AgentProfileHttpRequestMapper
             request.DisplayName,
             request.Purpose,
             request.Instructions,
-            toolPolicy);
+            toolPolicy,
+            recoveryToolPolicy);
         return true;
     }
 
@@ -116,7 +137,8 @@ internal static class AgentProfileHttpRequestMapper
             request.Skill.SkillGuid is null ||
             request.Skill.LiteralVersion is null ||
             request.Skill.ExpectedName is null ||
-            request.Skill.ExpectedPublisherId is null)
+            request.Skill.ExpectedPublisherId is null ||
+            !TryMapOptional(request.RoutingPolicy, out var routingPolicy))
         {
             return false;
         }
@@ -129,7 +151,48 @@ internal static class AgentProfileHttpRequestMapper
                 LiteralVersion = request.Skill.LiteralVersion,
                 ExpectedName = request.Skill.ExpectedName,
                 ExpectedPublisherId = request.Skill.ExpectedPublisherId,
-            });
+            },
+            routingPolicy);
+        return true;
+    }
+
+    private static bool TryMapOptional(
+        AgentProfileSkillRoutingPolicyHttpRequest? request,
+        out AgentProfileSkillRoutingPolicy? mapped)
+    {
+        mapped = null;
+        if (request is null)
+            return true;
+        if (request.IntentId is null ||
+            request.RoutingDescription is null ||
+            request.ExplicitTriggerAliases is null ||
+            request.ExplicitTriggerAliases.Any(static value => value is null) ||
+            !TryMap(request.TaskToolPolicy, out var taskToolPolicy))
+        {
+            return false;
+        }
+
+        mapped = new AgentProfileSkillRoutingPolicy
+        {
+            IntentId = request.IntentId,
+            RoutingDescription = request.RoutingDescription,
+            TaskToolPolicy = taskToolPolicy,
+            SideEffectClass = request.SideEffectClass,
+        };
+        mapped.ExplicitTriggerAliases.Add(request.ExplicitTriggerAliases);
+        return true;
+    }
+
+    private static bool TryMapOptional(
+        AgentProfileToolPolicyHttpRequest? request,
+        out AgentProfileToolPolicy? mapped)
+    {
+        mapped = null;
+        if (request is null)
+            return true;
+        if (!TryMap(request, out var value))
+            return false;
+        mapped = value;
         return true;
     }
 
@@ -181,17 +244,26 @@ internal sealed record AgentProfileToolPolicyHttpResponse(
     IReadOnlyList<string> ToolNames,
     IReadOnlyList<string> ToolSetRefs);
 
+internal sealed record AgentProfileSkillRoutingPolicyHttpResponse(
+    string IntentId,
+    string RoutingDescription,
+    IReadOnlyList<string> ExplicitTriggerAliases,
+    AgentProfileToolPolicyHttpResponse TaskToolPolicy,
+    string SideEffectClass);
+
 internal sealed record AgentProfileSkillBindingHttpResponse(
     string BindingId,
     string ActivationMode,
-    ExactOrnnSkillReferenceHttpResponse Skill);
+    ExactOrnnSkillReferenceHttpResponse Skill,
+    AgentProfileSkillRoutingPolicyHttpResponse? RoutingPolicy);
 
 internal sealed record AgentProfileContentHttpResponse(
     string DisplayName,
     string Purpose,
     string Instructions,
     IReadOnlyList<AgentProfileSkillBindingHttpResponse> SkillBindings,
-    AgentProfileToolPolicyHttpResponse ToolPolicy);
+    AgentProfileToolPolicyHttpResponse ToolPolicy,
+    AgentProfileToolPolicyHttpResponse RecoveryToolPolicy);
 
 internal sealed record AgentProfileSafeDiagnosticHttpResponse(
     string Code,
@@ -307,5 +379,39 @@ internal sealed class AgentProfileToolPolicyModeJsonConverter
             AgentProfileToolPolicyMode.InheritRouteMaximum => "INHERIT_ROUTE_MAXIMUM",
             AgentProfileToolPolicyMode.ExplicitAllowlist => "EXPLICIT_ALLOWLIST",
             _ => throw new JsonException("Invalid Agent Profile tool policy mode."),
+        });
+}
+
+internal sealed class AgentProfileSkillSideEffectClassJsonConverter
+    : JsonConverter<AgentProfileSkillSideEffectClass>
+{
+    public override AgentProfileSkillSideEffectClass Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options) =>
+        reader.TokenType == JsonTokenType.String
+            ? reader.GetString() switch
+            {
+                "UNSPECIFIED" => AgentProfileSkillSideEffectClass.Unspecified,
+                "READ_ONLY" => AgentProfileSkillSideEffectClass.ReadOnly,
+                "EXTERNAL_HANDOFF" => AgentProfileSkillSideEffectClass.ExternalHandoff,
+                "SERVICE_CALL" => AgentProfileSkillSideEffectClass.ServiceCall,
+                "MAINTENANCE" => AgentProfileSkillSideEffectClass.Maintenance,
+                _ => throw new JsonException(),
+            }
+            : throw new JsonException();
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        AgentProfileSkillSideEffectClass value,
+        JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            AgentProfileSkillSideEffectClass.Unspecified => "UNSPECIFIED",
+            AgentProfileSkillSideEffectClass.ReadOnly => "READ_ONLY",
+            AgentProfileSkillSideEffectClass.ExternalHandoff => "EXTERNAL_HANDOFF",
+            AgentProfileSkillSideEffectClass.ServiceCall => "SERVICE_CALL",
+            AgentProfileSkillSideEffectClass.Maintenance => "MAINTENANCE",
+            _ => throw new JsonException(),
         });
 }

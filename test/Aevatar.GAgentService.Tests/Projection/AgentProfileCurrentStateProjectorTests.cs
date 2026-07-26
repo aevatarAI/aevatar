@@ -1,6 +1,8 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Runtime;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
@@ -213,12 +215,82 @@ public sealed class AgentProfileCurrentStateProjectorTests
         persisted.LastEventId.Should().Be("evt-profile-42");
     }
 
+    [Fact]
+    public async Task Projectors_ShouldNotifyBootstrapObserversOnlyAfterAcceptedUpserts()
+    {
+        var observer = new RecordingAgentProfileReadModelMaterializationObserver();
+        var namespaceProjector = new AgentProfileNamespaceCurrentStateProjector(
+            new RecordingDocumentStore<AgentProfileNamespaceCatalogDocument>(x => x.Id),
+            new FixedProjectionClock(ObservedAt),
+            [observer]);
+        var ownerProjector = new AgentProfileOwnerCurrentStateProjector(
+            new RecordingDocumentStore<AgentProfileOwnerDocument>(x => x.Id),
+            new FixedProjectionClock(ObservedAt),
+            [observer]);
+        var executionProjector = new AgentProfileExecutionCurrentStateProjector(
+            new RecordingDocumentStore<AgentProfileExecutionDocument>(x => x.Id),
+            new FixedProjectionClock(ObservedAt),
+            [observer]);
+
+        await namespaceProjector.ProjectAsync(
+            NamespaceContext(),
+            WrapCommitted(new AgentProfileNamespaceState(), 41, "evt-namespace-41"));
+        await ownerProjector.ProjectAsync(
+            OwnerContext(),
+            WrapCommitted(ProfileState(published: true), 42, "evt-owner-42"));
+        await executionProjector.ProjectAsync(
+            ExecutionContext(),
+            WrapCommitted(ProfileState(published: true), 42, "evt-execution-42"));
+
+        observer.NotificationCount.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Projector_ShouldNotNotifyBootstrapObserverWhenUpsertIsRejected()
+    {
+        var observer = new RecordingAgentProfileReadModelMaterializationObserver();
+        var projector = new AgentProfileNamespaceCurrentStateProjector(
+            new RejectedProjectionWriteDispatcher<AgentProfileNamespaceCatalogDocument>(),
+            new FixedProjectionClock(ObservedAt),
+            [observer]);
+
+        var act = async () => await projector.ProjectAsync(
+            NamespaceContext(),
+            WrapCommitted(new AgentProfileNamespaceState(), 41, "evt-namespace-conflict"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Conflict*");
+        observer.NotificationCount.Should().Be(0);
+    }
+
     private static AgentProfileNamespaceCurrentStateProjectionContext NamespaceContext() =>
         new()
         {
             RootActorId = AgentProfileActorIds.Namespace,
             ProjectionKind = "agent-profile-namespaces",
         };
+
+    private sealed class RecordingAgentProfileReadModelMaterializationObserver
+        : IAgentProfileReadModelMaterializationObserver
+    {
+        public int NotificationCount { get; private set; }
+
+        public void OnAgentProfileReadModelMaterialized() => NotificationCount++;
+    }
+
+    private sealed class RejectedProjectionWriteDispatcher<TReadModel>
+        : IProjectionWriteDispatcher<TReadModel>
+        where TReadModel : class, IProjectionReadModel
+    {
+        public Task<ProjectionWriteResult> UpsertAsync(
+            TReadModel readModel,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Conflict());
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            string id,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Conflict());
+    }
 
     private static AgentProfileOwnerCurrentStateProjectionContext OwnerContext() =>
         new()

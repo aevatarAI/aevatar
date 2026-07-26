@@ -255,13 +255,28 @@ public sealed record ScheduledInvocationConnectorEvidence(
 
 public sealed record ScheduledInvocationOwnerLLMEvidence(
     long StateVersion,
-    string NyxIdServiceId,
-    string NyxIdServiceSlug,
-    AuthorizationGrantRequirement ServiceGrantRequirement);
+    ScheduledInvocationOwnerLLMSelection Selection);
 
-public sealed class ScheduledInvocationOwnerLLMRouteOptions
+public static class ScheduledInvocationOwnerLLMSelectionPolicy
 {
-    public string DefaultRoutePreference { get; set; } = string.Empty;
+    public const string GatewayRoute = "/api/v1/llm/gateway/v1";
+    public const string NyxIdProxyRoutePrefix = "/api/v1/proxy/s/";
+
+    public static bool IsDurableSelectionValid(ScheduledInvocationOwnerLLMSelection? value) =>
+        value?.RouteKind switch
+        {
+            ScheduledInvocationOwnerLLMRouteKind.Gateway =>
+                value.RouteValue == GatewayRoute && Canonical(value.Model) &&
+                value.NyxIdUserServiceId.Length == 0 && value.ServiceSlugSnapshot.Length == 0,
+            ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService =>
+                Canonical(value.RouteValue) && Canonical(value.NyxIdUserServiceId) &&
+                Canonical(value.ServiceSlugSnapshot) && Canonical(value.Model) &&
+                !value.ServiceSlugSnapshot.Contains('/') &&
+                value.RouteValue == $"{NyxIdProxyRoutePrefix}{value.ServiceSlugSnapshot}",
+            _ => false,
+        };
+
+    private static bool Canonical(string value) => value.Length > 0 && value == value.Trim();
 }
 
 public interface INyxIdAuthorizationCatalogQueryPort

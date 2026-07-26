@@ -592,7 +592,8 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Binding(
             "bind-alpha",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidAlpha, "skill-alpha")));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("identity-drift-alpha", "identity-drift-alpha-alias")));
         var (agent, store, _) = await CreateInitializedActorAsync(content: content);
         Func<Task> replay;
 
@@ -620,7 +621,8 @@ public sealed class AgentProfileGAgentTests
                     Binding(
                         "bind-beta",
                         AgentProfileSkillActivationMode.Routed,
-                        ExactReference(SkillGuidBeta, "skill-beta")),
+                        ExactReference(SkillGuidBeta, "skill-beta"),
+                        RoutingPolicy("identity-drift-beta", "identity-drift-beta-alias")),
                     "op-identity-drift-upsert");
                 await agent.HandleUpsertSkillBindingAsync(command);
                 var candidate = command.Clone();
@@ -747,7 +749,11 @@ public sealed class AgentProfileGAgentTests
     public async Task UpsertBinding_ShouldKeepDeterministicOrderAndTreatIdenticalBindingAsNoChange()
     {
         var (agent, _, _) = await CreateInitializedActorAsync();
-        var zeta = Binding("bind-zeta", AgentProfileSkillActivationMode.Routed, ExactReference(SkillGuidBeta, "skill-zeta"));
+        var zeta = Binding(
+            "bind-zeta",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidBeta, "skill-zeta"),
+            RoutingPolicy("deterministic-zeta", "deterministic-zeta-alias"));
         var alpha = Binding("bind-alpha", AgentProfileSkillActivationMode.Always, ExactReference(SkillGuidAlpha, "skill-alpha"));
 
         await agent.HandleUpsertSkillBindingAsync(UpsertCommand(agent, zeta, "op-upsert-zeta"));
@@ -768,18 +774,83 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Binding(
             "bind-alpha",
             AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
-            ExactReference(SkillGuidAlpha, "skill-alpha")));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("first-default", "first-default-alias")));
         var (agent, _, _) = await CreateInitializedActorAsync(content: content);
         var second = Binding(
             "bind-beta",
             AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
-            ExactReference(SkillGuidBeta, "skill-beta"));
+            ExactReference(SkillGuidBeta, "skill-beta"),
+            RoutingPolicy("second-default", "second-default-alias"));
 
         await agent.HandleUpsertSkillBindingAsync(UpsertCommand(agent, second, "op-upsert-second-default"));
 
         agent.State.Draft.SkillBindings.Should().HaveCount(2);
         agent.State.DraftRevision.Should().Be(2);
         agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Applied);
+    }
+
+    [Theory]
+    [InlineData("intent", "DUPLICATE_ROUTING_INTENT_ID")]
+    [InlineData("alias", "DUPLICATE_EXPLICIT_TRIGGER_ALIAS")]
+    [InlineData("task_policy", "TASK_TOOL_POLICY_EXCEEDS_PROFILE_MAXIMUM")]
+    public async Task UpsertBinding_AggregatePolicyConflict_ShouldCommitTypedRejection(
+        string boundary,
+        string expectedCode)
+    {
+        var content = GAgentServiceTestKit.CreateAgentProfileContent();
+        content.ToolPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "tool-alpha" },
+        };
+        content.SkillBindings.Add(Binding(
+            "bind-existing",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("existing-intent", "shared-alias")));
+        var (agent, store, publisher) = await CreateInitializedActorAsync(content: content);
+        var routingPolicy = RoutingPolicy("candidate-intent", "candidate-alias");
+        switch (boundary)
+        {
+            case "intent":
+                routingPolicy.IntentId = "existing-intent";
+                break;
+            case "alias":
+                routingPolicy.ExplicitTriggerAliases[0] = "SHARED-ALIAS";
+                break;
+            case "task_policy":
+                routingPolicy.TaskToolPolicy.ToolNames.Add("tool-beta");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(boundary), boundary, null);
+        }
+        var candidate = Binding(
+            "bind-candidate",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidBeta, "skill-beta"),
+            routingPolicy);
+        var beforeDraft = agent.State.Draft.Clone();
+        var beforeDraftRevision = agent.State.DraftRevision;
+        var beforeDraftSha256 = agent.State.DraftSha256;
+        var eventCount = (await store.GetEventsAsync(agent.Id)).Count;
+        var command = UpsertCommand(agent, candidate, $"op-upsert-aggregate-{boundary}");
+
+        var act = () => agent.HandleUpsertSkillBindingAsync(command);
+
+        await act.Should().NotThrowAsync();
+        agent.State.Draft.Should().BeEquivalentTo(beforeDraft);
+        agent.State.DraftRevision.Should().Be(beforeDraftRevision);
+        agent.State.DraftSha256.Should().Equal(beforeDraftSha256);
+        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        agent.State.LastMutation.Diagnostic.Code.Should().Be(expectedCode);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Should().HaveCount(eventCount + 1);
+        var rejection = events[^1].EventData.Unpack<AgentProfileMutationRejectedEvent>();
+        rejection.Operation.OperationId.Should().Be(command.Operation.OperationId);
+        rejection.Outcome.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        rejection.Outcome.Diagnostic.Code.Should().Be(expectedCode);
+        publisher.Sends.Should().ContainSingle();
     }
 
     [Fact]
@@ -852,7 +923,8 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Binding(
             "bind-alpha",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidAlpha, "skill-alpha")));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("invalid-sealed", "invalid-sealed-alias")));
         var (agent, _, _) = await CreateInitializedActorAsync(content: content);
         var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
         var command = PublishCommand(agent, snapshot, "op-publish-bad-sealed");
@@ -878,7 +950,8 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Enumerable.Range(1, bindingCount).Select(index => Binding(
             $"bind-{index:D2}",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidAlpha, "skill-alpha"))));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy($"hard-limit-{index:D2}", $"hard-limit-{index:D2}-alias"))));
         var (agent, store, _) = await CreateInitializedActorAsync(content: content);
         var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
 
@@ -932,6 +1005,61 @@ public sealed class AgentProfileGAgentTests
         (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
     }
 
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    public async Task Publish_ShouldEnforceExactMaterializedProfileLayerLimit(
+        int extraRenderedByte,
+        bool expectedAccepted)
+    {
+        var boundary = GAgentServiceTestKit.CreateRenderedProfileLayerBoundary(extraRenderedByte);
+        var content = GAgentServiceTestKit.CreateAgentProfileContent(
+            instructions: boundary.ProfileInstructions);
+        content.SkillBindings.Add(
+        [
+            Binding(
+                "bind-1",
+                AgentProfileSkillActivationMode.Always,
+                ExactReference(SkillGuidAlpha, "skill-alpha")),
+            Binding(
+                "bind-2",
+                AgentProfileSkillActivationMode.Always,
+                ExactReference(SkillGuidBeta, "skill-beta")),
+        ]);
+        var (agent, store, _) = await CreateInitializedActorAsync(content: content);
+        var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+        for (var index = 0; index < snapshot.SkillBindings.Count; index++)
+        {
+            var package = snapshot.SkillBindings[index].Skill.Package;
+            package.Description = string.Empty;
+            package.Instructions = boundary.AlwaysProcedures[index];
+            package.Arguments = string.Empty;
+            package.WhenToUse = string.Empty;
+            snapshot.SkillBindings[index].Skill.ContentSha256 =
+                AgentProfileDeterminism.ComputeSealedSkillSha256(snapshot.SkillBindings[index].Skill);
+        }
+        snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+
+        await agent.HandlePublishAsync(PublishCommand(
+            agent,
+            snapshot,
+            $"op-publish-materialized-profile-layer-{extraRenderedByte}"));
+
+        if (expectedAccepted)
+        {
+            agent.State.Published.Should().NotBeNull();
+            agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Applied);
+        }
+        else
+        {
+            agent.State.Published.Should().BeNull();
+            agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+            agent.State.LastMutation.Diagnostic.Code.Should()
+                .Be("MATERIALIZED_PROFILE_LAYER_BYTES_EXCEEDED");
+        }
+        (await store.GetEventsAsync(agent.Id)).Should().HaveCount(2);
+    }
+
     [Fact]
     public async Task PublishHardLimitRejection_ShouldPersistBoundedDiagnosticFields()
     {
@@ -939,7 +1067,8 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Binding(
             "bind-alpha",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidAlpha, "skill-alpha")));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("bounded-diagnostic", "bounded-diagnostic-alias")));
         var (agent, store, _) = await CreateInitializedActorAsync(content: content);
         var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
         snapshot.SkillBindings[0].Skill.Package.Assets.Add(new AgentProfileNamedTextAsset
@@ -972,7 +1101,8 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Enumerable.Range(1, 17).Select(index => Binding(
             $"bind-{index:D2}",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidAlpha, "skill-alpha"))));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy($"snapshot-limit-{index:D2}", $"snapshot-limit-{index:D2}-alias"))));
         var (agent, store, _) = await CreateInitializedActorAsync(content: content);
         var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
         for (var index = 0; index < 16; index++)
@@ -1009,14 +1139,16 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Binding(
             "bind-alpha",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidAlpha, "skill-alpha")));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("draft-match-alpha", "draft-match-alpha-alias")));
         var (agent, _, _) = await CreateInitializedActorAsync(content: content);
         var otherContent = content.Clone();
         otherContent.SkillBindings.Clear();
         otherContent.SkillBindings.Add(Binding(
             "bind-beta",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidBeta, "skill-beta")));
+            ExactReference(SkillGuidBeta, "skill-beta"),
+            RoutingPolicy("draft-match-beta", "draft-match-beta-alias")));
         var snapshot = Snapshot(agent.State.Identity, otherContent);
         snapshot.SourceDraftSha256 = agent.State.DraftSha256;
         snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
@@ -1025,6 +1157,81 @@ public sealed class AgentProfileGAgentTests
 
         agent.State.Published.Should().BeNull();
         agent.State.LastMutation.Diagnostic.Code.Should().Be("PROFILE_BINDING_CONFLICT");
+    }
+
+    [Theory]
+    [InlineData("recovery", "PUBLISH_SOURCE_CHANGED")]
+    [InlineData("intent", "PROFILE_BINDING_CONFLICT")]
+    [InlineData("description", "PROFILE_BINDING_CONFLICT")]
+    [InlineData("alias", "PROFILE_BINDING_CONFLICT")]
+    [InlineData("task_policy", "PROFILE_BINDING_CONFLICT")]
+    [InlineData("side_effect", "PROFILE_BINDING_CONFLICT")]
+    public async Task Publish_ShouldRejectSnapshotPolicyFactsThatDoNotMatchDraft(
+        string boundary,
+        string expectedCode)
+    {
+        var content = GAgentServiceTestKit.CreateAgentProfileContent();
+        content.RecoveryToolPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "recovery-alpha" },
+        };
+        content.SkillBindings.Add(Binding(
+            "bind-alpha",
+            AgentProfileSkillActivationMode.Routed,
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("publish-policy", "publish-policy-alias", "task-alpha")));
+        var (agent, store, publisher) = await CreateInitializedActorAsync(content: content);
+        var snapshot = Snapshot(agent.State.Identity, agent.State.Draft);
+        switch (boundary)
+        {
+            case "recovery":
+                snapshot.RecoveryToolPolicy.ToolNames[0] = "recovery-beta";
+                break;
+            case "intent":
+                snapshot.SkillBindings[0].RoutingPolicy.IntentId = "publish-policy-changed";
+                break;
+            case "description":
+                snapshot.SkillBindings[0].RoutingPolicy.RoutingDescription =
+                    "Route a different request.";
+                break;
+            case "alias":
+                snapshot.SkillBindings[0].RoutingPolicy.ExplicitTriggerAliases[0] =
+                    "publish-policy-changed-alias";
+                break;
+            case "task_policy":
+                snapshot.SkillBindings[0].RoutingPolicy.TaskToolPolicy.ToolNames[0] =
+                    "task-beta";
+                break;
+            case "side_effect":
+                snapshot.SkillBindings[0].RoutingPolicy.SideEffectClass =
+                    AgentProfileSkillSideEffectClass.ServiceCall;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(boundary), boundary, null);
+        }
+        snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
+        var beforeDraft = agent.State.Draft.Clone();
+        var beforeDraftRevision = agent.State.DraftRevision;
+        var beforeDraftSha256 = agent.State.DraftSha256;
+        var command = PublishCommand(agent, snapshot, $"op-publish-policy-{boundary}");
+
+        await agent.HandlePublishAsync(command);
+
+        agent.State.Published.Should().BeNull();
+        agent.State.PublishedRevision.Should().Be(0);
+        agent.State.Draft.Should().BeEquivalentTo(beforeDraft);
+        agent.State.DraftRevision.Should().Be(beforeDraftRevision);
+        agent.State.DraftSha256.Should().Equal(beforeDraftSha256);
+        agent.State.LastMutation.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        agent.State.LastMutation.Diagnostic.Code.Should().Be(expectedCode);
+        var events = await store.GetEventsAsync(agent.Id);
+        events.Should().HaveCount(2);
+        events.Should().NotContain(evt => evt.EventData.Is(AgentProfilePublishedEvent.Descriptor));
+        var rejection = events[^1].EventData.Unpack<AgentProfileMutationRejectedEvent>();
+        rejection.Outcome.Status.Should().Be(AgentProfileMutationStatus.Rejected);
+        rejection.Outcome.Diagnostic.Code.Should().Be(expectedCode);
+        publisher.Sends.Should().ContainSingle();
     }
 
     [Theory]
@@ -1155,7 +1362,8 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Binding(
             "bind-alpha",
             AgentProfileSkillActivationMode.Routed,
-            ExactReference(SkillGuidAlpha, "skill-alpha")));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("sealed-change", "sealed-change-alias")));
         var (agent, _, _) = await CreateInitializedActorAsync(content: content);
         var first = Snapshot(agent.State.Identity, agent.State.Draft, packageVariant: "one");
         await agent.HandlePublishAsync(PublishCommand(agent, first, "op-publish-sealed-one"));
@@ -1586,7 +1794,10 @@ public sealed class AgentProfileGAgentTests
                 Binding(
                     $"bind-{variant}",
                     AgentProfileSkillActivationMode.Routed,
-                    ExactReference(SkillGuidAlpha, "skill-alpha")),
+                    ExactReference(SkillGuidAlpha, "skill-alpha"),
+                    RoutingPolicy(
+                        $"canonical-{variant}",
+                        $"canonical-{variant}-alias")),
                 operationId),
             "remove" => RemoveCommand(agent, $"bind-{variant}", operationId),
             _ => throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null),
@@ -1694,7 +1905,8 @@ public sealed class AgentProfileGAgentTests
                 Binding(
                     "bind-alpha",
                     AgentProfileSkillActivationMode.Routed,
-                    ExactReference(SkillGuidAlpha, "skill-alpha")),
+                    ExactReference(SkillGuidAlpha, "skill-alpha"),
+                    RoutingPolicy("malformed-alpha", "malformed-alpha-alias")),
                 operationId),
             "remove" => RemoveCommand(agent, "bind-alpha", operationId),
             "publish" => PublishCommand(
@@ -1870,6 +2082,7 @@ public sealed class AgentProfileGAgentTests
             Purpose = normalized.Purpose,
             Instructions = normalized.Instructions,
             ToolPolicy = normalized.ToolPolicy.Clone(),
+            RecoveryToolPolicy = normalized.RecoveryToolPolicy.Clone(),
             SourceDraftSha256 = AgentProfileDeterminism.ComputeSourceDraftSha256(normalized),
         };
         snapshot.SkillBindings.Add(normalized.SkillBindings.Select(binding =>
@@ -1884,11 +2097,13 @@ public sealed class AgentProfileGAgentTests
         content.SkillBindings.Add(Binding(
             "bind-alpha",
             AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
-            ExactReference(SkillGuidAlpha, "skill-alpha")));
+            ExactReference(SkillGuidAlpha, "skill-alpha"),
+            RoutingPolicy("multiple-default-alpha", "multiple-default-alpha-alias")));
         content.SkillBindings.Add(Binding(
             "bind-beta",
             AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
-            ExactReference(SkillGuidBeta, "skill-beta")));
+            ExactReference(SkillGuidBeta, "skill-beta"),
+            RoutingPolicy("multiple-default-beta", "multiple-default-beta-alias")));
         return content;
     }
 
@@ -1918,6 +2133,7 @@ public sealed class AgentProfileGAgentTests
             BindingId = binding.BindingId,
             ActivationMode = binding.ActivationMode,
             Skill = skill,
+            RoutingPolicy = binding.RoutingPolicy?.Clone(),
         };
     }
 
@@ -1969,13 +2185,42 @@ public sealed class AgentProfileGAgentTests
     private static AgentProfileSkillBinding Binding(
         string bindingId,
         AgentProfileSkillActivationMode activationMode,
-        ExactOrnnSkillReference reference) =>
-        new()
+        ExactOrnnSkillReference reference,
+        AgentProfileSkillRoutingPolicy? routingPolicy = null)
+    {
+        if (activationMode != AgentProfileSkillActivationMode.Always && routingPolicy is null)
+            throw new ArgumentException("Routed/default test bindings require explicit routing policy.");
+        if (activationMode == AgentProfileSkillActivationMode.Always && routingPolicy is not null)
+            throw new ArgumentException("Always-active test bindings cannot carry routing policy.");
+
+        return new AgentProfileSkillBinding
         {
             BindingId = bindingId,
             ActivationMode = activationMode,
             Skill = reference.Clone(),
+            RoutingPolicy = routingPolicy?.Clone(),
         };
+    }
+
+    private static AgentProfileSkillRoutingPolicy RoutingPolicy(
+        string intentId,
+        string alias,
+        params string[] taskToolNames)
+    {
+        var policy = new AgentProfileSkillRoutingPolicy
+        {
+            IntentId = intentId,
+            RoutingDescription = $"Route requests for {intentId}.",
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            },
+            SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+        };
+        policy.ExplicitTriggerAliases.Add(alias);
+        policy.TaskToolPolicy.ToolNames.Add(taskToolNames);
+        return policy;
+    }
 
     private static ExactOrnnSkillReference ExactReference(string guid, string name) =>
         new()

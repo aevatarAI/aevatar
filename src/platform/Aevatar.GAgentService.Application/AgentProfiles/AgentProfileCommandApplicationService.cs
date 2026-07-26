@@ -52,6 +52,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
             Purpose = request.Purpose,
             Instructions = request.Instructions,
             ToolPolicy = request.ToolPolicy,
+            RecoveryToolPolicy = request.RecoveryToolPolicy,
         });
         var profileId = AgentProfileDeterminism.CreateProfileId(
             normalizedCaller.Owner.User,
@@ -103,6 +104,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
             Purpose = request.Purpose,
             Instructions = request.Instructions,
             ToolPolicy = request.ToolPolicy,
+            RecoveryToolPolicy = request.RecoveryToolPolicy,
         };
         content.SkillBindings.Add(owned.Management.Draft.SkillBindings
             .Select(static binding => binding.Clone()));
@@ -145,6 +147,7 @@ public sealed class AgentProfileCommandApplicationService : IAgentProfileCommand
             BindingId = bindingId,
             ActivationMode = request.ActivationMode,
             Skill = request.Skill,
+            RoutingPolicy = request.RoutingPolicy,
         });
         var operation = _operationFactory.CreateUpsertSkillBinding(
             owned.Management.ProfileId,

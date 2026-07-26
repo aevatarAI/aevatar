@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package aevatar.tools.agent_profile_rollout;
+
+option csharp_namespace = "Aevatar.Tools.AgentProfileRollout.Contracts";
+
+import "ai_messages.proto";
+
+message AgentProfileEvaluationReport {
+  string profile_version = 1;
+  int32 total_cases = 2;
+  int32 passed_cases = 3;
+  int32 expected_match_cases = 4;
+  int32 correct_selection_cases = 5;
+  int32 no_match_cases = 6;
+  int32 classifier_timeout_or_error_cases = 7;
+  int32 unsafe_admission_count = 8;
+  int32 approval_bypass_count = 9;
+  int32 replay_acceptance_count = 10;
+  int32 secret_telemetry_violation_count = 11;
+  int32 shadow_execution_side_effect_count = 12;
+  double classifier_p95_ms = 13;
+  double total_pre_turn_p95_ms = 14;
+  double first_output_regression_percent = 15;
+  double completion_rate_drop_percentage_points = 16;
+  double unnecessary_tool_round_increase_percent = 17;
+  aevatar.ai.AgentProfileActivationMode activation_mode = 18;
+  int32 eligible_turn_count = 19;
+  double continuous_observation_hours = 20;
+}
+
+message AgentProfileEvaluationDecision {
+  bool accepted = 1;
+  repeated string violations = 2;
+}

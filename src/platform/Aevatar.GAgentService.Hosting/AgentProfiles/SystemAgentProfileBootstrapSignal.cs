@@ -1,3 +1,6 @@
+using System.Threading.Channels;
+using Aevatar.GAgentService.Abstractions.AgentProfiles;
+
 namespace Aevatar.GAgentService.Hosting.AgentProfiles;
 
 internal interface ISystemAgentProfileBootstrapSignal
@@ -7,15 +10,34 @@ internal interface ISystemAgentProfileBootstrapSignal
 
 internal sealed class SystemAgentProfileBootstrapSignal : ISystemAgentProfileBootstrapSignal
 {
-    internal static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
+    private readonly Channel<bool> _pending = Channel.CreateBounded<bool>(
+        new BoundedChannelOptions(1)
+        {
+            AllowSynchronousContinuations = false,
+            FullMode = BoundedChannelFullMode.DropWrite,
+            SingleReader = true,
+            SingleWriter = false,
+        });
 
-    private readonly TimeProvider _timeProvider;
+    public ValueTask WaitAsync(CancellationToken ct = default) =>
+        ReadSignalAsync(_pending.Reader, ct);
 
-    public SystemAgentProfileBootstrapSignal(TimeProvider timeProvider)
+    internal void Pulse()
     {
-        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _pending.Writer.TryWrite(true);
     }
 
-    public async ValueTask WaitAsync(CancellationToken ct = default) =>
-        await Task.Delay(RetryInterval, _timeProvider, ct);
+    private static async ValueTask ReadSignalAsync(
+        ChannelReader<bool> reader,
+        CancellationToken ct)
+    {
+        _ = await reader.ReadAsync(ct);
+    }
+}
+
+internal sealed class SystemAgentProfileBootstrapMaterializationObserver(
+    SystemAgentProfileBootstrapSignal signal)
+    : IAgentProfileReadModelMaterializationObserver
+{
+    public void OnAgentProfileReadModelMaterialized() => signal.Pulse();
 }

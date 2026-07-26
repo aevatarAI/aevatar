@@ -8,8 +8,31 @@ internal sealed class AgentProfileAuthoritySyntaxChecker
 {
     internal const string AuthorityOrderMessage =
         "The actual [EventHandler] must be the unique expected handler for the message and match the canonical pre-authority statements, exact authority call, and immediate operation parse.";
+    internal const string AdmissionArtifactOnlyMessage =
+        "The Mainnet rollout artifact owns admission pins only and must not implement INyxIdChatAgentProfileBindingSource.";
+    internal const string BinderReadModelOnlyMessage =
+        "The Mainnet Profile binder may read only the namespace and execution read-model ports; event-store and projection-activation dependencies are forbidden.";
+    internal const string SealedTurnOnlyMessage =
+        "Agent Profile turns must execute from the immutable conversation binding and must not depend on IRemoteSkillFetcher.";
 
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.Preview);
+    private const string RolloutSelectorFile =
+        "src/Aevatar.Mainnet.Host.Api/Profiles/MainnetAgentProfileRolloutSelector.cs";
+    private const string RolloutSelectorType = "MainnetAgentProfileRolloutSelector";
+    private const string RuntimeBindingSourceMetadataName =
+        "Aevatar.GAgents.NyxidChat.AgentProfiles.INyxIdChatAgentProfileBindingSource";
+    private const string MainnetBinderFile =
+        "src/Aevatar.Mainnet.Host.Api/AgentProfiles/MainnetNyxIdChatAgentProfileBindingSource.cs";
+    private const string MainnetBinderType = "MainnetNyxIdChatAgentProfileBindingSource";
+    private const string TurnMaterializerFile =
+        "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/AgentProfileTurnCatalogMaterializer.cs";
+    private const string TurnMaterializerType = "AgentProfileTurnCatalogMaterializer";
+    private const string EventStoreMetadataName =
+        "Aevatar.Foundation.Abstractions.Persistence.IEventStore";
+    private const string ProjectionActivationMetadataName =
+        "Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService`1";
+    private const string RemoteSkillFetcherMetadataName =
+        "Aevatar.AI.ToolProviders.Skills.IRemoteSkillFetcher";
 
     private static readonly HandlerContract[] Contracts =
     [
@@ -131,8 +154,194 @@ internal sealed class AgentProfileAuthoritySyntaxChecker
             }
         }
 
+        CheckRolloutArtifactOwnership(root, violations);
+        CheckBinderDependencies(root, violations);
+        CheckTurnDependencies(root, violations);
+
         return new AgentProfileAuthorityCheckResult(violations);
     }
+
+    private static void CheckRolloutArtifactOwnership(
+        string root,
+        ICollection<AgentProfileAuthorityViolation> violations)
+    {
+        var path = Path.Combine(root, RolloutSelectorFile);
+        if (!File.Exists(path))
+            return;
+
+        var target = CreateSemanticTarget(root, RolloutSelectorFile, RolloutSelectorType);
+        var runtimeSource = target.Compilation.GetTypeByMetadataName(RuntimeBindingSourceMetadataName)
+            ?? throw new InvalidOperationException("The authority checker runtime source symbol is unavailable.");
+        var selector = target.Declaration is null
+            ? null
+            : target.SemanticModel.GetDeclaredSymbol(target.Declaration);
+        if (selector is null || selector.AllInterfaces.Any(candidate =>
+                SymbolEqualityComparer.Default.Equals(candidate, runtimeSource)))
+        {
+            violations.Add(new AgentProfileAuthorityViolation(
+                RolloutSelectorFile,
+                RolloutSelectorType,
+                AdmissionArtifactOnlyMessage,
+                "admission-artifact-only"));
+        }
+    }
+
+    private static void CheckBinderDependencies(
+        string root,
+        ICollection<AgentProfileAuthorityViolation> violations)
+    {
+        if (!File.Exists(Path.Combine(root, MainnetBinderFile)))
+            return;
+
+        var target = CreateSemanticTarget(root, MainnetBinderFile, MainnetBinderType);
+        if (target.Declaration is null || ReferencesAnyExactType(
+                target,
+                EventStoreMetadataName,
+                ProjectionActivationMetadataName))
+        {
+            violations.Add(new AgentProfileAuthorityViolation(
+                MainnetBinderFile,
+                MainnetBinderType,
+                BinderReadModelOnlyMessage,
+                "read-model-only"));
+        }
+    }
+
+    private static void CheckTurnDependencies(
+        string root,
+        ICollection<AgentProfileAuthorityViolation> violations)
+    {
+        if (!File.Exists(Path.Combine(root, TurnMaterializerFile)))
+            return;
+
+        var target = CreateSemanticTarget(root, TurnMaterializerFile, TurnMaterializerType);
+        if (target.Declaration is null || ReferencesAnyExactType(
+                target,
+                RemoteSkillFetcherMetadataName))
+        {
+            violations.Add(new AgentProfileAuthorityViolation(
+                TurnMaterializerFile,
+                TurnMaterializerType,
+                SealedTurnOnlyMessage,
+                "sealed-turn-only"));
+        }
+    }
+
+    private static SemanticTarget CreateSemanticTarget(
+        string root,
+        string relativeFile,
+        string className)
+    {
+        var source = ReadSource(root, relativeFile);
+        var targetTree = CSharpSyntaxTree.ParseText(source, ParseOptions, relativeFile);
+        var contractTree = CSharpSyntaxTree.ParseText(
+            SemanticContractStubs,
+            ParseOptions,
+            "AgentProfileAuthoritySemanticContracts.cs");
+        var compilation = CSharpCompilation.Create(
+            "AgentProfileAuthoritySemanticCheck",
+            [targetTree, contractTree],
+            TrustedPlatformReferences.Value,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var declarations = targetTree.GetCompilationUnitRoot()
+            .DescendantNodes()
+            .OfType<ClassDeclarationSyntax>()
+            .Where(candidate =>
+                string.Equals(candidate.Identifier.ValueText, className, StringComparison.Ordinal) &&
+                IsTopLevel(candidate))
+            .Take(2)
+            .ToArray();
+        return new SemanticTarget(
+            compilation,
+            compilation.GetSemanticModel(targetTree),
+            declarations.Length == 1 ? declarations[0] : null);
+    }
+
+    private static bool ReferencesAnyExactType(
+        SemanticTarget target,
+        params string[] metadataNames)
+    {
+        if (target.Declaration is null)
+            return false;
+
+        var forbidden = metadataNames
+            .Select(metadataName => target.Compilation.GetTypeByMetadataName(metadataName)
+                ?? throw new InvalidOperationException(
+                    $"The authority checker symbol '{metadataName}' is unavailable."))
+            .ToArray();
+        foreach (var name in target.Declaration.DescendantNodes().OfType<NameSyntax>())
+        {
+            var symbol = target.SemanticModel.GetSymbolInfo(name).Symbol;
+            if (symbol is IAliasSymbol alias)
+                symbol = alias.Target;
+            if (symbol is not INamedTypeSymbol namedType)
+                continue;
+
+            var definition = namedType.OriginalDefinition;
+            if (forbidden.Any(candidate =>
+                    SymbolEqualityComparer.Default.Equals(candidate, definition)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static readonly Lazy<IReadOnlyList<MetadataReference>> TrustedPlatformReferences =
+        new(() =>
+        {
+            var paths = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
+            if (string.IsNullOrWhiteSpace(paths))
+                return [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)];
+            return paths
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Select(static path => MetadataReference.CreateFromFile(path))
+                .ToArray();
+        });
+
+    private const string SemanticContractStubs = """
+        namespace Aevatar.GAgents.NyxidChat.AgentProfiles
+        {
+            public interface INyxIdChatAgentProfileBindingSource;
+        }
+
+        namespace Aevatar.GAgentService.Abstractions.Ports
+        {
+            public interface IAgentProfileNamespaceQueryPort;
+            public interface IAgentProfileExecutionSnapshotQueryPort;
+        }
+
+        namespace Aevatar.Foundation.Abstractions.Persistence
+        {
+            public interface IEventStore;
+        }
+
+        namespace Aevatar.CQRS.Projection.Core.Abstractions
+        {
+            public interface IProjectionRuntimeLease;
+
+            public interface IProjectionScopeActivationService<TLease>
+                where TLease : class, IProjectionRuntimeLease;
+        }
+
+        namespace Aevatar.AI.ToolProviders.Skills
+        {
+            public interface IRemoteSkillFetcher;
+        }
+
+        namespace Fixture.Decoys
+        {
+            public interface IEventStore;
+            public interface IProjectionScopeActivationService<T>;
+            public interface IRemoteSkillFetcher;
+        }
+        """;
+
+    private sealed record SemanticTarget(
+        CSharpCompilation Compilation,
+        SemanticModel SemanticModel,
+        ClassDeclarationSyntax? Declaration);
 
     private static string GetReadableRoot(string scanRoot)
     {
@@ -304,9 +513,10 @@ internal sealed record AgentProfileAuthorityCheckResult(
 internal sealed record AgentProfileAuthorityViolation(
     string RelativeFile,
     string MethodName,
-    string Message)
+    string Message,
+    string Rule = "authority-order")
 {
-    internal string Location => $"{RelativeFile}:{MethodName}.authority-order";
+    internal string Location => $"{RelativeFile}:{MethodName}.{Rule}";
 }
 
 internal sealed class AgentProfileAuthorityInputException : Exception;

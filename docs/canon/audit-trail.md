@@ -134,6 +134,18 @@ Tool-execution middleware records tool-plane facts around tool invocation. It
 captures the tool identity, execution phase, safe caller and scope identity,
 safe resource target, timing, result class, and redacted diagnostic summary.
 
+Provider receipts must use the same stable resource target for successful and
+failed calls. Invocation ids are correlation identifiers only and must not
+stand in for the downstream resource. NyxID proxy receipts identify an admitted
+exact UserService as `nyxid.user-service/<user_service_id>`; they do not derive
+identity from service slugs, request paths, call ids, or response content.
+
+NyxID proxy failure classification is limited to exact
+`NYXID_PROXY_UNAUTHORIZED`, exact `NYXID_PROXY_FORBIDDEN`, and the full-value
+form `NYXID_PROXY_HTTP_[1-5][0-9][0-9]`. Other provider strings remain the
+generic `tool_error` classification. Raw messages, arguments, results, paths,
+headers, and credentials remain excluded from audit artifacts.
+
 It must not store full prompts, full tool arguments, full tool results, raw
 model responses, bearer tokens, OAuth codes, API keys, cookies, headers, or
 connector credential material. If a tool result needs later inspection, the

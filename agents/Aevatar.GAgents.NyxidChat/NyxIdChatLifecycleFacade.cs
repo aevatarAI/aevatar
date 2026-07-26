@@ -1,9 +1,10 @@
+using Aevatar.Capabilities;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -22,6 +23,7 @@ public enum NyxIdChatConversationCreateStatus
     Accepted = 0,
     RouteRejected = 1,
     RegistrationUnavailable = 2,
+    AdmissionUnavailable = 3,
 }
 
 public sealed record NyxIdChatConversationDeleteReceipt(
@@ -93,6 +95,8 @@ public sealed class NyxIdChatLifecycleFacade
                 new NyxIdChatConversationCreateReceipt(NyxIdChatConversationCreateStatus.RouteRejected, null, null),
             NyxIdChatLifecycleCommandStartError.TargetNotFound =>
                 new NyxIdChatConversationCreateReceipt(NyxIdChatConversationCreateStatus.RegistrationUnavailable, null, null),
+            NyxIdChatLifecycleCommandStartError.AdmissionUnavailable =>
+                new NyxIdChatConversationCreateReceipt(NyxIdChatConversationCreateStatus.AdmissionUnavailable, null, null),
             _ => new NyxIdChatConversationCreateReceipt(NyxIdChatConversationCreateStatus.RegistrationUnavailable, null, null),
         };
     }
@@ -176,15 +180,19 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
     private readonly IActorRuntime _actorRuntime;
     private readonly IChatRoutePolicyQueryPort _routeQueryPort;
     private readonly ChatRouteResolver _routeResolver;
+    private readonly INyxIdChatAgentProfileBindingSource _agentProfileBindingSource;
 
     public NyxIdChatConversationCreateCommandTargetResolver(
         IActorRuntime actorRuntime,
         IChatRoutePolicyQueryPort routeQueryPort,
-        ChatRouteResolver routeResolver)
+        ChatRouteResolver routeResolver,
+        INyxIdChatAgentProfileBindingSource agentProfileBindingSource)
     {
         _actorRuntime = actorRuntime ?? throw new ArgumentNullException(nameof(actorRuntime));
         _routeQueryPort = routeQueryPort ?? throw new ArgumentNullException(nameof(routeQueryPort));
         _routeResolver = routeResolver ?? throw new ArgumentNullException(nameof(routeResolver));
+        _agentProfileBindingSource = agentProfileBindingSource ??
+                                     throw new ArgumentNullException(nameof(agentProfileBindingSource));
     }
 
     public async Task<CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>> ResolveAsync(
@@ -209,10 +217,39 @@ internal sealed class NyxIdChatConversationCreateCommandTargetResolver
             return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
                 NyxIdChatLifecycleCommandStartError.RouteRejected);
 
+        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
+        var bindingResult = await _agentProfileBindingSource.ResolveForNewConversationAsync(
+            actorId,
+            decision.Action.ForwardToModel?.ToolSetRef?.Name ?? string.Empty,
+            ct);
+        if (bindingResult.Status is
+            NyxIdChatAgentProfileBindingStatus.ProfileUnavailable or
+            NyxIdChatAgentProfileBindingStatus.AdmissionMismatch)
+        {
+            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        }
+
+        if (bindingResult.Status == NyxIdChatAgentProfileBindingStatus.Bound)
+        {
+            if (bindingResult.Binding is null)
+            {
+                return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                    NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+            }
+
+            command.AgentProfileBinding = bindingResult.Binding.Clone();
+        }
+        else if (bindingResult.Status != NyxIdChatAgentProfileBindingStatus.NotSelected ||
+                 bindingResult.Binding is not null)
+        {
+            return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Failure(
+                NyxIdChatLifecycleCommandStartError.AdmissionUnavailable);
+        }
+
         // Refactor (issue1321-first): ForwardToModel.tool_choice_hint is tool prefill only,
         // so conversation creation never treats hint arguments as actor addressing.
 
-        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
         var createdActor = await _actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
         command.CreatedLocally = true;
         return CommandTargetResolution<NyxIdChatConversationCreateCommandTarget, NyxIdChatLifecycleCommandStartError>.Success(

@@ -2688,12 +2688,12 @@ const StudioFilesDetailPane: React.FC<Props> = ({
               message={t("pages.studio.studiofilesdetailpane.failed.to.load.conversation", "Failed to load conversation")}
               description={describeError(selectedConversationMessages.error)}
             />
-          ) : (selectedConversationMessages.data?.length ?? 0) === 0 ? (
+          ) : (selectedConversationMessages.data?.messages.length ?? 0) === 0 ? (
             <div style={emptyCardStyle}>{t("pages.studio.studiofilesdetailpane.no.messages.in.this.conversation", "No messages in this conversation")}</div>
           ) : (
             <section aria-label={t("pages.studio.studiofilesdetailpane.chat.history.messages", "Chat history messages")} style={chatMessageListStyle}>
               {(
-                (selectedConversationMessages.data ?? []) as ChatHistoryMessageView[]
+                (selectedConversationMessages.data?.messages ?? []) as ChatHistoryMessageView[]
               ).map(
                 (message) => (
                   <article

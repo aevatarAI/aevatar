@@ -46,10 +46,37 @@ message ExactOrnnSkillReference {
   string expected_publisher_id = 4;
 }
 
+enum AgentProfileRolloutActivationMode {
+  AGENT_PROFILE_ROLLOUT_ACTIVATION_MODE_UNSPECIFIED = 0;
+  AGENT_PROFILE_ROLLOUT_ACTIVATION_MODE_SHADOW = 1;
+  AGENT_PROFILE_ROLLOUT_ACTIVATION_MODE_ENFORCED = 2;
+}
+
+message AgentProfileRolloutRuntimeBounds {
+  int32 max_plan_steps = 1;
+  int32 handoff_ttl_seconds = 2;
+  int32 classifier_timeout_ms = 3;
+  int32 max_selected_skill_bytes = 4;
+}
+
+message AgentProfileRolloutReleaseSpec {
+  string release_id = 1;
+  string stage = 2;
+  AgentProfileReference profile_reference = 3;
+  AgentProfileRolloutActivationMode activation_mode = 4;
+  string cohort_salt = 5;
+  int32 cohort_basis_points = 6;
+  int64 expected_published_revision = 7;
+  bytes expected_published_snapshot_sha256 = 8;
+  repeated ExactOrnnSkillReference expected_exact_skill_closure = 9;
+  AgentProfileRolloutRuntimeBounds runtime_bounds = 10;
+}
+
 message AgentProfileSkillBinding {
   string binding_id = 1;
   AgentProfileSkillActivationMode activation_mode = 2;
   ExactOrnnSkillReference skill = 3;
+  AgentProfileSkillRoutingPolicy routing_policy = 4;
 }
 
 enum AgentProfileToolPolicyMode {
@@ -64,12 +91,29 @@ message AgentProfileToolPolicy {
   repeated string tool_set_refs = 3;
 }
 
+enum AgentProfileSkillSideEffectClass {
+  AGENT_PROFILE_SKILL_SIDE_EFFECT_CLASS_UNSPECIFIED = 0;
+  AGENT_PROFILE_SKILL_SIDE_EFFECT_CLASS_READ_ONLY = 1;
+  AGENT_PROFILE_SKILL_SIDE_EFFECT_CLASS_EXTERNAL_HANDOFF = 2;
+  AGENT_PROFILE_SKILL_SIDE_EFFECT_CLASS_SERVICE_CALL = 3;
+  AGENT_PROFILE_SKILL_SIDE_EFFECT_CLASS_MAINTENANCE = 4;
+}
+
+message AgentProfileSkillRoutingPolicy {
+  string intent_id = 1;
+  string routing_description = 2;
+  repeated string explicit_trigger_aliases = 3;
+  AgentProfileToolPolicy task_tool_policy = 4;
+  AgentProfileSkillSideEffectClass side_effect_class = 5;
+}
+
 message AgentProfileContent {
   string display_name = 1;
   string purpose = 2;
   string instructions = 3;
   repeated AgentProfileSkillBinding skill_bindings = 4;
   AgentProfileToolPolicy tool_policy = 5;
+  AgentProfileToolPolicy recovery_tool_policy = 6;
 }
 
 message AgentProfileNamedTextAsset {
@@ -118,6 +162,7 @@ message SealedAgentProfileSkillBinding {
   string binding_id = 1;
   AgentProfileSkillActivationMode activation_mode = 2;
   SealedAgentProfileSkill skill = 3;
+  AgentProfileSkillRoutingPolicy routing_policy = 4;
 }
 
 message AgentProfilePublishedSnapshot {
@@ -130,6 +175,7 @@ message AgentProfilePublishedSnapshot {
   int64 published_revision = 7;
   bytes source_draft_sha256 = 8;
   bytes snapshot_sha256 = 9;
+  AgentProfileToolPolicy recovery_tool_policy = 10;
 }
 
 message AgentProfileSafeDiagnostic {

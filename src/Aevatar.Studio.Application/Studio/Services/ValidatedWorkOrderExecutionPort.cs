@@ -65,11 +65,14 @@ public sealed class ValidatedWorkOrderExecutionPort : IWorkOrderExecutionPort
         }
 
         if (!string.Equals(receipt.RunId, request.RequestedRunId, StringComparison.Ordinal) ||
-            !string.Equals(receipt.CommandId, request.DispatchCommandId, StringComparison.Ordinal))
+            !string.Equals(receipt.CommandId, request.DispatchCommandId, StringComparison.Ordinal) ||
+            !string.Equals(receipt.CorrelationId, request.DispatchCommandId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(receipt.TargetActorId) ||
+            string.IsNullOrWhiteSpace(receipt.DeploymentId))
         {
             return Failed(
                 "WORK_ORDER_RUN_IDENTITY_MISMATCH",
-                "Service invocation receipt did not preserve the authorized command and Run identities.",
+                "Service invocation receipt did not preserve the authorized WorkOrder Run link.",
                 "gagent-service",
                 receipt.RunId);
         }
@@ -93,11 +96,12 @@ public sealed class ValidatedWorkOrderExecutionPort : IWorkOrderExecutionPort
     {
         if (request.Input?.Chat == null)
             throw new InvalidOperationException("WorkOrder chat input is required for dispatch.");
-        if (request.DeadlineAtUtc == null ||
+        if (request.DeadlineAtUtc != null &&
             request.DeadlineAtUtc.ToDateTimeOffset().ToUnixTimeMilliseconds() <= 0)
             throw new InvalidOperationException("WorkOrder execution requires a positive deadline_at_utc.");
 
-        var expiresAtUnixMs = request.DeadlineAtUtc.ToDateTimeOffset().ToUnixTimeMilliseconds();
+        var expiresAtUnixMs = request.DeadlineAtUtc?.ToDateTimeOffset().ToUnixTimeMilliseconds()
+                              ?? long.MaxValue;
 
         var invocationRequest = new ServiceInvocationRequest
         {

@@ -1,16 +1,21 @@
 using System.Reflection;
 using System.Threading.Channels;
+using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Application.AgentProfiles;
+using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Hosting.AgentProfiles;
 using Aevatar.GAgentService.Hosting.DependencyInjection;
 using Aevatar.GAgentService.Projection.AgentProfiles;
 using Aevatar.Workflow.Extensions.Hosting;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -390,6 +395,48 @@ public sealed class SystemAgentProfileBootstrapTests
     }
 
     [Fact]
+    public async Task BootstrapSignal_ShouldRetainOneWakeCoalesceAdditionalWakesAndHonorCancellation()
+    {
+        var signal = new SystemAgentProfileBootstrapSignal();
+
+        signal.Pulse();
+        signal.Pulse();
+        await signal.WaitAsync();
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+
+        var wait = async () => await signal.WaitAsync(canceled.Token);
+        await wait.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task AcceptedProfileProjection_ShouldWakeHostedBootstrapWithoutPolling()
+    {
+        var provisioning = new RecordingProvisioningService();
+        var signal = new SystemAgentProfileBootstrapSignal();
+        var observer = new SystemAgentProfileBootstrapMaterializationObserver(signal);
+        using var hosted = new SystemAgentProfileBootstrapHostedService(provisioning, signal);
+        var projector = new AgentProfileNamespaceCurrentStateProjector(
+            new AppliedProjectionWriteDispatcher<AgentProfileNamespaceCatalogDocument>(),
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-26T00:00:00+00:00")),
+            [observer]);
+
+        await hosted.StartAsync(CancellationToken.None);
+        (await provisioning.WaitForCallAsync()).Should().Be(1);
+        await projector.ProjectAsync(
+            new AgentProfileNamespaceCurrentStateProjectionContext
+            {
+                RootActorId = AgentProfileActorIds.Namespace,
+                ProjectionKind = "agent-profile-namespaces",
+            },
+            WrapCommittedNamespaceState());
+
+        (await provisioning.WaitForCallAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1)))
+            .Should().Be(2);
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public void BootstrapAndReadiness_ShouldNotOwnProfileCachesOrProjectionLifecyclePorts()
     {
         var implementationTypes = new[]
@@ -427,6 +474,26 @@ public sealed class SystemAgentProfileBootstrapTests
         return entry;
     }
 
+    private static EventEnvelope WrapCommittedNamespaceState() =>
+        new()
+        {
+            Id = "outer-agent-profile-namespace",
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-26T00:00:00+00:00")),
+            Payload = Any.Pack(new CommittedStateEventPublished
+            {
+                StateEvent = new StateEvent
+                {
+                    AgentId = AgentProfileActorIds.Namespace,
+                    EventId = "evt-agent-profile-namespace",
+                    Version = 1,
+                    Timestamp = Timestamp.FromDateTimeOffset(
+                        DateTimeOffset.Parse("2026-07-26T00:00:00+00:00")),
+                    EventData = Any.Pack(new StringValue { Value = "committed" }),
+                },
+                StateRoot = Any.Pack(new AgentProfileNamespaceState()),
+            }),
+        };
+
     private static AgentProfileContent Content(
         bool withSkill = false,
         string displayName = "Test Assistant")
@@ -447,6 +514,7 @@ public sealed class SystemAgentProfileBootstrapTests
             {
                 BindingId = "binding-alpha",
                 ActivationMode = AgentProfileSkillActivationMode.Routed,
+                RoutingPolicy = RoutingPolicy("binding-alpha").Clone(),
                 Skill = new ExactOrnnSkillReference
                 {
                     SkillGuid = "00000000-0000-0000-0000-000000000001",
@@ -456,8 +524,21 @@ public sealed class SystemAgentProfileBootstrapTests
                 },
             });
         }
-        return content;
+        return AgentProfileDeterminism.NormalizeContent(content);
     }
+
+    private static AgentProfileSkillRoutingPolicy RoutingPolicy(string bindingId) =>
+        new()
+        {
+            IntentId = bindingId,
+            RoutingDescription = $"Route requests for {bindingId}.",
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            },
+            SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+            ExplicitTriggerAliases = { bindingId },
+        };
 
     private static AgentProfileReference SystemReference(string profileSlug = ProfileSlug) =>
         new()
@@ -507,35 +588,71 @@ public sealed class SystemAgentProfileBootstrapTests
         ByteString? publishedSourceDraftSha256 = null,
         ByteString? publishedSnapshotSha256 = null,
         string profileId = ProfileId,
-        string profileSlug = ProfileSlug) =>
-        new(
+        string profileSlug = ProfileSlug)
+    {
+        var normalizedContent = AgentProfileDeterminism.NormalizeContent(content);
+        return new AgentProfileManagementSnapshot(
             11,
             "profile-event-11",
             SystemIdentity(profileId, profileSlug),
-            content,
+            normalizedContent,
             1,
-            AgentProfileDeterminism.ComputeDraftSha256(content),
+            AgentProfileDeterminism.ComputeDraftSha256(normalizedContent),
             publishedRevision,
             publishedSnapshotSha256 ?? ByteString.Empty,
             publishedSourceDraftSha256 ?? ByteString.Empty,
             null);
+    }
 
     private static AgentProfilePublishedSnapshot PublishedSnapshot(
         AgentProfileContent content,
         long revision)
     {
+        var normalizedContent = AgentProfileDeterminism.NormalizeContent(content);
         var snapshot = new AgentProfilePublishedSnapshot
         {
             Identity = SystemIdentity(),
-            DisplayName = content.DisplayName,
-            Purpose = content.Purpose,
-            Instructions = content.Instructions,
-            ToolPolicy = content.ToolPolicy.Clone(),
+            DisplayName = normalizedContent.DisplayName,
+            Purpose = normalizedContent.Purpose,
+            Instructions = normalizedContent.Instructions,
+            ToolPolicy = normalizedContent.ToolPolicy.Clone(),
+            RecoveryToolPolicy = normalizedContent.RecoveryToolPolicy.Clone(),
             PublishedRevision = revision,
-            SourceDraftSha256 = AgentProfileDeterminism.ComputeSourceDraftSha256(content),
+            SourceDraftSha256 = AgentProfileDeterminism.ComputeSourceDraftSha256(normalizedContent),
         };
+        snapshot.SkillBindings.Add(normalizedContent.SkillBindings.Select(SealedBinding));
         snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
-        return snapshot;
+        return AgentProfileDeterminism.NormalizePublishedSnapshot(snapshot);
+    }
+
+    private static SealedAgentProfileSkillBinding SealedBinding(AgentProfileSkillBinding binding)
+    {
+        var sealedSkill = new SealedAgentProfileSkill
+        {
+            ExactReference = binding.Skill.Clone(),
+            Package = new ResolvedOrnnSkillPackage
+            {
+                SkillGuid = binding.Skill.SkillGuid,
+                LiteralVersion = binding.Skill.LiteralVersion,
+                CanonicalName = binding.Skill.ExpectedName,
+                PublisherId = binding.Skill.ExpectedPublisherId,
+                UpstreamSkillHash = "upstream-skill-hash-alpha",
+                Description = "Exact system skill",
+                Instructions = "Follow the resolved skill.",
+                Arguments = "request",
+                WhenToUse = "Use for the system test assistant.",
+                ModelInvocable = true,
+                UserInvocable = false,
+            },
+        };
+        sealedSkill.ContentSha256 = AgentProfileDeterminism.ComputeSkillContentSha256(sealedSkill);
+        return new SealedAgentProfileSkillBinding
+        {
+            BindingId = binding.BindingId,
+            ActivationMode = binding.ActivationMode,
+            Skill = sealedSkill,
+            RoutingPolicy = binding.RoutingPolicy?.Clone(),
+        };
     }
 
     private static AgentProfileExecutionSnapshot ExecutionSnapshot(
@@ -779,6 +896,26 @@ public sealed class SystemAgentProfileBootstrapTests
             _signals.Reader.ReadAsync(ct).AsValueTask();
 
         public void Pulse() => _signals.Writer.TryWrite(true).Should().BeTrue();
+    }
+
+    private sealed class FixedProjectionClock(DateTimeOffset utcNow) : IProjectionClock
+    {
+        public DateTimeOffset UtcNow { get; } = utcNow;
+    }
+
+    private sealed class AppliedProjectionWriteDispatcher<TReadModel>
+        : IProjectionWriteDispatcher<TReadModel>
+        where TReadModel : class, IProjectionReadModel
+    {
+        public Task<ProjectionWriteResult> UpsertAsync(
+            TReadModel readModel,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
+
+        public Task<ProjectionWriteResult> DeleteAsync(
+            string id,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionWriteResult.Applied());
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
@@ -161,6 +162,136 @@ public sealed class OrnnSkillClientTests
         request.Authorization!.Parameter.Should().Be("access-token");
         request.RequestUri!.AbsoluteUri.Should().Be(
             "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/aevatar-system");
+    }
+
+    [Fact]
+    public async Task GetExactSkillJsonAsync_UsesGuidAndLiteralVersionAndParsesToolDeclarations()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "name": "nyxid-service-call",
+                "version": "1.2",
+                "metadata": {
+                  "tools": [
+                    { "tool": "nyxid_service_inventory", "type": "mcp" },
+                    { "tool": "nyxid_service_request", "type": "mcp" }
+                  ]
+                },
+                "files": { "SKILL.md": "reviewed" }
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        const string guid = "11111111-2222-3333-4444-555555555555";
+
+        var result = await client.GetExactSkillJsonAsync("access-token", guid, "1.2");
+
+        result.ProxyStatus.Should().BeNull();
+        result.Value.Should().NotBeNull();
+        result.Value!.Version.Should().Be("1.2");
+        result.Value.Metadata!.Tools!.Select(static tool => tool.Tool).Should().Equal(
+            "nyxid_service_inventory",
+            "nyxid_service_request");
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Get);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            $"https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skills/{guid}/json?version=1.2");
+    }
+
+    [Fact]
+    public async Task GetExactSkillSetAsync_UsesGuidAndLiteralVersion()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "guid": "11111111-2222-3333-4444-555555555555",
+                "name": "nyxid-chat-core",
+                "version": "1.0",
+                "createdBy": "publisher-id",
+                "members": []
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        const string guid = "11111111-2222-3333-4444-555555555555";
+
+        var skillset = await client.GetExactSkillSetAsync("access-token", guid, "1.0");
+
+        skillset.Should().NotBeNull();
+        skillset!.Guid.Should().Be(guid);
+        skillset.Version.Should().Be("1.0");
+        skillset.CreatedBy.Should().Be("publisher-id");
+        handler.Requests.Should().ContainSingle().Which.RequestUri!.AbsoluteUri.Should().Be(
+            $"https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/{guid}?version=1.0");
+    }
+
+    [Fact]
+    public async Task GetExactSkillSetClosureAsync_UsesExactClosurePath()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "items": [
+                  {
+                    "guid": "22222222-2222-2222-2222-222222222222",
+                    "name": "nyxid-service-call",
+                    "version": "1.2"
+                  }
+                ]
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        const string guid = "11111111-2222-3333-4444-555555555555";
+
+        var closure = await client.GetExactSkillSetClosureAsync("access-token", guid, "1.0");
+
+        closure.Should().NotBeNull();
+        closure!.Items.Should().ContainSingle().Which.Version.Should().Be("1.2");
+        handler.Requests.Should().ContainSingle().Which.RequestUri!.AbsoluteUri.Should().Be(
+            $"https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets/{guid}/closure?version=1.0");
+    }
+
+    [Fact]
+    public async Task CreateSkillSetAsync_PostsReviewedExactMembers()
+    {
+        var handler = OrnnTestHttpMessageHandler.ReturningJson("""
+            {
+              "data": {
+                "guid": "11111111-2222-3333-4444-555555555555",
+                "name": "nyxid-chat-core",
+                "version": "1.0",
+                "members": []
+              }
+            }
+            """);
+        var client = CreateClient(handler, slug: "ornn-api");
+        var requestModel = new OrnnSkillSetPublishRequest(
+            "nyxid-chat-core",
+            "reviewed",
+            "select one member",
+            "generic",
+            ["aevatar", "reviewed-profile"],
+            ["22222222-2222-2222-2222-222222222222@1.2"],
+            "1.0");
+
+        var result = await client.CreateSkillSetAsync("access-token", requestModel);
+
+        result.Succeeded.Should().BeTrue();
+        var request = handler.Requests.Should().ContainSingle().Subject;
+        request.Method.Should().Be(HttpMethod.Post);
+        request.Authorization!.Parameter.Should().Be("access-token");
+        request.ContentType.Should().Be("application/json");
+        request.RequestUri!.AbsoluteUri.Should().Be(
+            "https://nyx.example/api/v1/proxy/s/ornn-api/api/v1/skillsets");
+        using var body = JsonDocument.Parse(request.Body!);
+        body.RootElement.GetProperty("name").GetString().Should().Be("nyxid-chat-core");
+        body.RootElement.GetProperty("version").GetString().Should().Be("1.0");
+        body.RootElement.GetProperty("members").EnumerateArray()
+            .Select(static member => member.GetString())
+            .Should().Equal("22222222-2222-2222-2222-222222222222@1.2");
     }
 
     [Fact]

@@ -608,7 +608,7 @@ public sealed class AgentProfileEndpointsTests
     }
 
     [Fact]
-    public async Task SkillPut_ShouldMapOnlyActivationAndFourExactReferenceFields()
+    public async Task SkillPut_ShouldMapTypedRoutingPolicyAndExactReference()
     {
         await using var host = await EndpointTestHost.StartAsync();
         using var request = CreateRequest(HttpMethod.Put, SkillRoute());
@@ -632,8 +632,20 @@ public sealed class AgentProfileEndpointsTests
             ExpectedName = "xiaomi-home-control",
             ExpectedPublisherId = "publisher-123",
         });
+        call.Request.RoutingPolicy.Should().BeEquivalentTo(new AgentProfileSkillRoutingPolicy
+        {
+            IntentId = "intent-alpha",
+            RoutingDescription = "Route alpha requests.",
+            ExplicitTriggerAliases = { "alpha", "alpha-service" },
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                ToolNames = { "alpha" },
+            },
+            SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+        });
         call.Request.GetType().GetProperties().Select(static property => property.Name)
-            .Should().BeEquivalentTo("ActivationMode", "Skill");
+            .Should().BeEquivalentTo("ActivationMode", "Skill", "RoutingPolicy");
     }
 
     [Fact]
@@ -654,7 +666,15 @@ public sealed class AgentProfileEndpointsTests
         text.Should().NotContain(SecretSkillBody);
         using var json = JsonDocument.Parse(text);
         json.RootElement.GetProperty("authorityStateVersion").GetInt64().Should().Be(14);
-        json.RootElement.GetProperty("draft").GetProperty("skillBindings").GetArrayLength().Should().Be(1);
+        var draft = json.RootElement.GetProperty("draft");
+        draft.GetProperty("recoveryToolPolicy").GetProperty("toolNames")[0]
+            .GetString().Should().Be("recovery-tool");
+        var routing = draft.GetProperty("skillBindings")[0].GetProperty("routingPolicy");
+        routing.GetProperty("intentId").GetString().Should().Be("intent-alpha");
+        routing.GetProperty("explicitTriggerAliases")[0].GetString().Should().Be("alpha");
+        routing.GetProperty("taskToolPolicy").GetProperty("toolNames")[0]
+            .GetString().Should().Be("alpha");
+        routing.GetProperty("sideEffectClass").GetString().Should().Be("READ_ONLY");
         json.RootElement.TryGetProperty("identity", out _).Should().BeFalse();
         json.RootElement.TryGetProperty("owner", out _).Should().BeFalse();
         json.RootElement.TryGetProperty("lastEventId", out _).Should().BeFalse();
@@ -1272,6 +1292,19 @@ public sealed class AgentProfileEndpointsTests
         new(StringComparer.Ordinal)
         {
             ["activationMode"] = "ROUTED",
+            ["routingPolicy"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["intentId"] = "intent-alpha",
+                ["routingDescription"] = "Route alpha requests.",
+                ["explicitTriggerAliases"] = new[] { "alpha", "alpha-service" },
+                ["taskToolPolicy"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["mode"] = "EXPLICIT_ALLOWLIST",
+                    ["toolNames"] = new[] { "alpha" },
+                    ["toolSetRefs"] = Array.Empty<string>(),
+                },
+                ["sideEffectClass"] = "READ_ONLY",
+            },
             ["skill"] = new Dictionary<string, object?>(StringComparer.Ordinal)
             {
                 ["skillGuid"] = "2d05bf2e-88ee-4f76-9998-728ba2f9db10",
@@ -1640,12 +1673,29 @@ public sealed class AgentProfileEndpointsTests
             {
                 Mode = AgentProfileToolPolicyMode.InheritRouteMaximum,
             },
+            RecoveryToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                ToolNames = { "recovery-tool" },
+            },
         };
         draft.SkillBindings.Add(new AgentProfileSkillBinding
         {
             BindingId = "binding-alpha",
             ActivationMode = AgentProfileSkillActivationMode.Routed,
             Skill = ExactReference(),
+            RoutingPolicy = new AgentProfileSkillRoutingPolicy
+            {
+                IntentId = "intent-alpha",
+                RoutingDescription = "Route alpha requests.",
+                ExplicitTriggerAliases = { "alpha" },
+                TaskToolPolicy = new AgentProfileToolPolicy
+                {
+                    Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                    ToolNames = { "alpha" },
+                },
+                SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+            },
         });
         return new AgentProfileManagementSnapshot(
             14,

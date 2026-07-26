@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.GAgentService.Abstractions.AgentProfiles;
@@ -21,6 +22,8 @@ public static class AgentProfilePolicies
     private const int SkillBindingMaxCount = AgentProfileValidationLimits.SkillBindingMaxCount;
     private const int ToolNameMaxCount = AgentProfileValidationLimits.ExplicitToolNameMaxCount;
     private const int ToolSetRefMaxCount = AgentProfileValidationLimits.ToolSetRefMaxCount;
+    private const int RoutingDescriptionMaxBytes = 512;
+    private const int ExplicitTriggerAliasMaxCount = 16;
 
     private static readonly Regex HumanReferenceSegmentPattern = new(
         "\\A[a-z0-9]+(?:-[a-z0-9]+)*\\z",
@@ -28,6 +31,10 @@ public static class AgentProfilePolicies
 
     private static readonly Regex LiteralVersionPattern = new(
         "\\A(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\z",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+    private static readonly Regex RoutingIntentIdPattern = new(
+        "\\A[a-z0-9]+(?:[._-][a-z0-9]+)*\\z",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     public static AgentProfileSafeDiagnostic NormalizeDiagnostic(
@@ -391,6 +398,18 @@ public static class AgentProfilePolicies
             required: false);
 
         diagnostics.AddRange(ValidateToolPolicy(content.ToolPolicy));
+        if (content.RecoveryToolPolicy is not null)
+        {
+            diagnostics.AddRange(ValidateToolPolicy(
+                content.RecoveryToolPolicy,
+                "recovery_tool_policy"));
+            ValidateNarrowingToolPolicy(
+                content.RecoveryToolPolicy,
+                content.ToolPolicy,
+                "recovery_tool_policy",
+                "RECOVERY_TOOL_POLICY_EXCEEDS_PROFILE_MAXIMUM",
+                diagnostics);
+        }
 
         if (content.SkillBindings.Count > SkillBindingMaxCount)
         {
@@ -401,6 +420,8 @@ public static class AgentProfilePolicies
         }
 
         var bindingIds = new HashSet<string>(StringComparer.Ordinal);
+        var intentIds = new HashSet<string>(StringComparer.Ordinal);
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < content.SkillBindings.Count; index++)
         {
             var binding = content.SkillBindings[index];
@@ -427,6 +448,15 @@ public static class AgentProfilePolicies
                     "Skill activation mode must be supported.",
                     $"{path}.activation_mode"));
             }
+
+            ValidateRoutingPolicyForActivation(
+                binding.ActivationMode,
+                binding.RoutingPolicy,
+                content.ToolPolicy,
+                path,
+                intentIds,
+                aliases,
+                diagnostics);
 
             diagnostics.AddRange(ValidateExactSkillReference(binding.Skill)
                 .Select(diagnostic => PrefixPath(diagnostic, path)));
@@ -465,8 +495,22 @@ public static class AgentProfilePolicies
             InstructionsMaxBytes,
             required: false);
         diagnostics.AddRange(ValidateToolPolicy(snapshot.ToolPolicy));
+        if (snapshot.RecoveryToolPolicy is not null)
+        {
+            diagnostics.AddRange(ValidateToolPolicy(
+                snapshot.RecoveryToolPolicy,
+                "recovery_tool_policy"));
+            ValidateNarrowingToolPolicy(
+                snapshot.RecoveryToolPolicy,
+                snapshot.ToolPolicy,
+                "recovery_tool_policy",
+                "RECOVERY_TOOL_POLICY_EXCEEDS_PROFILE_MAXIMUM",
+                diagnostics);
+        }
 
         var bindingIds = new HashSet<string>(StringComparer.Ordinal);
+        var intentIds = new HashSet<string>(StringComparer.Ordinal);
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var binding in snapshot.SkillBindings)
         {
             if (!IsBoundedOpaqueIdentifier(binding.BindingId, IdentifierMaxBytes))
@@ -491,6 +535,16 @@ public static class AgentProfilePolicies
                     "Skill activation mode must be supported.",
                     "skill_bindings.activation_mode"));
             }
+
+
+            ValidateRoutingPolicyForActivation(
+                binding.ActivationMode,
+                binding.RoutingPolicy,
+                snapshot.ToolPolicy,
+                "skill_bindings",
+                intentIds,
+                aliases,
+                diagnostics);
 
             diagnostics.AddRange(ValidateSealedSkill(binding.Skill)
                 .Select(static diagnostic => PrefixPath(diagnostic, "skill_bindings.skill")));
@@ -541,6 +595,7 @@ public static class AgentProfilePolicies
 
         var diagnostics = new List<AgentProfileSafeDiagnostic>();
         long aggregatePromptBytes = Encoding.UTF8.GetByteCount(snapshot.Instructions ?? string.Empty);
+        var alwaysSkillProcedures = new List<string>();
         foreach (var binding in snapshot.SkillBindings)
         {
             var skill = binding.Skill;
@@ -548,6 +603,8 @@ public static class AgentProfilePolicies
             if (package is not null)
             {
                 aggregatePromptBytes += PromptByteCount(package);
+                if (binding.ActivationMode == AgentProfileSkillActivationMode.Always)
+                    alwaysSkillProcedures.Add(package.Instructions);
                 foreach (var (path, content) in EnumerateTextAssets(package))
                 {
                     if (Encoding.UTF8.GetByteCount(content) <=
@@ -575,7 +632,8 @@ public static class AgentProfilePolicies
             }
         }
 
-        if (aggregatePromptBytes > AgentProfileValidationLimits.AggregatePromptMaxUtf8Bytes)
+        if (aggregatePromptBytes >
+            AgentProfileValidationLimits.RawAuthoritativeAggregateContentMaxUtf8Bytes)
         {
             AddHardLimitDiagnostic(
                 diagnostics,
@@ -583,12 +641,34 @@ public static class AgentProfilePolicies
                 "Aggregate Profile prompt bytes exceed the limit.",
                 "skill_bindings");
         }
-        if (aggregatePromptBytes > AgentProfileValidationLimits.AggregatePromptMaxTokens)
+        if (aggregatePromptBytes >
+            AgentProfileValidationLimits.RawAuthoritativeAggregateContentMaxEstimatedTokens)
         {
             AddHardLimitDiagnostic(
                 diagnostics,
                 "AGGREGATE_PROMPT_TOKENS_EXCEEDED",
                 "Aggregate Profile prompt token upper bound exceeds the limit.",
+                "skill_bindings");
+        }
+        var profileLayer = ProfilePromptLayerRenderer.Render(
+            snapshot.Instructions,
+            alwaysSkillProcedures);
+        if (profileLayer.ActualUtf8Bytes >
+            AgentProfileValidationLimits.MaterializedProfileLayerMaxUtf8Bytes)
+        {
+            AddHardLimitDiagnostic(
+                diagnostics,
+                "MATERIALIZED_PROFILE_LAYER_BYTES_EXCEEDED",
+                "Materialized Profile layer bytes exceed the limit.",
+                "skill_bindings");
+        }
+        if (profileLayer.EstimatedTokens >
+            AgentProfileValidationLimits.MaterializedProfileLayerMaxEstimatedTokens)
+        {
+            AddHardLimitDiagnostic(
+                diagnostics,
+                "MATERIALIZED_PROFILE_LAYER_TOKENS_EXCEEDED",
+                "Materialized Profile layer estimated tokens exceed the limit.",
                 "skill_bindings");
         }
         if (snapshot.CalculateSize() > AgentProfileValidationLimits.PublishedSnapshotMaxSerializedBytes)
@@ -646,10 +726,11 @@ public static class AgentProfilePolicies
     }
 
     private static IReadOnlyList<AgentProfileSafeDiagnostic> ValidateToolPolicy(
-        AgentProfileToolPolicy? policy)
+        AgentProfileToolPolicy? policy,
+        string path = "tool_policy")
     {
         if (policy is null)
-            return [Diagnostic("MISSING_TOOL_POLICY", "Profile tool policy is required.", "tool_policy")];
+            return [Diagnostic("MISSING_TOOL_POLICY", "Profile tool policy is required.", path)];
 
         var diagnostics = new List<AgentProfileSafeDiagnostic>();
         if (!IsSupportedToolPolicyMode(policy.Mode))
@@ -657,7 +738,7 @@ public static class AgentProfilePolicies
             diagnostics.Add(Diagnostic(
                 "INVALID_TOOL_POLICY_MODE",
                 "Profile tool policy mode must be supported.",
-                "tool_policy.mode"));
+                $"{path}.mode"));
         }
 
         if (policy.ToolNames.Count > ToolNameMaxCount)
@@ -665,7 +746,7 @@ public static class AgentProfilePolicies
             diagnostics.Add(Diagnostic(
                 "TOO_MANY_TOOL_NAMES",
                 "Tool name count exceeds the limit.",
-                "tool_policy.tool_names"));
+                $"{path}.tool_names"));
         }
 
         if (policy.ToolSetRefs.Count > ToolSetRefMaxCount)
@@ -673,7 +754,7 @@ public static class AgentProfilePolicies
             diagnostics.Add(Diagnostic(
                 "TOO_MANY_TOOL_SET_REFS",
                 "Tool-set reference count exceeds the limit.",
-                "tool_policy.tool_set_refs"));
+                $"{path}.tool_set_refs"));
         }
 
         for (var index = 0; index < policy.ToolNames.Count; index++)
@@ -683,7 +764,7 @@ public static class AgentProfilePolicies
                 diagnostics.Add(Diagnostic(
                     "INVALID_TOOL_NAME",
                     "Tool name is required and must be bounded.",
-                    $"tool_policy.tool_names[{index}]"));
+                    $"{path}.tool_names[{index}]"));
             }
         }
 
@@ -694,11 +775,169 @@ public static class AgentProfilePolicies
                 diagnostics.Add(Diagnostic(
                     "INVALID_TOOL_SET_REF",
                     "Tool-set reference is required and must be bounded.",
-                    $"tool_policy.tool_set_refs[{index}]"));
+                    $"{path}.tool_set_refs[{index}]"));
             }
         }
 
         return diagnostics;
+    }
+
+    private static void ValidateRoutingPolicyForActivation(
+        AgentProfileSkillActivationMode activationMode,
+        AgentProfileSkillRoutingPolicy? routingPolicy,
+        AgentProfileToolPolicy? maximumPolicy,
+        string bindingPath,
+        HashSet<string> intentIds,
+        HashSet<string> aliases,
+        List<AgentProfileSafeDiagnostic> diagnostics)
+    {
+        if (activationMode == AgentProfileSkillActivationMode.Always)
+        {
+            if (routingPolicy is not null)
+            {
+                diagnostics.Add(Diagnostic(
+                    "UNEXPECTED_SKILL_ROUTING_POLICY",
+                    "Always-active skill bindings cannot carry routing policy.",
+                    $"{bindingPath}.routing_policy"));
+            }
+            return;
+        }
+
+        if (activationMode is not (
+                AgentProfileSkillActivationMode.Routed or
+                AgentProfileSkillActivationMode.DefaultForUnmatchedTurn))
+        {
+            return;
+        }
+
+        if (routingPolicy is null)
+        {
+            diagnostics.Add(Diagnostic(
+                "MISSING_SKILL_ROUTING_POLICY",
+                "Routed skill bindings require routing policy.",
+                $"{bindingPath}.routing_policy"));
+            return;
+        }
+
+        var path = $"{bindingPath}.routing_policy";
+        var normalizedIntentId = (routingPolicy.IntentId ?? string.Empty)
+            .Normalize(NormalizationForm.FormC);
+        if (Encoding.UTF8.GetByteCount(normalizedIntentId) > IdentifierMaxBytes ||
+            !RoutingIntentIdPattern.IsMatch(normalizedIntentId))
+        {
+            diagnostics.Add(Diagnostic(
+                "INVALID_ROUTING_INTENT_ID",
+                "Routing intent id must use canonical lowercase identifier form.",
+                $"{path}.intent_id"));
+        }
+        else if (!intentIds.Add(normalizedIntentId))
+        {
+            diagnostics.Add(Diagnostic(
+                "DUPLICATE_ROUTING_INTENT_ID",
+                "Routing intent ids must be unique.",
+                $"{path}.intent_id"));
+        }
+
+        ValidateAuthoredText(
+            diagnostics,
+            routingPolicy.RoutingDescription,
+            $"{path}.routing_description",
+            "INVALID_ROUTING_DESCRIPTION",
+            RoutingDescriptionMaxBytes,
+            required: true);
+
+        if (routingPolicy.ExplicitTriggerAliases.Count > ExplicitTriggerAliasMaxCount)
+        {
+            diagnostics.Add(Diagnostic(
+                "TOO_MANY_EXPLICIT_TRIGGER_ALIASES",
+                "Explicit trigger alias count exceeds the limit.",
+                $"{path}.explicit_trigger_aliases"));
+        }
+        for (var index = 0; index < routingPolicy.ExplicitTriggerAliases.Count; index++)
+        {
+            var alias = routingPolicy.ExplicitTriggerAliases[index];
+            var normalizedAlias = (alias ?? string.Empty).Normalize(NormalizationForm.FormC);
+            if (!IsBoundedOpaqueIdentifier(normalizedAlias, IdentifierMaxBytes))
+            {
+                diagnostics.Add(Diagnostic(
+                    "INVALID_EXPLICIT_TRIGGER_ALIAS",
+                    "Explicit trigger alias is required and must be bounded.",
+                    $"{path}.explicit_trigger_aliases[{index}]"));
+            }
+            else if (!aliases.Add(normalizedAlias))
+            {
+                diagnostics.Add(Diagnostic(
+                    "DUPLICATE_EXPLICIT_TRIGGER_ALIAS",
+                    "Explicit trigger aliases must be globally unique.",
+                    $"{path}.explicit_trigger_aliases[{index}]"));
+            }
+        }
+
+        diagnostics.AddRange(ValidateToolPolicy(
+            routingPolicy.TaskToolPolicy,
+            $"{path}.task_tool_policy"));
+        ValidateNarrowingToolPolicy(
+            routingPolicy.TaskToolPolicy,
+            maximumPolicy,
+            $"{path}.task_tool_policy",
+            "TASK_TOOL_POLICY_EXCEEDS_PROFILE_MAXIMUM",
+            diagnostics);
+
+        if (routingPolicy.SideEffectClass is not (
+                AgentProfileSkillSideEffectClass.ReadOnly or
+                AgentProfileSkillSideEffectClass.ExternalHandoff or
+                AgentProfileSkillSideEffectClass.ServiceCall or
+                AgentProfileSkillSideEffectClass.Maintenance))
+        {
+            diagnostics.Add(Diagnostic(
+                "INVALID_SKILL_SIDE_EFFECT_CLASS",
+                "Skill side-effect class must be explicit.",
+                $"{path}.side_effect_class"));
+        }
+    }
+
+    private static void ValidateNarrowingToolPolicy(
+        AgentProfileToolPolicy? candidate,
+        AgentProfileToolPolicy? maximum,
+        string path,
+        string diagnosticCode,
+        List<AgentProfileSafeDiagnostic> diagnostics)
+    {
+        if (candidate is null || maximum is null ||
+            candidate.Mode != AgentProfileToolPolicyMode.ExplicitAllowlist)
+        {
+            if (candidate is not null && candidate.Mode == AgentProfileToolPolicyMode.InheritRouteMaximum)
+            {
+                diagnostics.Add(Diagnostic(
+                    diagnosticCode,
+                    "Narrowing tool policy cannot inherit the Profile maximum.",
+                    path));
+            }
+            return;
+        }
+
+        if (maximum.Mode == AgentProfileToolPolicyMode.InheritRouteMaximum)
+            return;
+        if (maximum.Mode != AgentProfileToolPolicyMode.ExplicitAllowlist)
+            return;
+
+        var maximumToolNames = maximum.ToolNames
+            .Select(static value => value.Normalize(NormalizationForm.FormC))
+            .ToHashSet(StringComparer.Ordinal);
+        var maximumToolSetRefs = maximum.ToolSetRefs
+            .Select(static value => value.Normalize(NormalizationForm.FormC))
+            .ToHashSet(StringComparer.Ordinal);
+        var isSubset = candidate.ToolNames.All(value =>
+                maximumToolNames.Contains(value.Normalize(NormalizationForm.FormC))) &&
+            candidate.ToolSetRefs.All(value =>
+                maximumToolSetRefs.Contains(value.Normalize(NormalizationForm.FormC)));
+        if (!isSubset)
+        {
+            diagnostics.Add(Diagnostic(
+                diagnosticCode,
+                "Narrowing tool policy cannot exceed the Profile maximum.",
+                path));
+        }
     }
 
     private static bool IsSupportedSkillActivationMode(AgentProfileSkillActivationMode mode) =>

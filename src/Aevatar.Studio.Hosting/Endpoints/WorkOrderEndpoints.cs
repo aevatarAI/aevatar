@@ -23,10 +23,6 @@ internal static class WorkOrderEndpoints
             .WithTags("WorkOrders");
         app.MapPost("/api/scopes/{scopeId}/work-orders/{workOrderId}:reassign", HandleReassignAsync)
             .WithTags("WorkOrders");
-        app.MapPost("/api/scopes/{scopeId}/work-orders/{workOrderId}:approve", HandleApproveAsync)
-            .WithTags("WorkOrders");
-        app.MapPost("/api/scopes/{scopeId}/work-orders/{workOrderId}:deny", HandleDenyAsync)
-            .WithTags("WorkOrders");
         app.MapPost("/api/scopes/{scopeId}/work-orders/{workOrderId}:dispatch", HandleDispatchAsync)
             .WithTags("WorkOrders");
         app.MapPost("/api/scopes/{scopeId}/work-orders/{workOrderId}:cancel", HandleCancelAsync)
@@ -147,36 +143,6 @@ internal static class WorkOrderEndpoints
             workOrderId,
             service,
             (principal, token) => service.ReassignAsync(scopeId, workOrderId, request, principal, token),
-            ct);
-
-    internal static Task<IResult> HandleApproveAsync(
-        HttpContext http,
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        [FromServices] IWorkOrderService service,
-        CancellationToken ct) =>
-        HandleRequesterCommandAsync(
-            http,
-            scopeId,
-            workOrderId,
-            service,
-            (principal, token) => service.ApproveAsync(scopeId, workOrderId, request, principal, token),
-            ct);
-
-    internal static Task<IResult> HandleDenyAsync(
-        HttpContext http,
-        string scopeId,
-        string workOrderId,
-        DecideWorkOrderApprovalRequest request,
-        [FromServices] IWorkOrderService service,
-        CancellationToken ct) =>
-        HandleRequesterCommandAsync(
-            http,
-            scopeId,
-            workOrderId,
-            service,
-            (principal, token) => service.DenyAsync(scopeId, workOrderId, request, principal, token),
             ct);
 
     internal static Task<IResult> HandleDispatchAsync(

@@ -1,15 +1,14 @@
-using Aevatar.GAgents.Scheduled;
-using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
-using Aevatar.AI.Abstractions.Middleware;
-using Aevatar.AI.Abstractions.LLMProviders;
-using Aevatar.AI.Abstractions.ToolProviders;
+using System.Reflection;
 using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Application.CodexExecution;
-using Aevatar.AI.Infrastructure.ChronoSandbox;
 using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AgentCatalog.AgentProfiles;
-using Aevatar.AI.ToolProviders.AevatarInvocation;
 using Aevatar.AI.ToolProviders.Channel;
 using Aevatar.AI.ToolProviders.ChannelAdmin;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -31,25 +30,30 @@ using Aevatar.Configuration;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Aevatar.Foundation.Runtime.Hosting.Maintenance;
 using Aevatar.Foundation.VoicePresence;
-using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Hosting;
+using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Transport;
-using Aevatar.GAgentService.Abstractions.Ports;
-using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.GAgents.Channel.Identity;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
+using Aevatar.GAgents.NyxidChat.AgentProfiles;
+using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgents.StatusDashboard.Executors;
+using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.Mainnet.Host.Api.Profiles;
 using Aevatar.Mainnet.Host.Api.Responses;
-using Aevatar.Foundation.Abstractions.HumanInteraction;
-using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.Scripting.Projection.ReadModels;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Hosting;
@@ -61,13 +65,13 @@ using Aevatar.Workflow.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
-using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -112,6 +116,85 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldComposeReadModelBackedProfileBinder()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        var profileOptions = app.Services.GetRequiredService<IOptions<NyxIdChatAgentProfileOptions>>().Value;
+        var source = app.Services.GetRequiredService<INyxIdChatAgentProfileBindingSource>();
+
+        profileOptions.Enabled.Should().BeFalse();
+        profileOptions.ReleaseSpecPath.Should().BeEmpty();
+        source.Should().BeSameAs(
+            app.Services.GetRequiredService<MainnetNyxIdChatAgentProfileBindingSource>());
+    }
+
+    [Fact]
+    public void AddAevatarMainnetHost_WithEnabledRollout_ShouldRegisterPinOnlySelectorAndBinder()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var releaseSpecPath = Path.Combine(
+            Path.GetTempPath(),
+            $"aevatar-mainnet-profile-release-{Guid.NewGuid():N}.json");
+        File.WriteAllText(
+            releaseSpecPath,
+            MainnetAgentProfileRolloutSelectorTests.BuildValidReleaseSpecJson());
+        try
+        {
+            using var enabled = new EnvironmentVariableScope(
+                "AEVATAR_Aevatar__AgentProfiles__NyxIdChat__Enabled", "true");
+            using var releaseSpec = new EnvironmentVariableScope(
+                "AEVATAR_Aevatar__AgentProfiles__NyxIdChat__ReleaseSpecPath", releaseSpecPath);
+            using var runtimeProvider = new EnvironmentVariableScope(
+                "AEVATAR_ActorRuntime__Provider", "InMemory");
+            using var documentProvider = new EnvironmentVariableScope(
+                "AEVATAR_Projection__Document__Providers__InMemory__Enabled", "true");
+            using var documentElasticsearch = new EnvironmentVariableScope(
+                "AEVATAR_Projection__Document__Providers__Elasticsearch__Enabled", "false");
+            using var graphProvider = new EnvironmentVariableScope(
+                "AEVATAR_Projection__Graph__Providers__InMemory__Enabled", "true");
+            using var graphNeo4j = new EnvironmentVariableScope(
+                "AEVATAR_Projection__Graph__Providers__Neo4j__Enabled", "false");
+            using var projectionEnvironment = new EnvironmentVariableScope(
+                "Projection__Policies__Environment", "Development");
+            using var denyInMemoryDocument = new EnvironmentVariableScope(
+                "Projection__Policies__DenyInMemoryDocumentReadStore", "false");
+            using var denyInMemoryGraph = new EnvironmentVariableScope(
+                "Projection__Policies__DenyInMemoryGraphFactStore", "false");
+            var builder = CreateBuilder();
+            builder.AddAevatarMainnetHost(options =>
+            {
+                options.EnableConnectorBootstrap = false;
+                options.EnableCors = false;
+            });
+
+            using var app = builder.Build();
+            var registry = app.Services.GetRequiredService<IToolSetRegistry>();
+
+            app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>()
+                .SelectForNewConversation("conversation-a")
+                .Should()
+                .NotBeNull();
+            app.Services.GetRequiredService<INyxIdChatAgentProfileBindingSource>()
+                .Should()
+                .BeSameAs(app.Services.GetRequiredService<MainnetNyxIdChatAgentProfileBindingSource>());
+            registry.GetRegisteredNames().Should().NotContain("profile.route.v1");
+        }
+        finally
+        {
+            File.Delete(releaseSpecPath);
+        }
+    }
+
+    [Fact]
     public async Task AddAevatarMainnetHost_WithInMemoryDependencies_ShouldBuildAndStartFullComposition()
     {
         using var home = new TemporaryAevatarHomeScope();
@@ -152,6 +235,9 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<NyxIdToolOptions>()
             .SandboxServiceSlug.Should().Be(NyxIdToolOptions.DefaultSandboxServiceSlug);
         app.Services.GetRequiredService<IServiceRolloutCommandObservationQueryReader>().Should().NotBeNull();
+        app.Services.GetRequiredService<MainnetAgentProfileRolloutSelector>()
+            .SelectForNewConversation("new-conversation")
+            .Should().BeNull();
         app.Services.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>()
             .Should()
             .NotBeNull();
@@ -470,6 +556,7 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
         workspace.Sources.Should().Contain(source => source is StudioMemberQueryToolSource);
         workspace.Sources.Should().Contain(source => source is StudioScheduleQueryToolSource);
+        workspace.Sources.Should().Contain(source => source is StudioWorkflowQueryToolSource);
         workspace.Sources.Should().Contain(source => source is WorkflowCatalogAgentToolSource);
         workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
@@ -479,12 +566,29 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is AgentDeliveryTargetToolSource);
         workspace.Sources.Should().Contain(source => source is AgentProfilesToolSource);
         workspace.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+        workspace.Sources.Should().NotContain(source => source is NyxIdConnectedServiceInventoryToolSource);
         workspace.Sources.Should().Contain(source => source is LarkAgentToolSource);
         workspace.Sources.Should().Contain(source => source is TelegramAgentToolSource);
         workspace.Sources.Should().Contain(source => source is ChronoStorageAgentToolSource);
         workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
         workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        app.Services.GetServices<IAgentToolSource>()
+            .Select(static source => source.GetType())
+            .Should()
+            .NotContain(typeof(NyxIdConnectedServiceInventoryToolSource));
+        app.Services.GetRequiredService<NyxIdConnectedServiceInventoryToolSource>()
+            .Should()
+            .NotBeNull();
+        var replyGenerator = app.Services.GetRequiredService<IConversationReplyGenerator>();
+        var channelToolSources = replyGenerator.GetType()
+            .GetField("_toolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(replyGenerator)
+            .Should()
+            .BeAssignableTo<IReadOnlyList<IAgentToolSource>>()
+            .Subject;
+        channelToolSources.Should().ContainSingle(source =>
+            source is NyxIdConnectedServiceInventoryToolSource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);

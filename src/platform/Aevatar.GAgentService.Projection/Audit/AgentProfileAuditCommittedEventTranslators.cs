@@ -100,6 +100,8 @@ public sealed class AgentProfileInitializedAuditTranslator
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
         AddTransitionFacts(annotations, evt.Transition);
+        if (evt.InitialContent is not null)
+            AddRecoveryToolPolicyFacts(annotations, evt.InitialContent.RecoveryToolPolicy);
         return ProfileSeed(
             "agent_profile.created",
             evt.Identity,
@@ -139,6 +141,8 @@ public sealed class AgentProfileDraftUpdatedAuditTranslator
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
         AddOutcomeFacts(annotations, evt.Outcome);
+        if (evt.Content is not null)
+            AddRecoveryToolPolicyFacts(annotations, evt.Content.RecoveryToolPolicy);
         return ProfileSeed(
             "agent_profile.draft.updated",
             evt.Identity,
@@ -160,6 +164,8 @@ public sealed class AgentProfileSkillBindingUpsertedAuditTranslator
     {
         var annotations = new Dictionary<string, string>(StringComparer.Ordinal);
         AddOutcomeFacts(annotations, evt.Outcome);
+        if (evt.Content is not null)
+            AddRecoveryToolPolicyFacts(annotations, evt.Content.RecoveryToolPolicy);
         AddBindingFacts(annotations, evt.Binding);
         return ProfileSeed(
             "agent_profile.skill_binding.upserted",
@@ -185,6 +191,8 @@ public sealed class AgentProfileSkillBindingRemovedAuditTranslator
             ["binding_id"] = evt.BindingId ?? string.Empty,
         };
         AddOutcomeFacts(annotations, evt.Outcome);
+        if (evt.Content is not null)
+            AddRecoveryToolPolicyFacts(annotations, evt.Content.RecoveryToolPolicy);
         return ProfileSeed(
             "agent_profile.skill_binding.removed",
             evt.Identity,
@@ -211,6 +219,8 @@ public sealed class AgentProfilePublishedAuditTranslator
             annotations,
             "published_source_draft_sha256",
             evt.Snapshot?.SourceDraftSha256);
+        if (evt.Snapshot is not null)
+            AddRecoveryToolPolicyFacts(annotations, evt.Snapshot.RecoveryToolPolicy);
         return ProfileSeed(
             "agent_profile.published",
             evt.Identity,
@@ -427,6 +437,18 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
 
         annotations["binding_id"] = binding.BindingId ?? string.Empty;
         annotations["activation_mode"] = ActivationMode(binding.ActivationMode);
+        if (binding.RoutingPolicy is not null && binding.Skill is not null)
+        {
+            var normalized = AgentProfileDeterminism.NormalizeSkillBinding(binding);
+            var routingPolicy = normalized.RoutingPolicy;
+            annotations["routing_intent_id"] = routingPolicy.IntentId;
+            annotations["routing_side_effect_class"] =
+                SideEffectClass(routingPolicy.SideEffectClass);
+            AddDigest(
+                annotations,
+                "routing_policy_sha256",
+                AgentProfileDeterminism.Sha256(routingPolicy));
+        }
         if (binding.Skill is null)
             return;
 
@@ -434,6 +456,23 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         annotations["literal_version"] = binding.Skill.LiteralVersion ?? string.Empty;
         annotations["expected_name"] = binding.Skill.ExpectedName ?? string.Empty;
         annotations["expected_publisher_id"] = binding.Skill.ExpectedPublisherId ?? string.Empty;
+    }
+
+    protected static void AddRecoveryToolPolicyFacts(
+        IDictionary<string, string> annotations,
+        AgentProfileToolPolicy? policy)
+    {
+        var normalized = policy is null
+            ? new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            }
+            : AgentProfileDeterminism.NormalizeToolPolicy(policy);
+        annotations["recovery_tool_policy_mode"] = ToolPolicyMode(normalized.Mode);
+        AddDigest(
+            annotations,
+            "recovery_tool_policy_sha256",
+            AgentProfileDeterminism.Sha256(normalized));
     }
 
     protected static void AddPublishedSummaryFacts(
@@ -607,6 +646,23 @@ public abstract class AgentProfileAuditTranslatorBase<TEvent> : AuditTranslatorB
         AgentProfileSkillActivationMode.DefaultForUnmatchedTurn => "default_for_unmatched_turn",
         _ => "unspecified",
     };
+
+    private static string ToolPolicyMode(AgentProfileToolPolicyMode mode) => mode switch
+    {
+        AgentProfileToolPolicyMode.InheritRouteMaximum => "inherit_route_maximum",
+        AgentProfileToolPolicyMode.ExplicitAllowlist => "explicit_allowlist",
+        _ => "unspecified",
+    };
+
+    private static string SideEffectClass(AgentProfileSkillSideEffectClass sideEffectClass) =>
+        sideEffectClass switch
+        {
+            AgentProfileSkillSideEffectClass.ReadOnly => "read_only",
+            AgentProfileSkillSideEffectClass.ExternalHandoff => "external_handoff",
+            AgentProfileSkillSideEffectClass.ServiceCall => "service_call",
+            AgentProfileSkillSideEffectClass.Maintenance => "maintenance",
+            _ => "unspecified",
+        };
 
     protected static string ProvisioningFailureKind(AgentProfileProvisioningFailureKind kind) => kind switch
     {

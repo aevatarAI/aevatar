@@ -1,7 +1,8 @@
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.Authentication.Abstractions;
-using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -28,11 +29,10 @@ public static class ServiceCollectionExtensions
         // Old: singleton tool clients constructed or pinned raw HttpClient instances.
         // New: stateless API calls use AddHttpClient<T>; stateful caches use named clients through IHttpClientFactory.
         services.AddNyxIdApiAccess(configure);
+        services.TryAddTransient<NyxIdServiceInstanceClient>();
         services.TryAddEnumerable(ServiceDescriptor.Transient<
             IExternalWorkflowCapabilitySource,
             NyxIdExternalWorkflowCapabilitySource>());
-        services.AddHttpClient(ConnectedServiceSpecCache.HttpClientName, _ => { });
-        services.TryAddSingleton<IConnectedServiceSpecSource, ConnectedServiceSpecCache>();
         services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPort,
             NyxIdWorkflowFileMultipartUploadPort>());
@@ -45,6 +45,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddEnumerable(
             ServiceDescriptor.Transient<IAgentToolSource, NyxIdAgentToolSource>());
+        services.TryAddTransient<NyxIdConnectedServiceInventoryToolSource>();
 
         // Refactor (iter23/cluster-001-nyxid-tool-approval-polling):
         //   Old pattern: NyxID was registered as a generic local approval handler that blocked while polling.
@@ -127,9 +128,7 @@ public static class ServiceCollectionExtensions
         return null;
     }
 
-    private sealed class NyxIdApiAccessRegistrationMarker
-    {
-    }
+    private sealed class NyxIdApiAccessRegistrationMarker;
 
     // Registers the NyxID-backed current-user resolver behind the aevatar admin authorization seam.
     public static IServiceCollection AddNyxIdPlatformAuthorization(

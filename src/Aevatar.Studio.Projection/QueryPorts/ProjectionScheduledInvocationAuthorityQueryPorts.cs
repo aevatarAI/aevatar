@@ -5,8 +5,9 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgents.ConnectorCatalog;
+using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Projection.ReadModels;
-using Microsoft.Extensions.Options;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.Studio.Projection.QueryPorts;
 
@@ -87,75 +88,47 @@ public sealed class ProjectionScheduledInvocationConnectorQueryPort(
     }
 }
 
-public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort
+public sealed class ProjectionScheduledInvocationOwnerLLMQueryPort(
+    IProjectionDocumentReader<UserConfigCurrentStateDocument, string> reader)
     : IScheduledInvocationOwnerLLMEvidenceQueryPort
 {
-    private const string NyxIdProxyRoutePrefix = "/api/v1/proxy/s/";
-    private const string NyxIdGatewayRoute = "/api/v1/llm/gateway/v1";
-    private readonly IProjectionDocumentReader<UserConfigCurrentStateDocument, string> _reader;
-    private readonly string _defaultRoutePreference;
-
-    public ProjectionScheduledInvocationOwnerLLMQueryPort(
-        IProjectionDocumentReader<UserConfigCurrentStateDocument, string> reader,
-        IOptions<ScheduledInvocationOwnerLLMRouteOptions>? options = null)
-    {
-        _reader = reader ?? throw new ArgumentNullException(nameof(reader));
-        _defaultRoutePreference = options?.Value.DefaultRoutePreference?.Trim() ?? string.Empty;
-    }
-
     public async Task<ScheduledInvocationOwnerLLMEvidence?> GetAsync(
         string scopeId,
         CancellationToken ct = default)
     {
-        var document = await _reader.GetAsync($"user-config-{scopeId.Trim()}", ct);
-        var stateVersion = document?.StateVersion ?? 0;
-        var route = NormalizeRoutePreference(document?.PreferredLlmRoute);
-        if (route.Length == 0)
-            route = NormalizeRoutePreference(_defaultRoutePreference);
+        var document = await reader.GetAsync($"user-config-{scopeId.Trim()}", ct);
+        if (document == null)
+            return null;
 
-        if (route.Length == 0 ||
-            string.Equals(route.TrimEnd('/'), NyxIdGatewayRoute, StringComparison.OrdinalIgnoreCase))
-        {
-            return new ScheduledInvocationOwnerLLMEvidence(
-                stateVersion,
-                string.Empty,
-                string.Empty,
-                AuthorizationGrantRequirement.NotRequired);
-        }
-
-        var serviceSlug = route.StartsWith(NyxIdProxyRoutePrefix, StringComparison.Ordinal)
-            ? route[NyxIdProxyRoutePrefix.Length..].Trim('/')
-            : route.Trim('/');
-        if (serviceSlug.Length == 0 || serviceSlug.Contains('/'))
-        {
-            return new ScheduledInvocationOwnerLLMEvidence(
-                stateVersion,
-                string.Empty,
-                string.Empty,
-                AuthorizationGrantRequirement.Unspecified);
-        }
-
-        return new ScheduledInvocationOwnerLLMEvidence(
-            stateVersion,
-            string.Empty,
-            serviceSlug,
-            AuthorizationGrantRequirement.Required);
+        return document.LlmSelection == null
+            ? Unspecified(document.StateVersion)
+            : MapTypedEvidence(document.StateVersion, document.DefaultModel, document.LlmSelection);
     }
 
-    private static string NormalizeRoutePreference(string? value)
+    private static ScheduledInvocationOwnerLLMEvidence MapTypedEvidence(
+        long stateVersion,
+        string model,
+        UserLlmSelection selection)
     {
-        var normalized = value?.Trim() ?? string.Empty;
-        if (normalized.Length == 0 ||
-            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("//", StringComparison.Ordinal) ||
-            normalized.Contains("://", StringComparison.Ordinal))
+        var mapped = new ScheduledInvocationOwnerLLMSelection
         {
-            return string.Empty;
-        }
+            RouteKind = selection.RouteKind switch
+            {
+                UserLlmRouteKind.Gateway => ScheduledInvocationOwnerLLMRouteKind.Gateway,
+                UserLlmRouteKind.NyxIdUserService => ScheduledInvocationOwnerLLMRouteKind.NyxIdUserService,
+                _ => ScheduledInvocationOwnerLLMRouteKind.Unspecified,
+            },
+            RouteValue = selection.RouteValue,
+            NyxIdUserServiceId = selection.NyxIdUserServiceId,
+            ServiceSlugSnapshot = selection.ServiceSlugSnapshot,
+            Model = model,
+        };
 
-        return normalized.StartsWith("/", StringComparison.Ordinal)
-            ? normalized
-            : $"{NyxIdProxyRoutePrefix}{normalized.Trim('/')}";
+        return ScheduledInvocationOwnerLLMSelectionPolicy.IsDurableSelectionValid(mapped)
+            ? new ScheduledInvocationOwnerLLMEvidence(stateVersion, mapped)
+            : Unspecified(stateVersion);
     }
+
+    private static ScheduledInvocationOwnerLLMEvidence Unspecified(long stateVersion) =>
+        new(stateVersion, new ScheduledInvocationOwnerLLMSelection());
 }

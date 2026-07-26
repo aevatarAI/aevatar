@@ -104,6 +104,9 @@ public static class AgentProfileDeterminism
             BindingId = NormalizeText(binding.BindingId),
             ActivationMode = binding.ActivationMode,
             Skill = NormalizeExactSkillReference(binding.Skill),
+            RoutingPolicy = binding.RoutingPolicy is null
+                ? null
+                : NormalizeSkillRoutingPolicyCore(binding.RoutingPolicy),
         };
     }
 
@@ -117,6 +120,9 @@ public static class AgentProfileDeterminism
             Purpose = NormalizeText(content.Purpose),
             Instructions = NormalizeText(content.Instructions),
             ToolPolicy = NormalizeToolPolicy(content.ToolPolicy),
+            RecoveryToolPolicy = content.RecoveryToolPolicy is null
+                ? EmptyToolPolicy()
+                : NormalizeToolPolicy(content.RecoveryToolPolicy),
         };
         normalized.SkillBindings.Add(content.SkillBindings
             .Select(NormalizeSkillBinding)
@@ -265,6 +271,9 @@ public static class AgentProfileDeterminism
             BindingId = NormalizeText(binding.BindingId),
             ActivationMode = binding.ActivationMode,
             Skill = NormalizeSealedSkill(binding.Skill),
+            RoutingPolicy = binding.RoutingPolicy is null
+                ? null
+                : NormalizeSkillRoutingPolicyCore(binding.RoutingPolicy),
         };
     }
 
@@ -280,6 +289,9 @@ public static class AgentProfileDeterminism
             Purpose = NormalizeText(snapshot.Purpose),
             Instructions = NormalizeText(snapshot.Instructions),
             ToolPolicy = NormalizeToolPolicy(snapshot.ToolPolicy),
+            RecoveryToolPolicy = snapshot.RecoveryToolPolicy is null
+                ? EmptyToolPolicy()
+                : NormalizeToolPolicy(snapshot.RecoveryToolPolicy),
             PublishedRevision = snapshot.PublishedRevision,
             SourceDraftSha256 = snapshot.SourceDraftSha256,
             SnapshotSha256 = snapshot.SnapshotSha256,
@@ -289,6 +301,24 @@ public static class AgentProfileDeterminism
             .OrderBy(static binding => binding.BindingId, StringComparer.Ordinal));
         return normalized;
     }
+
+    private static AgentProfileSkillRoutingPolicy NormalizeSkillRoutingPolicyCore(
+        AgentProfileSkillRoutingPolicy policy)
+    {
+        var normalized = new AgentProfileSkillRoutingPolicy
+        {
+            IntentId = NormalizeText(policy.IntentId),
+            RoutingDescription = NormalizeText(policy.RoutingDescription),
+            TaskToolPolicy = NormalizeToolPolicy(policy.TaskToolPolicy),
+            SideEffectClass = policy.SideEffectClass,
+        };
+        normalized.ExplicitTriggerAliases.Add(
+            NormalizeDistinctStrings(policy.ExplicitTriggerAliases));
+        return normalized;
+    }
+
+    private static AgentProfileToolPolicy EmptyToolPolicy() =>
+        new() { Mode = AgentProfileToolPolicyMode.ExplicitAllowlist };
 
     public static AgentProfilePublishedSummary NormalizePublishedSummary(
         AgentProfilePublishedSummary summary)

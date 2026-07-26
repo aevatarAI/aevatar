@@ -24,7 +24,8 @@ internal static class SkillRecoveryPlanner
     public readonly record struct RecoveryDirective(
         ToolCall? ToolCall,
         bool ConsumesOrnnSearchAttempt,
-        string? Nudge);
+        string? Nudge,
+        bool AttemptsPrimarySkill = false);
 
     private static readonly string[] BlockerPhrases =
     [
@@ -101,6 +102,23 @@ internal static class SkillRecoveryPlanner
         string? finalContent,
         int recoveryAttempts,
         string? callIdPrefix,
+        out RecoveryDirective directive) =>
+        TryPlanNextDirective(
+            recovery,
+            messages,
+            finalContent,
+            recoveryAttempts,
+            callIdPrefix,
+            primarySkillAttempted: false,
+            out directive);
+
+    public static bool TryPlanNextDirective(
+        AgentSkillRecoveryContext recovery,
+        IReadOnlyList<ChatMessage> messages,
+        string? finalContent,
+        int recoveryAttempts,
+        string? callIdPrefix,
+        bool primarySkillAttempted,
         out RecoveryDirective directive)
     {
         directive = default;
@@ -111,7 +129,8 @@ internal static class SkillRecoveryPlanner
             ? recovery.MaxOrnnSearchAttempts
             : 1;
 
-        if (!string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
+        if (!primarySkillAttempted &&
+            !string.IsNullOrWhiteSpace(recovery.PrimarySkillName) &&
             !HasUseSkillFor(messages, recovery.PrimarySkillName))
         {
             directive = new RecoveryDirective(
@@ -120,7 +139,8 @@ internal static class SkillRecoveryPlanner
                     recovery.PrimarySkillName,
                     ExtractCommandArguments(recovery)),
                 ConsumesOrnnSearchAttempt: false,
-                Nudge: null);
+                Nudge: null,
+                AttemptsPrimarySkill: true);
             return true;
         }
 

@@ -126,6 +126,73 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
     }
 
     [Fact]
+    public void RejectsRolloutArtifactImplementingRuntimeBindingSource()
+    {
+        using var fixture = AuthorityBoundarySemanticFixture.Create();
+        fixture.MakeRolloutArtifactImplementRuntimeSource();
+        fixture.AssertBoundarySourcesCompile();
+
+        var result = new AgentProfileAuthoritySyntaxChecker().Check(fixture.Root);
+
+        var violation = Assert.Single(result.Violations);
+        Assert.Equal(
+            "src/Aevatar.Mainnet.Host.Api/Profiles/MainnetAgentProfileRolloutSelector.cs:MainnetAgentProfileRolloutSelector.admission-artifact-only",
+            violation.Location);
+        Assert.Equal(
+            "The Mainnet rollout artifact owns admission pins only and must not implement INyxIdChatAgentProfileBindingSource.",
+            violation.Message);
+    }
+
+    [Theory]
+    [InlineData("event-store")]
+    [InlineData("projection-activation")]
+    public void RejectsBinderAuthoritySideReadOrPrimingDependencies(string dependency)
+    {
+        using var fixture = AuthorityBoundarySemanticFixture.Create();
+        fixture.AddBinderDependency(dependency);
+        fixture.AssertBoundarySourcesCompile();
+
+        var result = new AgentProfileAuthoritySyntaxChecker().Check(fixture.Root);
+
+        var violation = Assert.Single(result.Violations);
+        Assert.Equal(
+            "src/Aevatar.Mainnet.Host.Api/AgentProfiles/MainnetNyxIdChatAgentProfileBindingSource.cs:MainnetNyxIdChatAgentProfileBindingSource.read-model-only",
+            violation.Location);
+        Assert.Equal(
+            "The Mainnet Profile binder may read only the namespace and execution read-model ports; event-store and projection-activation dependencies are forbidden.",
+            violation.Message);
+    }
+
+    [Fact]
+    public void RejectsTurnRemoteSkillFetcherDependency()
+    {
+        using var fixture = AuthorityBoundarySemanticFixture.Create();
+        fixture.AddTurnRemoteFetcherDependency();
+        fixture.AssertBoundarySourcesCompile();
+
+        var result = new AgentProfileAuthoritySyntaxChecker().Check(fixture.Root);
+
+        var violation = Assert.Single(result.Violations);
+        Assert.Equal(
+            "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/AgentProfileTurnCatalogMaterializer.cs:AgentProfileTurnCatalogMaterializer.sealed-turn-only",
+            violation.Location);
+        Assert.Equal(
+            "Agent Profile turns must execute from the immutable conversation binding and must not depend on IRemoteSkillFetcher.",
+            violation.Message);
+    }
+
+    [Fact]
+    public void AcceptsReadModelBinderAndExactSymbolDecoys()
+    {
+        using var fixture = AuthorityBoundarySemanticFixture.Create();
+        fixture.AssertBoundarySourcesCompile();
+
+        var result = new AgentProfileAuthoritySyntaxChecker().Check(fixture.Root);
+
+        Assert.Empty(result.Violations);
+    }
+
+    [Fact]
     public void CliBatchScansEveryRootAndReturnsOneForViolations()
     {
         using var valid = AuthoritySyntaxFixture.Create();
@@ -232,6 +299,278 @@ public sealed class AgentProfileAuthoritySyntaxCheckerTests
         Assert.Equal(
             "src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs:HandleInitializeAsync.authority-order",
             violation.Location);
+    }
+
+    private sealed class AuthorityBoundarySemanticFixture : IDisposable
+    {
+        private const string SelectorRelativePath =
+            "src/Aevatar.Mainnet.Host.Api/Profiles/MainnetAgentProfileRolloutSelector.cs";
+        private const string BinderRelativePath =
+            "src/Aevatar.Mainnet.Host.Api/AgentProfiles/MainnetNyxIdChatAgentProfileBindingSource.cs";
+        private const string TurnRelativePath =
+            "agents/Aevatar.GAgents.NyxidChat/AgentProfiles/AgentProfileTurnCatalogMaterializer.cs";
+        private const string ContractsRelativePath = "fixtures/AuthorityBoundaryContracts.cs";
+
+        private readonly AuthoritySyntaxFixture _authorityFixture;
+
+        private AuthorityBoundarySemanticFixture(AuthoritySyntaxFixture authorityFixture)
+        {
+            _authorityFixture = authorityFixture;
+        }
+
+        public string Root => _authorityFixture.Root;
+
+        private string SelectorPath => Path.Combine(Root, SelectorRelativePath);
+
+        private string BinderPath => Path.Combine(Root, BinderRelativePath);
+
+        private string TurnPath => Path.Combine(Root, TurnRelativePath);
+
+        private string ContractsPath => Path.Combine(Root, ContractsRelativePath);
+
+        public static AuthorityBoundarySemanticFixture Create()
+        {
+            var fixture = new AuthorityBoundarySemanticFixture(AuthoritySyntaxFixture.Create());
+            WriteSource(fixture.ContractsPath, BoundaryContracts);
+            WriteSource(fixture.SelectorPath, ValidSelector);
+            WriteSource(fixture.BinderPath, ValidBinder);
+            WriteSource(fixture.TurnPath, ValidTurnMaterializer);
+            return fixture;
+        }
+
+        public void MakeRolloutArtifactImplementRuntimeSource()
+        {
+            ReplaceOnce(
+                SelectorPath,
+                "public sealed class MainnetAgentProfileRolloutSelector",
+                "public sealed class MainnetAgentProfileRolloutSelector : INyxIdChatAgentProfileBindingSource");
+            ReplaceOnce(
+                SelectorPath,
+                "    private readonly AgentProfileRolloutReleaseSpec? _releaseSpec;",
+                """
+                    private readonly AgentProfileRolloutReleaseSpec? _releaseSpec;
+
+                    public Task<NyxIdChatAgentProfileBindingResult> ResolveForNewConversationAsync(
+                        string actorId,
+                        string routeToolSetName,
+                        CancellationToken ct = default) =>
+                        Task.FromResult(new NyxIdChatAgentProfileBindingResult());
+                """);
+        }
+
+        public void AddBinderDependency(string dependency)
+        {
+            var declaration = dependency switch
+            {
+                "event-store" =>
+                    "private readonly Aevatar.Foundation.Abstractions.Persistence.IEventStore _eventStore = null!;",
+                "projection-activation" =>
+                    "private readonly Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ProfileProjectionLease> _projectionActivation = null!;",
+                _ => throw new ArgumentOutOfRangeException(nameof(dependency), dependency, null),
+            };
+            ReplaceOnce(
+                BinderPath,
+                "public sealed class MainnetNyxIdChatAgentProfileBindingSource : INyxIdChatAgentProfileBindingSource\n{",
+                $$"""
+                public sealed class MainnetNyxIdChatAgentProfileBindingSource : INyxIdChatAgentProfileBindingSource
+                {
+                    {{declaration}}
+                """);
+        }
+
+        public void AddTurnRemoteFetcherDependency() =>
+            ReplaceOnce(
+                TurnPath,
+                "public sealed class AgentProfileTurnCatalogMaterializer\n{",
+                """
+                public sealed class AgentProfileTurnCatalogMaterializer
+                {
+                    private readonly Aevatar.AI.ToolProviders.Skills.IRemoteSkillFetcher _remoteSkillFetcher = null!;
+                """);
+
+        public void AssertBoundarySourcesCompile()
+        {
+            var parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
+            var paths = new[] { ContractsPath, SelectorPath, BinderPath, TurnPath };
+            var syntaxTrees = paths
+                .Select(path => CSharpSyntaxTree.ParseText(
+                    File.ReadAllText(path),
+                    parseOptions,
+                    path))
+                .ToArray();
+            var trustedPlatformAssemblies = Assert.IsType<string>(
+                AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"));
+            var references = trustedPlatformAssemblies
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Select(static path => MetadataReference.CreateFromFile(path));
+            var compilation = CSharpCompilation.Create(
+                $"AgentProfileAuthorityBoundaryFixture_{Guid.NewGuid():N}",
+                syntaxTrees,
+                references,
+                new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    nullableContextOptions: NullableContextOptions.Enable));
+            var diagnostics = compilation.GetDiagnostics()
+                .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+                .ToArray();
+
+            Assert.True(
+                diagnostics.Length == 0,
+                $"{string.Join(Environment.NewLine, diagnostics)}{Environment.NewLine}" +
+                string.Join(
+                    Environment.NewLine,
+                    paths.Select(path => $"--- {path} ---{Environment.NewLine}{File.ReadAllText(path)}")));
+        }
+
+        private static void ReplaceOnce(string path, string current, string replacement)
+        {
+            var source = File.ReadAllText(path);
+            var index = source.IndexOf(current, StringComparison.Ordinal);
+            Assert.True(index >= 0, $"Fixture text was not found: {current}");
+            source = source.Remove(index, current.Length).Insert(index, replacement);
+            File.WriteAllText(path, source);
+        }
+
+        private static void WriteSource(string path, string source)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, source);
+        }
+
+        public void Dispose() => _authorityFixture.Dispose();
+
+        private const string BoundaryContracts = """
+            using System.Threading;
+            using System.Threading.Tasks;
+
+            namespace Aevatar.GAgents.NyxidChat.AgentProfiles
+            {
+                public sealed class NyxIdChatAgentProfileBindingResult;
+
+                public interface INyxIdChatAgentProfileBindingSource
+                {
+                    Task<NyxIdChatAgentProfileBindingResult> ResolveForNewConversationAsync(
+                        string actorId,
+                        string routeToolSetName,
+                        CancellationToken ct = default);
+                }
+            }
+
+            namespace Aevatar.GAgentService.Abstractions.AgentProfiles
+            {
+                public sealed class AgentProfileRolloutReleaseSpec;
+            }
+
+            namespace Aevatar.GAgentService.Abstractions.Ports
+            {
+                public interface IAgentProfileNamespaceQueryPort;
+                public interface IAgentProfileExecutionSnapshotQueryPort;
+            }
+
+            namespace Aevatar.Foundation.Abstractions.Persistence
+            {
+                public interface IEventStore;
+            }
+
+            namespace Aevatar.CQRS.Projection.Core.Abstractions
+            {
+                public interface IProjectionRuntimeLease;
+
+                public interface IProjectionScopeActivationService<TLease>
+                    where TLease : class, IProjectionRuntimeLease;
+            }
+
+            namespace Aevatar.AI.ToolProviders.Skills
+            {
+                public interface IRemoteSkillFetcher;
+            }
+
+            namespace Fixture.Decoys
+            {
+                public interface IEventStore;
+                public interface IProjectionScopeActivationService<T>;
+                public interface IRemoteSkillFetcher;
+            }
+            """;
+
+        private const string ValidSelector = """
+            using Aevatar.GAgentService.Abstractions.AgentProfiles;
+            using Aevatar.GAgents.NyxidChat.AgentProfiles;
+            using System.Threading;
+            using System.Threading.Tasks;
+
+            namespace Aevatar.Mainnet.Host.Api.Profiles;
+
+            public sealed class MainnetAgentProfileRolloutSelector
+            {
+                private readonly AgentProfileRolloutReleaseSpec? _releaseSpec;
+            }
+            """;
+
+        private const string ValidBinder = """
+            using Aevatar.GAgents.NyxidChat.AgentProfiles;
+            using Aevatar.GAgentService.Abstractions.Ports;
+            using Aevatar.Mainnet.Host.Api.Profiles;
+            using System.Threading;
+            using System.Threading.Tasks;
+
+            namespace Aevatar.Mainnet.Host.Api.AgentProfiles;
+
+            public sealed class MainnetNyxIdChatAgentProfileBindingSource : INyxIdChatAgentProfileBindingSource
+            {
+                private readonly MainnetAgentProfileRolloutSelector _selector;
+                private readonly IAgentProfileNamespaceQueryPort _namespaceQuery;
+                private readonly IAgentProfileExecutionSnapshotQueryPort _executionQuery;
+
+                public MainnetNyxIdChatAgentProfileBindingSource(
+                    MainnetAgentProfileRolloutSelector selector,
+                    IAgentProfileNamespaceQueryPort namespaceQuery,
+                    IAgentProfileExecutionSnapshotQueryPort executionQuery)
+                {
+                    _selector = selector;
+                    _namespaceQuery = namespaceQuery;
+                    _executionQuery = executionQuery;
+                }
+
+                public Task<NyxIdChatAgentProfileBindingResult> ResolveForNewConversationAsync(
+                    string actorId,
+                    string routeToolSetName,
+                    CancellationToken ct = default) =>
+                    Task.FromResult(new NyxIdChatAgentProfileBindingResult());
+
+                private static void ExactSymbolDecoys()
+                {
+                    // IEventStore IProjectionScopeActivationService IRemoteSkillFetcher
+                    const string names = "IEventStore IProjectionScopeActivationService IRemoteSkillFetcher";
+                    static Fixture.Decoys.IEventStore? IEventStore() => null;
+                    static Fixture.Decoys.IProjectionScopeActivationService<object>? IProjectionScopeActivationService() => null;
+                    _ = names;
+                    _ = IEventStore();
+                    _ = IProjectionScopeActivationService();
+                }
+
+                private sealed class ProfileProjectionLease :
+                    Aevatar.CQRS.Projection.Core.Abstractions.IProjectionRuntimeLease;
+            }
+            """;
+
+        private const string ValidTurnMaterializer = """
+            namespace Aevatar.GAgents.NyxidChat.AgentProfiles;
+
+            public sealed class AgentProfileTurnCatalogMaterializer
+            {
+                private static void ExactSymbolDecoys()
+                {
+                    // IRemoteSkillFetcher.FetchSkillAsync
+                    const string remoteFetch = "IRemoteSkillFetcher FetchSkillAsync Ornn";
+                    static Fixture.Decoys.IRemoteSkillFetcher? IRemoteSkillFetcher() => null;
+                    static void FetchSkillAsync() { }
+                    _ = remoteFetch;
+                    _ = IRemoteSkillFetcher();
+                    FetchSkillAsync();
+                }
+            }
+            """;
     }
 
     private sealed class AuthoritySyntaxFixture : IDisposable

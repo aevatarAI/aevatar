@@ -172,6 +172,7 @@ message WorkflowCallerNyxIdAuthority {
   string tenant = 2;
   string external_user_id = 3;
   string scope = 4;
+  string binding_id = 5;
 }
 
 message WorkflowExternalIngressContext {
@@ -210,6 +211,30 @@ message WorkflowChatRequestEvent {
   WorkflowRunForkSeed fork_seed = 11;
   WorkflowExternalIngressContext external_ingress = 12;
   WorkflowCompletionNotificationTarget completion_notification_target = 13;
+  WorkflowConversationContext conversation_context = 14;
+}
+
+enum WorkflowConversationRole {
+  WORKFLOW_CONVERSATION_ROLE_UNSPECIFIED = 0;
+  WORKFLOW_CONVERSATION_ROLE_USER = 1;
+  WORKFLOW_CONVERSATION_ROLE_ASSISTANT = 2;
+  WORKFLOW_CONVERSATION_ROLE_TOOL = 3;
+}
+
+message WorkflowConversationMessage {
+  int32 sequence = 1;
+  string turn_id = 2;
+  WorkflowConversationRole role = 3;
+  string content = 4;
+}
+
+message WorkflowConversationContext {
+  string scope_id = 1;
+  string conversation_id = 2;
+  int64 state_version = 3;
+  repeated WorkflowConversationMessage messages = 4;
+  bool truncated = 5;
+  int32 max_message_count = 6;
 }
 
 message WorkflowRunForkSeed
@@ -279,7 +304,7 @@ message BindWorkflowDefinitionEvent
   string workflow_name = 1;
   string workflow_yaml = 2;
   map<string, string> inline_workflow_yamls = 3;
-  string scope_id = 4;
+  optional string scope_id = 4;
   string source_kind = 5;
   WorkflowAuthorizationDependencies authorization_dependencies = 6;
   WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;

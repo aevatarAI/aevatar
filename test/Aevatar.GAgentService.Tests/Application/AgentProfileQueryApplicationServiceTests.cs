@@ -427,7 +427,7 @@ public sealed class AgentProfileQueryApplicationServiceTests
 
     private static AgentProfileManagementSnapshot Management()
     {
-        var draft = new AgentProfileContent
+        var draft = AgentProfileDeterminism.NormalizeContent(new AgentProfileContent
         {
             DisplayName = "Draft alpha",
             Purpose = "Draft purpose",
@@ -443,9 +443,10 @@ public sealed class AgentProfileQueryApplicationServiceTests
                     BindingId = "bind-alpha",
                     ActivationMode = AgentProfileSkillActivationMode.Routed,
                     Skill = ExactReference(),
+                    RoutingPolicy = RoutingPolicy("bind-alpha").Clone(),
                 },
             },
-        };
+        });
         return new AgentProfileManagementSnapshot(
             14,
             "profile-event-14",
@@ -479,23 +480,8 @@ public sealed class AgentProfileQueryApplicationServiceTests
 
     private static AgentProfilePublishedSnapshot PublishedSnapshot(AgentProfileIdentity identity)
     {
-        var sealedSkill = new SealedAgentProfileSkill
+        var normalizedContent = AgentProfileDeterminism.NormalizeContent(new AgentProfileContent
         {
-            ExactReference = ExactReference(),
-            Package = new ResolvedOrnnSkillPackage
-            {
-                SkillGuid = ExactReference().SkillGuid,
-                LiteralVersion = ExactReference().LiteralVersion,
-                CanonicalName = ExactReference().ExpectedName,
-                PublisherId = ExactReference().ExpectedPublisherId,
-                UpstreamSkillHash = "upstream-hash-alpha",
-                Instructions = "sealed-package-secret",
-            },
-        };
-        sealedSkill.ContentSha256 = AgentProfileDeterminism.ComputeSkillContentSha256(sealedSkill);
-        var snapshot = new AgentProfilePublishedSnapshot
-        {
-            Identity = identity,
             DisplayName = identity.Reference.OwnerHandle == AgentProfilePolicies.SystemOwnerHandle
                 ? "Studio"
                 : "Published alpha",
@@ -507,11 +493,46 @@ public sealed class AgentProfileQueryApplicationServiceTests
             },
             SkillBindings =
             {
-                new SealedAgentProfileSkillBinding
+                new AgentProfileSkillBinding
                 {
                     BindingId = "bind-alpha",
                     ActivationMode = AgentProfileSkillActivationMode.Routed,
+                    Skill = ExactReference(),
+                    RoutingPolicy = RoutingPolicy("bind-alpha").Clone(),
+                },
+            },
+        });
+        var binding = normalizedContent.SkillBindings.Single();
+        var sealedSkill = new SealedAgentProfileSkill
+        {
+            ExactReference = binding.Skill.Clone(),
+            Package = new ResolvedOrnnSkillPackage
+            {
+                SkillGuid = binding.Skill.SkillGuid,
+                LiteralVersion = binding.Skill.LiteralVersion,
+                CanonicalName = binding.Skill.ExpectedName,
+                PublisherId = binding.Skill.ExpectedPublisherId,
+                UpstreamSkillHash = "upstream-hash-alpha",
+                Instructions = "sealed-package-secret",
+            },
+        };
+        sealedSkill.ContentSha256 = AgentProfileDeterminism.ComputeSkillContentSha256(sealedSkill);
+        var snapshot = new AgentProfilePublishedSnapshot
+        {
+            Identity = identity,
+            DisplayName = normalizedContent.DisplayName,
+            Purpose = normalizedContent.Purpose,
+            Instructions = normalizedContent.Instructions,
+            ToolPolicy = normalizedContent.ToolPolicy.Clone(),
+            RecoveryToolPolicy = normalizedContent.RecoveryToolPolicy.Clone(),
+            SkillBindings =
+            {
+                new SealedAgentProfileSkillBinding
+                {
+                    BindingId = binding.BindingId,
+                    ActivationMode = binding.ActivationMode,
                     Skill = sealedSkill,
+                    RoutingPolicy = binding.RoutingPolicy?.Clone(),
                 },
             },
             PublishedRevision = 3,
@@ -528,6 +549,19 @@ public sealed class AgentProfileQueryApplicationServiceTests
             LiteralVersion = "1.4",
             ExpectedName = "skill-alpha",
             ExpectedPublisherId = "publisher-alpha",
+        };
+
+    private static AgentProfileSkillRoutingPolicy RoutingPolicy(string bindingId) =>
+        new()
+        {
+            IntentId = bindingId,
+            RoutingDescription = $"Route requests for {bindingId}.",
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            },
+            SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+            ExplicitTriggerAliases = { bindingId },
         };
 
     private static ByteString Digest(byte value) =>

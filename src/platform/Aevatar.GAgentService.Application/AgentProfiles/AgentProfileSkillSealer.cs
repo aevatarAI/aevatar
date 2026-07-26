@@ -79,7 +79,21 @@ public sealed class AgentProfileSkillSealer
             return AgentProfileSealingResult.Failed(diagnostics);
         }
 
-        ValidateToolSetReferences(normalizedContent.ToolPolicy, diagnostics);
+        ValidateToolSetReferences(normalizedContent.ToolPolicy, "tool_policy", diagnostics);
+        ValidateToolSetReferences(
+            normalizedContent.RecoveryToolPolicy,
+            "recovery_tool_policy",
+            diagnostics);
+        foreach (var binding in normalizedContent.SkillBindings)
+        {
+            if (binding.RoutingPolicy is not null)
+            {
+                ValidateToolSetReferences(
+                    binding.RoutingPolicy.TaskToolPolicy,
+                    $"skill_bindings.{binding.BindingId}.routing_policy.task_tool_policy",
+                    diagnostics);
+            }
+        }
         if (normalizedContent.SkillBindings.Count > 0 &&
             string.IsNullOrWhiteSpace(nyxIdAccessToken))
         {
@@ -163,6 +177,7 @@ public sealed class AgentProfileSkillSealer
                 BindingId = binding.BindingId,
                 ActivationMode = binding.ActivationMode,
                 Skill = sealedSkill,
+                RoutingPolicy = binding.RoutingPolicy?.Clone(),
             });
         }
 
@@ -173,6 +188,7 @@ public sealed class AgentProfileSkillSealer
             Purpose = normalizedContent.Purpose,
             Instructions = normalizedContent.Instructions,
             ToolPolicy = normalizedContent.ToolPolicy.Clone(),
+            RecoveryToolPolicy = normalizedContent.RecoveryToolPolicy.Clone(),
             PublishedRevision = 0,
             SourceDraftSha256 = AgentProfileDeterminism.ComputeSourceDraftSha256(normalizedContent),
         };
@@ -206,6 +222,7 @@ public sealed class AgentProfileSkillSealer
 
     private void ValidateToolSetReferences(
         AgentProfileToolPolicy policy,
+        string path,
         List<AgentProfileSafeDiagnostic> diagnostics)
     {
         var registered = _toolSetRegistry.GetRegisteredNames()
@@ -219,7 +236,7 @@ public sealed class AgentProfileSkillSealer
                 diagnostics,
                 "UNKNOWN_TOOL_SET_REF",
                 "Profile tool-set reference is not registered.",
-                $"tool_policy.tool_set_refs[{index}]");
+                $"{path}.tool_set_refs[{index}]");
         }
     }
 

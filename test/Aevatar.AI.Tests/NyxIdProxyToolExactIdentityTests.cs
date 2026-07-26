@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -81,6 +82,46 @@ public sealed class NyxIdProxyToolExactIdentityTests
 
         receipt.Should().NotBeNull();
         receipt!.AuthorizationRequired.UserServiceId.Should().Be("us-home-alpha");
+        receipt.SubjectKind.Should().Be("nyxid.user-service");
+        receipt.SubjectId.Should().Be("us-home-alpha");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithSuccess_ShouldTargetExactUserService()
+    {
+        var tool = CreateTool(new CountingHandler());
+
+        var receipt = tool.CreateResultReceipt(
+            "call-success",
+            tool.Name,
+            """{"service_id":"us-home-alpha","slug":"home-assistant","path":"/api/items"}""",
+            """{"items":[]}""");
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Success);
+        receipt.SubjectKind.Should().Be("nyxid.user-service");
+        receipt.SubjectId.Should().Be("us-home-alpha");
+    }
+
+    [Fact]
+    public void CreateResultReceipt_WithHttpFailure_ShouldTargetExactUserService()
+    {
+        var tool = CreateTool(new CountingHandler());
+        const string result =
+            """{"error":true,"status":502,"body":"upstream bearer-secret"}""";
+
+        var receipt = tool.CreateResultReceipt(
+            "call-error",
+            tool.Name,
+            """{"service_id":"us-home-alpha","slug":"home-assistant","path":"/api/items?token=query-secret"}""",
+            result);
+
+        receipt.Should().NotBeNull();
+        receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ErrorCode.Should().Be("NYXID_PROXY_HTTP_502");
+        receipt.SubjectKind.Should().Be("nyxid.user-service");
+        receipt.SubjectId.Should().Be("us-home-alpha");
+        receipt.ToString().Should().NotContain("bearer-secret").And.NotContain("query-secret");
     }
 
     private static NyxIdProxyTool CreateTool(CountingHandler handler)

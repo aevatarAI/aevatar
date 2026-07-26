@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions.AgentProfiles;
 using Aevatar.GAgentService.Core.AgentProfiles;
 using Aevatar.GAgentService.Projection.AgentProfiles;
+using Aevatar.GAgentService.Tests.TestSupport;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -220,6 +221,34 @@ public sealed class AgentProfileContractsTests
             .And.Match<FieldDescriptor>(field => field.MessageType == outcomeTransition.MessageType);
     }
 
+    [Fact]
+    public void AuthoritativeProfileContracts_ShouldCarryTypedRoutingAndRecoveryPolicies()
+    {
+        var routingPolicy = AgentProfilesReflection.Descriptor.MessageTypes
+            .Single(message => message.Name == "AgentProfileSkillRoutingPolicy");
+
+        routingPolicy.Fields.InFieldNumberOrder()
+            .Select(static field => (field.Name, field.FieldNumber))
+            .Should().Equal(
+                ("intent_id", 1),
+                ("routing_description", 2),
+                ("explicit_trigger_aliases", 3),
+                ("task_tool_policy", 4),
+                ("side_effect_class", 5));
+        AgentProfileSkillBinding.Descriptor.FindFieldByName("routing_policy")
+            .Should().Match<FieldDescriptor>(field =>
+                field.FieldNumber == 4 && field.MessageType == routingPolicy);
+        SealedAgentProfileSkillBinding.Descriptor.FindFieldByName("routing_policy")
+            .Should().Match<FieldDescriptor>(field =>
+                field.FieldNumber == 4 && field.MessageType == routingPolicy);
+        AgentProfileContent.Descriptor.FindFieldByName("recovery_tool_policy")
+            .Should().Match<FieldDescriptor>(field =>
+                field.FieldNumber == 6 && field.MessageType == AgentProfileToolPolicy.Descriptor);
+        AgentProfilePublishedSnapshot.Descriptor.FindFieldByName("recovery_tool_policy")
+            .Should().Match<FieldDescriptor>(field =>
+                field.FieldNumber == 10 && field.MessageType == AgentProfileToolPolicy.Descriptor);
+    }
+
     [Theory]
     [InlineData("1.4")]
     [InlineData("0.0")]
@@ -370,6 +399,213 @@ public sealed class AgentProfileContractsTests
             .Should().ContainSingle(diagnostic =>
                 diagnostic.Code == "INVALID_TOOL_POLICY_MODE" &&
                 diagnostic.Path == "tool_policy.mode");
+    }
+
+    [Fact]
+    public void ValidateContent_ShouldFailClosedForIncompleteOrBroaderRoutingPolicies()
+    {
+        var missingRouting = Content("Purpose", "Instructions", ["alpha"]);
+        missingRouting.SkillBindings.Add(new AgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = AgentProfileSkillActivationMode.Routed,
+            Skill = ExactReference(),
+        });
+
+        AgentProfilePolicies.ValidateContent(missingRouting)
+            .Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "MISSING_SKILL_ROUTING_POLICY" &&
+                diagnostic.Path == "skill_bindings[0].routing_policy");
+
+        var broaderPolicies = Content("Purpose", "Instructions", ["alpha"]);
+        broaderPolicies.RecoveryToolPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "beta" },
+        };
+        broaderPolicies.SkillBindings.Add(new AgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = AgentProfileSkillActivationMode.Routed,
+            Skill = ExactReference(),
+            RoutingPolicy = new AgentProfileSkillRoutingPolicy
+            {
+                IntentId = "intent-alpha",
+                RoutingDescription = "Route alpha requests.",
+                TaskToolPolicy = new AgentProfileToolPolicy
+                {
+                    Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                    ToolNames = { "beta" },
+                },
+                SideEffectClass = AgentProfileSkillSideEffectClass.Unspecified,
+            },
+        });
+
+        AgentProfilePolicies.ValidateContent(broaderPolicies)
+            .Select(static diagnostic => diagnostic.Code)
+            .Should().Contain([
+                "INVALID_SKILL_SIDE_EFFECT_CLASS",
+                "TASK_TOOL_POLICY_EXCEEDS_PROFILE_MAXIMUM",
+                "RECOVERY_TOOL_POLICY_EXCEEDS_PROFILE_MAXIMUM",
+            ]);
+    }
+
+    [Fact]
+    public void ValidateContent_ShouldEnforceRoutingActivationIdentityAndSideEffectRules()
+    {
+        var content = Content("Purpose", "Instructions", ["alpha"]);
+        content.SkillBindings.Add([
+            new AgentProfileSkillBinding
+            {
+                BindingId = "binding-always",
+                ActivationMode = AgentProfileSkillActivationMode.Always,
+                Skill = ExactReference(),
+                RoutingPolicy = RoutingPolicy("always-intent", "always"),
+            },
+            new AgentProfileSkillBinding
+            {
+                BindingId = "binding-default",
+                ActivationMode = AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
+                Skill = ExactReference(),
+            },
+            new AgentProfileSkillBinding
+            {
+                BindingId = "binding-first",
+                ActivationMode = AgentProfileSkillActivationMode.Routed,
+                Skill = ExactReference(),
+                RoutingPolicy = RoutingPolicy("shared-intent", "Support"),
+            },
+            new AgentProfileSkillBinding
+            {
+                BindingId = "binding-second",
+                ActivationMode = AgentProfileSkillActivationMode.Routed,
+                Skill = ExactReference(),
+                RoutingPolicy = RoutingPolicy(
+                    "shared-intent",
+                    "support",
+                    (AgentProfileSkillSideEffectClass)99),
+            },
+        ]);
+
+        AgentProfilePolicies.ValidateContent(content)
+            .Select(static diagnostic => diagnostic.Code)
+            .Should().Contain([
+                "UNEXPECTED_SKILL_ROUTING_POLICY",
+                "MISSING_SKILL_ROUTING_POLICY",
+                "DUPLICATE_ROUTING_INTENT_ID",
+                "DUPLICATE_EXPLICIT_TRIGGER_ALIAS",
+                "INVALID_SKILL_SIDE_EFFECT_CLASS",
+            ]);
+    }
+
+    [Fact]
+    public void NormalizeContent_ShouldCanonicalizeRoutingAndRecoveryFields()
+    {
+        var first = Content("Purpose", "Instructions", ["zeta", "alpha"]);
+        first.RecoveryToolPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "zeta", "alpha" },
+        };
+        first.SkillBindings.Add(new AgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = AgentProfileSkillActivationMode.Routed,
+            Skill = ExactReference(),
+            RoutingPolicy = RoutingPolicy(
+                "support-research",
+                ["zeta", "caf\u00e9"],
+                ["zeta", "alpha"],
+                "Route support.\r\nUse verified facts."),
+        });
+
+        var second = Content("Purpose", "Instructions", ["alpha", "zeta"]);
+        second.RecoveryToolPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "alpha", "zeta" },
+        };
+        second.SkillBindings.Add(new AgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = AgentProfileSkillActivationMode.Routed,
+            Skill = ExactReference(),
+            RoutingPolicy = RoutingPolicy(
+                "support-research",
+                ["cafe\u0301", "zeta"],
+                ["alpha", "zeta"],
+                "Route support.\nUse verified facts."),
+        });
+
+        var normalized = AgentProfileDeterminism.NormalizeContent(first);
+
+        normalized.RecoveryToolPolicy.ToolNames.Should().Equal("alpha", "zeta");
+        normalized.SkillBindings[0].RoutingPolicy.ExplicitTriggerAliases
+            .Should().Equal("caf\u00e9", "zeta");
+        normalized.SkillBindings[0].RoutingPolicy.TaskToolPolicy.ToolNames
+            .Should().Equal("alpha", "zeta");
+        normalized.SkillBindings[0].RoutingPolicy.RoutingDescription
+            .Should().Be("Route support.\nUse verified facts.");
+        AgentProfileDeterminism.ComputeDraftSha256(first)
+            .Should().Equal(AgentProfileDeterminism.ComputeDraftSha256(second));
+    }
+
+    [Fact]
+    public void RoutingAndRecoveryPolicies_ShouldAffectAuthoritativeDigests()
+    {
+        var target = ProfileIdentity();
+        var content = Content("Purpose", "Instructions", ["alpha", "beta"]);
+        content.RecoveryToolPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "alpha" },
+        };
+        content.SkillBindings.Add(new AgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = AgentProfileSkillActivationMode.Routed,
+            Skill = ExactReference(),
+            RoutingPolicy = RoutingPolicy("support-research", "support"),
+        });
+        var changedRouting = content.Clone();
+        changedRouting.SkillBindings[0].RoutingPolicy.RoutingDescription = "Changed route.";
+        var changedRecovery = content.Clone();
+        changedRecovery.RecoveryToolPolicy.ToolNames.Clear();
+        changedRecovery.RecoveryToolPolicy.ToolNames.Add("beta");
+
+        AgentProfileDeterminism.ComputeDraftSha256(content)
+            .Should().NotEqual(AgentProfileDeterminism.ComputeDraftSha256(changedRouting));
+        AgentProfileDeterminism.ComputeDraftSha256(content)
+            .Should().NotEqual(AgentProfileDeterminism.ComputeDraftSha256(changedRecovery));
+        AgentProfileDeterminism.ComputeUpsertAgentProfileSkillBindingInputSha256(
+                target,
+                content.SkillBindings[0])
+            .Should().NotEqual(
+                AgentProfileDeterminism.ComputeUpsertAgentProfileSkillBindingInputSha256(
+                    target,
+                    changedRouting.SkillBindings[0]));
+
+        var published = PublishedSnapshot(content);
+        published.RecoveryToolPolicy = content.RecoveryToolPolicy.Clone();
+        published.SkillBindings.Add(new SealedAgentProfileSkillBinding
+        {
+            BindingId = "binding-alpha",
+            ActivationMode = AgentProfileSkillActivationMode.Routed,
+            Skill = ValidSealedSkill(),
+            RoutingPolicy = content.SkillBindings[0].RoutingPolicy.Clone(),
+        });
+        var publishedRoutingChanged = published.Clone();
+        publishedRoutingChanged.SkillBindings[0].RoutingPolicy.RoutingDescription = "Changed route.";
+        var publishedRecoveryChanged = published.Clone();
+        publishedRecoveryChanged.RecoveryToolPolicy.ToolNames.Clear();
+        publishedRecoveryChanged.RecoveryToolPolicy.ToolNames.Add("beta");
+
+        AgentProfileDeterminism.ComputePublishedSnapshotSha256(published)
+            .Should().NotEqual(
+                AgentProfileDeterminism.ComputePublishedSnapshotSha256(publishedRoutingChanged));
+        AgentProfileDeterminism.ComputePublishedSnapshotSha256(published)
+            .Should().NotEqual(
+                AgentProfileDeterminism.ComputePublishedSnapshotSha256(publishedRecoveryChanged));
     }
 
     [Fact]
@@ -547,6 +783,52 @@ public sealed class AgentProfileContractsTests
         Encoding.UTF8.GetByteCount(diagnostic.Path).Should().BeLessThanOrEqualTo(512);
     }
 
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    public void ValidatePublishedSnapshotHardLimits_ShouldEnforceExactMaterializedProfileLayerLimit(
+        int extraRenderedByte,
+        bool expectedExceeded)
+    {
+        var boundary = GAgentServiceTestKit.CreateRenderedProfileLayerBoundary(extraRenderedByte);
+        var snapshot = PublishedSnapshot(Content(
+            purpose: "Control devices.",
+            instructions: boundary.ProfileInstructions,
+            toolNames: []));
+        for (var index = 0; index < boundary.AlwaysProcedures.Count; index++)
+        {
+            var skill = ValidSealedSkill();
+            skill.ExactReference.SkillGuid = $"00000000-0000-0000-0000-{index + 1:D12}";
+            skill.Package.SkillGuid = skill.ExactReference.SkillGuid;
+            skill.Package.Description = string.Empty;
+            skill.Package.Instructions = boundary.AlwaysProcedures[index];
+            skill.Package.Arguments = string.Empty;
+            skill.Package.WhenToUse = string.Empty;
+            skill.ContentSha256 = AgentProfileDeterminism.ComputeSealedSkillSha256(skill);
+            snapshot.SkillBindings.Add(new SealedAgentProfileSkillBinding
+            {
+                BindingId = $"bind-{index + 1}",
+                ActivationMode = AgentProfileSkillActivationMode.Always,
+                Skill = skill,
+            });
+        }
+
+        var diagnostics = AgentProfilePolicies.ValidatePublishedSnapshotHardLimits(snapshot);
+
+        if (expectedExceeded)
+        {
+            diagnostics.Should().ContainSingle(diagnostic =>
+                diagnostic.Code == "MATERIALIZED_PROFILE_LAYER_BYTES_EXCEEDED");
+        }
+        else
+        {
+            diagnostics.Should().NotContain(diagnostic =>
+                diagnostic.Code == "MATERIALIZED_PROFILE_LAYER_BYTES_EXCEEDED");
+        }
+        diagnostics.Should().NotContain(diagnostic =>
+            diagnostic.Code == "AGGREGATE_PROMPT_BYTES_EXCEEDED");
+    }
+
     [Fact]
     public void Purpose_ShouldAffectDraftDigestButNotExecutionSnapshotDigest()
     {
@@ -708,7 +990,13 @@ public sealed class AgentProfileContractsTests
         var owner = UserOwner("subject-alpha");
         var policy = new AgentProfileToolPolicy { Mode = AgentProfileToolPolicyMode.ExplicitAllowlist };
         policy.ToolNames.Add("alpha");
+        var recoveryPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "alpha" },
+        };
         var exactReference = ExactReference();
+        var routingPolicy = RoutingPolicy("support-research", "support");
         var diagnostic = new AgentProfileSafeDiagnostic { Code = "VALIDATION_ALPHA" };
         var diagnostics = new List<AgentProfileSafeDiagnostic> { diagnostic };
         var resolution = new AgentProfileSkillResolutionSummary(
@@ -732,11 +1020,12 @@ public sealed class AgentProfileContractsTests
 
         var caller = new AgentProfileCallerContext(owner, "scope-gamma", "eanzhao", "token-alpha");
         var create = new CreateAgentProfileRequest(
-            "xiaomi-home-assistant", null, "Home assistant", "Purpose", "Instructions", policy);
+            "xiaomi-home-assistant", null, "Home assistant", "Purpose", "Instructions", policy,
+            recoveryPolicy);
         var update = new UpdateAgentProfileDraftRequest(
-            "Home assistant", "Purpose", "Instructions", policy);
+            "Home assistant", "Purpose", "Instructions", policy, recoveryPolicy);
         var upsert = new UpsertAgentProfileSkillBindingRequest(
-            AgentProfileSkillActivationMode.Routed, exactReference);
+            AgentProfileSkillActivationMode.Routed, exactReference, routingPolicy);
         var report = new AgentProfileValidationReport(
             true, 3, ByteString.CopyFrom([0x22]), diagnostics, resolutions);
         var namespaceEntry = new AgentProfileNamespaceEntrySnapshot(
@@ -752,7 +1041,10 @@ public sealed class AgentProfileContractsTests
 
         owner.SubjectId = "mutated-owner";
         policy.ToolNames[0] = "mutated-tool";
+        recoveryPolicy.ToolNames[0] = "mutated-recovery-tool";
         exactReference.ExpectedName = "mutated-skill";
+        routingPolicy.IntentId = "mutated-intent";
+        routingPolicy.TaskToolPolicy.ToolNames[0] = "mutated-task-tool";
         diagnostic.Code = "MUTATED_DIAGNOSTIC";
         diagnostics.Clear();
         resolutions.Clear();
@@ -765,8 +1057,12 @@ public sealed class AgentProfileContractsTests
 
         caller.Owner.SubjectId.Should().Be("subject-alpha");
         create.ToolPolicy.ToolNames.Should().Equal("alpha");
+        create.RecoveryToolPolicy!.ToolNames.Should().Equal("alpha");
         update.ToolPolicy.ToolNames.Should().Equal("alpha");
+        update.RecoveryToolPolicy!.ToolNames.Should().Equal("alpha");
         upsert.Skill.ExpectedName.Should().Be("xiaomi-home-control");
+        upsert.RoutingPolicy!.IntentId.Should().Be("support-research");
+        upsert.RoutingPolicy.TaskToolPolicy.ToolNames.Should().Equal("alpha");
         resolution.ExactReference.ExpectedName.Should().Be("xiaomi-home-control");
         report.Diagnostics.Should().ContainSingle(x => x.Code == "VALIDATION_ALPHA");
         report.ResolvedSkills.Should().ContainSingle();
@@ -786,7 +1082,13 @@ public sealed class AgentProfileContractsTests
     {
         var policy = new AgentProfileToolPolicy { Mode = AgentProfileToolPolicyMode.ExplicitAllowlist };
         policy.ToolNames.Add("alpha");
+        var recoveryPolicy = new AgentProfileToolPolicy
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "alpha" },
+        };
         var exactReference = ExactReference();
+        var routingPolicy = RoutingPolicy("support-research", "support");
         var diagnostic = new AgentProfileSafeDiagnostic { Code = "VALIDATION_ALPHA" };
         var resolution = new AgentProfileSkillResolutionSummary(
             "bind-beta", exactReference, ByteString.CopyFrom([0x11]));
@@ -805,11 +1107,12 @@ public sealed class AgentProfileContractsTests
         var caller = new AgentProfileCallerContext(
             UserOwner("subject-alpha"), "scope-gamma", "eanzhao", "token-alpha");
         var create = new CreateAgentProfileRequest(
-            "xiaomi-home-assistant", null, "Home assistant", "Purpose", "Instructions", policy);
+            "xiaomi-home-assistant", null, "Home assistant", "Purpose", "Instructions", policy,
+            recoveryPolicy);
         var update = new UpdateAgentProfileDraftRequest(
-            "Home assistant", "Purpose", "Instructions", policy);
+            "Home assistant", "Purpose", "Instructions", policy, recoveryPolicy);
         var upsert = new UpsertAgentProfileSkillBindingRequest(
-            AgentProfileSkillActivationMode.Routed, exactReference);
+            AgentProfileSkillActivationMode.Routed, exactReference, routingPolicy);
         var report = new AgentProfileValidationReport(
             true, 3, ByteString.CopyFrom([0x22]), [diagnostic], [resolution]);
         var namespaceEntry = new AgentProfileNamespaceEntrySnapshot(
@@ -825,8 +1128,12 @@ public sealed class AgentProfileContractsTests
 
         caller.Owner.SubjectId = "returned-owner";
         create.ToolPolicy.ToolNames[0] = "returned-create-tool";
+        create.RecoveryToolPolicy!.ToolNames[0] = "returned-create-recovery-tool";
         update.ToolPolicy.ToolNames[0] = "returned-update-tool";
+        update.RecoveryToolPolicy!.ToolNames[0] = "returned-update-recovery-tool";
         upsert.Skill.ExpectedName = "returned-upsert-skill";
+        upsert.RoutingPolicy!.IntentId = "returned-intent";
+        upsert.RoutingPolicy.TaskToolPolicy.ToolNames[0] = "returned-task-tool";
         resolution.ExactReference.ExpectedName = "returned-resolution-skill";
         report.Diagnostics[0].Code = "RETURNED_DIAGNOSTIC";
         report.ResolvedSkills[0].ExactReference.ExpectedName = "returned-report-skill";
@@ -842,8 +1149,12 @@ public sealed class AgentProfileContractsTests
 
         caller.Owner.SubjectId.Should().Be("subject-alpha");
         create.ToolPolicy.ToolNames.Should().Equal("alpha");
+        create.RecoveryToolPolicy!.ToolNames.Should().Equal("alpha");
         update.ToolPolicy.ToolNames.Should().Equal("alpha");
+        update.RecoveryToolPolicy!.ToolNames.Should().Equal("alpha");
         upsert.Skill.ExpectedName.Should().Be("xiaomi-home-control");
+        upsert.RoutingPolicy!.IntentId.Should().Be("support-research");
+        upsert.RoutingPolicy.TaskToolPolicy.ToolNames.Should().Equal("alpha");
         resolution.ExactReference.ExpectedName.Should().Be("xiaomi-home-control");
         report.Diagnostics.Should().ContainSingle(x => x.Code == "VALIDATION_ALPHA");
         report.ResolvedSkills[0].ExactReference.ExpectedName.Should().Be("xiaomi-home-control");
@@ -941,6 +1252,36 @@ public sealed class AgentProfileContractsTests
         };
         content.ToolPolicy.ToolNames.Add(toolNames);
         return content;
+    }
+
+    private static AgentProfileSkillRoutingPolicy RoutingPolicy(
+        string intentId,
+        string alias,
+        AgentProfileSkillSideEffectClass sideEffectClass =
+            AgentProfileSkillSideEffectClass.ReadOnly) =>
+        RoutingPolicy(intentId, [alias], ["alpha"], $"Route requests for {intentId}.", sideEffectClass);
+
+    private static AgentProfileSkillRoutingPolicy RoutingPolicy(
+        string intentId,
+        IEnumerable<string> aliases,
+        IEnumerable<string> taskToolNames,
+        string routingDescription,
+        AgentProfileSkillSideEffectClass sideEffectClass =
+            AgentProfileSkillSideEffectClass.ReadOnly)
+    {
+        var policy = new AgentProfileSkillRoutingPolicy
+        {
+            IntentId = intentId,
+            RoutingDescription = routingDescription,
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            },
+            SideEffectClass = sideEffectClass,
+        };
+        policy.ExplicitTriggerAliases.Add(aliases);
+        policy.TaskToolPolicy.ToolNames.Add(taskToolNames);
+        return policy;
     }
 
     private static AgentProfileWorkflowAsset Workflow(

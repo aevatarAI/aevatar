@@ -100,20 +100,25 @@ public sealed class NyxIdRemoteCapabilityBroker :
         var pkce = PkceHelper.GeneratePair();
         var correlationId = Guid.NewGuid().ToString("N");
         var existingBinding = await _queryPort.ResolveAsync(externalSubject, ct).ConfigureAwait(false);
-        var bindingGrantId = existingBinding is null
+        var expectedBindingHash = existingBinding is null
             ? null
             : HashBindingId(existingBinding.Value);
         var stateToken = await _stateTokenCodec
-            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, bindingGrantId, ct)
+            .EncodeAsync(correlationId, externalSubject, pkce.CodeVerifier, expectedBindingHash, ct)
             .ConfigureAwait(false);
 
-        var url = BuildAuthorizeUrl(snapshot, redirectUri, stateToken, pkce.CodeChallenge, bindingGrantId);
+        var url = BuildAuthorizeUrl(
+            snapshot,
+            redirectUri,
+            stateToken,
+            pkce.CodeChallenge,
+            externalSubject);
         var expiresAt = _timeProvider.GetUtcNow().Add(_options.StateTokenLifetime).ToUnixTimeSeconds();
         return new BindingChallenge
         {
             AuthorizeUrl = url,
             ExpiresAtUnix = expiresAt,
-            ReviewsExistingBinding = existingBinding is not null,
+            RenewsExistingBinding = existingBinding is not null,
         };
     }
 
@@ -332,6 +337,50 @@ public sealed class NyxIdRemoteCapabilityBroker :
             ct);
     }
 
+    public async Task<OwnerScopeId?> ResolveBindingOwnerScopeAsync(
+        string bindingId,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+
+        var normalizedBindingId = bindingId.Trim();
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{snapshot.NyxIdAuthority.TrimEnd('/')}{BindingsEndpoint}/{Uri.EscapeDataString(normalizedBindingId)}?client_id={Uri.EscapeDataString(snapshot.ClientId)}");
+        var http = CreateHttpClient();
+        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+
+        if ((int)response.StatusCode is 404 or 410)
+            return null;
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            _logger.LogError(
+                "NyxID binding owner introspection failed: status={StatusCode}, body={Body}",
+                (int)response.StatusCode,
+                Truncate(SecretScrubber.Scrub(body), 256));
+            response.EnsureSuccessStatusCode();
+        }
+
+        var binding = await response.Content
+            .ReadFromJsonAsync<BindingIntrospectionResponse>(JsonOptions, ct)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("NyxID returned an empty binding introspection response.");
+        if (binding.Revoked)
+            return null;
+        if (!string.Equals(binding.BindingId, normalizedBindingId, StringComparison.Ordinal)
+            || !string.Equals(binding.ClientId, snapshot.ClientId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("NyxID returned binding metadata for an unexpected binding or OAuth client.");
+        }
+
+        var ownerScopeId = binding.NyxSubject?.Trim();
+        return string.IsNullOrWhiteSpace(ownerScopeId)
+            ? null
+            : new OwnerScopeId { Value = ownerScopeId };
+    }
+
     private async Task<BrokerAuthorizationCodeResult> ExchangeAuthorizationCodeCoreAsync(
         string authorizationCode,
         string codeVerifier,
@@ -397,7 +446,7 @@ public sealed class NyxIdRemoteCapabilityBroker :
         string redirectUri,
         string stateToken,
         string codeChallenge,
-        string? bindingGrantId)
+        ExternalSubjectRef externalSubject)
     {
         var queryParts = new List<string>
         {
@@ -406,7 +455,14 @@ public sealed class NyxIdRemoteCapabilityBroker :
             $"redirect_uri={Uri.EscapeDataString(redirectUri)}",
             $"scope={Uri.EscapeDataString(AevatarOAuthClientScopes.AuthorizationScope)}",
             "prompt=consent",
+            $"external_subject_platform={Uri.EscapeDataString(externalSubject.Platform)}",
+            $"external_subject_external_user_id={Uri.EscapeDataString(externalSubject.ExternalUserId)}",
         };
+        if (!string.IsNullOrWhiteSpace(externalSubject.Tenant))
+        {
+            queryParts.Add(
+                $"external_subject_tenant={Uri.EscapeDataString(externalSubject.Tenant)}");
+        }
         queryParts.AddRange(RequiredResourceUris()
             .Select(static resource => $"resource={Uri.EscapeDataString(resource)}"));
         queryParts.AddRange(
@@ -415,8 +471,6 @@ public sealed class NyxIdRemoteCapabilityBroker :
             $"code_challenge={Uri.EscapeDataString(codeChallenge)}",
             "code_challenge_method=S256",
         ]);
-        if (!string.IsNullOrEmpty(bindingGrantId))
-            queryParts.Add($"binding_grant_id={Uri.EscapeDataString(bindingGrantId)}");
         return $"{snapshot.NyxIdAuthority.TrimEnd('/')}{AuthorizeEndpoint}?{string.Join("&", queryParts)}";
     }
 
@@ -605,6 +659,14 @@ public sealed class NyxIdRemoteCapabilityBroker :
     {
         public string Id { get; init; } = string.Empty;
         public string ResourceUri { get; init; } = string.Empty;
+    }
+
+    private sealed record BindingIntrospectionResponse
+    {
+        public string BindingId { get; init; } = string.Empty;
+        public string ClientId { get; init; } = string.Empty;
+        public string NyxSubject { get; init; } = string.Empty;
+        public bool Revoked { get; init; }
     }
 }
 

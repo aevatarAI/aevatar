@@ -40,6 +40,7 @@ public sealed class AgentProfileCommandApplicationServiceTests
             ProfileSlug = ProfileSlug,
         });
         firstCommand.InitialContent.SkillBindings.Should().BeEmpty();
+        firstCommand.InitialContent.RecoveryToolPolicy.Should().BeEquivalentTo(request.RecoveryToolPolicy);
         actorPort.ResolvedProfileIds.Should().Equal(firstCommand.Identity.ProfileId, secondCommand.Identity.ProfileId);
         firstCommand.ProfileActorId.Should().Be($"profile-actor:{firstCommand.Identity.ProfileId}");
         firstCommand.Operation.OperationId.Should().Be(secondCommand.Operation.OperationId);
@@ -309,7 +310,8 @@ public sealed class AgentProfileCommandApplicationServiceTests
             14,
             new UpsertAgentProfileSkillBindingRequest(
                 AgentProfileSkillActivationMode.Routed,
-                ExactReference(2, "skill-beta")),
+                ExactReference(2, "skill-beta"),
+                RoutingPolicy("bind-beta")),
             "upsert-beta");
         await service.RemoveSkillBindingAsync(
             Caller(),
@@ -331,11 +333,15 @@ public sealed class AgentProfileCommandApplicationServiceTests
         actorPort.UpdateCommands[0].Identity.Should().BeEquivalentTo(Identity());
         actorPort.UpdateCommands[0].ExpectedAuthorityStateVersion.Should().Be(14);
         actorPort.UpdateCommands[0].Content.DisplayName.Should().Be("Updated profile");
+        actorPort.UpdateCommands[0].Content.RecoveryToolPolicy.Should()
+            .BeEquivalentTo(UpdateRequest("ignored").RecoveryToolPolicy);
         actorPort.UpdateCommands[0].Content.SkillBindings.Should().ContainSingle()
             .Which.BindingId.Should().Be("bind-alpha");
         actorPort.UpsertCommands[0].Identity.Should().BeEquivalentTo(Identity());
         actorPort.UpsertCommands[0].Binding.BindingId.Should().Be("bind-beta");
         actorPort.UpsertCommands[0].Binding.Skill.ExpectedName.Should().Be("skill-beta");
+        actorPort.UpsertCommands[0].Binding.RoutingPolicy.Should()
+            .BeEquivalentTo(RoutingPolicy("bind-beta"));
         actorPort.RemoveCommands[0].Identity.Should().BeEquivalentTo(Identity());
         actorPort.RemoveCommands[0].BindingId.Should().Be("bind-alpha");
     }
@@ -458,7 +464,8 @@ public sealed class AgentProfileCommandApplicationServiceTests
             14,
             new UpsertAgentProfileSkillBindingRequest(
                 AgentProfileSkillActivationMode.DefaultForUnmatchedTurn,
-                ExactReference(2, "skill-beta")),
+                ExactReference(2, "skill-beta"),
+                RoutingPolicy("bind-beta")),
             "second-default");
 
         receipt.Accepted.Should().BeTrue();
@@ -542,7 +549,7 @@ public sealed class AgentProfileCommandApplicationServiceTests
             var package = PackageFor(reference);
             package.Instructions = new string(
                 'a',
-                AgentProfileValidationLimits.AggregatePromptMaxUtf8Bytes / 2 + 1);
+                AgentProfileValidationLimits.RawAuthoritativeAggregateContentMaxUtf8Bytes / 2 + 1);
             return ExactOrnnSkillResolutionResult.Success(package);
         });
         var service = CreateService(
@@ -908,17 +915,26 @@ public sealed class AgentProfileCommandApplicationServiceTests
             "Profile Alpha",
             "Controls exact test behavior",
             "Follow the Profile procedure.",
-            ToolPolicy());
+            ToolPolicy(),
+            RecoveryPolicy());
 
     private static UpdateAgentProfileDraftRequest UpdateRequest(string displayName) =>
         new(
             displayName,
             "Updated purpose",
             "Updated instructions",
-            ToolPolicy());
+            ToolPolicy(),
+            RecoveryPolicy());
 
     private static AgentProfileToolPolicy ToolPolicy() =>
         new() { Mode = AgentProfileToolPolicyMode.InheritRouteMaximum };
+
+    private static AgentProfileToolPolicy RecoveryPolicy() =>
+        new()
+        {
+            Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            ToolNames = { "recovery-tool" },
+        };
 
     private static AgentProfileIdentity Identity() =>
         new()
@@ -1013,12 +1029,30 @@ public sealed class AgentProfileCommandApplicationServiceTests
     private static AgentProfileSkillBinding Binding(
         string bindingId,
         AgentProfileSkillActivationMode activationMode,
-        ExactOrnnSkillReference reference) =>
-        new()
+        ExactOrnnSkillReference reference)
+    {
+        var binding = new AgentProfileSkillBinding
         {
             BindingId = bindingId,
             ActivationMode = activationMode,
             Skill = reference,
+        };
+        if (activationMode is AgentProfileSkillActivationMode.Routed or
+            AgentProfileSkillActivationMode.DefaultForUnmatchedTurn)
+        {
+            binding.RoutingPolicy = RoutingPolicy(bindingId);
+        }
+        return binding;
+    }
+
+    private static AgentProfileSkillRoutingPolicy RoutingPolicy(string intentId) =>
+        new()
+        {
+            IntentId = intentId,
+            RoutingDescription = $"Route requests for {intentId}.",
+            TaskToolPolicy = RecoveryPolicy(),
+            SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+            ExplicitTriggerAliases = { intentId },
         };
 
     private static ExactOrnnSkillReference ExactReference(

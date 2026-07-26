@@ -45,7 +45,8 @@ public sealed class AgentProfilesToolTests
             .Select(static item => item.GetString())
             .Should().Equal(Actions);
 
-        root.GetProperty("properties").EnumerateObject()
+        var properties = root.GetProperty("properties");
+        properties.EnumerateObject()
             .Select(static property => property.Name)
             .Should().BeEquivalentTo(
                 "action",
@@ -55,13 +56,29 @@ public sealed class AgentProfilesToolTests
                 "purpose",
                 "instructions",
                 "tool_policy",
+                "recovery_tool_policy",
                 "etag",
                 "binding_id",
                 "activation_mode",
                 "skill",
+                "routing_policy",
                 "idempotency_key");
 
-        var skill = root.GetProperty("properties").GetProperty("skill");
+        properties.GetProperty("tool_policy").GetProperty("properties")
+            .GetProperty("mode").GetProperty("enum").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Equal("INHERIT_ROUTE_MAXIMUM", "EXPLICIT_ALLOWLIST");
+        properties.GetProperty("recovery_tool_policy").GetProperty("properties")
+            .GetProperty("mode").GetProperty("enum").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Equal("EXPLICIT_ALLOWLIST");
+        properties.GetProperty("routing_policy").GetProperty("properties")
+            .GetProperty("task_tool_policy").GetProperty("properties")
+            .GetProperty("mode").GetProperty("enum").EnumerateArray()
+            .Select(static item => item.GetString())
+            .Should().Equal("EXPLICIT_ALLOWLIST");
+
+        var skill = properties.GetProperty("skill");
         skill.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
         skill.GetProperty("properties").EnumerateObject()
             .Select(static property => property.Name)
@@ -440,6 +457,8 @@ public sealed class AgentProfilesToolTests
         capturedRequest.ToolPolicy.Mode.Should().Be(AgentProfileToolPolicyMode.ExplicitAllowlist);
         capturedRequest.ToolPolicy.ToolNames.Should().Equal("ornn_search_skills", "agent_profiles");
         capturedRequest.ToolPolicy.ToolSetRefs.Should().Equal("workspace.default");
+        capturedRequest.RecoveryToolPolicy!.Mode.Should().Be(AgentProfileToolPolicyMode.ExplicitAllowlist);
+        capturedRequest.RecoveryToolPolicy.ToolNames.Should().Equal("agent_profiles");
         capturedIdempotencyKey.Should().Be("explicit-idempotency-61");
         AssertAcceptedReceipt(result);
         result.Should().NotContain("token-secret-47");
@@ -488,8 +507,14 @@ public sealed class AgentProfilesToolTests
         payload.GetProperty("reference").GetProperty("owner_handle").GetString().Should().Be("owner-delta");
         payload.GetProperty("reference").GetProperty("profile_slug").GetString().Should().Be("profile-zulu");
         payload.GetProperty("draft_digest").GetString().Should().Be("64726166742d646967657374");
-        payload.GetProperty("draft").GetProperty("skill_bindings")[0]
-            .GetProperty("skill").GetProperty("skill_guid").GetString().Should().Be("guid-stable-11");
+        var draft = payload.GetProperty("draft");
+        draft.GetProperty("recovery_tool_policy").GetProperty("tool_names")[0]
+            .GetString().Should().Be("agent_profiles");
+        var binding = draft.GetProperty("skill_bindings")[0];
+        binding.GetProperty("skill").GetProperty("skill_guid").GetString().Should().Be("guid-stable-11");
+        var routing = binding.GetProperty("routing_policy");
+        routing.GetProperty("intent_id").GetString().Should().Be("support_research");
+        routing.GetProperty("side_effect_class").GetString().Should().Be("READ_ONLY");
         result.Should().NotContain("subject-bravo-29");
         result.Should().NotContain("token-secret-47");
         queries.ReceivedCalls().Should().ContainSingle();
@@ -535,6 +560,7 @@ public sealed class AgentProfilesToolTests
         capturedRequest.Should().NotBeNull();
         capturedRequest!.DisplayName.Should().Be("Updated Support Profile");
         capturedRequest.ToolPolicy.Mode.Should().Be(AgentProfileToolPolicyMode.InheritRouteMaximum);
+        capturedRequest.RecoveryToolPolicy!.Mode.Should().Be(AgentProfileToolPolicyMode.ExplicitAllowlist);
         capturedIdempotencyKey.Should().Be("mutation-key-91");
         AssertAcceptedReceipt(result);
         commands.ReceivedCalls().Should().ContainSingle();
@@ -542,7 +568,7 @@ public sealed class AgentProfilesToolTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_upsert_skill_maps_only_exact_ornn_reference_once()
+    public async Task ExecuteAsync_upsert_skill_maps_typed_routing_and_exact_ornn_reference_once()
     {
         var tool = CreateTool(out var commands, out var queries);
         UpsertAgentProfileSkillBindingRequest? capturedRequest = null;
@@ -567,6 +593,11 @@ public sealed class AgentProfilesToolTests
         capturedRequest.Skill.LiteralVersion.Should().Be("2.7");
         capturedRequest.Skill.ExpectedName.Should().Be("support-research");
         capturedRequest.Skill.ExpectedPublisherId.Should().Be("publisher-stable-31");
+        capturedRequest.RoutingPolicy!.IntentId.Should().Be("support_research");
+        capturedRequest.RoutingPolicy.RoutingDescription.Should().Be("Route support research requests.");
+        capturedRequest.RoutingPolicy.ExplicitTriggerAliases.Should().Equal("support", "research-support");
+        capturedRequest.RoutingPolicy.TaskToolPolicy.ToolNames.Should().Equal("agent_profiles");
+        capturedRequest.RoutingPolicy.SideEffectClass.Should().Be(AgentProfileSkillSideEffectClass.ReadOnly);
         AssertAcceptedReceipt(result);
         commands.ReceivedCalls().Should().ContainSingle();
         queries.ReceivedCalls().Should().BeEmpty();
@@ -895,6 +926,11 @@ public sealed class AgentProfilesToolTests
             {
                 Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
             },
+            RecoveryToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                ToolNames = { "agent_profiles" },
+            },
         };
         content.ToolPolicy.ToolNames.Add("agent_profiles");
         content.ToolPolicy.ToolSetRefs.Add("workspace.default");
@@ -903,6 +939,18 @@ public sealed class AgentProfilesToolTests
             BindingId = "binding-alpha",
             ActivationMode = AgentProfileSkillActivationMode.Routed,
             Skill = ExactReference(),
+            RoutingPolicy = new AgentProfileSkillRoutingPolicy
+            {
+                IntentId = "support_research",
+                RoutingDescription = "Route support research requests.",
+                ExplicitTriggerAliases = { "support", "research-support" },
+                TaskToolPolicy = new AgentProfileToolPolicy
+                {
+                    Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                    ToolNames = { "agent_profiles" },
+                },
+                SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+            },
         });
         return new AgentProfileManagementSnapshot(
             AuthorityStateVersion: 23,
@@ -980,6 +1028,11 @@ public sealed class AgentProfilesToolTests
                 "mode": "EXPLICIT_ALLOWLIST",
                 "tool_names": ["ornn_search_skills", "agent_profiles"],
                 "tool_set_refs": ["workspace.default"]
+              },
+              "recovery_tool_policy": {
+                "mode": "EXPLICIT_ALLOWLIST",
+                "tool_names": ["agent_profiles"],
+                "tool_set_refs": []
               }
             }
             """;
@@ -1000,6 +1053,11 @@ public sealed class AgentProfilesToolTests
                 "tool_names": [],
                 "tool_set_refs": []
               },
+              "recovery_tool_policy": {
+                "mode": "EXPLICIT_ALLOWLIST",
+                "tool_names": [],
+                "tool_set_refs": []
+              },
               "idempotency_key": "mutation-key-91"
             }
             """;
@@ -1014,6 +1072,17 @@ public sealed class AgentProfilesToolTests
               "profile_slug": "profile-zulu",
               "binding_id": "binding-alpha",
               "activation_mode": "ROUTED",
+              "routing_policy": {
+                "intent_id": "support_research",
+                "routing_description": "Route support research requests.",
+                "explicit_trigger_aliases": ["support", "research-support"],
+                "task_tool_policy": {
+                  "mode": "EXPLICIT_ALLOWLIST",
+                  "tool_names": ["agent_profiles"],
+                  "tool_set_refs": []
+                },
+                "side_effect_class": "READ_ONLY"
+              },
               "skill": {
                 "skill_guid": "guid-stable-11",
                 "literal_version": "2.7",

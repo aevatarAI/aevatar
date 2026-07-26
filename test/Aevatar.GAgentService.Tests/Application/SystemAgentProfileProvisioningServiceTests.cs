@@ -499,7 +499,7 @@ public sealed class SystemAgentProfileProvisioningServiceTests
         };
         if (withSkill)
             content.SkillBindings.Add(Binding("binding-alpha", 1, "skill-alpha"));
-        return content;
+        return AgentProfileDeterminism.NormalizeContent(content);
     }
 
     private static AgentProfileSkillBinding Binding(
@@ -510,6 +510,7 @@ public sealed class SystemAgentProfileProvisioningServiceTests
         {
             BindingId = bindingId,
             ActivationMode = AgentProfileSkillActivationMode.Routed,
+            RoutingPolicy = RoutingPolicy(bindingId).Clone(),
             Skill = new ExactOrnnSkillReference
             {
                 SkillGuid = $"00000000-0000-0000-0000-{identity:D12}",
@@ -517,6 +518,19 @@ public sealed class SystemAgentProfileProvisioningServiceTests
                 ExpectedName = name,
                 ExpectedPublisherId = "publisher-alpha",
             },
+        };
+
+    private static AgentProfileSkillRoutingPolicy RoutingPolicy(string bindingId) =>
+        new()
+        {
+            IntentId = bindingId,
+            RoutingDescription = $"Route requests for {bindingId}.",
+            TaskToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+            },
+            SideEffectClass = AgentProfileSkillSideEffectClass.ReadOnly,
+            ExplicitTriggerAliases = { bindingId },
         };
 
     private static AgentProfileReference SystemReference() =>
@@ -563,35 +577,71 @@ public sealed class SystemAgentProfileProvisioningServiceTests
         long draftRevision = 1,
         long publishedRevision = 0,
         ByteString? publishedSourceDraftSha256 = null,
-        ByteString? publishedSnapshotSha256 = null) =>
-        new(
+        ByteString? publishedSnapshotSha256 = null)
+    {
+        var normalizedContent = AgentProfileDeterminism.NormalizeContent(content);
+        return new AgentProfileManagementSnapshot(
             authorityVersion,
             $"profile-event-{authorityVersion}",
             SystemIdentity(),
-            content,
+            normalizedContent,
             draftRevision,
-            AgentProfileDeterminism.ComputeDraftSha256(content),
+            AgentProfileDeterminism.ComputeDraftSha256(normalizedContent),
             publishedRevision,
             publishedSnapshotSha256 ?? ByteString.Empty,
             publishedSourceDraftSha256 ?? ByteString.Empty,
             null);
+    }
 
     private static AgentProfilePublishedSnapshot PublishedSnapshot(
         AgentProfileContent content,
         long revision)
     {
+        var normalizedContent = AgentProfileDeterminism.NormalizeContent(content);
         var snapshot = new AgentProfilePublishedSnapshot
         {
             Identity = SystemIdentity(),
-            DisplayName = content.DisplayName,
-            Purpose = content.Purpose,
-            Instructions = content.Instructions,
-            ToolPolicy = content.ToolPolicy.Clone(),
+            DisplayName = normalizedContent.DisplayName,
+            Purpose = normalizedContent.Purpose,
+            Instructions = normalizedContent.Instructions,
+            ToolPolicy = normalizedContent.ToolPolicy.Clone(),
+            RecoveryToolPolicy = normalizedContent.RecoveryToolPolicy.Clone(),
             PublishedRevision = revision,
-            SourceDraftSha256 = AgentProfileDeterminism.ComputeSourceDraftSha256(content),
+            SourceDraftSha256 = AgentProfileDeterminism.ComputeSourceDraftSha256(normalizedContent),
         };
+        snapshot.SkillBindings.Add(normalizedContent.SkillBindings.Select(SealedBinding));
         snapshot.SnapshotSha256 = AgentProfileDeterminism.ComputeExecutionSnapshotSha256(snapshot);
-        return snapshot;
+        return AgentProfileDeterminism.NormalizePublishedSnapshot(snapshot);
+    }
+
+    private static SealedAgentProfileSkillBinding SealedBinding(AgentProfileSkillBinding binding)
+    {
+        var sealedSkill = new SealedAgentProfileSkill
+        {
+            ExactReference = binding.Skill.Clone(),
+            Package = new ResolvedOrnnSkillPackage
+            {
+                SkillGuid = binding.Skill.SkillGuid,
+                LiteralVersion = binding.Skill.LiteralVersion,
+                CanonicalName = binding.Skill.ExpectedName,
+                PublisherId = binding.Skill.ExpectedPublisherId,
+                UpstreamSkillHash = "upstream-skill-hash-alpha",
+                Description = "Exact system skill",
+                Instructions = "Follow the resolved skill.",
+                Arguments = "request",
+                WhenToUse = "Use for the system test assistant.",
+                ModelInvocable = true,
+                UserInvocable = false,
+            },
+        };
+        sealedSkill.ContentSha256 = AgentProfileDeterminism.ComputeSkillContentSha256(sealedSkill);
+        return new SealedAgentProfileSkillBinding
+        {
+            BindingId = binding.BindingId,
+            ActivationMode = binding.ActivationMode,
+            Skill = sealedSkill,
+            RoutingPolicy = binding.RoutingPolicy?.Clone(),
+        };
     }
 
     private static AgentProfileExecutionSnapshot ExecutionSnapshot(

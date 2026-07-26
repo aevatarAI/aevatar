@@ -11,13 +11,16 @@ public sealed class AgentProfileNamespaceCurrentStateProjector
 {
     private readonly IProjectionWriteDispatcher<AgentProfileNamespaceCatalogDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
+    private readonly IReadOnlyList<IAgentProfileReadModelMaterializationObserver> _materializationObservers;
 
     public AgentProfileNamespaceCurrentStateProjector(
         IProjectionWriteDispatcher<AgentProfileNamespaceCatalogDocument> writeDispatcher,
-        IProjectionClock clock)
+        IProjectionClock clock,
+        IEnumerable<IAgentProfileReadModelMaterializationObserver>? materializationObservers = null)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _materializationObservers = materializationObservers?.ToArray() ?? [];
     }
 
     public async ValueTask ProjectAsync(
@@ -67,6 +70,8 @@ public sealed class AgentProfileNamespaceCurrentStateProjector
 
         var result = await _writeDispatcher.UpsertAsync(document, ct);
         AgentProfileProjectionWritePolicy.EnsureAccepted(result, document.Id);
+        foreach (var observer in _materializationObservers)
+            observer.OnAgentProfileReadModelMaterialized();
     }
 
     private static bool IsActiveSafeEntry(AgentProfileNamespaceEntryState entry) =>

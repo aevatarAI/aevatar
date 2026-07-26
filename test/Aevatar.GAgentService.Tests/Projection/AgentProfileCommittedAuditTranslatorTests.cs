@@ -23,6 +23,12 @@ namespace Aevatar.GAgentService.Tests.Projection;
 public sealed class AgentProfileCommittedAuditTranslatorTests
 {
     private const string DraftInstructions = "draft instructions must stay private";
+    private const string RoutingDescription = "routing description must stay private";
+    private const string RoutingAlias = "routing alias must stay private";
+    private const string TaskToolName = "task tool name must stay private";
+    private const string TaskToolSetRef = "task tool-set ref must stay private";
+    private const string RecoveryToolName = "recovery tool name must stay private";
+    private const string RecoveryToolSetRef = "recovery tool-set ref must stay private";
     private const string SkillInstructions = "sealed skill instructions must stay private";
     private const string AssetBody = "asset body must stay private";
     private const string Bearer = "Bearer test-credential-7";
@@ -104,6 +110,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         record.Annotations.Should().Contain("new_draft_sha256", Hex(Digest(0x11)));
         record.Annotations.Should().Contain("new_published_revision", "0");
         record.Annotations.Should().Contain("new_published_snapshot_sha256", string.Empty);
+        AssertRecoveryPolicyAnnotations(record, evt.InitialContent.RecoveryToolPolicy);
         record.Annotations.Keys.Should().NotContain(key => key.StartsWith("old_", StringComparison.Ordinal));
         AssertSensitiveValuesOmitted(record);
     }
@@ -138,6 +145,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         record.Annotations.Should().Contain("draft_sha256", Hex(Digest(0x22)));
         record.Annotations.Should().Contain("published_revision", "1");
         record.Annotations.Should().Contain("published_snapshot_sha256", Hex(Digest(0x19)));
+        AssertRecoveryPolicyAnnotations(record, evt.Content.RecoveryToolPolicy);
         AssertTransitionAnnotations(
             record,
             oldDraftRevision: 1,
@@ -205,6 +213,12 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         upsertRecord.Annotations.Should().Contain("literal_version", "1.2");
         upsertRecord.Annotations.Should().Contain("expected_name", "calendar");
         upsertRecord.Annotations.Should().Contain("expected_publisher_id", "publisher-alpha");
+        upsertRecord.Annotations.Should().Contain("routing_intent_id", "calendar-requests");
+        upsertRecord.Annotations.Should().Contain("routing_side_effect_class", "service_call");
+        upsertRecord.Annotations.Should().Contain(
+            "routing_policy_sha256",
+            RoutingPolicyDigest(upserted.Binding));
+        AssertRecoveryPolicyAnnotations(upsertRecord, upserted.Content.RecoveryToolPolicy);
         AssertTransitionAnnotations(
             upsertRecord,
             oldDraftRevision: 2,
@@ -218,6 +232,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         AssertCommon(removedRecord, "agent_profile.skill_binding.removed", "applied");
         removedRecord.Annotations.Should().Contain("binding_id", "binding-alpha");
         removedRecord.Annotations.Should().Contain("draft_revision", "4");
+        AssertRecoveryPolicyAnnotations(removedRecord, removed.Content.RecoveryToolPolicy);
         AssertTransitionAnnotations(
             removedRecord,
             oldDraftRevision: 3,
@@ -285,6 +300,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         appliedRecord.Annotations.Should().Contain(
             "published_snapshot_sha256",
             Hex(published.SnapshotSha256));
+        AssertRecoveryPolicyAnnotations(appliedRecord, published.RecoveryToolPolicy);
         AssertTransitionAnnotations(
             appliedRecord,
             oldDraftRevision: 4,
@@ -701,6 +717,12 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         foreach (var forbidden in new[]
                  {
                      DraftInstructions,
+                     RoutingDescription,
+                     RoutingAlias,
+                     TaskToolName,
+                     TaskToolSetRef,
+                     RecoveryToolName,
+                     RecoveryToolSetRef,
                      SkillInstructions,
                      AssetBody,
                      Bearer,
@@ -846,6 +868,12 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             {
                 Mode = AgentProfileToolPolicyMode.InheritRouteMaximum,
             },
+            RecoveryToolPolicy = new AgentProfileToolPolicy
+            {
+                Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                ToolNames = { RecoveryToolName },
+                ToolSetRefs = { RecoveryToolSetRef },
+            },
             SkillBindings = { Binding() },
         };
 
@@ -861,6 +889,19 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
                 ExpectedName = "calendar",
                 ExpectedPublisherId = "publisher-alpha",
             },
+            RoutingPolicy = new AgentProfileSkillRoutingPolicy
+            {
+                IntentId = "calendar-requests",
+                RoutingDescription = RoutingDescription,
+                ExplicitTriggerAliases = { RoutingAlias },
+                TaskToolPolicy = new AgentProfileToolPolicy
+                {
+                    Mode = AgentProfileToolPolicyMode.ExplicitAllowlist,
+                    ToolNames = { TaskToolName },
+                    ToolSetRefs = { TaskToolSetRef },
+                },
+                SideEffectClass = AgentProfileSkillSideEffectClass.ServiceCall,
+            },
         };
 
     private static AgentProfilePublishedSnapshot PublishedSnapshot()
@@ -875,6 +916,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
             {
                 Mode = AgentProfileToolPolicyMode.InheritRouteMaximum,
             },
+            RecoveryToolPolicy = SensitiveContent().RecoveryToolPolicy.Clone(),
             PublishedRevision = 2,
             SourceDraftSha256 = Digest(0x44),
             SnapshotSha256 = Digest(0x55),
@@ -883,6 +925,7 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
         {
             BindingId = "binding-alpha",
             ActivationMode = AgentProfileSkillActivationMode.Routed,
+            RoutingPolicy = Binding().RoutingPolicy.Clone(),
             Skill = new SealedAgentProfileSkill
             {
                 ExactReference = Binding().Skill,
@@ -944,6 +987,25 @@ public sealed class AgentProfileCommittedAuditTranslatorTests
 
     private static string Hex(ByteString value) =>
         Convert.ToHexString(value.Span).ToLowerInvariant();
+
+    private static void AssertRecoveryPolicyAnnotations(
+        AuditRecord record,
+        AgentProfileToolPolicy policy)
+    {
+        record.Annotations.Should().Contain(
+            "recovery_tool_policy_mode",
+            "explicit_allowlist");
+        record.Annotations.Should().Contain(
+            "recovery_tool_policy_sha256",
+            Hex(AgentProfileDeterminism.Sha256(
+                AgentProfileDeterminism.NormalizeToolPolicy(policy))));
+    }
+
+    private static string RoutingPolicyDigest(AgentProfileSkillBinding binding)
+    {
+        var normalized = AgentProfileDeterminism.NormalizeSkillBinding(binding);
+        return Hex(AgentProfileDeterminism.Sha256(normalized.RoutingPolicy));
+    }
 
     private static async Task<AuditTrailDocument?> MaterializeAsync<TEvent>(
         IAuditCommittedEventTranslator translator,

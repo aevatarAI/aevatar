@@ -43,7 +43,8 @@ public sealed record TeamAutomationOperationCommittedOutcome(
     ScheduledCredentialEffectLocator? CredentialEffectLocator = null,
     string MutationDigest = "",
     string ObservationRequestId = "",
-    TeamAutomationOperationObservationStatus Status = TeamAutomationOperationObservationStatus.Committed);
+    TeamAutomationOperationObservationStatus Status = TeamAutomationOperationObservationStatus.Committed,
+    bool NewOperationCommitted = false);
 
 public sealed record TeamAutomationOperationObservationScopeLeasePreparation(
     string ActorId,

@@ -45,6 +45,8 @@ const enUSMessages = {
     'Describe the workflow you want, or ask about the current setup...',
   'pages.chat.index.confirmAndCreate': 'Confirm and create',
   'pages.chat.index.confirmPrompt': 'Confirm. Please create it now.',
+  'pages.chat.index.continuationContextMissing':
+    'The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing.',
   'pages.chat.index.cancel': 'Cancel',
   'pages.chat.index.delete': 'Delete',
   'pages.chat.index.deleteChat': 'Delete {title}',
@@ -63,6 +65,8 @@ const enUSMessages = {
   'pages.chat.index.historyTitle': 'Chat history',
   'pages.chat.index.loadingConversation': 'Loading conversation',
   'pages.chat.index.loadingHistory': 'Loading chat history',
+  'pages.chat.index.historySynchronizing':
+    'Conversation history is still synchronizing. Try again shortly.',
   'pages.chat.index.missingChatHistoryContext':
     'Chat completed without a conversation context.',
   'pages.chat.index.newChat': 'New chat',
@@ -1040,8 +1044,14 @@ const enUSMessages = {
   'pages.runs.memberPublishedRuns.timeline': 'Timeline',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.description':
     'You can build or edit the workflow YAML here. Saving creates a reusable workflow draft until the member link is materialized.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.publishedDescription':
+    'This published member has no materialized draft workflow link. Refresh after the member read model exposes its draft workflow id.',
   'teamMemberWorkflowStudio.alerts.linkedWorkflowMissing.title':
     'No workflow draft is linked to this member yet.',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.description':
+    'Studio resolved draft workflow {workflowId}, but loading it failed: {reason}',
+  'teamMemberWorkflowStudio.alerts.linkedWorkflowLoadFailed.title':
+    'Workflow draft could not be loaded.',
   'teamMemberWorkflowStudio.common.close': 'Close',
   'teamMemberWorkflowStudio.executionPanel.consoleAria': 'Draft run console',
   'teamMemberWorkflowStudio.executionPanel.duration': 'Duration',
@@ -1109,6 +1119,9 @@ const enUSMessages = {
     'Service ready',
   'teamMemberWorkflowStudio.executionsPanel.title': 'Executions',
   'teamMemberWorkflowStudio.executionsPanel.unknownStatus': 'unknown',
+  'teamMemberWorkflowStudio.graph.branchCount.one': '1 branch',
+  'teamMemberWorkflowStudio.graph.branchCount.other': '{count} branches',
+  'teamMemberWorkflowStudio.graph.role': 'Role',
   'teamMemberWorkflowStudio.header.activateAria': 'Activate workflow member',
   'teamMemberWorkflowStudio.header.activation.active': 'Active',
   'teamMemberWorkflowStudio.header.activation.error': 'Error',

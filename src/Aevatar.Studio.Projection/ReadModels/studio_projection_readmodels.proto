@@ -4,6 +4,7 @@ option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 
 import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
+import "user_config_messages.proto";
 
 message WorkOrderArtifactReferenceDocument {
   string artifact_id = 1;
@@ -12,31 +13,14 @@ message WorkOrderArtifactReferenceDocument {
   string revision_id = 4;
 }
 
-message WorkOrderExternalActionReferenceDocument {
-  string action_id = 1;
-  string system = 2;
-  string action = 3;
-  string resource_id = 4;
-}
-
-message WorkOrderPermissionRequirementDocument {
-  string permission_id = 1;
-  string action_id = 2;
-  string capability = 3;
-  bool requires_approval = 4;
-}
-
-message WorkOrderTerminalEvidenceDocument {
+message WorkOrderRunOutcomeReferenceDocument {
   string delivery_id = 1;
   string run_id = 2;
   string run_actor_id = 3;
   string command_id = 4;
-  string outcome = 5;
-  string output = 6;
-  string error = 7;
-  int64 terminal_at_unix_ms = 8;
-  repeated WorkOrderArtifactReferenceDocument result_artifacts = 9;
-  string correlation_id = 10;
+  string correlation_id = 5;
+  string outcome = 6;
+  int64 terminal_at_unix_ms = 7;
 }
 
 // Actor-scoped current-state replica for WorkOrderGAgent. Business lifecycle
@@ -71,17 +55,9 @@ message WorkOrderCurrentStateDocument {
   string input_prompt = 40;
   repeated WorkOrderArtifactReferenceDocument input_artifacts = 41;
   repeated WorkOrderArtifactReferenceDocument declared_result_artifacts = 42;
-  repeated WorkOrderExternalActionReferenceDocument external_actions = 43;
-  repeated WorkOrderPermissionRequirementDocument permission_requirements = 44;
-  repeated string approver_principal_ids = 45;
+  reserved 43 to 45;
 
-  string approval_id = 50;
-  string approval_status = 51;
-  string approval_decision_id = 52;
-  string approval_decided_by_id = 53;
-  string approval_decided_by_kind = 54;
-  string approval_reason = 55;
-  int64 approval_decided_at_unix_ms = 56;
+  reserved 50 to 56;
 
   string run_id = 60;
   string run_actor_id = 61;
@@ -90,10 +66,10 @@ message WorkOrderCurrentStateDocument {
   string run_revision_id = 64;
   string run_deployment_id = 65;
   int64 run_accepted_at_unix_ms = 66;
-  int64 run_started_at_unix_ms = 67;
+  reserved 67;
 
-  WorkOrderTerminalEvidenceDocument terminal_evidence = 70;
-  WorkOrderTerminalEvidenceDocument late_terminal_evidence = 71;
+  WorkOrderRunOutcomeReferenceDocument run_outcome = 70;
+  WorkOrderRunOutcomeReferenceDocument late_run_outcome = 71;
   string failure_code = 72;
   string failure_message = 73;
   string failure_source = 74;
@@ -167,6 +143,7 @@ message UserConfigCurrentStateDocument {
   string remote_runtime_base_url = 14;
   int32 max_tool_rounds = 15;
   string github_username = 16;
+  aevatar.gagents.user_config.UserLlmSelection llm_selection = 17;
 }
 
 // ─── GAgentRegistry Current State ReadModel ───

@@ -785,9 +785,13 @@ write_valid_fixture() {
   local runtime_propagation="${root}/src/Aevatar.Foundation.Runtime/Propagation"
   local local_runtime="${root}/src/Aevatar.Foundation.Runtime.Implementations.Local/Actors"
   local orleans_runtime="${root}/src/Aevatar.Foundation.Runtime.Implementations.Orleans/Actors"
+  local mainnet_profiles="${root}/src/Aevatar.Mainnet.Host.Api/Profiles"
+  local mainnet_agent_profiles="${root}/src/Aevatar.Mainnet.Host.Api/AgentProfiles"
+  local nyxid_agent_profiles="${root}/agents/Aevatar.GAgents.NyxidChat/AgentProfiles"
   mkdir -p "${core}" "${application}" "${projection}" "${audit}" "${hosting}" \
     "${ornn}/AgentProfiles" "${tool}" "${foundation_abstractions}" \
-    "${runtime_propagation}" "${local_runtime}" "${orleans_runtime}"
+    "${runtime_propagation}" "${local_runtime}" "${orleans_runtime}" \
+    "${mainnet_profiles}" "${mainnet_agent_profiles}" "${nyxid_agent_profiles}"
 
   write_lines "${core}/AgentProfile.cs" 'public sealed class AgentProfileDefinition { }'
   write_lines "${foundation_abstractions}/agent_messages.proto" \
@@ -991,6 +995,36 @@ write_valid_fixture() {
     '    var detailRead = await _client.GetExactSkillDetailAsync(token, guid, version, ct);' \
     '    var jsonRead = await _client.GetExactSkillJsonAsync(token, guid, version, ct);' \
     '    return Combine(detailRead, jsonRead); } }'
+  write_lines "${mainnet_profiles}/MainnetAgentProfileRolloutSelector.cs" \
+    'using Aevatar.GAgentService.Abstractions.AgentProfiles;' \
+    'public sealed class MainnetAgentProfileRolloutSelector {' \
+    '  // INyxIdChatAgentProfileBindingSource is a harmless comment decoy.' \
+    '  private const string RuntimeSourceDecoy = "INyxIdChatAgentProfileBindingSource";' \
+    '  private readonly AgentProfileRolloutReleaseSpec? _releaseSpec;' \
+    '}'
+  write_lines "${mainnet_agent_profiles}/MainnetNyxIdChatAgentProfileBindingSource.cs" \
+    'using Aevatar.GAgentService.Abstractions.Ports;' \
+    'using Aevatar.GAgents.NyxidChat.AgentProfiles;' \
+    'public sealed class MainnetNyxIdChatAgentProfileBindingSource : INyxIdChatAgentProfileBindingSource {' \
+    '  private readonly IAgentProfileNamespaceQueryPort _namespaceQuery;' \
+    '  private readonly IAgentProfileExecutionSnapshotQueryPort _executionQuery;' \
+    '  private static void ExactSymbolDecoys() {' \
+    '    // IEventStore IProjectionScopeActivationService are harmless comments.' \
+    '    const string names = "IEventStore IProjectionScopeActivationService";' \
+    '    static Fixture.Decoys.IEventStore? IEventStore() => null;' \
+    '    static Fixture.Decoys.IProjectionScopeActivationService<object>? IProjectionScopeActivationService() => null;' \
+    '  }' \
+    '  private sealed class ProfileProjectionLease : Aevatar.CQRS.Projection.Core.Abstractions.IProjectionRuntimeLease;' \
+    '}'
+  write_lines "${nyxid_agent_profiles}/AgentProfileTurnCatalogMaterializer.cs" \
+    'public sealed class AgentProfileTurnCatalogMaterializer {' \
+    '  private static void ExactSymbolDecoys() {' \
+    '    // IRemoteSkillFetcher.FetchSkillAsync is a harmless comment.' \
+    '    const string remoteFetch = "IRemoteSkillFetcher FetchSkillAsync Ornn";' \
+    '    static Fixture.Decoys.IRemoteSkillFetcher? IRemoteSkillFetcher() => null;' \
+    '    static void FetchSkillAsync() { }' \
+    '  }' \
+    '}'
   write_tool_schema "${tool}/AgentProfilesTool.cs" ""
 }
 
@@ -1093,15 +1127,23 @@ run_self_tests() {
 
   local structured_profile_file="src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileGAgent.cs"
   local structured_namespace_file="src/platform/Aevatar.GAgentService.Core/AgentProfiles/AgentProfileNamespaceGAgent.cs"
+  local semantic_selector_file="src/Aevatar.Mainnet.Host.Api/Profiles/MainnetAgentProfileRolloutSelector.cs"
+  local semantic_binder_file="src/Aevatar.Mainnet.Host.Api/AgentProfiles/MainnetNyxIdChatAgentProfileBindingSource.cs"
+  local semantic_turn_file="agents/Aevatar.GAgents.NyxidChat/AgentProfiles/AgentProfileTurnCatalogMaterializer.cs"
   local structured_message="The actual [EventHandler] must be the unique expected handler for the message and match the canonical pre-authority statements, exact authority call, and immediate operation parse."
+  local semantic_artifact_message="The Mainnet rollout artifact owns admission pins only and must not implement INyxIdChatAgentProfileBindingSource."
+  local semantic_binder_message="The Mainnet Profile binder may read only the namespace and execution read-model ports; event-store and projection-activation dependencies are forbidden."
+  local semantic_turn_message="Agent Profile turns must execute from the immutable conversation binding and must not depend on IRemoteSkillFetcher."
   local -a structured_roots=() structured_expected_hits=()
 
   record_structured_case() {
     local relative_file="$1"
     local method_name="$2"
+    local rule="${3:-authority-order}"
+    local message="${4:-${structured_message}}"
     structured_roots+=("${case_root}")
     structured_expected_hits+=(
-      "VIOLATION|${case_root}|${relative_file}:${method_name}.authority-order|${structured_message}")
+      "VIOLATION|${case_root}|${relative_file}:${method_name}.${rule}|${message}")
   }
 
   fresh_case "structured-valid-decoys"
@@ -1262,6 +1304,46 @@ run_self_tests() {
   fresh_case "structured-parse-error"
   perl -0777 -pi -e 's/\A/}/' "${case_root}/${structured_profile_file}"
   record_structured_case "${structured_profile_file}" "HandleInitializeAsync"
+
+  fresh_case "semantic-rollout-artifact-runtime-source"
+  perl -0777 -pi -e \
+    's/public sealed class MainnetAgentProfileRolloutSelector/public sealed class MainnetAgentProfileRolloutSelector : Aevatar.GAgents.NyxidChat.AgentProfiles.INyxIdChatAgentProfileBindingSource/' \
+    "${case_root}/${semantic_selector_file}"
+  record_structured_case \
+    "${semantic_selector_file}" \
+    "MainnetAgentProfileRolloutSelector" \
+    "admission-artifact-only" \
+    "${semantic_artifact_message}"
+
+  fresh_case "semantic-binder-event-store"
+  perl -0777 -pi -e \
+    's/(public sealed class MainnetNyxIdChatAgentProfileBindingSource[^\{]*\{)/$1\n  private readonly Aevatar.Foundation.Abstractions.Persistence.IEventStore _eventStore = null!;/' \
+    "${case_root}/${semantic_binder_file}"
+  record_structured_case \
+    "${semantic_binder_file}" \
+    "MainnetNyxIdChatAgentProfileBindingSource" \
+    "read-model-only" \
+    "${semantic_binder_message}"
+
+  fresh_case "semantic-binder-projection-activation"
+  perl -0777 -pi -e \
+    's/(public sealed class MainnetNyxIdChatAgentProfileBindingSource[^\{]*\{)/$1\n  private readonly Aevatar.CQRS.Projection.Core.Abstractions.IProjectionScopeActivationService<ProfileProjectionLease> _projectionActivation = null!;/' \
+    "${case_root}/${semantic_binder_file}"
+  record_structured_case \
+    "${semantic_binder_file}" \
+    "MainnetNyxIdChatAgentProfileBindingSource" \
+    "read-model-only" \
+    "${semantic_binder_message}"
+
+  fresh_case "semantic-turn-remote-fetch"
+  perl -0777 -pi -e \
+    's/(public sealed class AgentProfileTurnCatalogMaterializer[^\{]*\{)/$1\n  private readonly Aevatar.AI.ToolProviders.Skills.IRemoteSkillFetcher _remoteSkillFetcher = null!;/' \
+    "${case_root}/${semantic_turn_file}"
+  record_structured_case \
+    "${semantic_turn_file}" \
+    "AgentProfileTurnCatalogMaterializer" \
+    "sealed-turn-only" \
+    "${semantic_turn_message}"
 
   local expected_index=0 other_expected_index=0
   local expected_hit="" other_expected_hit="" structured_root_output=""

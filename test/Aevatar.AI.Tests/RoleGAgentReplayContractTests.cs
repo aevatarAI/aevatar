@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Routing;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
@@ -19,6 +20,710 @@ namespace Aevatar.AI.Tests;
 
 public class RoleGAgentReplayContractTests
 {
+    [Fact]
+    public void RoleStateRoundTrip_ShouldPreserveCompleteExecutionBindingProvenance()
+    {
+        var binding = ProfileBinding("profile-roundtrip");
+        binding = binding.Clone();
+        binding.DeterministicBindingSha256 = ByteString.Empty;
+        binding.Members[0].ActivationMode =
+            AgentProfileExecutionMemberActivationMode.DefaultForUnmatchedTurn;
+        binding = AgentProfileExecutionBindingCodec.Seal(binding);
+        var state = new RoleGAgentState { AgentProfileBinding = binding };
+
+        var restored = RoleGAgentState.Parser.ParseFrom(state.ToByteArray());
+
+        AgentProfileExecutionBindingCodec.ByteEquivalent(restored.AgentProfileBinding, binding).Should().BeTrue();
+        restored.AgentProfileBinding.Source.StateVersion.Should().Be(17);
+        restored.AgentProfileBinding.Admission.RolloutStage.Should().Be("canary");
+        restored.AgentProfileBinding.Members[0].InstructionBody
+            .Should().Be("Use the exact sealed procedure.");
+        restored.AgentProfileBinding.Members[0].ActivationMode.Should()
+            .Be(AgentProfileExecutionMemberActivationMode.DefaultForUnmatchedTurn);
+    }
+
+    [Fact]
+    public void RoleStateRoundTrip_ShouldPreserveAlwaysMemberWithoutRoutingPolicy()
+    {
+        const string alwaysProcedure = "Apply this published procedure on every turn.";
+        var binding = ProfileBinding("profile-always-roundtrip").Clone();
+        binding.DeterministicBindingSha256 = ByteString.Empty;
+        AgentProfileExecutionBindingCodecTests.ConfigureAlwaysMember(binding.Members[0], alwaysProcedure);
+        binding = AgentProfileExecutionBindingCodec.Seal(binding);
+        var state = new RoleGAgentState { AgentProfileBinding = binding };
+
+        var restored = RoleGAgentState.Parser.ParseFrom(state.ToByteArray());
+
+        AgentProfileExecutionBindingCodec.ByteEquivalent(restored.AgentProfileBinding, binding).Should().BeTrue();
+        var member = restored.AgentProfileBinding.Members.Should().ContainSingle().Subject;
+        member.ActivationMode.Should().Be(AgentProfileExecutionMemberActivationMode.Always);
+        member.InstructionBody.Should().Be(alwaysProcedure);
+        member.IntentId.Should().BeEmpty();
+        member.RoutingDescription.Should().BeEmpty();
+        member.ExplicitTriggerAliases.Should().BeEmpty();
+        member.TaskToolPolicy.Should().BeNull();
+        member.SideEffectClass.Should().Be(AgentProfileSideEffectClass.Unspecified);
+    }
+
+    [Fact]
+    public async Task NewProfiledSession_ShouldCommitStartedAndInitialAuthorityInOneOrderedBatch()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        var operationLog = new List<string>();
+        var store = new RecordingBatchEventStore(inner, operationLog);
+        var services = BuildServices(store);
+        var agent = CreateProfiledAgent(services, "role-profiled-batch", operationLog: operationLog);
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        var authorityBatch = store.Batches.Should().ContainSingle(batch =>
+                batch.Any(stateEvent => stateEvent.EventData.Is(RoleChatSessionStartedEvent.Descriptor)))
+            .Subject;
+        authorityBatch.Select(stateEvent => stateEvent.EventData.TypeUrl).Should().Equal(
+            Any.Pack(new RoleChatSessionStartedEvent()).TypeUrl,
+            Any.Pack(new AgentProfileTurnAuthorityCommittedEvent()).TypeUrl);
+        authorityBatch[1].EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind
+            .Should().Be(AgentProfileTurnAuthorityCommitKind.Initial);
+        agent.State.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-a");
+        operationLog.Should().ContainInOrder("commit:INITIAL:1", "materialize:1");
+    }
+
+    [Fact]
+    public async Task NewProfiledSession_WhenAuthorityBatchAppendFails_ShouldExposeNeitherFact()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        var store = new FailOnceOnInitialAuthorityBatchEventStore(inner);
+        var services = BuildServices(store);
+        const string actorId = "role-profiled-batch-fail";
+        var agent = CreateProfiledAgent(services, actorId);
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        var committedPublisher = AttachCommittedPublisher(agent);
+        await agent.ActivateAsync();
+
+        var act = () => agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*authority batch*");
+        agent.State.Sessions.Should().NotContainKey("session-a");
+        agent.State.AgentProfileTurnAuthority.Should().BeNull();
+        (await inner.GetEventsAsync(actorId)).Should().BeEmpty();
+        committedPublisher.Published.Should().BeEmpty();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-b",
+            Prompt = "next",
+        });
+
+        var persisted = await inner.GetEventsAsync(actorId);
+        persisted.Should().NotContain(stateEvent => IsSessionFact(stateEvent, "session-a"));
+        persisted.Should().Contain(stateEvent => IsSessionFact(stateEvent, "session-b"));
+        committedPublisher.Published
+            .Should().NotContain(published => IsSessionFact(published.StateEvent, "session-a"));
+
+        var replayed = CreateProfiledAgent(services, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.Sessions.Should().NotContainKey("session-a");
+        replayed.State.Sessions.Should().ContainKey("session-b");
+        replayed.State.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-b");
+    }
+
+    [Theory]
+    [InlineData(InitialAuthorityMutation.WrongSession)]
+    [InlineData(InitialAuthorityMutation.AttemptNotOne)]
+    [InlineData(InitialAuthorityMutation.RecoveryWithEmptyCeiling)]
+    public async Task NewProfiledSession_WhenInitialAuthorityIsInvalid_ShouldExposeNoFactsFramesOrLlmCall(
+        InitialAuthorityMutation initialAuthorityMutation)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var provider = new CountingLlmProviderFactory("must not run");
+        const string actorId = "role-profiled-invalid-initial";
+        var agent = CreateProfiledAgent(
+            services,
+            actorId,
+            providerFactory: provider,
+            initialAuthorityMutation: initialAuthorityMutation);
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        var committedPublisher = AttachCommittedPublisher(agent);
+        await agent.ActivateAsync();
+
+        var act = () => agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        await act.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage("Prepared turn authority is not valid for the new session.");
+        agent.PrepareCallCount.Should().Be(1);
+        agent.MaterializeCallCount.Should().Be(0);
+        provider.StreamCallCount.Should().Be(0);
+        agent.State.Sessions.Should().NotContainKey("session-a");
+        agent.State.AgentProfileTurnAuthority.Should().BeNull();
+        (await store.GetEventsAsync(actorId)).Should().BeEmpty();
+        committedPublisher.Published.Should().BeEmpty();
+        publisher.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReconcileAppendFailure_ShouldNotLeakIntoCompletionCommitOrReplay()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        var store = new FailOnceOnReconcileEventStore(inner);
+        var services = BuildServices(store);
+        const string actorId = "role-profiled-reconcile-fail";
+        var agent = CreateProfiledAgent(services, actorId);
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        var publisher = new RecordingEventPublisher();
+        agent.EventPublisher = publisher;
+        var committedPublisher = AttachCommittedPublisher(agent);
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        var persisted = await inner.GetEventsAsync(actorId);
+        persisted
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind)
+            .Should().Equal(AgentProfileTurnAuthorityCommitKind.Initial);
+        persisted.Should().ContainSingle(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionCompletedEvent.Descriptor));
+        committedPublisher.Published
+            .Where(published => published.StateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(published => published.StateEvent.EventData
+                .Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind)
+            .Should().Equal(AgentProfileTurnAuthorityCommitKind.Initial);
+
+        var replayed = CreateProfiledAgent(services, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.Sessions["session-a"].Completed.Should().BeTrue();
+        replayed.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task InvalidReconcileProposal_ShouldNotAppendCallLlmOrReplaceReplayedAuthority()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var provider = new CountingLlmProviderFactory("must not run");
+        const string actorId = "role-profiled-invalid-reconcile";
+        var agent = CreateProfiledAgent(
+            services,
+            actorId,
+            providerFactory: provider,
+            reconcileProposalMutation: ReconcileProposalMutation.WidenCeiling);
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        provider.StreamCallCount.Should().Be(0);
+        agent.MaterializeCallCount.Should().Be(1);
+        var authorityEvents = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .ToArray();
+        authorityEvents.Should().ContainSingle();
+        authorityEvents[0].CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.Initial);
+        authorityEvents[0].Authority.AuthorityCeilingToolNames.Should().Equal("recovery", "task");
+
+        var replayed = CreateProfiledAgent(services, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.AgentProfileTurnAuthority.Should().BeEquivalentTo(authorityEvents[0].Authority);
+    }
+
+    [Fact]
+    public void ReconcileReducer_ShouldRejectSubstitutionPartialErasureSameRankErasureWideningAndWrongKey()
+    {
+        var active = TurnAuthority("session-a", 1, "intent-a", "skill-a");
+        var state = new RoleGAgentState
+        {
+            AgentProfileTurnAuthority = active,
+            Sessions = { ["session-a"] = new RoleChatSessionState { Sequence = 1 } },
+        };
+        var substitutedCandidate = active.Clone();
+        substitutedCandidate.CandidateRoute.IntentId = "intent-substitute";
+        var substitutedExactRef = active.Clone();
+        substitutedExactRef.SelectedExactSkillRef.Guid = "skill-substitute";
+        var candidateOnlyErasure = active.Clone();
+        candidateOnlyErasure.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+        candidateOnlyErasure.CandidateRoute = null;
+        candidateOnlyErasure.AuthorityCeilingToolNames.Clear();
+        candidateOnlyErasure.AuthorityCeilingToolNames.Add("recovery");
+        var exactRefOnlyErasure = active.Clone();
+        exactRefOnlyErasure.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+        exactRefOnlyErasure.SelectedExactSkillRef = null;
+        exactRefOnlyErasure.AuthorityCeilingToolNames.Clear();
+        exactRefOnlyErasure.AuthorityCeilingToolNames.Add("recovery");
+        var sameRankErasure = active.Clone();
+        sameRankErasure.CandidateRoute = null;
+        sameRankErasure.SelectedExactSkillRef = null;
+        var wrongKey = active.Clone();
+        wrongKey.ReconciliationKey.Attempt++;
+
+        foreach (var incoming in new[]
+                 {
+                     substitutedCandidate,
+                     substitutedExactRef,
+                     candidateOnlyErasure,
+                     exactRefOnlyErasure,
+                     sameRankErasure,
+                     wrongKey,
+                 })
+        {
+            ApplyTurnAuthority(state, new AgentProfileTurnAuthorityCommittedEvent
+                {
+                    CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+                    Authority = incoming,
+                })
+                .Should().BeSameAs(state);
+        }
+
+        var recovery = active.Clone();
+        recovery.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+        recovery.CandidateRoute = null;
+        recovery.SelectedExactSkillRef = null;
+        recovery.AuthorityCeilingToolNames.Clear();
+        recovery.AuthorityCeilingToolNames.Add("recovery");
+        var recoveryState = new RoleGAgentState
+        {
+            AgentProfileTurnAuthority = recovery,
+            Sessions = { ["session-a"] = new RoleChatSessionState { Sequence = 1 } },
+        };
+
+        ApplyTurnAuthority(recoveryState, new AgentProfileTurnAuthorityCommittedEvent
+            {
+                CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+                Authority = active,
+            })
+            .Should().BeSameAs(recoveryState);
+    }
+
+    [Theory]
+    [InlineData(AgentProfileTurnAuthorityKind.Recovery, true, true)]
+    [InlineData(AgentProfileTurnAuthorityKind.Recovery, true, false)]
+    [InlineData(AgentProfileTurnAuthorityKind.Recovery, false, true)]
+    [InlineData(AgentProfileTurnAuthorityKind.RestrictedEmpty, true, true)]
+    [InlineData(AgentProfileTurnAuthorityKind.RestrictedEmpty, true, false)]
+    [InlineData(AgentProfileTurnAuthorityKind.RestrictedEmpty, false, true)]
+    public void ReconcileReducer_SelectedRankDropWithRetainedIdentity_ShouldBeRejected(
+        AgentProfileTurnAuthorityKind incomingKind,
+        bool retainCandidateRoute,
+        bool retainSelectedExactSkillRef)
+    {
+        var active = TurnAuthority("session-a", 1, "intent-a", "skill-a");
+        var state = new RoleGAgentState
+        {
+            AgentProfileTurnAuthority = active,
+            Sessions = { ["session-a"] = new RoleChatSessionState { Sequence = 1 } },
+        };
+        var incoming = active.Clone();
+        incoming.AuthorityKind = incomingKind;
+        incoming.AuthorityCeilingToolNames.Clear();
+        if (incomingKind == AgentProfileTurnAuthorityKind.Recovery)
+            incoming.AuthorityCeilingToolNames.Add("recovery");
+        if (!retainCandidateRoute)
+            incoming.CandidateRoute = null;
+        if (!retainSelectedExactSkillRef)
+            incoming.SelectedExactSkillRef = null;
+
+        ApplyTurnAuthority(state, new AgentProfileTurnAuthorityCommittedEvent
+            {
+                CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+                Authority = incoming,
+            })
+            .Should().BeSameAs(state);
+        state.AgentProfileTurnAuthority.Should().BeEquivalentTo(active);
+    }
+
+    [Theory]
+    [InlineData(ReconcileProposalMutation.RecoveryWithEmptyCeiling)]
+    [InlineData(ReconcileProposalMutation.RestrictedEmptyWithNonEmptyCeiling)]
+    public async Task ContradictoryAuthorityKindAndCeiling_ShouldFailCommandPrevalidationAndReplay(
+        ReconcileProposalMutation reconcileProposalMutation)
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var provider = new CountingLlmProviderFactory("must not run");
+        const string actorId = "role-profiled-contradictory-authority";
+        var agent = CreateProfiledAgent(
+            services,
+            actorId,
+            providerFactory: provider,
+            reconcileProposalMutation: reconcileProposalMutation);
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        await agent.ActivateAsync();
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        provider.StreamCallCount.Should().Be(0);
+        var authorityEvents = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .ToArray();
+        var initial = authorityEvents.Should().ContainSingle().Which;
+        initial.CommitKind.Should().Be(AgentProfileTurnAuthorityCommitKind.Initial);
+
+        var replayState = new RoleGAgentState
+        {
+            AgentProfileTurnAuthority = initial.Authority.Clone(),
+            Sessions = { ["session-a"] = new RoleChatSessionState { Sequence = 1 } },
+        };
+        var malformed = MutateReconcileProposal(initial.Authority, reconcileProposalMutation);
+        ApplyTurnAuthority(replayState, new AgentProfileTurnAuthorityCommittedEvent
+        {
+            CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+            Authority = malformed,
+        })
+            .Should()
+            .BeSameAs(replayState);
+    }
+
+    [Fact]
+    public async Task RetryStartedAppendFailure_ShouldNotDuplicateFenceOnNextCommandOrReplay()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        const string actorId = "role-profiled-retry-fail";
+        await inner.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-a",
+                    Prompt = "hello",
+                }),
+                StateEventFor(actorId, 2, new AgentProfileTurnAuthorityCommittedEvent
+                {
+                    CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                    Authority = TurnAuthority("session-a", 1, "intent-a", "skill-a"),
+                }),
+            ],
+            expectedVersion: 0);
+        var store = new FailOnceOnRetryStartedEventStore(inner);
+        var services = BuildServices(store);
+        var agent = CreateProfiledAgent(services, actorId);
+        var committedPublisher = AttachCommittedPublisher(agent);
+        await agent.ActivateAsync();
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        var request = new ChatRequestEvent { SessionId = "session-a", Prompt = "hello" };
+
+        await FluentActions.Awaiting(() => agent.HandleChatRequest(request))
+            .Should().ThrowAsync<InvalidOperationException>().WithMessage("*retry started*");
+        agent.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(1);
+
+        await agent.HandleChatRequest(request.Clone());
+
+        var retryEvents = (await inner.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Where(authorityEvent => authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted)
+            .ToArray();
+        retryEvents.Should().ContainSingle(authorityEvent =>
+            authorityEvent.Authority.ReconciliationKey.Attempt == 2);
+        committedPublisher.Published
+            .Where(published => published.StateEvent.EventData.Is(
+                AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(published => published.StateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Should().ContainSingle(authorityEvent =>
+                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted &&
+                authorityEvent.Authority.ReconciliationKey.Attempt == 2);
+
+        var replayed = CreateProfiledAgent(services, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.AgentProfileTurnAuthority.ReconciliationKey.Attempt.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task StartedAuthorityReplay_ShouldRespectFrozenExactRefRetryBoundaryWithoutReclassification()
+    {
+        var store = new InMemoryEventStoreForTests();
+        const string actorId = "role-profiled-replay";
+        await store.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-a",
+                    Prompt = "hello",
+                }),
+                StateEventFor(actorId, 2, new AgentProfileTurnAuthorityCommittedEvent
+                {
+                    CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                    Authority = TurnAuthority("session-a", 1, "intent-frozen", "skill-frozen"),
+                }),
+            ],
+            expectedVersion: 0);
+        var services = BuildServices(store);
+        var agent = CreateProfiledAgent(services, actorId);
+        await agent.ActivateAsync();
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        agent.PrepareCallCount.Should().Be(0);
+        agent.MaterializeCallCount.Should().Be(1);
+        agent.MaterializedAuthorities.Should().ContainSingle(authority =>
+            authority.ReconciliationKey.Attempt == 2 &&
+            authority.CandidateRoute.IntentId == "intent-frozen" &&
+            authority.SelectedExactSkillRef.Guid == "skill-frozen");
+
+        const string recoveryActorId = "role-profiled-replay-recovery";
+        var recoveryAuthority = TurnAuthority("session-recovery", 1, "intent-recovery", "skill-unused");
+        recoveryAuthority.SelectedExactSkillRef = null;
+        recoveryAuthority.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+        await store.AppendAsync(
+            recoveryActorId,
+            [
+                StateEventFor(recoveryActorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-recovery",
+                    Prompt = "recover",
+                }),
+                StateEventFor(recoveryActorId, 2, new AgentProfileTurnAuthorityCommittedEvent
+                {
+                    CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                    Authority = recoveryAuthority,
+                }),
+            ],
+            expectedVersion: 0);
+        var recoveryAgent = CreateProfiledAgent(services, recoveryActorId);
+        await recoveryAgent.ActivateAsync();
+        recoveryAgent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        await recoveryAgent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-recovery",
+            Prompt = "recover",
+        });
+        recoveryAgent.PrepareCallCount.Should().Be(0);
+        recoveryAgent.MaterializedAuthorities.Should().ContainSingle(authority =>
+            authority.ReconciliationKey.SessionId == "session-recovery" &&
+            authority.ReconciliationKey.Attempt == 1 &&
+            authority.SelectedExactSkillRef == null);
+        (await store.GetEventsAsync(recoveryActorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind)
+            .Should().NotContain(AgentProfileTurnAuthorityCommitKind.RetryStarted);
+    }
+
+    [Fact]
+    public async Task RetryReplay_ShouldCommitNextAttemptBeforeExactIoAndRejectLateResult()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        var operationLog = new List<string>();
+        var store = new RecordingBatchEventStore(inner, operationLog);
+        const string actorId = "role-profiled-retry";
+        await inner.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-a",
+                    Prompt = "hello",
+                }),
+                StateEventFor(actorId, 2, new AgentProfileTurnAuthorityCommittedEvent
+                {
+                    CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                    Authority = TurnAuthority("session-a", 1, "intent-a", "skill-a"),
+                }),
+            ],
+            expectedVersion: 0);
+        var services = BuildServices(store);
+        var agent = CreateProfiledAgent(services, actorId, operationLog: operationLog);
+        await agent.ActivateAsync();
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-a",
+            Prompt = "hello",
+        });
+
+        agent.MaterializedAuthorities.Should().ContainSingle(authority =>
+            authority.ReconciliationKey.Attempt == 2);
+        store.Batches.SelectMany(static batch => batch)
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Should().Contain(authorityEvent =>
+                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted &&
+                authorityEvent.Authority.ReconciliationKey.Attempt == 2);
+        operationLog.Should().ContainInOrder("commit:RETRY_STARTED:2", "materialize:2");
+
+        var stateBeforeLateResult = agent.State;
+        var late = new AgentProfileTurnAuthorityCommittedEvent
+        {
+            CommitKind = AgentProfileTurnAuthorityCommitKind.Reconcile,
+            Authority = TurnAuthority("session-a", 1, "intent-a", "skill-a"),
+        };
+        ApplyTurnAuthority(stateBeforeLateResult, late).Should().BeSameAs(stateBeforeLateResult);
+    }
+
+    [Fact]
+    public async Task LegacyIncompleteSessionWithoutAuthority_ShouldCommitRestrictedEmptyOnce()
+    {
+        var store = new InMemoryEventStoreForTests();
+        const string actorId = "role-profiled-legacy";
+        await store.AppendAsync(
+            actorId,
+            [StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+            {
+                SessionId = "session-legacy",
+                Prompt = "hello",
+            })],
+            expectedVersion: 0);
+        var services = BuildServices(store);
+        var agent = CreateProfiledAgent(services, actorId);
+        await agent.ActivateAsync();
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+        var request = new ChatRequestEvent { SessionId = "session-legacy", Prompt = "hello" };
+
+        await agent.HandleChatRequest(request);
+        await agent.HandleChatRequest(request.Clone());
+
+        agent.PrepareCallCount.Should().Be(0);
+        var legacyEvents = (await store.GetEventsAsync(actorId))
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Where(authorityEvent => authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.Initial)
+            .ToArray();
+        legacyEvents.Should().ContainSingle();
+        legacyEvents[0].Authority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.RestrictedEmpty);
+        legacyEvents[0].Authority.AuthorityCeilingToolNames.Should().BeEmpty();
+        legacyEvents[0].Authority.CandidateRoute.Should().BeNull();
+        legacyEvents[0].Authority.SelectedExactSkillRef.Should().BeNull();
+        legacyEvents[0].Authority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.LegacyAuthorityMissing);
+    }
+
+    [Fact]
+    public async Task LegacyIncompleteSessionWithActiveAuthority_ShouldReplaceItInSessionOrderAndReplay()
+    {
+        var store = new InMemoryEventStoreForTests();
+        const string actorId = "role-profiled-legacy-replacement";
+        await store.AppendAsync(
+            actorId,
+            [
+                StateEventFor(actorId, 1, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-active",
+                    Prompt = "active",
+                }),
+                StateEventFor(actorId, 2, new AgentProfileTurnAuthorityCommittedEvent
+                {
+                    CommitKind = AgentProfileTurnAuthorityCommitKind.Initial,
+                    Authority = TurnAuthority("session-active", 1, "intent-active", "skill-active"),
+                }),
+                StateEventFor(actorId, 3, new RoleChatSessionStartedEvent
+                {
+                    SessionId = "session-legacy",
+                    Prompt = "legacy",
+                }),
+            ],
+            expectedVersion: 0);
+        var services = BuildServices(store);
+        var agent = CreateProfiledAgent(services, actorId);
+        await agent.ActivateAsync();
+        agent.State.AgentProfileBinding = ProfileBinding("profile-a");
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            SessionId = "session-legacy",
+            Prompt = "legacy",
+        });
+
+        agent.PrepareCallCount.Should().Be(0);
+        var persisted = await store.GetEventsAsync(actorId);
+        var legacyStarted = persisted.Single(stateEvent =>
+            stateEvent.EventData.Is(RoleChatSessionStartedEvent.Descriptor) &&
+            stateEvent.EventData.Unpack<RoleChatSessionStartedEvent>().SessionId == "session-legacy");
+        var legacyInitial = persisted.Single(stateEvent =>
+            stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
+            stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>() is
+            {
+                CommitKind: AgentProfileTurnAuthorityCommitKind.Initial,
+                Authority.ReconciliationKey.SessionId: "session-legacy",
+            });
+        legacyInitial.Version.Should().Be(legacyStarted.Version + 1);
+        var legacyAuthority = legacyInitial.EventData
+            .Unpack<AgentProfileTurnAuthorityCommittedEvent>()
+            .Authority;
+        legacyAuthority.AuthorityKind.Should().Be(AgentProfileTurnAuthorityKind.RestrictedEmpty);
+        legacyAuthority.AuthorityCeilingToolNames.Should().BeEmpty();
+        legacyAuthority.DegradationReasons.Should().Equal(
+            AgentProfileTurnDegradationReason.LegacyAuthorityMissing);
+        persisted
+            .Where(stateEvent => stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+            .Select(stateEvent => stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>())
+            .Should().NotContain(authorityEvent =>
+                authorityEvent.CommitKind == AgentProfileTurnAuthorityCommitKind.RetryStarted);
+
+        var replayed = CreateProfiledAgent(services, actorId);
+        await replayed.ActivateAsync();
+        replayed.State.Sessions["session-active"].Sequence.Should().Be(1);
+        replayed.State.Sessions["session-active"].Completed.Should().BeFalse();
+        replayed.State.Sessions["session-legacy"].Sequence.Should().Be(2);
+        replayed.State.Sessions["session-legacy"].Completed.Should().BeTrue();
+        replayed.State.AgentProfileTurnAuthority.Should().BeEquivalentTo(legacyAuthority);
+    }
+
+    [Fact]
+    public async Task ParallelActorsAndSessions_ShouldKeepTurnAuthorityIsolated()
+    {
+        var store = new InMemoryEventStoreForTests();
+        var services = BuildServices(store);
+        var agentA = CreateProfiledAgent(services, "role-profiled-a", "intent-a", "skill-a");
+        var agentB = CreateProfiledAgent(services, "role-profiled-b", "intent-b", "skill-b");
+        agentA.State.AgentProfileBinding = ProfileBinding("profile-a");
+        agentB.State.AgentProfileBinding = ProfileBinding("profile-b");
+        await agentA.ActivateAsync();
+        await agentB.ActivateAsync();
+
+        await Task.WhenAll(
+            agentA.HandleChatRequest(new ChatRequestEvent { SessionId = "session-a", Prompt = "a" }),
+            agentB.HandleChatRequest(new ChatRequestEvent { SessionId = "session-b", Prompt = "b" }));
+
+        agentA.State.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-a");
+        agentA.State.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should().Be("intent-a");
+        agentA.State.AgentProfileTurnAuthority.SelectedExactSkillRef.Guid.Should().Be("skill-a");
+        agentB.State.AgentProfileTurnAuthority.ReconciliationKey.SessionId.Should().Be("session-b");
+        agentB.State.AgentProfileTurnAuthority.CandidateRoute.IntentId.Should().Be("intent-b");
+        agentB.State.AgentProfileTurnAuthority.SelectedExactSkillRef.Guid.Should().Be("skill-b");
+        (await store.GetEventsAsync("role-profiled-a")).Should().OnlyContain(stateEvent =>
+            stateEvent.AgentId == "role-profiled-a");
+        (await store.GetEventsAsync("role-profiled-b")).Should().OnlyContain(stateEvent =>
+            stateEvent.AgentId == "role-profiled-b");
+    }
+
     [Fact]
     public async Task InitializeRoleEvent_ShouldPersistAndReplayRoleState()
     {
@@ -277,7 +982,7 @@ public class RoleGAgentReplayContractTests
     [Fact]
     public async Task Completion_ShouldEmbedTerminalTailInOneCommittedFact()
     {
-        var store = new RecordingBatchEventStore();
+        var store = new RecordingTerminalBatchEventStore();
         var services = BuildServices(store);
         var provider = new CountingLlmProviderFactory("atomic answer");
         var agent = CreateAgent(services, "role-atomic-terminal", provider);
@@ -1175,6 +1880,159 @@ public class RoleGAgentReplayContractTests
         return agent;
     }
 
+    private static AgentProfileExecutionBinding ProfileBinding(string profileId)
+    {
+        var binding = AgentProfileExecutionBindingCodecTests.BuildExecutionBinding();
+        binding.Source.ProfileId = profileId;
+        return AgentProfileExecutionBindingCodec.Seal(binding);
+    }
+
+    private static ProfiledRoleGAgent CreateProfiledAgent(
+        IServiceProvider services,
+        string actorId,
+        string intentId = "intent-a",
+        string exactSkillGuid = "skill-a",
+        List<string>? operationLog = null,
+        ILLMProviderFactory? providerFactory = null,
+        ReconcileProposalMutation reconcileProposalMutation = ReconcileProposalMutation.None,
+        InitialAuthorityMutation initialAuthorityMutation = InitialAuthorityMutation.None)
+    {
+        var agent = new ProfiledRoleGAgent(
+            providerFactory ?? new CountingLlmProviderFactory("done"),
+            intentId,
+            exactSkillGuid,
+            operationLog,
+            reconcileProposalMutation,
+            initialAuthorityMutation)
+        {
+            Services = services,
+            EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
+        };
+        AssignActorId(agent, actorId);
+        return agent;
+    }
+
+    private static AgentProfileTurnAuthorityState MutateReconcileProposal(
+        AgentProfileTurnAuthorityState authority,
+        ReconcileProposalMutation mutation)
+    {
+        var proposal = authority.Clone();
+        switch (mutation)
+        {
+            case ReconcileProposalMutation.None:
+                break;
+            case ReconcileProposalMutation.WidenCeiling:
+                proposal.AuthorityCeilingToolNames.Add("outside-frozen-ceiling");
+                break;
+            case ReconcileProposalMutation.RecoveryWithEmptyCeiling:
+                proposal.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+                proposal.AuthorityCeilingToolNames.Clear();
+                break;
+            case ReconcileProposalMutation.RestrictedEmptyWithNonEmptyCeiling:
+                proposal.AuthorityKind = AgentProfileTurnAuthorityKind.RestrictedEmpty;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+        }
+
+        return proposal;
+    }
+
+    private static AgentProfileTurnAuthorityState MutateInitialAuthority(
+        AgentProfileTurnAuthorityState authority,
+        InitialAuthorityMutation mutation)
+    {
+        var initial = authority.Clone();
+        switch (mutation)
+        {
+            case InitialAuthorityMutation.None:
+                break;
+            case InitialAuthorityMutation.WrongSession:
+                initial.ReconciliationKey.SessionId = "session-other";
+                break;
+            case InitialAuthorityMutation.AttemptNotOne:
+                initial.ReconciliationKey.Attempt = 2;
+                break;
+            case InitialAuthorityMutation.RecoveryWithEmptyCeiling:
+                initial.AuthorityKind = AgentProfileTurnAuthorityKind.Recovery;
+                initial.AuthorityCeilingToolNames.Clear();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mutation), mutation, null);
+        }
+
+        return initial;
+    }
+
+    private static AgentProfileTurnAuthorityState TurnAuthority(
+        string sessionId,
+        int attempt,
+        string intentId,
+        string exactSkillGuid) =>
+        new()
+        {
+            ReconciliationKey = new AgentProfileTurnReconciliationKey
+            {
+                SessionId = sessionId,
+                Attempt = attempt,
+            },
+            CandidateRoute = new AgentProfileTurnCandidateRouteIdentity
+            {
+                SourceProfileId = "profile-a",
+                SourceStateVersion = 1,
+                PublishedRevision = 1,
+                PublishedSnapshotSha256 = ByteString.CopyFrom(new byte[32]),
+                ExecutionBindingSha256 = ByteString.CopyFrom(Enumerable.Repeat((byte)1, 32).ToArray()),
+                IntentId = intentId,
+            },
+            SelectedExactSkillRef = new ExactRemoteSkillRef
+            {
+                Guid = exactSkillGuid,
+                LiteralVersion = "1.0.0",
+            },
+            AuthorityKind = AgentProfileTurnAuthorityKind.Selected,
+            AuthorityCeilingToolNames = { "recovery", "task" },
+        };
+
+    private static RoleGAgentState ApplyTurnAuthority(
+        RoleGAgentState current,
+        AgentProfileTurnAuthorityCommittedEvent evt)
+    {
+        var method = typeof(RoleGAgent).GetMethod(
+            "ApplyAgentProfileTurnAuthorityCommitted",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+        return (RoleGAgentState)method!.Invoke(null, [current, evt])!;
+    }
+
+    private static bool IsSessionFact(StateEvent stateEvent, string sessionId) =>
+        stateEvent.EventData.Is(RoleChatSessionStartedEvent.Descriptor)
+            ? string.Equals(
+                stateEvent.EventData.Unpack<RoleChatSessionStartedEvent>().SessionId,
+                sessionId,
+                StringComparison.Ordinal)
+            : stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
+              string.Equals(
+                  stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>()
+                      .Authority.ReconciliationKey.SessionId,
+                  sessionId,
+                  StringComparison.Ordinal);
+
+    private static RecordingCommittedPublisherProxy AttachCommittedPublisher(RoleGAgent agent)
+    {
+        var publisherType = typeof(GAgentBase).Assembly.GetType(
+            "Aevatar.Foundation.Core.EventSourcing.ICommittedStateEventPublisher",
+            throwOnError: true)!;
+        var proxy = (RecordingCommittedPublisherProxy)DispatchProxy.Create(
+            publisherType,
+            typeof(RecordingCommittedPublisherProxy));
+        typeof(GAgentBase).GetProperty(
+                "CommittedStateEventPublisher",
+                BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(agent, proxy);
+        return proxy;
+    }
+
     private static StateEvent StateEventFor(string agentId, long version, IMessage evt) =>
         new()
         {
@@ -1226,7 +2084,7 @@ public class RoleGAgentReplayContractTests
         return (bool)property.GetValue(result)!;
     }
 
-    private sealed class RecordingBatchEventStore : IEventStore
+    private sealed class RecordingTerminalBatchEventStore : IEventStore
     {
         private readonly InMemoryEventStoreForTests _inner = new();
 
@@ -1384,6 +2242,18 @@ public class RoleGAgentReplayContractTests
             PublishAsync(evt, TopologyAudience.Self, ct, sourceEnvelope, options);
     }
 
+    private class RecordingCommittedPublisherProxy : DispatchProxy
+    {
+        public List<CommittedStateEventPublished> Published { get; } = [];
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (args is { Length: > 0 } && args[0] is CommittedStateEventPublished published)
+                Published.Add(published.Clone());
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class CountingLlmProviderFactory(string response) : ILLMProviderFactory, ILLMProvider
     {
         public int StreamCallCount { get; private set; }
@@ -1480,6 +2350,71 @@ public class RoleGAgentReplayContractTests
                     SafeMessage = "Connect or reauthorize api-github to continue.",
                 },
             };
+    }
+
+    private sealed class ProfiledRoleGAgent(
+        ILLMProviderFactory providerFactory,
+        string intentId,
+        string exactSkillGuid,
+        List<string>? operationLog,
+        ReconcileProposalMutation reconcileProposalMutation,
+        InitialAuthorityMutation initialAuthorityMutation)
+        : RoleGAgent(providerFactory)
+    {
+        public int PrepareCallCount { get; private set; }
+        public int MaterializeCallCount { get; private set; }
+        public List<AgentProfileTurnAuthorityState> MaterializedAuthorities { get; } = [];
+
+        protected override Task<AgentProfileTurnAuthorityPreparation?> PrepareAgentProfileTurnAuthorityAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            PrepareCallCount++;
+            return Task.FromResult<AgentProfileTurnAuthorityPreparation?>(
+                AgentProfileTurnAuthorityPreparation.Create(
+                    MutateInitialAuthority(
+                        TurnAuthority(request.SessionId, 1, intentId, exactSkillGuid),
+                        initialAuthorityMutation)));
+        }
+
+        protected override Task<AgentProfileTurnCatalogMaterialization?> MaterializeCommittedAgentProfileTurnCatalogAsync(
+            ChatRequestEvent request,
+            AgentToolExecutionContext toolContext,
+            AgentProfileTurnAuthorityState committedAuthority,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            operationLog?.Add($"materialize:{committedAuthority.ReconciliationKey.Attempt}");
+            MaterializeCallCount++;
+            MaterializedAuthorities.Add(committedAuthority.Clone());
+            var reconcileProposal = MutateReconcileProposal(committedAuthority, reconcileProposalMutation);
+            var catalog = new AgentProfileTurnCatalog(
+                reconcileProposal.AuthorityCeilingToolNames,
+                profilePromptLayer: null,
+                selectedSkillPromptLayer: null,
+                selectedIntentId: committedAuthority.CandidateRoute?.IntentId,
+                candidateIntentId: committedAuthority.CandidateRoute?.IntentId);
+            return Task.FromResult<AgentProfileTurnCatalogMaterialization?>(
+                AgentProfileTurnCatalogMaterialization.Create(catalog, reconcileProposal));
+        }
+    }
+
+    public enum ReconcileProposalMutation
+    {
+        None,
+        WidenCeiling,
+        RecoveryWithEmptyCeiling,
+        RestrictedEmptyWithNonEmptyCeiling,
+    }
+
+    public enum InitialAuthorityMutation
+    {
+        None,
+        WrongSession,
+        AttemptNotOne,
+        RecoveryWithEmptyCeiling,
     }
 
     private sealed class CountingEventModuleFactory : IEventModuleFactory<IEventHandlerContext>
@@ -1652,4 +2587,152 @@ public class RoleGAgentReplayContractTests
         public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
             inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
+
+    private sealed class RecordingBatchEventStore(
+        InMemoryEventStoreForTests inner,
+        List<string>? operationLog = null) : IEventStore
+    {
+        public List<IReadOnlyList<StateEvent>> Batches { get; } = [];
+
+        public async Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.ToArray();
+            var result = await inner.AppendAsync(agentId, batch, expectedVersion, ct);
+            Batches.Add(batch);
+            foreach (var authorityEvent in batch
+                         .Where(stateEvent => stateEvent.EventData.Is(
+                             AgentProfileTurnAuthorityCommittedEvent.Descriptor))
+                         .Select(stateEvent => stateEvent.EventData
+                             .Unpack<AgentProfileTurnAuthorityCommittedEvent>()))
+            {
+                operationLog?.Add(
+                    $"commit:{AuthorityCommitName(authorityEvent.CommitKind)}:{authorityEvent.Authority.ReconciliationKey.Attempt}");
+            }
+            return result;
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId, long? fromVersion = null, CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FailOnceOnInitialAuthorityBatchEventStore(InMemoryEventStoreForTests inner) : IEventStore
+    {
+        private bool _shouldFail = true;
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.ToArray();
+            if (_shouldFail && batch.Any(stateEvent =>
+                    stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
+                    stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind ==
+                    AgentProfileTurnAuthorityCommitKind.Initial))
+            {
+                _shouldFail = false;
+                throw new InvalidOperationException("Simulated authority batch failure.");
+            }
+
+            return inner.AppendAsync(agentId, batch, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId, long? fromVersion = null, CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FailOnceOnReconcileEventStore(InMemoryEventStoreForTests inner) : IEventStore
+    {
+        private bool _shouldFail = true;
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.ToArray();
+            if (_shouldFail && batch.Any(stateEvent =>
+                    stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
+                    stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind ==
+                    AgentProfileTurnAuthorityCommitKind.Reconcile))
+            {
+                _shouldFail = false;
+                throw new InvalidOperationException("Simulated reconcile failure.");
+            }
+
+            return inner.AppendAsync(agentId, batch, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId, long? fromVersion = null, CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private sealed class FailOnceOnRetryStartedEventStore(InMemoryEventStoreForTests inner) : IEventStore
+    {
+        private bool _shouldFail = true;
+
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var batch = events.ToArray();
+            if (_shouldFail && batch.Any(stateEvent =>
+                    stateEvent.EventData.Is(AgentProfileTurnAuthorityCommittedEvent.Descriptor) &&
+                    stateEvent.EventData.Unpack<AgentProfileTurnAuthorityCommittedEvent>().CommitKind ==
+                    AgentProfileTurnAuthorityCommitKind.RetryStarted))
+            {
+                _shouldFail = false;
+                throw new InvalidOperationException("Simulated retry started failure.");
+            }
+
+            return inner.AppendAsync(agentId, batch, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId, long? fromVersion = null, CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
+    }
+
+    private static string AuthorityCommitName(AgentProfileTurnAuthorityCommitKind commitKind) => commitKind switch
+    {
+        AgentProfileTurnAuthorityCommitKind.Initial => "INITIAL",
+        AgentProfileTurnAuthorityCommitKind.RetryStarted => "RETRY_STARTED",
+        AgentProfileTurnAuthorityCommitKind.Reconcile => "RECONCILE",
+        _ => "UNSPECIFIED",
+    };
 }

@@ -172,7 +172,12 @@ public static class ServiceCollectionExtensions
             UnavailableSystemAgentProfileOrnnAccessTokenProvider>();
         services.TryAddSingleton<ISystemAgentProfileProvisioningService, SystemAgentProfileProvisioningService>();
         services.TryAddSingleton<ISystemAgentProfileReadinessService, SystemAgentProfileReadinessService>();
-        services.TryAddSingleton<ISystemAgentProfileBootstrapSignal, SystemAgentProfileBootstrapSignal>();
+        services.TryAddSingleton<SystemAgentProfileBootstrapSignal>();
+        services.TryAddSingleton<ISystemAgentProfileBootstrapSignal>(sp =>
+            sp.GetRequiredService<SystemAgentProfileBootstrapSignal>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IAgentProfileReadModelMaterializationObserver,
+            SystemAgentProfileBootstrapMaterializationObserver>());
         services.TryAddTransient<AgentProfileNamespaceGAgent>();
         services.TryAddTransient<AgentProfileGAgent>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<

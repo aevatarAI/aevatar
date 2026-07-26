@@ -9,7 +9,9 @@
     <RootNamespace>Aevatar.AI.ToolProviders.Ornn.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
+    <ProjectReference Include="..\..\tools\Aevatar.Tools.AgentProfileRollout\Aevatar.Tools.AgentProfileRollout.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Scripting\Aevatar.AI.ToolProviders.Scripting.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
@@ -35,5 +37,10 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\TestAgentToolContexts.cs" Link="TestAgentToolContexts.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\src\Aevatar.Mainnet.Host.Api\Profiles\nyxid-chat\**\*"
+             Link="Profiles\nyxid-chat\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

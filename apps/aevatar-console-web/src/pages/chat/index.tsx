@@ -37,10 +37,11 @@ import {
   isRawObserved,
 } from "./chatEventAdapter";
 import {
+  chatRequestMayHaveBeenAccepted,
   extractChatHistoryContext,
   extractChatStreamArtifacts,
   readChatStreamFrames,
-  startChatStreamWithProjectionRetry,
+  startChatStreamWithHistoryRefreshRetry,
 } from "./chatApi";
 import { ChatHistoryApiError, chatHistoryApi } from "./chatHistoryApi";
 import { ChatInput, ChatMessageBubble } from "./chatPresentation";
@@ -49,6 +50,7 @@ import type {
   ChatSessionState,
   ChatStudioTarget,
   ChatUsageSummary,
+  ChatCreateRecovery,
   ConversationMeta,
   LocalChatStatus,
   RuntimeEvent,
@@ -66,11 +68,13 @@ import { t } from "@/shared/i18n/messages";
 type ConversationState = {
   clientId: string;
   conversationId?: string;
-  createIdempotencyKey?: string;
+  createCommandId?: string;
+  createRequestPrompt?: string;
   expectedTurnCount: number;
   latestTurnId?: string;
   messages: ChatMessage[];
   sessionId: string;
+  stateVersion?: number;
   status: LocalChatStatus;
   target?: ChatStudioTarget;
   title: string;
@@ -81,7 +85,7 @@ const EMPTY_CONVERSATION_IDS: ReadonlySet<string> = new Set();
 
 type HistoryReconciliationState =
   | { status: "pending" }
-  | { message: string; status: "failed" };
+  | { message: string; retryable: boolean; status: "failed" };
 
 type PendingConversation = {
   conversation: ConversationState;
@@ -122,13 +126,19 @@ function createClientId(): string {
 function createDraftConversation(): ConversationState {
   return {
     clientId: createClientId(),
-    createIdempotencyKey: createClientId(),
+    createCommandId: createClientId(),
     expectedTurnCount: 0,
     messages: [],
     sessionId: createClientId(),
     status: "draft",
     title: t("pages.chat.index.newChat", "New chat"),
   };
+}
+
+function isContinuationStateVersion(
+  value: number | undefined
+): value is number {
+  return Number.isSafeInteger(value) && (value ?? 0) > 0;
 }
 
 export function hydrateStoredMessages(
@@ -275,6 +285,38 @@ function abortableDelay(delayMs: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+async function recoverCreateIdentity(
+  scopeId: string,
+  commandId: string,
+  signal: AbortSignal
+): Promise<ChatCreateRecovery | null> {
+  for (const delayMs of [0, 300, 900, 1_800]) {
+    await abortableDelay(delayMs, signal);
+    try {
+      return await chatHistoryApi.recoverCreate(scopeId, commandId, signal);
+    } catch (error) {
+      if (!(error instanceof ChatHistoryApiError) || error.status !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
+}
+
+function bindCreateRecovery(
+  conversation: ConversationState,
+  recovery: ChatCreateRecovery
+): ConversationState {
+  return {
+    ...conversation,
+    conversationId: recovery.conversationId,
+    expectedTurnCount: conversation.expectedTurnCount + 1,
+    latestTurnId: recovery.turnId,
+    stateVersion: Math.max(conversation.stateVersion ?? 0, recovery.stateVersion),
+  };
+}
+
 function createChatMessage(
   role: ChatMessage["role"],
   content: string,
@@ -309,6 +351,57 @@ function cloneStepInfo(steps?: readonly StepInfo[]): StepInfo[] {
 
 function cloneToolCallInfo(toolCalls?: readonly ToolCallInfo[]): ToolCallInfo[] {
   return (toolCalls ?? []).map((toolCall) => ({ ...toolCall }));
+}
+
+function hydrateAuthoritativeMessages(
+  storedMessages: readonly StoredChatMessage[],
+  localMessages: readonly ChatMessage[],
+  latestTurnId: string | undefined
+): ChatMessage[] {
+  const localMessagesById = new Map(
+    localMessages.map((message) => [message.id, message] as const)
+  );
+  const latestLocalAssistant = latestTurnId
+    ? [...localMessages]
+        .reverse()
+        .find((message) => message.role === "assistant")
+    : undefined;
+
+  return storedMessages.map((storedMessage) => {
+    const authoritativeMessage = hydrateStoredMessages([storedMessage])[0];
+    const localMessage =
+      localMessagesById.get(storedMessage.id) ??
+      (storedMessage.role === "assistant" &&
+      storedMessage.turnId === latestTurnId
+        ? latestLocalAssistant
+        : undefined);
+    if (!localMessage) {
+      return authoritativeMessage;
+    }
+
+    return {
+      ...authoritativeMessage,
+      ...(localMessage.events
+        ? { events: [...localMessage.events] }
+        : {}),
+      ...(localMessage.pendingApproval
+        ? { pendingApproval: { ...localMessage.pendingApproval } }
+        : {}),
+      ...(localMessage.pendingRunIntervention
+        ? {
+            pendingRunIntervention: {
+              ...localMessage.pendingRunIntervention,
+            },
+          }
+        : {}),
+      ...(localMessage.steps
+        ? { steps: cloneStepInfo(localMessage.steps) }
+        : {}),
+      ...(localMessage.toolCalls
+        ? { toolCalls: cloneToolCallInfo(localMessage.toolCalls) }
+        : {}),
+    };
+  });
 }
 
 function resolveEventTimestamp(events: readonly RuntimeEvent[]): number {
@@ -520,6 +613,7 @@ const ChatPage: React.FC = () => {
   const queryClient = useQueryClient();
   const activeConversationRef = useRef<ConversationState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const createRecoveryControllerRef = useRef<AbortController | null>(null);
   const detailRequestRef = useRef("");
   const reconciliationControllersRef = useRef(
     new Map<string, AbortController>()
@@ -682,6 +776,10 @@ const ChatPage: React.FC = () => {
     ? scopedPendingConversations.get(activeConversation.conversationId)
         ?.reconciliation
     : undefined;
+  const isConversationActionDisabled =
+    !canStartChat ||
+    detailLoadState.status === "loading" ||
+    Boolean(activeHistoryReconciliation);
   const hasFailedHistoryReconciliation = [
     ...scopedPendingConversations.values(),
   ].some((pending) => pending.reconciliation.status === "failed");
@@ -691,6 +789,8 @@ const ChatPage: React.FC = () => {
 
   useLayoutEffect(() => {
     abortControllerRef.current?.abort();
+    createRecoveryControllerRef.current?.abort();
+    createRecoveryControllerRef.current = null;
     for (const controller of reconciliationControllersRef.current.values()) {
       controller.abort();
     }
@@ -715,28 +815,6 @@ const ChatPage: React.FC = () => {
   }, [activeConversation]);
 
   useEffect(() => {
-    const serverConversations = conversationsQuery.data ?? [];
-    setPendingConversations((current) => {
-      const next = new Map(current);
-      let changed = false;
-      for (const [conversationId, pendingConversation] of current) {
-        const serverMeta = serverConversations.find(
-          (conversation) => conversation.id === conversationId
-        );
-        if (
-          serverMeta &&
-          serverMeta.messageCount >=
-            pendingConversation.conversation.expectedTurnCount
-        ) {
-          next.delete(conversationId);
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [conversationsQuery.data]);
-
-  useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView?.({
       behavior: "smooth",
       block: "end",
@@ -747,6 +825,7 @@ const ChatPage: React.FC = () => {
     () => () => {
       scopeEpochRef.current += 1;
       abortControllerRef.current?.abort();
+      createRecoveryControllerRef.current?.abort();
       for (const controller of reconciliationControllersRef.current.values()) {
         controller.abort();
       }
@@ -773,6 +852,8 @@ const ChatPage: React.FC = () => {
       }
 
       abortControllerRef.current?.abort();
+      createRecoveryControllerRef.current?.abort();
+      createRecoveryControllerRef.current = null;
       const pendingConversation = pendingConversations.get(conversationId);
       if (pendingConversation) {
         detailRequestRef.current = createClientId();
@@ -803,7 +884,7 @@ const ChatPage: React.FC = () => {
       setSession(createIdleSession(scopeId));
 
       try {
-        const storedMessages = await chatHistoryApi.loadConversation(
+        const detail = await chatHistoryApi.loadConversation(
           scopeId,
           conversationId
         );
@@ -813,15 +894,16 @@ const ChatPage: React.FC = () => {
 
         const restoredConversation: ConversationState = {
           ...placeholder,
-          messages: hydrateStoredMessages(storedMessages),
-          status: resolveStoredConversationStatus(storedMessages),
+          messages: hydrateStoredMessages(detail.messages),
+          stateVersion: detail.stateVersion,
+          status: resolveStoredConversationStatus(detail.messages),
         };
         activeConversationRef.current = restoredConversation;
         setActiveConversation(restoredConversation);
         setDetailLoadState({ status: "idle" });
         setSession({
           ...createIdleSession(scopeId),
-          status: storedMessages.length > 0 ? "success" : "idle",
+          status: detail.messages.length > 0 ? "success" : "idle",
           updatedAt: meta?.updatedAt ? Date.parse(meta.updatedAt) : undefined,
         });
       } catch (error) {
@@ -847,6 +929,8 @@ const ChatPage: React.FC = () => {
     }
 
     abortControllerRef.current?.abort();
+    createRecoveryControllerRef.current?.abort();
+    createRecoveryControllerRef.current = null;
     detailRequestRef.current = createClientId();
     const conversation = createDraftConversation();
     activeConversationRef.current = conversation;
@@ -949,7 +1033,10 @@ const ChatPage: React.FC = () => {
           try {
             await abortableDelay(delayMs, controller.signal);
             const nextConversations =
-              await chatHistoryApi.listConversationMetas(scopeId);
+              await chatHistoryApi.listConversationMetas(
+                scopeId,
+                controller.signal
+              );
             if (
               controller.signal.aborted ||
               scopeEpochRef.current !== reconciliationScopeEpoch
@@ -964,32 +1051,33 @@ const ChatPage: React.FC = () => {
             const serverMeta = nextConversations.find(
               (item) => item.id === conversationId
             );
-            let observedExpectedTurn = Boolean(
-              serverMeta &&
-                serverMeta.messageCount >= conversation.expectedTurnCount
+            if (!serverMeta) {
+              continue;
+            }
+
+            const detail = await chatHistoryApi.loadConversation(
+              scopeId,
+              conversationId,
+              controller.signal
             );
             if (
-              !observedExpectedTurn &&
-              serverMeta &&
-              conversation.latestTurnId
+              controller.signal.aborted ||
+              scopeEpochRef.current !== reconciliationScopeEpoch
             ) {
-              const storedMessages = await chatHistoryApi.loadConversation(
-                scopeId,
-                conversationId
-              );
-              if (
-                controller.signal.aborted ||
-                scopeEpochRef.current !== reconciliationScopeEpoch
-              ) {
-                return;
-              }
-              observedExpectedTurn = storedMessages.some(
-                (message) =>
-                  message.role === "assistant" &&
-                  message.turnId === conversation.latestTurnId
-              );
+              return;
             }
-            if (!serverMeta || !observedExpectedTurn) {
+            const observedExpectedTurn = conversation.latestTurnId
+              ? detail.messages.some(
+                  (message) =>
+                    message.role === "assistant" &&
+                    message.turnId === conversation.latestTurnId
+                )
+              : serverMeta.messageCount >= conversation.expectedTurnCount;
+            if (
+              !observedExpectedTurn ||
+              !isContinuationStateVersion(detail.stateVersion) ||
+              detail.stateVersion < (conversation.stateVersion ?? 0)
+            ) {
               continue;
             }
 
@@ -1008,6 +1096,15 @@ const ChatPage: React.FC = () => {
                 expectedTurnCount: Math.max(
                   serverMeta.messageCount,
                   conversation.expectedTurnCount
+                ),
+                stateVersion: Math.max(
+                  current.stateVersion ?? 0,
+                  detail.stateVersion
+                ),
+                messages: hydrateAuthoritativeMessages(
+                  detail.messages,
+                  current.messages,
+                  conversation.latestTurnId
                 ),
                 title: serverMeta.title || current.title,
               };
@@ -1043,6 +1140,7 @@ const ChatPage: React.FC = () => {
             conversation: pending.conversation,
             reconciliation: {
               message: failureMessage,
+              retryable: true,
               status: "failed",
             },
           });
@@ -1062,7 +1160,11 @@ const ChatPage: React.FC = () => {
   const handleRetryReconciliation = useCallback(
     (conversationId: string) => {
       const pending = pendingConversations.get(conversationId);
-      if (!pending) {
+      if (
+        !pending ||
+        pending.reconciliation.status !== "failed" ||
+        !pending.reconciliation.retryable
+      ) {
         return;
       }
 
@@ -1079,6 +1181,29 @@ const ChatPage: React.FC = () => {
 
       const trimmedInput = input.trim();
       if (!trimmedInput) {
+        return;
+      }
+
+      if (
+        conversation.conversationId &&
+        pendingConversations.has(conversation.conversationId)
+      ) {
+        return;
+      }
+      if (
+        conversation.conversationId &&
+        !isContinuationStateVersion(conversation.stateVersion)
+      ) {
+        setSession({
+          ...createIdleSession(scopeId),
+          error: t(
+            "pages.chat.index.historySynchronizing",
+            "Conversation history is still synchronizing. Try again shortly."
+          ),
+          status: "error",
+          updatedAt: Date.now(),
+        });
+        reconcileConversation(conversation);
         return;
       }
 
@@ -1104,8 +1229,19 @@ const ChatPage: React.FC = () => {
           : conversation.title;
       const nextStatus: LocalChatStatus =
         conversation.status === "needs_confirmation" ? "creating" : "streaming";
+      const createCommandId = conversation.conversationId
+        ? undefined
+        : !conversation.createRequestPrompt ||
+            conversation.createRequestPrompt === trimmedInput
+          ? conversation.createCommandId ?? conversation.clientId
+          : createClientId();
       const startedConversation: ConversationState = {
         ...conversation,
+        createCommandId,
+        createRequestPrompt: conversation.conversationId
+          ? undefined
+          : trimmedInput,
+        latestTurnId: undefined,
         messages: [...conversation.messages, userMessage, assistantMessage],
         status: nextStatus,
         title,
@@ -1116,11 +1252,15 @@ const ChatPage: React.FC = () => {
       let acceptedChatHistoryContext: ReturnType<
         typeof extractChatHistoryContext
       > = null;
+      let createRecoveryAttempted = false;
+      let latestRefreshedDetail:
+        | Awaited<ReturnType<typeof chatHistoryApi.loadConversation>>
+        | undefined;
       let streamingConversation = startedConversation;
-      const createIdempotencyKey =
-        conversation.createIdempotencyKey ?? conversation.clientId;
 
       abortControllerRef.current?.abort();
+      createRecoveryControllerRef.current?.abort();
+      createRecoveryControllerRef.current = null;
       if (conversation.conversationId) {
         reconciliationControllersRef.current
           .get(conversation.conversationId)
@@ -1139,15 +1279,38 @@ const ChatPage: React.FC = () => {
       });
 
       try {
-        const response = await startChatStreamWithProjectionRetry(
+        const response = await startChatStreamWithHistoryRefreshRetry(
           {
+            commandId: createCommandId,
             conversation: conversation.conversationId
-              ? { conversationId: conversation.conversationId }
-              : { createIdempotencyKey },
+              ? {
+                  conversationId: conversation.conversationId,
+                  minimumStateVersion: conversation.stateVersion as number,
+                }
+              : { conversationId: null },
             prompt: trimmedInput,
             sessionId: conversation.sessionId,
           },
-          controller.signal
+          controller.signal,
+          conversation.conversationId
+            ? {
+                refreshMinimumStateVersion: async (signal) => {
+                  const detail = await chatHistoryApi.loadConversation(
+                    scopeId,
+                    conversation.conversationId as string,
+                    signal
+                  );
+                  if (
+                    detail.stateVersion >= (conversation.stateVersion as number) &&
+                    (!latestRefreshedDetail ||
+                      detail.stateVersion > latestRefreshedDetail.stateVersion)
+                  ) {
+                    latestRefreshedDetail = detail;
+                  }
+                  return detail.stateVersion;
+                },
+              }
+            : undefined
         );
 
         for await (const frame of readChatStreamFrames(response, {
@@ -1175,7 +1338,10 @@ const ChatPage: React.FC = () => {
                 acceptedChatHistoryContext.scopeId ||
                 chatHistoryContext.conversationId !==
                   acceptedChatHistoryContext.conversationId ||
-                chatHistoryContext.turnId !== acceptedChatHistoryContext.turnId)
+                chatHistoryContext.turnId !==
+                  acceptedChatHistoryContext.turnId ||
+                chatHistoryContext.stateVersion !==
+                  acceptedChatHistoryContext.stateVersion)
             ) {
               throw new Error("Chat History context changed during the stream.");
             }
@@ -1187,6 +1353,11 @@ const ChatPage: React.FC = () => {
                 conversationId: chatHistoryContext.conversationId,
                 expectedTurnCount: conversation.expectedTurnCount + 1,
                 latestTurnId: chatHistoryContext.turnId,
+                stateVersion: Math.max(
+                  streamingConversation.stateVersion ?? 0,
+                  latestRefreshedDetail?.stateVersion ?? 0,
+                  chatHistoryContext.stateVersion
+                ),
               };
               activeConversationRef.current = streamingConversation;
               setActiveConversation((current) =>
@@ -1241,51 +1412,33 @@ const ChatPage: React.FC = () => {
         if (scopeEpochRef.current !== runScopeEpoch) {
           return;
         }
-        if (!receivedChatHistoryContext) {
-          let recovery: Awaited<ReturnType<typeof chatHistoryApi.recoverCreate>> | null =
-            null;
-          for (const delayMs of [0, 300, 900, 1_800]) {
-            await abortableDelay(delayMs, controller.signal);
-            try {
-              recovery = await chatHistoryApi.recoverCreate(
-                scopeId,
-                createIdempotencyKey
-              );
-              break;
-            } catch (error) {
-              if (
-                !(error instanceof ChatHistoryApiError) ||
-                error.status !== 404
-              ) {
-                throw error;
-              }
-            }
-          }
-          if (!recovery) {
-            throw new Error(
-              t(
-                "pages.chat.index.missingChatHistoryContext",
-                "Chat completed without a conversation context."
-              )
+        if (!receivedChatHistoryContext && createCommandId) {
+          createRecoveryAttempted = true;
+          const recovery = await recoverCreateIdentity(
+            scopeId,
+            createCommandId,
+            controller.signal
+          );
+          if (recovery) {
+            receivedChatHistoryContext = true;
+            streamingConversation = bindCreateRecovery(
+              streamingConversation,
+              recovery
+            );
+            activeConversationRef.current = streamingConversation;
+            setActiveConversation((current) =>
+              current?.clientId === conversation.clientId
+                ? streamingConversation
+                : current
             );
           }
-          acceptedChatHistoryContext = {
-            conversationId: recovery.conversationId,
-            scopeId,
-            turnId: recovery.turnId,
-          };
-          receivedChatHistoryContext = true;
-          streamingConversation = {
-            ...streamingConversation,
-            conversationId: recovery.conversationId,
-            expectedTurnCount: conversation.expectedTurnCount + 1,
-            latestTurnId: recovery.turnId,
-          };
-          activeConversationRef.current = streamingConversation;
-          setActiveConversation((current) =>
-            current?.clientId === conversation.clientId
-              ? streamingConversation
-              : current
+        }
+        if (!receivedChatHistoryContext) {
+          throw new Error(
+            t(
+              "pages.chat.index.missingChatHistoryContext",
+              "Chat completed without a conversation context."
+            )
           );
         }
 
@@ -1336,23 +1489,87 @@ const ChatPage: React.FC = () => {
         if (scopeEpochRef.current !== runScopeEpoch) {
           return;
         }
-        const message =
-          controller.signal.aborted && !accumulator.errorText
+        const shouldRecoverCreate = Boolean(
+          !conversation.conversationId &&
+            !receivedChatHistoryContext &&
+            !createRecoveryAttempted &&
+            createCommandId &&
+            chatRequestMayHaveBeenAccepted(error)
+        );
+        if (shouldRecoverCreate && !controller.signal.aborted) {
+          try {
+            const recovery = await recoverCreateIdentity(
+              scopeId,
+              createCommandId as string,
+              controller.signal
+            );
+            if (recovery) {
+              receivedChatHistoryContext = true;
+              streamingConversation = bindCreateRecovery(
+                streamingConversation,
+                recovery
+              );
+            }
+          } catch {
+            // Preserve the accepted request's original stream failure.
+          }
+        }
+        const isAmbiguousContinuation = Boolean(
+          conversation.conversationId &&
+            !receivedChatHistoryContext &&
+            chatRequestMayHaveBeenAccepted(error)
+        );
+        const message = isAmbiguousContinuation
+          ? t(
+              "pages.chat.index.continuationContextMissing",
+              "The continuation may have been accepted, but its turn identity was not received. Reload this page before continuing."
+            )
+          : controller.signal.aborted && !accumulator.errorText
             ? t("pages.chat.index.chatStopped", "Chat stopped.")
             : error instanceof Error
               ? error.message
               : String(error);
         accumulator.errorText = message;
+        const failedMessages = streamingConversation.messages.map((entry) =>
+          entry.id === assistantMessageId
+            ? {
+                ...entry,
+                ...buildAssistantMessagePatch(accumulator, "error"),
+              }
+            : entry
+        );
+        const refreshedDetail = latestRefreshedDetail;
+        const authoritativeMessages = refreshedDetail
+          ? hydrateAuthoritativeMessages(
+              refreshedDetail.messages,
+              streamingConversation.messages,
+              undefined
+            )
+          : undefined;
+        const authoritativeMessageIds = new Set(
+          authoritativeMessages?.map((entry) => entry.id) ?? []
+        );
+        const failedAttemptMessages = failedMessages.filter(
+          (entry) =>
+            (entry.id === userMessage.id || entry.id === assistantMessageId) &&
+            !authoritativeMessageIds.has(entry.id)
+        );
         const failedConversation: ConversationState = {
           ...streamingConversation,
-          messages: streamingConversation.messages.map((entry) =>
-            entry.id === assistantMessageId
-              ? {
-                  ...entry,
-                  ...buildAssistantMessagePatch(accumulator, "error"),
-                }
-              : entry
-          ),
+          ...(refreshedDetail
+            ? {
+                ...(receivedChatHistoryContext
+                  ? {}
+                  : { latestTurnId: undefined }),
+                stateVersion: Math.max(
+                  streamingConversation.stateVersion ?? 0,
+                  refreshedDetail.stateVersion
+                ),
+              }
+            : {}),
+          messages: authoritativeMessages
+            ? [...authoritativeMessages, ...failedAttemptMessages]
+            : failedMessages,
           status: "error",
         };
         activeConversationRef.current = failedConversation;
@@ -1360,8 +1577,67 @@ const ChatPage: React.FC = () => {
           current?.clientId === conversation.clientId ? failedConversation : current
         );
         setSession(buildSessionFromAccumulator(scopeId, accumulator, "error"));
-        if (failedConversation.conversationId) {
+        if (
+          failedConversation.conversationId &&
+          receivedChatHistoryContext
+        ) {
           reconcileConversation(failedConversation);
+        } else if (
+          failedConversation.conversationId &&
+          isAmbiguousContinuation
+        ) {
+          setPendingConversations((current) => {
+            const next = new Map(current);
+            next.set(failedConversation.conversationId as string, {
+              conversation: failedConversation,
+              reconciliation: {
+                message,
+                retryable: false,
+                status: "failed",
+              },
+            });
+            return next;
+          });
+        } else if (shouldRecoverCreate && controller.signal.aborted) {
+          const recoveryController = new AbortController();
+          createRecoveryControllerRef.current = recoveryController;
+          void recoverCreateIdentity(
+            scopeId,
+            createCommandId as string,
+            recoveryController.signal
+          )
+            .then((recovery) => {
+              if (
+                !recovery ||
+                recoveryController.signal.aborted ||
+                scopeEpochRef.current !== runScopeEpoch
+              ) {
+                return;
+              }
+
+              void queryClient.invalidateQueries({
+                queryKey: ["chat-history", scopeId],
+              });
+              const current = activeConversationRef.current;
+              if (
+                current?.clientId !== conversation.clientId ||
+                current.conversationId ||
+                current.createCommandId !== createCommandId
+              ) {
+                return;
+              }
+
+              const recoveredConversation = bindCreateRecovery(current, recovery);
+              activeConversationRef.current = recoveredConversation;
+              setActiveConversation(recoveredConversation);
+              reconcileConversation(recoveredConversation);
+            })
+            .catch(() => undefined)
+            .finally(() => {
+              if (createRecoveryControllerRef.current === recoveryController) {
+                createRecoveryControllerRef.current = null;
+              }
+            });
         }
       } finally {
         if (abortControllerRef.current === controller) {
@@ -1369,7 +1645,14 @@ const ChatPage: React.FC = () => {
         }
       }
     },
-    [canStartChat, isStreaming, reconcileConversation, scopeId]
+    [
+      canStartChat,
+      isStreaming,
+      pendingConversations,
+      queryClient,
+      reconcileConversation,
+      scopeId,
+    ]
   );
 
   const handleSend = useCallback(() => {
@@ -1594,7 +1877,8 @@ const ChatPage: React.FC = () => {
                       </span>
                     </span>
                   </button>
-                  {conversation.historyReconciliation?.status === "failed" ? (
+                  {conversation.historyReconciliation?.status === "failed" &&
+                  conversation.historyReconciliation.retryable ? (
                     <Tooltip
                       title={t(
                         "pages.chat.index.retryHistorySave",
@@ -1804,17 +2088,19 @@ const ChatPage: React.FC = () => {
             activeConversation?.conversationId ? (
             <Alert
               action={
-                <Button
-                  icon={<ReloadOutlined />}
-                  onClick={() =>
-                    handleRetryReconciliation(
-                      activeConversation.conversationId as string
-                    )
-                  }
-                  size="small"
-                >
-                  {t("pages.chat.index.retry", "Retry")}
-                </Button>
+                activeHistoryReconciliation.retryable ? (
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={() =>
+                      handleRetryReconciliation(
+                        activeConversation.conversationId as string
+                      )
+                    }
+                    size="small"
+                  >
+                    {t("pages.chat.index.retry", "Retry")}
+                  </Button>
+                ) : undefined
               }
               banner
               description={activeHistoryReconciliation.message}
@@ -1913,10 +2199,12 @@ const ChatPage: React.FC = () => {
               </div>
             ) : (
               <Space
+                className="aevatar-chat-message-list"
                 direction="vertical"
                 size={14}
                 style={{
-                  maxWidth: 920,
+                  marginInline: "auto",
+                  maxWidth: 1440,
                   width: "100%",
                 }}
               >
@@ -1942,6 +2230,7 @@ const ChatPage: React.FC = () => {
                         )}
                       </Typography.Text>
                       <Button
+                        disabled={isConversationActionDisabled}
                         icon={<SendOutlined />}
                         onClick={handleConfirmCreate}
                         type="primary"
@@ -1987,7 +2276,7 @@ const ChatPage: React.FC = () => {
               </Space>
             ) : null}
             <ChatInput
-              disabled={!canStartChat || detailLoadState.status === "loading"}
+              disabled={isConversationActionDisabled}
               isStreaming={isStreaming}
               onChange={setPrompt}
               onSend={handleSend}

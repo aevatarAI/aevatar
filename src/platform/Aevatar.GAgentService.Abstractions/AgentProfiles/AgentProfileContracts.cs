@@ -9,14 +9,22 @@ public sealed record CreateAgentProfileRequest(
     string DisplayName,
     string Purpose,
     string Instructions,
-    AgentProfileToolPolicy ToolPolicy)
+    AgentProfileToolPolicy ToolPolicy,
+    AgentProfileToolPolicy? RecoveryToolPolicy = null)
 {
     private AgentProfileToolPolicy _toolPolicy = ToolPolicy.Clone();
+    private AgentProfileToolPolicy? _recoveryToolPolicy = RecoveryToolPolicy?.Clone();
 
     public AgentProfileToolPolicy ToolPolicy
     {
         get => _toolPolicy.Clone();
         init => _toolPolicy = value.Clone();
+    }
+
+    public AgentProfileToolPolicy? RecoveryToolPolicy
+    {
+        get => _recoveryToolPolicy?.Clone();
+        init => _recoveryToolPolicy = value?.Clone();
     }
 }
 
@@ -24,27 +32,43 @@ public sealed record UpdateAgentProfileDraftRequest(
     string DisplayName,
     string Purpose,
     string Instructions,
-    AgentProfileToolPolicy ToolPolicy)
+    AgentProfileToolPolicy ToolPolicy,
+    AgentProfileToolPolicy? RecoveryToolPolicy = null)
 {
     private AgentProfileToolPolicy _toolPolicy = ToolPolicy.Clone();
+    private AgentProfileToolPolicy? _recoveryToolPolicy = RecoveryToolPolicy?.Clone();
 
     public AgentProfileToolPolicy ToolPolicy
     {
         get => _toolPolicy.Clone();
         init => _toolPolicy = value.Clone();
     }
+
+    public AgentProfileToolPolicy? RecoveryToolPolicy
+    {
+        get => _recoveryToolPolicy?.Clone();
+        init => _recoveryToolPolicy = value?.Clone();
+    }
 }
 
 public sealed record UpsertAgentProfileSkillBindingRequest(
     AgentProfileSkillActivationMode ActivationMode,
-    ExactOrnnSkillReference Skill)
+    ExactOrnnSkillReference Skill,
+    AgentProfileSkillRoutingPolicy? RoutingPolicy = null)
 {
     private ExactOrnnSkillReference _skill = Skill.Clone();
+    private AgentProfileSkillRoutingPolicy? _routingPolicy = RoutingPolicy?.Clone();
 
     public ExactOrnnSkillReference Skill
     {
         get => _skill.Clone();
         init => _skill = value.Clone();
+    }
+
+    public AgentProfileSkillRoutingPolicy? RoutingPolicy
+    {
+        get => _routingPolicy?.Clone();
+        init => _routingPolicy = value?.Clone();
     }
 }
 

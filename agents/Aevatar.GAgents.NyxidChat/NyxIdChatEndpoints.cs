@@ -1,15 +1,15 @@
 using System.IdentityModel.Tokens.Jwt;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
-using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Capabilities;
 using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
-using Aevatar.Capabilities;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -141,6 +141,9 @@ public static partial class NyxIdChatEndpoints
             NyxIdChatConversationCreateStatus.RouteRejected => ChatRouteRejected(receipt.Reject),
             NyxIdChatConversationCreateStatus.RegistrationUnavailable => Results.Json(
                 new { error = "Conversation registration is not admission-visible" },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            NyxIdChatConversationCreateStatus.AdmissionUnavailable => Results.Json(
+                new { error = "Agent Profile admission is unavailable" },
                 statusCode: StatusCodes.Status503ServiceUnavailable),
             _ => Results.Json(
                 new { error = "Conversation creation failed" },
