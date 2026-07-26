@@ -15,6 +15,61 @@ public sealed class ElasticsearchStudioWorkspaceVersionRegressionStorePortTests
     private const string ScopeId = "scope-alpha";
     private static readonly string ActorId = StudioWorkspaceConventions.BuildActorId(ScopeId);
 
+    [Theory]
+    [InlineData(0, 4, "Expected source state version must be positive.")]
+    [InlineData(4, 4, "Expected document state version must exceed the expected source state version.")]
+    [InlineData(4, 3, "Expected document state version must exceed the expected source state version.")]
+    public async Task DeleteIfMatchesAsync_WhenManifestIsNotAStrictPositiveRegression_ShouldRejectBeforeStorageAccess(
+        long expectedSourceStateVersion,
+        long expectedDocumentStateVersion,
+        string expectedMessage)
+    {
+        var eventStore = new RecordingEventStore(
+            expectedSourceStateVersion,
+            expectedSourceStateVersion);
+        var repairStore = new RecordingRepairStore
+        {
+            Lease = Lease(Document(expectedDocumentStateVersion)),
+        };
+        var port = new ElasticsearchStudioWorkspaceVersionRegressionStorePort(
+            eventStore,
+            repairStore);
+        var request = Request() with
+        {
+            ExpectedSourceStateVersion = expectedSourceStateVersion,
+            ExpectedDocumentStateVersion = expectedDocumentStateVersion,
+        };
+
+        var act = () => port.DeleteIfMatchesAsync(request);
+
+        var exception = await act.Should().ThrowAsync<ArgumentOutOfRangeException>();
+        exception.Which.ParamName.Should().Be("request");
+        exception.WithMessage($"*{expectedMessage}*");
+        eventStore.VersionRequests.Should().BeEmpty();
+        repairStore.InspectKeys.Should().BeEmpty();
+        repairStore.DeleteLeases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteIfMatchesAsync_WhenExpectedActorIsNotCanonical_ShouldRejectBeforeStorageAccess()
+    {
+        var eventStore = new RecordingEventStore();
+        var repairStore = new RecordingRepairStore();
+        var port = new ElasticsearchStudioWorkspaceVersionRegressionStorePort(
+            eventStore,
+            repairStore);
+
+        var result = await port.DeleteIfMatchesAsync(Request() with
+        {
+            ExpectedActorId = StudioWorkspaceConventions.BuildActorId("scope-other"),
+        });
+
+        result.Should().Be(StudioWorkspaceReplicaDeleteDisposition.SourceChanged);
+        eventStore.VersionRequests.Should().BeEmpty();
+        repairStore.InspectKeys.Should().BeEmpty();
+        repairStore.DeleteLeases.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task DeleteIfMatchesAsync_WhenAuthorityChangesAfterLeaseValidation_ShouldNotDelete()
     {
@@ -46,11 +101,11 @@ public sealed class ElasticsearchStudioWorkspaceVersionRegressionStorePortTests
             RepairReason: "restore authoritative workspace",
             RequestedBySubjectId: "operator-alpha");
 
-    private static StudioWorkspaceCurrentStateDocument Document() => new()
+    private static StudioWorkspaceCurrentStateDocument Document(long stateVersion = 4) => new()
     {
         Id = ActorId,
         ActorId = ActorId,
-        StateVersion = 4,
+        StateVersion = stateVersion,
         LastEventId = "event-4",
     };
 

@@ -56,8 +56,36 @@ public sealed class StudioWorkspaceProjectionRebuildTests
         var publication = await fixture.Publications.Reader.ReadAsync();
         publication.StateEvent.Version.Should().Be(2);
         publication.StateEvent.EventId.Should().Be($"rebuild:{actor.Id}:2");
+        var rebuiltState = publication.StateRoot.Unpack<StudioWorkspaceState>();
+        rebuiltState.Drafts.Should().ContainKey(WorkflowId);
+        rebuiltState.Drafts[WorkflowId].Version.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task RepairProjection_WhenCurrentVersionEqualsMinimum_ShouldRepublishCommittedState()
+    {
+        var eventStore = new InMemoryEventStore();
+        var fixture = await CreateActorAsync(eventStore);
+        await using var subscription = fixture.Subscription;
+        var actor = fixture.Actor;
+        await SaveDraftAsync(actor);
+        _ = await fixture.Publications.Reader.ReadAsync();
+        var eventsBefore = await eventStore.GetEventsAsync(actor.Id);
+
+        await actor.HandleEventAsync(Envelope(actor.Id, new RepairStudioWorkspaceProjectionCommand
+        {
+            WorkspaceId = actor.Id,
+            ScopeId = ScopeId,
+            MinimumStateVersion = 1,
+            RepairRequestId = "repair-equal",
+        }));
+
+        (await eventStore.GetEventsAsync(actor.Id)).Should().HaveCount(eventsBefore.Count);
+        var publication = await fixture.Publications.Reader.ReadAsync();
+        publication.StateEvent.Version.Should().Be(1);
+        publication.StateEvent.EventId.Should().Be($"rebuild:{actor.Id}:1");
         publication.StateRoot.Unpack<StudioWorkspaceState>()
-            .Drafts.Should().ContainKey(WorkflowId);
+            .Drafts[WorkflowId].Version.Should().Be(1);
     }
 
     [Fact]

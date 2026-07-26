@@ -49,6 +49,20 @@ public sealed class ElasticsearchStudioWorkspaceVersionRegressionStorePort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.ExpectedSourceStateVersion <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "Expected source state version must be positive.");
+        }
+
+        if (request.ExpectedDocumentStateVersion <= request.ExpectedSourceStateVersion)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "Expected document state version must exceed the expected source state version.");
+        }
+
         var normalizedScopeId = StudioWorkspaceConventions.NormalizeScopeId(request.ScopeId);
         var actorId = StudioWorkspaceConventions.BuildActorId(normalizedScopeId);
         if (!string.Equals(request.ExpectedActorId, actorId, StringComparison.Ordinal))

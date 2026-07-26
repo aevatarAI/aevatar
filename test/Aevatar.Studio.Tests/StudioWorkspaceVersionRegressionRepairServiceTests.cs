@@ -238,14 +238,17 @@ public sealed class StudioWorkspaceVersionRegressionRepairServiceTests
         republish.Dispatches.Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task RepairAsync_AfterDelete_ShouldDispatchWithNonRequestCancellation()
+    [Theory]
+    [InlineData(StudioWorkspaceReplicaDeleteDisposition.Deleted)]
+    [InlineData(StudioWorkspaceReplicaDeleteDisposition.AlreadyAbsent)]
+    public async Task RepairAsync_AfterDeleteAllowsContinuation_ShouldDispatchWithNonRequestCancellation(
+        StudioWorkspaceReplicaDeleteDisposition deleteDisposition)
     {
         using var requestCancellation = new CancellationTokenSource();
         var store = new FakeStorePort
         {
             Inspection = Inspection(sourceVersion: 1, documentVersion: 4),
-            DeleteDisposition = StudioWorkspaceReplicaDeleteDisposition.Deleted,
+            DeleteDisposition = deleteDisposition,
             OnDelete = requestCancellation.Cancel,
         };
         var republish = new FakeRepublishPort();
