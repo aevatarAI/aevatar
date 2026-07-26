@@ -79,7 +79,8 @@ deferred AgentRun credential strip. Bearer tokens remain transient and are not
 persisted.
 
 `ChannelNyxIdConnectedServiceInventoryToolSource` remains a channel-only
-`IAgentToolSource`. During request-local discovery it follows this authority
+`IAgentToolSource`. Discovery only exposes a list-only lazy tool and performs no
+capability issuance or HTTP. When that tool executes, it follows this authority
 order:
 
 1. reuse a verified sender runtime token when one is available;
@@ -166,8 +167,8 @@ Regression coverage must prove the behavior at observable boundaries:
    `nyxid_service_inventory`, then emits the final answer;
 4. neither `code_execute` nor a CLI command is offered or invoked as part of
    the inventory flow;
-5. narrow capability discovery calls `GET /api/v1/keys` with the sender token
-   and never the bot-owner token;
+5. tool discovery issues no capability and performs no HTTP; tool execution
+   calls `GET /api/v1/keys` with the sender token and never the bot-owner token;
 6. inventory failure produces a sanitized tool result and no unconditional
    `/init` guidance;
 7. CardKit create, stream, and finalize behavior remains covered by the

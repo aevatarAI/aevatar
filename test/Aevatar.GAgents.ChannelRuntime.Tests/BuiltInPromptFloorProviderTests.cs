@@ -37,8 +37,10 @@ public sealed class BuiltInPromptFloorProviderTests
     [InlineData("organization-scoped sharing mechanism")]
     [InlineData("provider-specific typed sharing tool")]
     [InlineData("use_skill(skill=\"nyxid\")")]
-    [InlineData("call `nyxid_service_inventory` directly")]
-    [InlineData("Do not run `nyxid service list`")]
+    [InlineData("then call `nyxid_service_inventory`")]
+    [InlineData("temporary read failure")]
+    [InlineData("binding is explicitly missing or revoked")]
+    [InlineData("`nyxid service list`")]
     [InlineData("ornn_search_skills")]
     [InlineData("api-github-pat")]
     [InlineData("provider-backed relay registration")]
@@ -49,6 +51,26 @@ public sealed class BuiltInPromptFloorProviderTests
     public void Floor_RetainsMandatoryCapabilityInstructions(string requiredMarker)
     {
         FloorContent().Should().Contain(requiredMarker);
+    }
+
+    [Fact]
+    public void Floor_LoadsNyxIdSkillBeforeReadingSenderInventory()
+    {
+        var floor = FloorContent();
+        var skillCall = floor.IndexOf(
+            "first call `use_skill(skill=\"nyxid\")`",
+            StringComparison.Ordinal);
+        var inventoryCall = floor.IndexOf(
+            "then call `nyxid_service_inventory`",
+            StringComparison.Ordinal);
+
+        skillCall.Should().BeGreaterThanOrEqualTo(0);
+        inventoryCall.Should().BeGreaterThan(skillCall);
+        floor.Should().Contain("current sender's live inventory");
+        floor.Should().Contain("Do not call `code_execute`");
+        floor.Should().NotContain("typed-tool exception");
+        floor.Should().NotContain("call `nyxid_service_inventory` directly");
+        floor.Should().NotContain("Do not call `use_skill`");
     }
 
     [Fact]
