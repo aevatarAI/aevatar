@@ -172,8 +172,6 @@ public static class ServiceCollectionExtensions
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
-        services.TryAddSingleton<INyxIdConnectedServiceInventoryQuery>(sp =>
-            sp.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>());
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
             sp.GetService<INyxIdAuthorizationCatalogQueryPort>() is { } catalogQueryPort

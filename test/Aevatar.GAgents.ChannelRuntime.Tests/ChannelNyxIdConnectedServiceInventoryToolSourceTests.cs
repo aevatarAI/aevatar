@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -220,33 +219,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
             .IssueByBindingIdAsync(default!, default!, default);
     }
 
-    [Fact]
-    public async Task QueryAsync_WhenNyxIdInventoryEndpointRejectsRequest_ReturnsFailureInsteadOfEmptyInventory()
-    {
-        var handler = new InventoryHandler(HttpStatusCode.Unauthorized);
-        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
-        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
-            options,
-            new TestNyxIdApiClientFactory(new NyxIdApiClient(
-                options,
-                new HttpClient(handler))),
-            logger: NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
-        var context = AgentToolExecutionContext.Empty with
-        {
-            Credentials = new AgentToolCredentials(
-                NyxIdAccessToken: null,
-                NyxIdOrgToken: null,
-                SenderNyxIdAccessToken: "strict-sender-token"),
-            SenderBinding = new AgentToolSenderBindingContext("bnd-sender-1"),
-        };
-
-        var result = await ((INyxIdConnectedServiceInventoryQuery)source).QueryAsync(context);
-
-        result.Inventory.Should().BeNull();
-        result.Failure.Should().Be(NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable);
-    }
-
-    private sealed class InventoryHandler(HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
+    private sealed class InventoryHandler : HttpMessageHandler
     {
         public string? Authorization { get; private set; }
         public string? RequestPath { get; private set; }
@@ -257,10 +230,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         {
             Authorization = request.Headers.Authorization?.ToString();
             RequestPath = request.RequestUri?.AbsolutePath;
-            return Task.FromResult(new HttpResponseMessage(statusCode)
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                Content = new StringContent(statusCode == HttpStatusCode.OK
-                    ? """
+                Content = new StringContent("""
                     {
                       "keys": [
                         {
@@ -273,8 +245,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                         }
                       ]
                     }
-                    """
-                    : """{"error":"unauthorized"}"""),
+                    """),
             });
         }
     }

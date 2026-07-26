@@ -2706,51 +2706,15 @@ public sealed class ChannelConversationTurnRunnerTests
     }
 
     [Fact]
-    public async Task RunInboundAsync_ShouldReplyWithBoundNyxIdServiceInventory_WithoutStartingLlmOrSkillFlow()
+    public async Task RunInboundAsync_WhenBoundSenderAsksForNyxIdInventory_QueuesAgentRunWithExactAuthority()
     {
         var queryPort = Substitute.For<IExternalIdentityBindingQueryPort>();
         queryPort.ResolveAsync(
                 Arg.Any<ExternalSubjectRef>(),
                 Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd-user-1" }));
-        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
-        issuer.IssueByBindingIdAsync(
-                Arg.Any<ExternalSubjectRef>(),
-                "bnd-user-1",
-                Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new CapabilityHandle
-            {
-                AccessToken = "inventory-user-token",
-                Scope = "proxy",
-            }));
-        var inventoryHandler = new RecordingJsonHandler(
-            """
-            {
-              "keys": [
-                {
-                  "id": "user-service-github-1",
-                  "slug": "github",
-                  "service_id": "catalog-github",
-                  "label": "GitHub",
-                  "is_active": true,
-                  "credential_source": { "type": "personal" }
-                }
-              ]
-            }
-            """);
-        var inventoryOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
-        var inventoryClient = new NyxIdApiClient(
-            inventoryOptions,
-            new HttpClient(inventoryHandler) { BaseAddress = new Uri("https://nyx.test") });
-        var inventorySource = new ChannelNyxIdConnectedServiceInventoryToolSource(
-            inventoryOptions,
-            new TestNyxIdApiClientFactory(inventoryClient),
-            issuer,
-            NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
         var services = new ServiceCollection()
             .AddSingleton(queryPort)
-            .AddSingleton(issuer)
-            .AddSingleton<INyxIdConnectedServiceInventoryQuery>(inventorySource)
             .BuildServiceProvider();
         var adapter = new RecordingPlatformAdapter();
         var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
@@ -2765,98 +2729,14 @@ public sealed class ChannelConversationTurnRunnerTests
             CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        result.LlmReplyRequest.Should().BeNull("a bound account inventory query must not enter LLM or skill routing");
-        adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("GitHub");
-        adapter.Replies[0].ReplyText.Should().Contain("user-service-github-1");
-        adapter.Replies[0].ReplyText.Should().NotContain("UNAUTHENTICATED");
-        adapter.Replies[0].ReplyText.Should().NotContain("/init");
-        inventoryHandler.Requests.Should().ContainSingle(request =>
-            request.Path == "/api/v1/keys" &&
-            request.Authorization == "Bearer inventory-user-token");
-        await issuer.Received(1).IssueByBindingIdAsync(
-            Arg.Is<ExternalSubjectRef>(subject =>
-                subject.Platform == "lark" &&
-                subject.Tenant == "scope-1" &&
-                subject.ExternalUserId == "ou_user_1"),
-            "bnd-user-1",
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunInboundAsync_ShouldPassResolvedBindingSubjectToConnectedServiceInventoryQuery()
-    {
-        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
-        bindingQuery.ResolveAsync(
-                Arg.Any<ExternalSubjectRef>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd-user-1" }));
-        var inventoryQuery = Substitute.For<INyxIdConnectedServiceInventoryQuery>();
-        inventoryQuery.QueryAsync(
-                Arg.Any<AgentToolExecutionContext>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(NyxIdConnectedServiceInventoryQueryResult.Succeeded(
-                new NyxIdServiceInventoryResult())));
-        var services = new ServiceCollection()
-            .AddSingleton(bindingQuery)
-            .AddSingleton(inventoryQuery)
-            .BuildServiceProvider();
-        var adapter = new RecordingPlatformAdapter();
-        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
-
-        var result = await runner.RunInboundAsync(
-            BuildInboundActivity(
-                "我在 nyxid 上有什么服务",
-                "msg-nyxid-inventory-authority-1",
-                ConversationScope.DirectMessage,
-                "oc_p2p_chat_1"),
-            CancellationToken.None);
-
-        result.Success.Should().BeTrue();
-        await inventoryQuery.Received(1).QueryAsync(
-            Arg.Is<AgentToolExecutionContext>(context =>
-                context.NyxIdAuthority.Platform == "lark" &&
-                context.NyxIdAuthority.Tenant == "scope-1" &&
-                context.NyxIdAuthority.ExternalUserId == "ou_user_1"),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task RunInboundAsync_WhenConnectedServiceInventoryQueryThrows_ShouldKeepBindingSemanticsHonest()
-    {
-        var bindingQuery = Substitute.For<IExternalIdentityBindingQueryPort>();
-        bindingQuery.ResolveAsync(
-                Arg.Any<ExternalSubjectRef>(),
-                Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<BindingId?>(new BindingId { Value = "bnd-user-1" }));
-        var inventoryQuery = Substitute.For<INyxIdConnectedServiceInventoryQuery>();
-        inventoryQuery.QueryAsync(
-                Arg.Any<AgentToolExecutionContext>(),
-                Arg.Any<CancellationToken>())
-            .Returns<Task<NyxIdConnectedServiceInventoryQueryResult>>(_ =>
-                throw new HttpRequestException("NyxID inventory unavailable"));
-        var services = new ServiceCollection()
-            .AddSingleton(bindingQuery)
-            .AddSingleton(inventoryQuery)
-            .BuildServiceProvider();
-        var adapter = new RecordingPlatformAdapter();
-        var runner = CreateRunner(BuildRegistrationQueryPort(), adapter, services);
-
-        var result = await runner.RunInboundAsync(
-            BuildInboundActivity(
-                "我在 nyxid 上有什么服务",
-                "msg-nyxid-inventory-failure-1",
-                ConversationScope.DirectMessage,
-                "oc_p2p_chat_1"),
-            CancellationToken.None);
-
-        result.Success.Should().BeTrue();
-        result.LlmReplyRequest.Should().BeNull();
-        adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().Contain("已绑定");
-        adapter.Replies[0].ReplyText.Should().Contain("本次未能读取服务清单");
-        adapter.Replies[0].ReplyText.Should().NotContain("UNAUTHENTICATED");
-        adapter.Replies[0].ReplyText.Should().NotContain("/init");
+        result.LlmReplyRequest.Should().NotBeNull(
+            "natural-language intent and answer composition belong to AgentRun and the loaded NyxID skill");
+        adapter.Replies.Should().BeEmpty("the turn runner must not render a fixed inventory reply");
+        var toolContext = AgentToolExecutionContextMapper.FromPayload(result.LlmReplyRequest!.ToolContext);
+        toolContext.SenderBinding.BindingId.Should().Be("bnd-user-1");
+        toolContext.NyxIdAuthority.Platform.Should().Be("lark");
+        toolContext.NyxIdAuthority.Tenant.Should().Be("scope-1");
+        toolContext.NyxIdAuthority.ExternalUserId.Should().Be("ou_user_1");
     }
 
     [Fact]
@@ -4883,8 +4763,7 @@ public sealed class ChannelConversationTurnRunnerTests
             relayTailTextSender: relayTailTextSender ?? new LarkChannelRelayTailTextSender(
                 new LarkOutboundDispatcher(nyxClient, NullLogger.Instance),
                 NullLogger<LarkChannelRelayTailTextSender>.Instance),
-            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier(),
-            connectedServiceInventoryQuery: services.GetService<INyxIdConnectedServiceInventoryQuery>());
+            relayProxyResponseClassifier: relayProxyResponseClassifier ?? new LarkRelayProxyResponseClassifier());
     }
 
     private static IServiceProvider BuildAgentBuilderToolServices(IScopeWorkflowQueryPort? workflowQueryPort = null)

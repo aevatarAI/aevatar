@@ -617,9 +617,6 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>()
             .Should()
             .BeSameAs(channelInventorySource);
-        app.Services.GetRequiredService<INyxIdConnectedServiceInventoryQuery>()
-            .Should()
-            .BeSameAs(channelInventorySource);
         var replyGenerator = app.Services.GetRequiredService<IConversationReplyGenerator>();
         var channelToolSources = replyGenerator.GetType()
             .GetField("_toolSources", BindingFlags.Instance | BindingFlags.NonPublic)!

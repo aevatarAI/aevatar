@@ -4,7 +4,6 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
-using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -16,9 +15,7 @@ namespace Aevatar.GAgents.NyxidChat;
 /// otherwise a narrow request-local inventory capability is re-issued from the
 /// sender's typed binding identity. Ambient bot-owner credentials are never used.
 /// </summary>
-public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
-    IAgentToolSource,
-    INyxIdConnectedServiceInventoryQuery
+public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentToolSource
 {
     private readonly NyxIdToolOptions? _options;
     private readonly INyxIdApiClientFactory? _apiClientFactory;
@@ -98,72 +95,6 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
                 subject.Tenant,
                 subject.ExternalUserId);
             return [new InventoryUnavailableTool("inventory_capability_unavailable")];
-        }
-    }
-
-    async Task<NyxIdConnectedServiceInventoryQueryResult> INyxIdConnectedServiceInventoryQuery.QueryAsync(
-        AgentToolExecutionContext context,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-
-        using var scope = AgentToolContextScope.Push(context);
-        var inventoryTool = (await DiscoverToolsAsync(ct).ConfigureAwait(false))
-            .SingleOrDefault(static tool =>
-                string.Equals(tool.Name, "nyxid_service_inventory", StringComparison.Ordinal));
-        if (inventoryTool is null)
-        {
-            return NyxIdConnectedServiceInventoryQueryResult.Failed(
-                NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable);
-        }
-
-        var resultJson = await inventoryTool.ExecuteAsync("{}", ct).ConfigureAwait(false);
-        if (TryReadFailure(resultJson, out var failure))
-            return NyxIdConnectedServiceInventoryQueryResult.Failed(failure);
-
-        try
-        {
-            return NyxIdConnectedServiceInventoryQueryResult.Succeeded(
-                JsonParser.Default.Parse<NyxIdServiceInventoryResult>(resultJson));
-        }
-        catch (InvalidProtocolBufferException)
-        {
-            return NyxIdConnectedServiceInventoryQueryResult.Failed(
-                NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable);
-        }
-    }
-
-    private static bool TryReadFailure(
-        string? resultJson,
-        out NyxIdConnectedServiceInventoryQueryFailure failure)
-    {
-        failure = NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable;
-        if (string.IsNullOrWhiteSpace(resultJson))
-            return true;
-
-        try
-        {
-            using var document = JsonDocument.Parse(resultJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                !document.RootElement.TryGetProperty("error", out var error) ||
-                error.ValueKind != JsonValueKind.String)
-            {
-                return false;
-            }
-
-            failure = error.GetString() switch
-            {
-                "inventory_binding_revoked" => NyxIdConnectedServiceInventoryQueryFailure.BindingRevoked,
-                "inventory_scope_unavailable" => NyxIdConnectedServiceInventoryQueryFailure.ScopeUnavailable,
-                "inventory_source_unavailable" => NyxIdConnectedServiceInventoryQueryFailure.SourceUnavailable,
-                "inventory_capability_unavailable" => NyxIdConnectedServiceInventoryQueryFailure.CapabilityUnavailable,
-                _ => NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable,
-            };
-            return true;
-        }
-        catch (JsonException)
-        {
-            return true;
         }
     }
 
