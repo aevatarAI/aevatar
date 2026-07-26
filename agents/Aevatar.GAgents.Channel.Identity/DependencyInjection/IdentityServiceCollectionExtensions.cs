@@ -239,6 +239,8 @@ public static class IdentityServiceCollectionExtensions
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<INyxIdConnectedServiceInventoryCapabilityIssuer>(sp =>
+            sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBindingRetirementPort>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
 

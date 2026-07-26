@@ -86,7 +86,11 @@ proxy 请求只接受相对路径，拒绝绝对 URL、fragment、query-in-path 
 
 完整动态工具集位于独立 tool set `nyxid.connected_services`（`ToolSetNames.NyxIdConnectedServices`）。其中 update、route、delete、request 与 OpenAPI operation 工具默认不并入通用 chat surface，chat route policy 必须显式引用该 tool set 或包含它的组合 tool set。
 
-只读 `nyxid_service_inventory` 另由窄的 `NyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator，使已绑定的 Lark sender 可以直接查询自己的 exact connected-service 实例，而不开放任何变更或通用调用能力。它不注册到全局 `IAgentToolSource` 集合，也不并入 `workspace.default`，避免污染 actor/voice 工具面，或与显式 `nyxid.connected_services` tool set 中的同名 inventory 发生对象身份碰撞。它与完整 tool set 使用同一 `/keys` live discovery、同一 exact instance 契约和同一 request-local user token；不得回退到 Host/sandbox 中 `nyxid service list` 的 CLI 登录态。inventory 查询不以 OpenAPI spec 是否可用作为“已连接”判据，并在连接清单为空时返回空的 typed result；动态 operation 工具仍要求有效 proxy spec。
+只读 `nyxid_service_inventory` 由 `ChannelNyxIdConnectedServiceInventoryToolSource` 显式挂入 channel reply generator。该 channel source 组合底层 `NyxIdConnectedServiceInventoryToolSource`，但授权语义只属于当前 channel sender：存在已验证的 sender runtime token 时复用；否则根据 typed `ExternalSubjectRef + bindingId` 通过 `INyxIdConnectedServiceInventoryCapabilityIssuer` 当场签发 inventory capability。inventory capability 只证明绑定账号可以读取自己的 connected-service inventory，不证明该 binding 已覆盖 Aevatar LLM route、Ornn、Sandbox 等全部 runtime resources；后者仍由严格 `INyxIdCapabilityBroker` 独立校验。不得用 bot owner token 代替 sender inventory authority。
+
+明确询问“我在 NyxID 上已连接/可用哪些服务”的 channel 文本走确定性只读 query：binding read model 先证明 sender 已绑定，再调用上述 typed inventory source 并直接渲染结果，不进入 LLM、`use_skill`、`code_execute` 或 sandbox CLI。成功、空清单和查询失败都必须保持 binding 语义诚实：失败只能表达“账号已绑定，但本次清单查询失败”，不得据此宣称未绑定或建议重新 `/init`。catalog 浏览、连接、授权、维护或服务调用请求不属于该窄 intent，继续走原有 typed handoff/profile 流程。
+
+它不注册到全局 `IAgentToolSource` 集合，也不并入 `workspace.default`，避免污染 actor/voice 工具面，或与显式 `nyxid.connected_services` tool set 中的同名 inventory 发生对象身份碰撞。它与完整 tool set 使用同一 `/keys` live discovery、同一 exact instance 契约；不得回退到 Host/sandbox 中 `nyxid service list` 的 CLI 登录态。inventory 查询不以 OpenAPI spec 是否可用作为“已连接”判据，并在连接清单为空时返回空的 typed result；动态 operation 工具仍要求有效 proxy spec。
 
 `ToolSetResponsesToolProvider` 通过 `AgentToolContextScope` 提供当前请求的 typed token context，`NyxIdConnectedServiceToolSource` 在该作用域内 live 发现。未配置 NyxID base URL、没有 user token、发现失败或身份冲突时，不暴露相关工具。发现结果随 profile turn catalog 和最终 `LLMRequest.Tools` 冻结；执行路径不能再按名称回查 actor-level `ToolManager`。
 
@@ -116,5 +120,7 @@ Voice realtime attach 也遵循同一边界。带 `voice-tool:` credential ref �
 - `src/Aevatar.AI.ToolProviders.NyxId/ConnectedServices/NyxIdServiceInstanceClient.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceToolSource.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdConnectedServiceInventoryToolSource.cs`
+- `agents/Aevatar.GAgents.NyxidChat/ChannelNyxIdConnectedServiceInventoryToolSource.cs`
+- `agents/Aevatar.GAgents.Channel.Identity.Abstractions/INyxIdConnectedServiceInventoryCapabilityIssuer.cs`
 - `src/Aevatar.AI.ToolProviders.NyxId/NyxIdApiClient.cs`
 - `src/Aevatar.AI.ToolProviders.ToolSetRegistry/ToolSetNames.cs`

@@ -44,6 +44,7 @@ using Aevatar.GAgents.Channel.Identity.Broker;
 using Aevatar.GAgents.Channel.NyxIdRelay.Outbound;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.Device;
+using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.NyxidChat.AgentProfiles;
 using Aevatar.GAgents.StatusDashboard.Executors;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
@@ -598,6 +599,14 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetRequiredService<NyxIdConnectedServiceInventoryToolSource>()
             .Should()
             .NotBeNull();
+        var channelInventorySource = app.Services
+            .GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>();
+        app.Services.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>()
+            .Should()
+            .BeSameAs(channelInventorySource);
+        app.Services.GetRequiredService<INyxIdConnectedServiceInventoryQuery>()
+            .Should()
+            .BeSameAs(channelInventorySource);
         var replyGenerator = app.Services.GetRequiredService<IConversationReplyGenerator>();
         var channelToolSources = replyGenerator.GetType()
             .GetField("_toolSources", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -606,7 +615,9 @@ public sealed class MainnetHostCompositionTests
             .BeAssignableTo<IReadOnlyList<IAgentToolSource>>()
             .Subject;
         channelToolSources.Should().ContainSingle(source =>
-            source is NyxIdConnectedServiceInventoryToolSource);
+                source is ChannelNyxIdConnectedServiceInventoryToolSource)
+            .Which.Should()
+            .BeSameAs(channelInventorySource);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);

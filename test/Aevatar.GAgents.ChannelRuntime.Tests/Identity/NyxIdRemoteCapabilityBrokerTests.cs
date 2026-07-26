@@ -357,6 +357,28 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task IssueConnectedServiceInventoryByBindingIdAsync_DoesNotRequireAevatarRuntimeResources()
+    {
+        var accessToken = CreateAccessToken([RequiredAevatarResource]);
+        var handler = new SequenceHandler(TokenExchangeResponse(accessToken));
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        var result = await ((INyxIdConnectedServiceInventoryCapabilityIssuer)broker)
+            .IssueByBindingIdAsync(
+                SampleSubject(),
+                "bnd-inventory-only");
+
+        result.AccessToken.Should().Be(accessToken);
+        result.Scope.Should().Be(AevatarOAuthClientScopes.Proxy);
+        handler.Requests.Should().ContainSingle();
+        var bindingExchangeForm = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
+        bindingExchangeForm["scope"].Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.Proxy);
+        bindingExchangeForm.ContainsKey("resource").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task IssueShortLivedByBindingIdAsync_AcceptsAllServicesGrantFromAuthoritativeCatalog()
     {
         const string optionalResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/user-selected-service";

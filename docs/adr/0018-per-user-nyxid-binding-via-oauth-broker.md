@@ -8,7 +8,7 @@ owner: eanzhao
 
 ## Update 2026-07-24 - channel 历史 binding 通过 replacement 恢复
 
-`/whoami` 只证明 Aevatar 的 external-subject binding pointer 存在；Lark sender 能否读取自己的 NyxID connected-service inventory，还取决于该 binding 能否换出覆盖当前必需 service 的短期 capability。旧 grant 缺少新增必需 service 时，正常恢复入口是再次 `/init`，而不是使用 bot owner credential、容器内 NyxID CLI 登录态或 catalog 猜测用户已经连接的服务。
+`/whoami` 证明 Aevatar 的 external-subject binding pointer 存在。读取该 sender 自己的 NyxID connected-service inventory 只要求该 exact binding 能换出窄的 request-local inventory capability；它不要求 binding 同时覆盖 Aevatar LLM route、Ornn、Sandbox 等全部 runtime services。完整 runtime route readiness 仍由严格 capability broker 独立校验。inventory 查询失败不得反推“未绑定”，也不得建议 `/init`；`/init` 只用于真实 binding 缺失/撤销、用户主动补充 runtime service 授权或 same-owner renewal。任何路径都不得使用 bot owner credential、容器内 NyxID CLI 登录态或 catalog 猜测用户已经连接的服务。
 
 历史 Aevatar authorize URL 没有把 exact external subject 写入 NyxID binding。NyxID 的 in-place grant review 会联合校验 OAuth client、authenticated user、`binding_grant_id` 与 binding 中已经保存的 external subject；因此给旧 binding 的 review URL 临时补 external subject 仍会因“缺失 subject”或“subject 不匹配”失败，不能完成迁移。当前 channel contract 改为：
 
@@ -20,7 +20,7 @@ owner: eanzhao
 - owner 不同则拒绝并撤销新 binding。切换 NyxID 账号仍必须显式 `/unbind` 后再 `/init`，禁止 `/init` 静默换号。
 - callback 继续兼容 NyxID 返回 `binding_updated=true` 的旧请求，但正常 channel `/init` 不再发起该协议。
 
-授权补齐后，channel turn 继续通过 binding token-exchange 获得 request-local user capability；“我连接了哪些服务”由 `nyxid_service_inventory` 基于该用户 token 和 NyxID live service surface 回答，不运行 `nyxid service list` 去读取 Host 进程的 CLI 登录态。
+普通 runtime turn 继续通过严格 binding token-exchange 获得覆盖配置化必需 services 的 request-local user capability；“我连接了哪些服务”则走独立的窄 inventory capability 和 NyxID live service surface，不进入 LLM/skill/code-execute，也不运行 `nyxid service list` 去读取 Host 进程的 CLI 登录态。
 
 ## Update 2026-07-17 - 浏览器选择与 NyxID 授权事实分离
 

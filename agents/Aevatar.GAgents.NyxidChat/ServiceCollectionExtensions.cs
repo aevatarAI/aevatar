@@ -147,6 +147,9 @@ public static class ServiceCollectionExtensions
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
                 larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
+        services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
+        services.TryAddSingleton<INyxIdConnectedServiceInventoryQuery>(sp =>
+            sp.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>());
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<IAgentToolReceiptRenderer, AgentToolReceiptRenderer>();
         services.TryAddSingleton<ILarkCardReplyStreamRenderer, LarkCardReplyStreamRenderer>();
@@ -212,7 +215,7 @@ public static class ServiceCollectionExtensions
         foreach (var source in serviceProvider.GetServices<IAgentToolSource>())
             yield return source;
 
-        var inventory = serviceProvider.GetService<NyxIdConnectedServiceInventoryToolSource>();
+        var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();
         if (inventory is not null)
             yield return inventory;
     }

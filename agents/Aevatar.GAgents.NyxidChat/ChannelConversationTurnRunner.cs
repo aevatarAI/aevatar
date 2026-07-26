@@ -99,6 +99,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
     private readonly INyxIdCurrentUserResolver? _nyxIdCurrentUserResolver;
     private readonly IChannelRelayTailTextSender? _relayTailTextSender;
     private readonly IChannelRelayProxyResponseClassifier? _relayProxyResponseClassifier;
+    private readonly INyxIdConnectedServiceInventoryQuery? _connectedServiceInventoryQuery;
 
     public ChannelConversationTurnRunner(
         IServiceProvider services,
@@ -125,7 +126,8 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         ILarkBotIdentityResolver? botIdentityResolver = null,
         INyxIdCurrentUserResolver? nyxIdCurrentUserResolver = null,
         IChannelRelayTailTextSender? relayTailTextSender = null,
-        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null)
+        IChannelRelayProxyResponseClassifier? relayProxyResponseClassifier = null,
+        INyxIdConnectedServiceInventoryQuery? connectedServiceInventoryQuery = null)
     {
         _toolServiceProvider = services ?? throw new ArgumentNullException(nameof(services));
         _registrationQueryPort = registrationQueryPort ?? throw new ArgumentNullException(nameof(registrationQueryPort));
@@ -152,6 +154,7 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         _nyxIdCurrentUserResolver = nyxIdCurrentUserResolver;
         _relayTailTextSender = relayTailTextSender;
         _relayProxyResponseClassifier = relayProxyResponseClassifier;
+        _connectedServiceInventoryQuery = connectedServiceInventoryQuery;
     }
 
     public async Task<ConversationTurnResult> RunInboundAsync(
@@ -228,6 +231,22 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
         // sender's own NyxID LLM prefs first; otherwise the run actor/generator
         // will use the bot owner's ambient LLM config.
         var senderBinding = await TryResolveSenderBindingAsync(inbound, registration, ct).ConfigureAwait(false);
+
+        if (senderBinding is not null &&
+            NyxIdConnectedServiceInventoryIntent.Matches(inbound.Text))
+        {
+            var inventoryResult = await HandleConnectedServiceInventoryAsync(
+                    activity,
+                    inbound,
+                    registration,
+                    runtimeContext,
+                    senderBinding,
+                    ct)
+                .ConfigureAwait(false);
+            if (inventoryResult.Success)
+                _ = AwaitTypingReactionThenClearAsync(typingReactionTask, inbound, registration, ct);
+            return inventoryResult;
+        }
 
         if (await TryHandleLlmSelectionCardActionAsync(activity, inbound, registration, runtimeContext, senderBinding?.BindingId, ct).ConfigureAwait(false) is { } llmSelectionResult)
             return llmSelectionResult;
@@ -312,6 +331,87 @@ public sealed class ChannelConversationTurnRunner : IConversationTurnRunner
 
     public Task<ConversationTurnResult> RunInboundAsync(ChatActivity activity, CancellationToken ct) =>
         RunInboundAsync(activity, ConversationTurnRuntimeContext.Empty, ct);
+
+    private async Task<ConversationTurnResult> HandleConnectedServiceInventoryAsync(
+        ChatActivity activity,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        ConversationTurnRuntimeContext runtimeContext,
+        ResolvedSenderBinding senderBinding,
+        CancellationToken ct)
+    {
+        _logger.LogInformation(
+            "Bound NyxID connected-service inventory intent routed directly: activity={ActivityId}, platform={Platform}",
+            activity.Id,
+            inbound.Platform);
+
+        var query = _connectedServiceInventoryQuery;
+        string replyText;
+        if (query is null)
+        {
+            _logger.LogError(
+                "Bound NyxID service inventory intent cannot run because its query port is not registered. activity={ActivityId}",
+                activity.Id);
+            replyText = NyxIdConnectedServiceInventoryReplyRenderer.Render(
+                NyxIdConnectedServiceInventoryQueryResult.Failed(
+                    NyxIdConnectedServiceInventoryQueryFailure.CapabilityUnavailable));
+        }
+        else
+        {
+            var context = AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext(
+                    registration.ScopeId,
+                    registration.ScopeId,
+                    activity.Id,
+                    senderBinding.OwnerScopeId),
+                Channel = new AgentToolChannelContext(
+                    inbound.Platform,
+                    inbound.SenderId,
+                    registration.ScopeId,
+                    activity.Id,
+                    NormalizeOptional(activity.TransportExtras?.NyxPlatformMessageId),
+                    BotRegistrationId: NormalizeOptional(registration.Id)),
+                SenderBinding = new AgentToolSenderBindingContext(
+                    senderBinding.BindingId,
+                    NyxUserId: null,
+                    SenderTenant: NormalizeOptional(senderBinding.Subject.Tenant)),
+                NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                    senderBinding.Subject.Platform,
+                    senderBinding.Subject.Tenant,
+                    senderBinding.Subject.ExternalUserId),
+            };
+            NyxIdConnectedServiceInventoryQueryResult result;
+            try
+            {
+                result = await query.QueryAsync(context, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Bound NyxID connected-service inventory query failed. activity={ActivityId}, platform={Platform}",
+                    activity.Id,
+                    inbound.Platform);
+                result = NyxIdConnectedServiceInventoryQueryResult.Failed(
+                    NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable);
+            }
+            replyText = NyxIdConnectedServiceInventoryReplyRenderer.Render(result);
+        }
+
+        return await SendReplyAsync(
+                replyText,
+                activity,
+                inbound,
+                registration,
+                runtimeContext,
+                ct)
+            .ConfigureAwait(false);
+    }
 
     // ─── Slash command dispatch ───
     //

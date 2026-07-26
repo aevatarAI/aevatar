@@ -19,15 +19,19 @@ public sealed class NyxIdServiceInstanceClient
         CancellationToken ct)
     {
         var candidates = new List<NyxIdServiceInstanceBinding>();
+        var userResponse = await _client.ListServicesAsync(userToken, ct);
+        EnsureDiscoverySucceeded(userResponse);
         candidates.AddRange(ParseBindings(
-            await _client.ListServicesAsync(userToken, ct),
+            userResponse,
             userToken,
             NyxIdServiceAccessTokenSource.User));
         if (!string.IsNullOrWhiteSpace(organizationToken) &&
             !string.Equals(userToken, organizationToken, StringComparison.Ordinal))
         {
+            var organizationResponse = await _client.ListServicesAsync(organizationToken, ct);
+            EnsureDiscoverySucceeded(organizationResponse);
             candidates.AddRange(ParseBindings(
-                await _client.ListServicesAsync(organizationToken, ct),
+                organizationResponse,
                 organizationToken,
                 NyxIdServiceAccessTokenSource.Organization));
         }
@@ -55,6 +59,12 @@ public sealed class NyxIdServiceInstanceClient
         }
 
         return exact.Values.OrderBy(static binding => binding.Instance.UserServiceId, StringComparer.Ordinal).ToArray();
+    }
+
+    private static void EnsureDiscoverySucceeded(string response)
+    {
+        if (IsErrorResponse(response))
+            throw new InvalidOperationException("connected_service_inventory_unavailable");
     }
 
     internal Task<string> GetSpecAsync(NyxIdServiceInstanceBinding binding, CancellationToken ct) =>

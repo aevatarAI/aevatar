@@ -29,6 +29,7 @@ namespace Aevatar.GAgents.Channel.Identity.Broker;
 /// </remarks>
 public sealed class NyxIdRemoteCapabilityBroker :
     INyxIdCapabilityBroker,
+    INyxIdConnectedServiceInventoryCapabilityIssuer,
     INyxIdBrokerCallbackClient,
     INyxIdBindingRetirementPort
 {
@@ -224,15 +225,40 @@ public sealed class NyxIdRemoteCapabilityBroker :
                 "NyxID binding grant does not include every required service resource.");
         }
 
-        return new CapabilityHandle
-        {
-            AccessToken = accessToken,
-            ExpiresAtUnix = payload.ExpiresIn.HasValue
-                ? _timeProvider.GetUtcNow().AddSeconds(payload.ExpiresIn.Value).ToUnixTimeSeconds()
-                : 0,
-            Scope = payload.Scope ?? scope.Value,
-        };
+        return ToCapabilityHandle(payload, scope);
     }
+
+    async Task<CapabilityHandle> INyxIdConnectedServiceInventoryCapabilityIssuer.IssueByBindingIdAsync(
+        ExternalSubjectRef externalSubject,
+        string bindingId,
+        CancellationToken ct)
+    {
+        ExternalSubjectRefExtensions.EnsureValid(externalSubject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(bindingId);
+
+        var scope = new CapabilityScope { Value = AevatarOAuthClientScopes.Proxy };
+        var snapshot = await _clientProvider.GetAsync(ct).ConfigureAwait(false);
+        var payload = await ExchangeBindingTokenAsync(
+                snapshot,
+                externalSubject,
+                bindingId,
+                scope,
+                ct)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(payload.AccessToken))
+            throw new InvalidOperationException("NyxID returned a token-exchange response without an access token.");
+
+        return ToCapabilityHandle(payload, scope);
+    }
+
+    private CapabilityHandle ToCapabilityHandle(TokenResponse payload, CapabilityScope requestedScope) => new()
+    {
+        AccessToken = payload.AccessToken,
+        ExpiresAtUnix = payload.ExpiresIn.HasValue
+            ? _timeProvider.GetUtcNow().AddSeconds(payload.ExpiresIn.Value).ToUnixTimeSeconds()
+            : 0,
+        Scope = payload.Scope ?? requestedScope.Value,
+    };
 
     private async Task<TokenResponse> ExchangeBindingTokenAsync(
         AevatarOAuthClientSnapshot snapshot,
