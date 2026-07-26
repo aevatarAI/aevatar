@@ -17,6 +17,7 @@ owner_query_file="${OWNER_ROOT}/src/Aevatar.Studio.Projection/QueryPorts/Project
 owner_query_dir="$(dirname -- "${owner_query_file}")"
 planner_file="${OWNER_ROOT}/src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/ScheduledInvocationAuthorizationPlanner.cs"
 planner_dir="$(dirname -- "${planner_file}")"
+catalog_repair_file="${planner_dir}/NyxIdAuthorizationCatalogVersionRegressionRepairService.cs"
 contracts_file="${OWNER_ROOT}/src/platform/Aevatar.GAgentService.Abstractions/Schedules/Authorization/ScheduledInvocationAuthorizationContracts.cs"
 contracts_dir="$(dirname -- "${contracts_file}")"
 nyxid_endpoint_file="${NYXID_ROOT}/agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.State.cs"
@@ -46,6 +47,13 @@ printf '%s\n' \
   'namespace Aevatar.GAgentService.Application.Schedules.Authorization;' \
   'public sealed class ScheduledInvocationAuthorizationPlanner { }' \
   > "${planner_file}"
+printf '%s\n' \
+  'namespace Aevatar.GAgentService.Application.Schedules.Authorization;' \
+  'public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairService' \
+  '{' \
+  '    public string Refresh(RepairRequest request) => request.BearerToken;' \
+  '}' \
+  > "${catalog_repair_file}"
 printf '%s\n' \
   'namespace Aevatar.GAgentService.Abstractions.Schedules.Authorization;' \
   'public sealed record ScheduledInvocationOwnerLLMEvidence;' \
@@ -153,6 +161,29 @@ printf '%s\n' \
 run_guard
 require_failure "ForbiddenOwnerLLMQuery.cs"
 rm "${forbidden_file}"
+
+forbidden_authorization_file="${planner_dir}/ForbiddenScheduledOwnerLLMQuery.cs"
+printf '%s\n' \
+  'public sealed class ForbiddenScheduledOwnerLLMQuery' \
+  '{' \
+  '    public string Read(QueryRequest request) => request.BearerToken;' \
+  '}' \
+  > "${forbidden_authorization_file}"
+run_guard
+require_failure "ForbiddenScheduledOwnerLLMQuery.cs"
+rm "${forbidden_authorization_file}"
+
+same_basename_query_file="${owner_query_dir}/NyxIdAuthorizationCatalogVersionRegressionRepairService.cs"
+printf '%s\n' \
+  'namespace Aevatar.Studio.Projection.QueryPorts;' \
+  'public sealed class NyxIdAuthorizationCatalogVersionRegressionRepairService' \
+  '{' \
+  '    public string Read(QueryRequest request) => request.BearerToken;' \
+  '}' \
+  > "${same_basename_query_file}"
+run_guard
+require_failure "NyxIdAuthorizationCatalogVersionRegressionRepairService.cs"
+rm "${same_basename_query_file}"
 
 real_rg="$(command -v rg)"
 fake_bin="${TMP_DIR}/bin"

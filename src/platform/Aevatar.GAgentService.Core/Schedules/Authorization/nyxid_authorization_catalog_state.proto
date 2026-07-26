@@ -56,6 +56,14 @@ message BeginNyxIdAuthorizationCatalogRefreshCommand {
   int64 expected_lifecycle_fence = 4;
 }
 
+message BeginNyxIdAuthorizationCatalogRepairRefreshCommand {
+  aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
+  string refresh_id = 2;
+  google.protobuf.Timestamp started_at = 3;
+  int64 minimum_source_state_version = 4;
+  string repair_request_id = 5;
+}
+
 message RecordNyxIdAuthorizationCatalogRefreshFailureCommand {
   aevatar.gagentservice.schedules.authorization.AuthorizationOwnerIdentity owner = 1;
   google.protobuf.Timestamp failed_at = 2;

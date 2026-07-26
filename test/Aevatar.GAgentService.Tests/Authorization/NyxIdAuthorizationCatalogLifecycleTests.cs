@@ -212,6 +212,87 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         agent.State.ActiveRefreshId.Should().Be("refresh-new");
     }
 
+    [Fact]
+    public async Task RepairRefreshAcquire_WhenActorIsNewerThanMinimum_ShouldUseActorOwnedLifecycleFence()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-existing", ObservedAt);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-existing", ObservedAt.AddSeconds(1)));
+        var currentVersion = await eventStore.GetVersionAsync(agent.Id);
+        agent.State.LifecycleFence.Should().BeGreaterThan(0);
+        currentVersion.Should().BeGreaterThan(1);
+
+        await agent.HandleBeginRepairRefreshAsync(
+            new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-repair",
+                StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+                MinimumSourceStateVersion = 1,
+                RepairRequestId = "repair-alpha",
+            });
+
+        agent.State.ActiveRefreshId.Should().Be("refresh-repair");
+        await AssertLastRefreshOutcomeAsync(
+            eventStore,
+            agent.Id,
+            "refresh-repair",
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started);
+    }
+
+    [Fact]
+    public async Task RepairRefreshAcquire_WhenMinimumExceedsCurrentVersion_ShouldReject()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-existing", ObservedAt);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-existing", ObservedAt.AddSeconds(1)));
+        var currentVersion = await eventStore.GetVersionAsync(agent.Id);
+
+        var act = () => agent.HandleBeginRepairRefreshAsync(
+            new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-repair",
+                StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+                MinimumSourceStateVersion = currentVersion + 1,
+                RepairRequestId = "repair-alpha",
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("NyxID authorization catalog repair source version changed.");
+        agent.State.ActiveRefreshId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RepairRefreshAcquire_WhenRepairRequestIdentityIsMissing_ShouldReject()
+    {
+        var owner = Owner();
+        var eventStore = new InMemoryEventStore();
+        var agent = CreateAgent(owner, eventStore);
+        await BeginRefreshAsync(agent, owner, "refresh-existing", ObservedAt);
+        await agent.HandleObserveAsync(
+            ObservationCommand(owner, "refresh-existing", ObservedAt.AddSeconds(1)));
+
+        var act = () => agent.HandleBeginRepairRefreshAsync(
+            new BeginNyxIdAuthorizationCatalogRepairRefreshCommand
+            {
+                Owner = owner.Clone(),
+                RefreshId = "refresh-repair",
+                StartedAt = Timestamp.FromDateTimeOffset(ObservedAt.AddSeconds(2)),
+                MinimumSourceStateVersion = 1,
+                RepairRequestId = " ",
+            });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Catalog repair refresh identity is required.");
+    }
+
     [Theory]
     [InlineData("observed")]
     [InlineData("failed")]
@@ -1221,6 +1302,7 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         {
             NyxIdAuthorizationCatalogState.Descriptor,
             BeginNyxIdAuthorizationCatalogRefreshCommand.Descriptor,
+            BeginNyxIdAuthorizationCatalogRepairRefreshCommand.Descriptor,
             ObserveNyxIdAuthorizationCatalogCommand.Descriptor,
             RecordNyxIdAuthorizationCatalogRefreshFailureCommand.Descriptor,
             InvalidateNyxIdAuthorizationCatalogCommand.Descriptor,
@@ -1294,6 +1376,8 @@ public sealed class NyxIdAuthorizationCatalogLifecycleTests
         state.ToProto().ReservedRange.Should().Contain(static range => range.Start == 23 && range.End == 25);
         state.DescriptorForType("BeginNyxIdAuthorizationCatalogRefreshCommand")!
             .FindFieldByName("expected_lifecycle_fence").Should().NotBeNull();
+        state.DescriptorForType("BeginNyxIdAuthorizationCatalogRepairRefreshCommand")!
+            .FindFieldByName("minimum_source_state_version").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshBeganEvent").Should().NotBeNull();
         state.DescriptorForType("NyxIdAuthorizationCatalogRefreshFailedEvent")!
             .FindFieldByName("lifecycle_fence").Should().NotBeNull();

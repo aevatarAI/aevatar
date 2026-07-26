@@ -325,6 +325,17 @@ public interface INyxIdAuthorizationCatalogCommandPort
         CancellationToken ct = default);
 }
 
+public interface INyxIdAuthorizationCatalogRepairCommandPort
+{
+    Task BeginRepairRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset startedAtUtc,
+        long minimumSourceStateVersion,
+        string repairRequestId,
+        CancellationToken ct = default);
+}
+
 public interface INyxIdAuthorizationCatalogRefreshPort
 {
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshAsync(
@@ -335,6 +346,16 @@ public interface INyxIdAuthorizationCatalogRefreshPort
     Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
         string verifiedOwnerSubject,
         string bearerToken,
+        CancellationToken ct = default);
+}
+
+public interface INyxIdAuthorizationCatalogRepairRefreshPort
+{
+    Task<NyxIdAuthorizationCatalogRefreshResult> RefreshPersonalAsync(
+        string verifiedOwnerSubject,
+        string bearerToken,
+        long minimumSourceStateVersion,
+        string repairRequestId,
         CancellationToken ct = default);
 }
 

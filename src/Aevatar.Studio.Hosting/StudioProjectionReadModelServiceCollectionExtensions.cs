@@ -11,12 +11,15 @@ using Aevatar.GAgents.StudioMember;
 using Aevatar.GAgents.StudioTeam;
 using Aevatar.GAgents.WorkOrder;
 using Aevatar.Studio.Workspace;
+using Aevatar.Studio.Application.Studio.ProjectionRecovery;
+using Aevatar.Studio.Infrastructure.ProjectionRecovery;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aevatar.Studio.Hosting;
 
@@ -66,6 +69,15 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<StudioMemberBindingRunCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioTeamCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<StudioWorkspaceCurrentStateDocument>(services, configuration);
+            services.AddElasticsearchDocumentProjectionRepairStore<
+                StudioWorkspaceCurrentStateDocument,
+                string>();
+            services.TryAddSingleton<
+                IStudioWorkspaceVersionRegressionStorePort,
+                ElasticsearchStudioWorkspaceVersionRegressionStorePort>();
+            services.TryAddSingleton<
+                IStudioWorkspaceVersionRegressionRepairService,
+                StudioWorkspaceVersionRegressionRepairService>();
             RegisterElasticsearch<WorkOrderCurrentStateDocument>(services, configuration);
         }
         else

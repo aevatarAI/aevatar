@@ -234,12 +234,15 @@ owner_llm_resolver_hits="$(
 )"
 
 owner_llm_live_authority_hits="$(
+  # The NyxID catalog version-regression repair service is an explicit admin
+  # maintenance command, not scheduled owner-LLM query/planner logic.
   capture_root_rg_hits "owner LLM live authority scan" \
     "${owner_llm_root}" \
     -n "IUserLlmCatalogPort|GetServicesAsync|IWorkflowCallerAccessTokenProvider|I[A-Za-z0-9_]*AccessTokenIssuer|Issue[A-Za-z0-9_]*Async|BearerToken" \
     src/Aevatar.Studio.Projection/QueryPorts \
     src/platform/Aevatar.GAgentService.Application/Schedules/Authorization \
     -g '*.cs' \
+    -g '!src/platform/Aevatar.GAgentService.Application/Schedules/Authorization/NyxIdAuthorizationCatalogVersionRegressionRepairService.cs' \
     -g '!**/bin/**' \
     -g '!**/obj/**'
 )"

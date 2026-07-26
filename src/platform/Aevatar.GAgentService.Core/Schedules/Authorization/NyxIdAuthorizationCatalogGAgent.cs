@@ -68,26 +68,62 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         if (command.ExpectedLifecycleFence < 0)
             throw new InvalidOperationException("Catalog refresh lifecycle fence is invalid.");
 
-        var refreshId = command.RefreshId.Trim();
-        if (command.ExpectedLifecycleFence != State.LifecycleFence)
+        await BeginRefreshCoreAsync(
+            command.Owner,
+            command.RefreshId,
+            command.StartedAt,
+            command.ExpectedLifecycleFence);
+    }
+
+    [EventHandler(EndpointName = "beginCatalogRepairRefresh")]
+    public async Task HandleBeginRepairRefreshAsync(
+        BeginNyxIdAuthorizationCatalogRepairRefreshCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ValidateOwner(command.Owner);
+        EnsureCurrentOwner(command.Owner);
+        if (string.IsNullOrWhiteSpace(command.RefreshId) || command.StartedAt == null)
+            throw new InvalidOperationException("Catalog refresh identity and start time are required.");
+        if (string.IsNullOrWhiteSpace(command.RepairRequestId))
+            throw new InvalidOperationException("Catalog repair refresh identity is required.");
+        if (command.MinimumSourceStateVersion <= 0)
+            throw new InvalidOperationException("Catalog repair minimum source version is invalid.");
+        if (CurrentStateVersion() < command.MinimumSourceStateVersion)
+            throw new InvalidOperationException("NyxID authorization catalog repair source version changed.");
+
+        await BeginRefreshCoreAsync(
+            command.Owner,
+            command.RefreshId,
+            command.StartedAt,
+            State.LifecycleFence);
+    }
+
+    private async Task BeginRefreshCoreAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshIdentity,
+        Google.Protobuf.WellKnownTypes.Timestamp startedAt,
+        long expectedLifecycleFence)
+    {
+        var refreshId = refreshIdentity.Trim();
+        if (expectedLifecycleFence != State.LifecycleFence)
         {
             await PersistRefreshOutcomeAsync(
                 refreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
-                command.StartedAt,
+                startedAt,
                 RefreshSupersededFailureCode);
             return;
         }
 
         if (string.Equals(State.ActiveRefreshId, refreshId, StringComparison.Ordinal))
         {
-            if (State.ActiveRefreshStartedAt?.Equals(command.StartedAt) != true)
+            if (State.ActiveRefreshStartedAt?.Equals(startedAt) != true)
                 throw new InvalidOperationException("A catalog refresh identity cannot change its start time.");
 
             await PersistRefreshOutcomeAsync(
                 refreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started,
-                command.StartedAt,
+                startedAt,
                 string.Empty);
             return;
         }
@@ -95,7 +131,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         if (!string.IsNullOrEmpty(State.ActiveRefreshId) &&
             State.ActiveRefreshStartedAt != null &&
             CompareRefreshOrder(
-                command.StartedAt,
+                startedAt,
                 refreshId,
                 State.ActiveRefreshStartedAt,
                 State.ActiveRefreshId) < 0)
@@ -103,7 +139,7 @@ public sealed class NyxIdAuthorizationCatalogGAgent
             await PersistRefreshOutcomeAsync(
                 refreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
-                command.StartedAt,
+                startedAt,
                 RefreshSupersededFailureCode);
             return;
         }
@@ -113,8 +149,8 @@ public sealed class NyxIdAuthorizationCatalogGAgent
         {
             transitionEvents.Add(new NyxIdAuthorizationCatalogActivatedEvent
             {
-                Owner = command.Owner.Clone(),
-                ActivatedAt = command.StartedAt.Clone(),
+                Owner = owner.Clone(),
+                ActivatedAt = startedAt.Clone(),
                 LifecycleFence = State.LifecycleFence,
                 LifecycleFenceSemanticsVersion = CurrentLifecycleFenceSemanticsVersion,
             });
@@ -122,9 +158,9 @@ public sealed class NyxIdAuthorizationCatalogGAgent
 
         transitionEvents.Add(new NyxIdAuthorizationCatalogRefreshBeganEvent
         {
-            Owner = command.Owner.Clone(),
+            Owner = owner.Clone(),
             RefreshId = refreshId,
-            StartedAt = command.StartedAt.Clone(),
+            StartedAt = startedAt.Clone(),
         });
         var mutationStateVersion = checked(CurrentStateVersion() + transitionEvents.Count);
         if (!string.IsNullOrEmpty(State.ActiveRefreshId))
@@ -133,14 +169,14 @@ public sealed class NyxIdAuthorizationCatalogGAgent
                 State.ActiveRefreshId,
                 NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Superseded,
                 mutationStateVersion,
-                command.StartedAt,
+                startedAt,
                 RefreshSupersededFailureCode));
         }
         transitionEvents.Add(BuildRefreshOutcome(
             refreshId,
             NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Started,
             mutationStateVersion,
-            command.StartedAt,
+            startedAt,
             string.Empty));
         await PersistDomainEventsAsync(transitionEvents);
     }

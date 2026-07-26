@@ -178,6 +178,38 @@ Create, reauthorize, and update mutations share one refresh-aware revalidation p
 
 Both GAgentService and standalone Studio call the idempotent `AddNyxIdAuthorizationCatalogHosting` composition entrypoint. It installs the catalog actor, authorization planner/revalidator, NyxID adapter, refresh observation session, committed-state projector, and read-model provider on the single shared GAgentService Projection Pipeline; repeated full or scheduled capability composition does not duplicate these registrations.
 
+## Catalog Projection Version-Regression Recovery
+
+NyxID authorization catalog version-regression repair is a platform-admin
+incident-recovery operation only. It is never part of normal scheduled Agent
+Key preflight, planner query, readiness evaluation, login finalization, or
+fire-time authorization. Those paths remain read-only with respect to
+projection lifecycle and must not delete, refresh, activate, replay, poll, or
+prime a catalog in order to answer a request.
+
+The guarded Mainnet route
+`POST /api/admin/scheduled-agent-key/projection-repair/nyxid-catalog` first
+inspects the exact owner-scoped actor/document fingerprint. Apply is permitted
+only when the document version is greater than the positive authoritative
+source version and the request repeats the exact actor ID, both versions, last
+event ID, repair request ID, and operator reason. Any changed fingerprint is a
+conflict that requires a new inspection; generic replica deletion is not a
+catalog capability.
+
+After the guarded conditional delete, authorization evidence is rebuilt only
+through a fresh NyxID observation using the same elevated bearer's verified
+personal owner subject. The repair must not republish empty actor state, copy
+catalog contents out of Elasticsearch, or hydrate the actor from the read
+model. A refresh result of `observed` proves the actor committed a terminal
+refresh outcome; it is distinct from read-model `ready`. Until visibility
+reports `ready` at the required authoritative version, automation mutation,
+Agent Key creation, and canary execution must remain stopped. After the
+non-credential workflow/Team/member/published-service scaffold exists, the
+canonical Team automation preflight may be used as a bounded, pure read-only
+readiness probe: it must observe the required catalog actor state version and
+the exact expected non-wildcard service grant. It must not refresh, apply
+repair again, create a schedule, or provision a credential.
+
 The full-catalog scope plan is durable planning evidence, not a reusable key-creation precondition. Its opaque `normalized_grant_digest` is selection-scoped and is deliberately not persisted in the catalog. It is distinct from both the catalog `ContentDigest` and the authorization plan `PermissionDigest`; a digest produced for all eligible services cannot authorize a workflow that selected only a subset.
 
 Immediately before creating a dedicated key, `ScheduledAgentApiKeyIssuer` requests a new scope plan for the validated authorization plan's exact ordinal-sorted service IDs and passes `target_org_id` only for an already validated organization owner. The integrity-covered plan binds a personal owner to itself as `authenticated_actor`; an organization owner requires an explicit normalized NyxID personal administrator. The issuer requires the provider response's actor authority, kind, and ID to match that principal exactly, along with the intended owner, current contract and policy versions, freshness and completeness declarations, every per-service resource owner and node grant, and both flattened allowlists. Any mismatch returns `authorization_plan_changed`, provider timeout returns the stable sanitized `nyxid_scope_plan_provider_timed_out`, caller cancellation propagates, and key creation is not called.

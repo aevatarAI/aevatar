@@ -57,6 +57,7 @@ using Aevatar.Mainnet.Host.Api.Messages;
 using Aevatar.Mainnet.Host.Api.ManagedCodex;
 using Aevatar.Mainnet.Host.Api.AgentProfiles;
 using Aevatar.Mainnet.Host.Api.Profiles;
+using Aevatar.Mainnet.Host.Api.ProjectionRecovery;
 using Aevatar.Mainnet.Host.Api.Responses;
 using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
@@ -456,6 +457,7 @@ public static class MainnetHostBuilderExtensions
         app.MapDeviceEventEndpoints();
         app.MapIdentityOAuthEndpoints();
         app.MapScheduledAgentCredentialRepairAdminEndpoints();
+        app.MapProjectionVersionRegressionRepairAdminEndpoints();
         app.MapManagedCodexCredentialEndpoints();
         app.MapWorkflowSkillsEndpoints();
         app.MapStatusEndpoints();
