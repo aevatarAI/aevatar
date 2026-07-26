@@ -26,6 +26,7 @@ public sealed class UseSkillTool : IAgentTool
 
     private readonly LocalSkillCatalog _localCatalog;
     private readonly IRemoteSkillFetcher? _remoteFetcher;
+    private readonly IRemoteSkillAccessTokenResolver? _remoteAccessTokenResolver;
     private readonly ISkillWorkflowMountPort _workflowMountPort;
     private readonly IScopeWorkflowCommandPort? _scopeWorkflowCommandPort;
 
@@ -33,10 +34,12 @@ public sealed class UseSkillTool : IAgentTool
         LocalSkillCatalog localCatalog,
         IRemoteSkillFetcher? remoteFetcher = null,
         ISkillWorkflowMountPort? workflowMountPort = null,
-        IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null)
+        IScopeWorkflowCommandPort? scopeWorkflowCommandPort = null,
+        IRemoteSkillAccessTokenResolver? remoteAccessTokenResolver = null)
     {
         _localCatalog = localCatalog;
         _remoteFetcher = remoteFetcher;
+        _remoteAccessTokenResolver = remoteAccessTokenResolver;
         _workflowMountPort = workflowMountPort ?? new NoOpSkillWorkflowMountPort();
         _scopeWorkflowCommandPort = scopeWorkflowCommandPort;
     }
@@ -144,12 +147,25 @@ public sealed class UseSkillTool : IAgentTool
 
         if (_remoteFetcher != null)
         {
-            var token = AgentToolRequestContext.NyxIdAccessToken;
+            var token = _remoteAccessTokenResolver is null
+                ? AgentToolRequestContext.NyxIdAccessToken
+                : await _remoteAccessTokenResolver.ResolveAsync(skillName, ct).ConfigureAwait(false);
+            if (_remoteAccessTokenResolver is not null && string.IsNullOrWhiteSpace(token))
+            {
+                return BuildLoadResult(
+                    skillName: skillName,
+                    loaded: false,
+                    error: "Remote skill access is unavailable for the current caller.",
+                    status: "access_denied",
+                    text: BuildErrorWithAvailableSkills(
+                        $"Remote skill '{skillName}' could not be loaded for the current caller."));
+            }
+
             if (!string.IsNullOrWhiteSpace(token))
             {
                 try
                 {
-                    skill = await _remoteFetcher.FetchSkillAsync(token, skillName, ct);
+                    skill = await _remoteFetcher.FetchSkillAsync(token.Trim(), skillName, ct);
                 }
                 catch (RemoteSkillFetchException ex)
                 {

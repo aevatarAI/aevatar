@@ -85,6 +85,40 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
+    public async Task UseSkillTool_RemoteSkillUsesResolvedRequestTokenInsteadOfAmbientOwnerToken()
+    {
+        var catalog = new LocalSkillCatalog();
+        var fetcher = new RecordingRemoteSkillFetcher();
+        var resolver = new RecordingRemoteSkillAccessTokenResolver("sender-skill-token");
+        var tool = new UseSkillTool(catalog, fetcher, remoteAccessTokenResolver: resolver);
+
+        using var _ = BeginTokenScope("owner-token");
+        var result = await tool.ExecuteAsync("""{"skill":"nyxid"}""");
+
+        ExtractLoaded(result).Should().BeTrue();
+        fetcher.Requests.Should().ContainSingle().Which.Should().Be(("sender-skill-token", "nyxid"));
+        resolver.Requests.Should().ContainSingle().Which.Should().Be("nyxid");
+    }
+
+    [Fact]
+    public async Task UseSkillTool_WhenRequestTokenResolutionFails_DoesNotUseAmbientOwnerToken()
+    {
+        var catalog = new LocalSkillCatalog();
+        var fetcher = new RecordingRemoteSkillFetcher();
+        var resolver = new RecordingRemoteSkillAccessTokenResolver(null);
+        var tool = new UseSkillTool(catalog, fetcher, remoteAccessTokenResolver: resolver);
+
+        using var _ = BeginTokenScope("owner-token");
+        var result = await tool.ExecuteAsync("""{"skill":"nyxid"}""");
+
+        ExtractLoaded(result).Should().BeFalse();
+        ExtractStatus(result).Should().Be("access_denied");
+        fetcher.Requests.Should().BeEmpty("a configured resolver must never fall back to ambient owner credentials");
+        resolver.Requests.Should().ContainSingle().Which.Should().Be("nyxid");
+        result.Should().NotContain("owner-token");
+    }
+
+    [Fact]
     public async Task UseSkillTool_LocalSkillDoesNotCallRemoteFetcher()
     {
         var catalog = new LocalSkillCatalog();
@@ -365,6 +399,17 @@ public sealed class LocalSkillCatalogTests
         }
     }
 
+    private sealed class RecordingRemoteSkillAccessTokenResolver(string? token) : IRemoteSkillAccessTokenResolver
+    {
+        public List<string> Requests { get; } = [];
+
+        public Task<string?> ResolveAsync(string skillName, CancellationToken ct = default)
+        {
+            Requests.Add(skillName);
+            return Task.FromResult(token);
+        }
+    }
+
     private sealed class RecordingSkillWorkflowMountPort : ISkillWorkflowMountPort
     {
         public List<SkillWorkflowMountRequest> Requests { get; } = [];
@@ -478,6 +523,12 @@ public sealed class LocalSkillCatalogTests
     {
         using var document = JsonDocument.Parse(json);
         return document.RootElement.GetProperty("loaded").GetBoolean();
+    }
+
+    private static string ExtractStatus(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("status").GetString() ?? string.Empty;
     }
 
     private static JsonElement? ExtractWorkflowMount(string json)

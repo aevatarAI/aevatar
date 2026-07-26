@@ -73,6 +73,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private readonly IToolApprovalHandler? _approvalHandler;
     private readonly LocalSkillCatalog? _localSkillCatalog;
     private readonly IRemoteSkillFetcher? _remoteSkillFetcher;
+    private readonly IRemoteSkillAccessTokenResolver? _remoteSkillAccessTokenResolver;
     private readonly global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions? _relayOptions;
     private readonly INyxIdUserLlmPreferencesStore? _preferencesStore;
     private readonly IUserMemoryStore? _userMemoryStore;
@@ -125,7 +126,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         IToolApprovalHandler? approvalHandler = null,
         ILogger<NyxIdConversationReplyGenerator>? logger = null,
         ISystemSkillOverlayProvider? overlayProvider = null,
-        ILarkOutboundClientFactory? larkOutboundClientFactory = null)
+        ILarkOutboundClientFactory? larkOutboundClientFactory = null,
+        IRemoteSkillAccessTokenResolver? remoteSkillAccessTokenResolver = null)
     {
         _llmProviderFactory = llmProviderFactory ?? throw new ArgumentNullException(nameof(llmProviderFactory));
         _toolSources = (toolSources ?? []).ToArray();
@@ -135,6 +137,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         _approvalHandler = approvalHandler;
         _localSkillCatalog = localSkillCatalog;
         _remoteSkillFetcher = remoteSkillFetcher;
+        _remoteSkillAccessTokenResolver = remoteSkillAccessTokenResolver;
         _relayOptions = relayOptions;
         _preferencesStore = preferencesStore;
         _userMemoryStore = userMemoryStore;
@@ -401,7 +404,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if ((_localSkillCatalog is not null || _remoteSkillFetcher is not null) &&
             tools.Get("use_skill") is null)
         {
-            tools.Register(new UseSkillTool(_localSkillCatalog ?? new LocalSkillCatalog(), _remoteSkillFetcher));
+            tools.Register(new UseSkillTool(
+                _localSkillCatalog ?? new LocalSkillCatalog(),
+                _remoteSkillFetcher,
+                remoteAccessTokenResolver: _remoteSkillAccessTokenResolver));
         }
 
         return tools;

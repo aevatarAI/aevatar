@@ -379,6 +379,32 @@ public sealed class NyxIdRemoteCapabilityBrokerTests : IDisposable
     }
 
     [Fact]
+    public async Task IssueRemoteSkillReadByBindingIdAsync_DoesNotRequireAevatarRuntimeResources()
+    {
+        var accessToken = CreateAccessToken([RequiredAevatarResource]);
+        var handler = new SequenceHandler(TokenExchangeResponse(accessToken));
+        var broker = NewBroker(
+            NewSnapshot(NyxIdRedirectUriResolver.Resolve()),
+            httpHandler: handler);
+
+        var result = await ((INyxIdSkillCapabilityIssuer)broker)
+            .IssueByBindingIdAsync(
+                SampleSubject(),
+                "bnd-skill-alpha");
+
+        result.AccessToken.Should().Be(accessToken);
+        result.Scope.Should().Be(AevatarOAuthClientScopes.Proxy);
+        handler.Requests.Should().ContainSingle();
+        handler.Requests[0].Uri.Should().Be($"{OAuthAuthority}/oauth/token");
+        var bindingExchangeForm = QueryHelpers.ParseQuery($"?{handler.Requests[0].Body}");
+        bindingExchangeForm["grant_type"].Should().ContainSingle().Which.Should()
+            .Be(NyxIdRemoteCapabilityBroker.TokenExchangeGrantType);
+        bindingExchangeForm["subject_token"].Should().ContainSingle().Which.Should().Be("bnd-skill-alpha");
+        bindingExchangeForm["scope"].Should().ContainSingle().Which.Should().Be(AevatarOAuthClientScopes.Proxy);
+        bindingExchangeForm.ContainsKey("resource").Should().BeFalse();
+    }
+
+    [Fact]
     public async Task IssueShortLivedByBindingIdAsync_AcceptsAllServicesGrantFromAuthoritativeCatalog()
     {
         const string optionalResource = $"{ResourceServerBaseUrl}/api/v1/proxy/s/user-selected-service";
