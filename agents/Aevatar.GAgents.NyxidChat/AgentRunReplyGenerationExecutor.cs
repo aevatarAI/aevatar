@@ -546,8 +546,8 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         // Re-mint the sender's short-lived NyxID token here, in the deferred reply
         // run. The synchronous inbound path mints a sender token but ConversationGAgent
         // strips transient credentials before persisting NeedsLlmReplyEvent, so by the
-        // time this deferred run executes the token is gone. The binding-id + tenant
-        // survive as identity facts on the tool context, so we re-mint by binding id
+        // time this deferred run executes the token is gone. The binding-id + exact
+        // typed NyxID authority survive as identity facts, so we re-mint by binding id
         // and overlay the fresh token onto LlmControl; ToToolContext then projects it
         // into ToolContext.Credentials so sender-credentialed mutation tools (use_skill)
         // run under the sender's own NyxID instead of being denied. Owner fallback is
@@ -585,7 +585,7 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         if (!TryRebuildSenderSubject(toolContext, out var subject))
         {
             _logger.LogDebug(
-                "Sender token re-mint skipped: tool context lacks platform/sender-id to rebuild the external subject. correlation={CorrelationId}",
+                "Sender token re-mint skipped: tool context lacks complete typed NyxID authority. correlation={CorrelationId}",
                 request.CorrelationId);
             return control;
         }
@@ -706,20 +706,22 @@ public sealed class AgentRunReplyGenerationExecutor : IAgentRunReplyGenerationEx
         out ExternalSubjectRef subject)
     {
         subject = new ExternalSubjectRef();
-        var platform = NormalizeOptional(toolContext.Channel.Platform);
-        var senderId = NormalizeOptional(toolContext.Channel.SenderId);
+        var authority = toolContext.NyxIdAuthority;
+        if (!authority.IsComplete)
+            return false;
+
+        var platform = NormalizeOptional(authority.Platform);
+        var senderId = NormalizeOptional(authority.ExternalUserId);
         if (platform is null || senderId is null)
             return false;
 
-        // Mirror TryResolveExternalSubject's normalization so the rebuilt subject
-        // matches the one the synchronous path resolved (and the actor id derived
-        // from it): platform lowercased, fields trimmed. Tenant is carried as an
-        // identity fact (SenderBinding.SenderTenant); a null tenant is valid for
-        // platforms without a tenant scope.
+        // NyxID authority is independent from channel routing identity. Normalize
+        // the exact typed authority resolved during inbound binding lookup; never
+        // infer it from Channel or SenderBinding convenience fields.
         subject = new ExternalSubjectRef
         {
             Platform = platform.ToLowerInvariant(),
-            Tenant = NormalizeOptional(toolContext.SenderBinding.SenderTenant) ?? string.Empty,
+            Tenant = NormalizeOptional(authority.Tenant) ?? string.Empty,
             ExternalUserId = senderId,
         };
         return true;
