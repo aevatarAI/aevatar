@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Foundation.Abstractions.Tools;
+using Google.Protobuf;
 using Microsoft.AspNetCore.Http;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -217,6 +218,24 @@ internal sealed class NyxIdChatSseWriter
             },
         }, sequence, ct);
 
+    public ValueTask WriteTypedCustomEventAsync(
+        string name,
+        IMessage payload,
+        long sequence,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(payload);
+        var node = JsonNode.Parse(JsonFormatter.Default.Format(payload))
+                   ?? throw new InvalidOperationException("Typed custom payload must serialize to JSON.");
+        NormalizeNyxIdEnumValues(node);
+        return WriteFrameAsync(new
+        {
+            type = "CUSTOM",
+            custom = new { name, payload = node },
+        }, sequence, ct);
+    }
+
     public ValueTask WriteToolApprovalRequestAsync(
         string requestId, string toolName, string toolCallId,
         string argumentsJson, bool isDestructive, int timeoutSeconds,
@@ -235,6 +254,77 @@ internal sealed class NyxIdChatSseWriter
                 timeoutSeconds,
             }
         }, sequence, ct);
+
+    private static void NormalizeNyxIdEnumValues(JsonNode node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var property in obj.ToArray())
+                {
+                    if (property.Value is JsonValue value &&
+                        value.TryGetValue<string>(out var text) &&
+                        TryNormalizeNyxIdEnumValue(text, out var normalized))
+                    {
+                        obj[property.Key] = normalized;
+                    }
+                    else if (property.Value is not null)
+                    {
+                        NormalizeNyxIdEnumValues(property.Value);
+                    }
+                }
+                break;
+            case JsonArray array:
+                for (var index = 0; index < array.Count; index++)
+                {
+                    if (array[index] is JsonValue value &&
+                        value.TryGetValue<string>(out var text) &&
+                        TryNormalizeNyxIdEnumValue(text, out var normalized))
+                    {
+                        array[index] = normalized;
+                    }
+                    else if (array[index] is not null)
+                    {
+                        NormalizeNyxIdEnumValues(array[index]!);
+                    }
+                }
+                break;
+        }
+    }
+
+    private static bool TryNormalizeNyxIdEnumValue(string value, out string normalized)
+    {
+        string[] prefixes =
+        [
+            "NYX_ID_CHAT_CONTINUATION_ADMISSION_STATUS_",
+            "NYX_ID_CHAT_STEP_CONTROL_KIND_",
+            "NYX_ID_CHAT_ACTION_DISPOSITION_",
+            "NYX_ID_CHAT_OPERATION_PHASE_",
+            "NYX_ID_CHAT_EFFECT_EVIDENCE_",
+            "NYX_ID_CHAT_TRANSITION_OUTCOME_",
+            "NYX_ID_CHAT_CONTINUATION_KIND_",
+            "NYX_ID_CHAT_CONTROL_OUTCOME_",
+            "NYX_ID_ASSISTANT_ACTION_RISK_",
+            "NYX_ID_ASSISTANT_ACTION_TIER_",
+            "NYX_ID_ASSISTANT_ACTION_KIND_",
+            "NYX_ID_CHAT_CONTROL_KIND_",
+            "NYX_ID_CHAT_TURN_STATUS_",
+            "NYX_ID_CHAT_TASK_STATUS_",
+            "NYX_ID_CHAT_STEP_STATUS_",
+            "NYX_ID_CHAT_STEP_KIND_",
+        ];
+        foreach (var prefix in prefixes)
+        {
+            if (!value.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+
+            normalized = value[prefix.Length..].ToLowerInvariant();
+            return true;
+        }
+
+        normalized = value;
+        return false;
+    }
 
     private static object BuildPresentationPayload(
         ToolPresentationDescriptor? presentation,

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.AGUI.Contracts;
@@ -164,6 +165,192 @@ public class NyxIdChatAguiSseEventWriterTests
         approval.GetProperty("argumentsJson").GetString().Should().Be("{\"cmd\":\"pwd\"}");
         approval.GetProperty("isDestructive").GetBoolean().Should().BeTrue();
         approval.GetProperty("timeoutSeconds").GetInt32().Should().Be(30);
+    }
+
+    [Fact]
+    public async Task WriteAsync_ShouldMapTypedTaskSnapshotCustomEventToStableJson()
+    {
+        var sink = new SseFrameSink();
+        var task = new NyxIdChatTaskState
+        {
+            TaskId = "task-alpha",
+            TurnId = "turn-alpha",
+            Status = NyxIdChatTaskStatus.Active,
+            ActiveStepId = "step-alpha",
+            ActiveOperationId = "operation-alpha",
+            Steps =
+            {
+                new NyxIdChatTaskStepState
+                {
+                    StepId = "step-alpha",
+                    Order = 1,
+                    Kind = NyxIdChatStepKind.Tool,
+                    Status = NyxIdChatStepStatus.Running,
+                    Required = true,
+                    ExternalEffect = NyxIdChatEffectEvidence.NotStarted,
+                    Operation = new NyxIdChatOperationState
+                    {
+                        Key = new NyxIdChatOperationKey
+                        {
+                            ConversationActorId = "conversation-alpha",
+                            TurnId = "turn-alpha",
+                            TaskId = "task-alpha",
+                            StepId = "step-alpha",
+                            OperationId = "operation-alpha",
+                            OperationGeneration = 1,
+                        },
+                        Kind = NyxIdChatStepKind.Tool,
+                        Phase = NyxIdChatOperationPhase.Requested,
+                    },
+                },
+            },
+        };
+
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 17,
+            Custom = new CustomEvent
+            {
+                Name = "nyxid.task.snapshot",
+                Payload = Any.Pack(task),
+            },
+        }, "turn-alpha");
+
+        var frame = sink.ReadFrames().Should().ContainSingle().Which;
+        frame.GetProperty("type").GetString().Should().Be("CUSTOM");
+        frame.GetProperty("sequence").GetInt64().Should().Be(17);
+        var custom = frame.GetProperty("custom");
+        custom.GetProperty("name").GetString().Should().Be("nyxid.task.snapshot");
+        var payload = custom.GetProperty("payload");
+        payload.GetProperty("taskId").GetString().Should().Be("task-alpha");
+        payload.GetProperty("turnId").GetString().Should().Be("turn-alpha");
+        payload.GetProperty("status").GetString().Should().Be("active");
+        var step = payload.GetProperty("steps")[0];
+        step.GetProperty("kind").GetString().Should().Be("tool");
+        step.GetProperty("status").GetString().Should().Be("running");
+        step.GetProperty("externalEffect").GetString().Should().Be("not_started");
+        step.GetProperty("operation").GetProperty("phase").GetString().Should().Be("requested");
+        frame.GetRawText().Should().NotContain("@type");
+    }
+
+    [Fact]
+    public async Task WriteAsync_ShouldMapActionRequestToExactSchemaV4WirePayload()
+    {
+        var committed = new NyxIdChatActionRequestedEvent
+        {
+            Request = new NyxIdChatActionRequestState
+            {
+                SchemaVersion = 4,
+                RegistryRevision = "nyxid-assistant-actions.v4",
+                ConversationActorId = "conversation-alpha",
+                OriginTurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                StepId = "step-alpha",
+                ActionRequestId = "action-alpha",
+                Action = NyxIdAssistantActionKind.ServiceConnect,
+                Params = new NyxIdAssistantActionParams
+                {
+                    CatalogServiceConnect = new NyxIdCatalogServiceConnectParams
+                    {
+                        ServiceSlug = "api-github",
+                        RequestedScopes = { "repo" },
+                    },
+                },
+                AdvisoryRisk = NyxIdAssistantActionRisk.Grant,
+                RememberEligible = true,
+                RequestedAt = Timestamp.FromDateTimeOffset(
+                    new DateTimeOffset(2026, 7, 25, 8, 0, 0, TimeSpan.Zero)),
+            },
+            Task = new NyxIdChatTaskState
+            {
+                TaskId = "task-alpha",
+                TurnId = "turn-alpha",
+                Status = NyxIdChatTaskStatus.Blocked,
+            },
+            OriginTurn = new NyxIdChatTurnState
+            {
+                TurnId = "turn-alpha",
+                TaskId = "task-alpha",
+                Status = NyxIdChatTurnStatus.Blocked,
+            },
+        };
+        var actionFrame = NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+                "conversation-alpha",
+                "turn-alpha",
+                committed,
+                sequence: 23)
+            .Single(frame => frame.Custom?.Name ==
+                             NyxIdChatConversationAguiFrameBuilder.ActionRequestEventName);
+        var sink = new SseFrameSink();
+
+        await sink.WriteAsync(actionFrame, "turn-alpha");
+
+        var payload = sink.ReadFrames().Should().ContainSingle().Which
+            .GetProperty("custom")
+            .GetProperty("payload");
+        var expected = JsonNode.Parse("""
+        {
+          "schemaVersion": 4,
+          "actorId": "conversation-alpha",
+          "originTurnId": "turn-alpha",
+          "taskId": "task-alpha",
+          "stepId": "step-alpha",
+          "actionRequestId": "action-alpha",
+          "action": "service.connect",
+          "params": {
+            "catalogService": {
+              "serviceSlug": "api-github",
+              "requestedScopes": ["repo"]
+            }
+          }
+        }
+        """);
+
+        JsonNode.DeepEquals(JsonNode.Parse(payload.GetRawText()), expected)
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task WriteAsync_ShouldMapTypedStepControlCustomEventToStableJson()
+    {
+        var sink = new SseFrameSink();
+        var result = new NyxIdChatStepControlResultState
+        {
+            Kind = NyxIdChatStepControlKind.Retry,
+            RequestId = "retry-alpha",
+            ClientRequestId = "client-retry-alpha",
+            ScopeId = "scope-alpha",
+            ConversationActorId = "conversation-alpha",
+            TurnId = "turn-alpha",
+            TaskId = "task-alpha",
+            StepId = "step-alpha",
+            ExpectedOperationGeneration = 1,
+            OperationGeneration = 2,
+            Outcome = NyxIdChatTransitionOutcome.Accepted,
+            ReasonCode = NyxIdChatControlCommands.StepRetryAccepted,
+        };
+
+        await sink.WriteAsync(new AGUIEvent
+        {
+            Sequence = 19,
+            Custom = new CustomEvent
+            {
+                Name = NyxIdChatConversationAguiFrameBuilder.StepControlChangedEventName,
+                Payload = Any.Pack(result),
+            },
+        }, "turn-alpha");
+
+        var frame = sink.ReadFrames().Should().ContainSingle().Which;
+        frame.GetProperty("type").GetString().Should().Be("CUSTOM");
+        frame.GetProperty("sequence").GetInt64().Should().Be(19);
+        var custom = frame.GetProperty("custom");
+        custom.GetProperty("name").GetString().Should().Be("nyxid.step.control.changed");
+        var payload = custom.GetProperty("payload");
+        payload.GetProperty("kind").GetString().Should().Be("retry");
+        payload.GetProperty("outcome").GetString().Should().Be("accepted");
+        payload.GetProperty("requestId").GetString().Should().Be("retry-alpha");
+        payload.GetProperty("operationGeneration").GetString().Should().Be("2");
+        frame.GetRawText().Should().NotContain("@type");
     }
 
     [Fact]

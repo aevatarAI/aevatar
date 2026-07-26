@@ -54,6 +54,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterElasticsearch<RoleCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ConnectorCatalogCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatConversationCurrentStateDocument>(services, configuration);
+            RegisterElasticsearch<NyxIdChatConversationCurrentStateDocument>(services, configuration);
             RegisterElasticsearch<ChatHistoryCreateRecoveryCurrentStateDocument>(
                 services,
                 configuration,
@@ -76,6 +77,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
             RegisterInMemory<RoleCatalogCurrentStateDocument>(services);
             RegisterInMemory<ConnectorCatalogCurrentStateDocument>(services);
             RegisterInMemory<ChatConversationCurrentStateDocument>(services);
+            RegisterInMemory<NyxIdChatConversationCurrentStateDocument>(services);
             RegisterInMemory<ChatHistoryCreateRecoveryCurrentStateDocument>(
                 services,
                 static document => document.Id,
@@ -156,6 +158,7 @@ internal static class StudioProjectionReadModelServiceCollectionExtensions
                && HasDocumentReaderForProvider<RoleCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ConnectorCatalogCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatConversationCurrentStateDocument>(services, providerKind)
+               && HasDocumentReaderForProvider<NyxIdChatConversationCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<ChatHistoryCreateRecoveryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<GAgentRegistryCurrentStateDocument>(services, providerKind)
                && HasDocumentReaderForProvider<UserMemoryCurrentStateDocument>(services, providerKind)

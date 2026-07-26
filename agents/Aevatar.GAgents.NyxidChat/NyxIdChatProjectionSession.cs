@@ -269,6 +269,153 @@ public sealed class NyxIdChatSessionEventProjector
             return BuildProgressEntries(context, completion.TerminalProgress);
         }
 
+        if (payload.Is(NyxIdChatTurnStartedEvent.Descriptor))
+        {
+            var started = payload.Unpack<NyxIdChatTurnStartedEvent>();
+            if (!MatchesControllerState(context, started.State))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildStarted(
+                    context.RootActorId,
+                    context.SessionId,
+                    started.State));
+        }
+
+        if (payload.Is(NyxIdChatOperationProgressedEvent.Descriptor))
+        {
+            var progressed = payload.Unpack<NyxIdChatOperationProgressedEvent>();
+            if (!MatchesControllerKey(context, progressed.Progress?.Key))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildProgressed(
+                    context.SessionId,
+                    progressed));
+        }
+
+        if (payload.Is(NyxIdChatOperationReconciledEvent.Descriptor))
+        {
+            var reconciled = payload.Unpack<NyxIdChatOperationReconciledEvent>();
+            if (!MatchesControllerKey(context, reconciled.Result?.Key) ||
+                !MatchesControllerState(context, reconciled.State))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildReconciled(
+                    context.RootActorId,
+                    context.SessionId,
+                    reconciled));
+        }
+
+        if (payload.Is(NyxIdChatLateOperationEvidenceCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatLateOperationEvidenceCommittedEvent>();
+            if (!MatchesControllerKey(context, committed.Key) ||
+                !MatchesControllerState(context, committed.State))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildLateOperationEvidence(
+                    committed,
+                    stateVersion));
+        }
+
+        if (payload.Is(NyxIdChatControlFenceCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatControlFenceCommittedEvent>();
+            if (!string.Equals(committed.Fence?.TurnId, context.SessionId, StringComparison.Ordinal))
+                return EmptyEntries;
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildControlChanged(
+                    context.RootActorId,
+                    context.SessionId,
+                    committed,
+                    stateVersion));
+        }
+
+        if (payload.Is(NyxIdChatActionRequestedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatActionRequestedEvent>();
+            if (!string.Equals(committed.Request?.ConversationActorId, context.RootActorId, StringComparison.Ordinal) ||
+                !string.Equals(committed.Request?.OriginTurnId, context.SessionId, StringComparison.Ordinal))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildActionRequested(
+                    context.RootActorId,
+                    context.SessionId,
+                    committed,
+                    stateVersion));
+        }
+
+        if (payload.Is(NyxIdChatContinuationAdmissionCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatContinuationAdmissionCommittedEvent>();
+            if (!string.Equals(
+                    committed.Admission?.OriginTurnId,
+                    context.SessionId,
+                    StringComparison.Ordinal))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildContinuationChanged(
+                    committed,
+                    stateVersion));
+        }
+
+        if (payload.Is(NyxIdChatStepControlCommittedEvent.Descriptor))
+        {
+            var committed = payload.Unpack<NyxIdChatStepControlCommittedEvent>();
+            if (!string.Equals(
+                    committed.Result?.ConversationActorId,
+                    context.RootActorId,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    committed.Result?.TurnId,
+                    context.SessionId,
+                    StringComparison.Ordinal) ||
+                !MatchesControllerState(context, committed.State))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildStepControlChanged(
+                    committed,
+                    stateVersion));
+        }
+
+        if (payload.Is(NyxIdChatTurnAdmissionRejectedEvent.Descriptor))
+        {
+            var rejected = payload.Unpack<NyxIdChatTurnAdmissionRejectedEvent>();
+            if (!string.Equals(
+                    rejected.ConversationActorId,
+                    context.RootActorId,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    rejected.RequestedTurnId,
+                    context.SessionId,
+                    StringComparison.Ordinal))
+            {
+                return EmptyEntries;
+            }
+            return Entries(
+                context,
+                NyxIdChatConversationAguiFrameBuilder.BuildTurnAdmissionRejected(
+                    rejected,
+                    stateVersion));
+        }
+
         if (payload.Is(RoleChatSessionConflictEvent.Descriptor))
         {
             var conflict = payload.Unpack<RoleChatSessionConflictEvent>();
@@ -291,6 +438,25 @@ public sealed class NyxIdChatSessionEventProjector
 
         return EmptyEntries;
     }
+
+    private static bool MatchesControllerState(
+        NyxIdChatSessionProjectionContext context,
+        NyxIdChatConversationGAgentState? state) =>
+        state?.ActiveTurn is not null &&
+        string.Equals(state.ConversationActorId, context.RootActorId, StringComparison.Ordinal) &&
+        string.Equals(state.ActiveTurn.TurnId, context.SessionId, StringComparison.Ordinal);
+
+    private static bool MatchesControllerKey(
+        NyxIdChatSessionProjectionContext context,
+        NyxIdChatOperationKey? key) =>
+        key is not null &&
+        string.Equals(key.ConversationActorId, context.RootActorId, StringComparison.Ordinal) &&
+        string.Equals(key.TurnId, context.SessionId, StringComparison.Ordinal);
+
+    private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> Entries(
+        NyxIdChatSessionProjectionContext context,
+        IEnumerable<AGUIEvent> frames) =>
+        frames.Select(frame => Entry(context, frame)).ToArray();
 
     private static IReadOnlyList<ProjectionSessionEventEntry<AGUIEvent>> BuildCommandAttemptRejectionEntries(
         NyxIdChatSessionProjectionContext context,

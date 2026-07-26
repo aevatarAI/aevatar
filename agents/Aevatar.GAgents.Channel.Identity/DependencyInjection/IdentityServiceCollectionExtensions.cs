@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Audit;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Configuration.BackendConsole;
@@ -117,6 +118,30 @@ public static class IdentityServiceCollectionExtensions
         services.TryAddSingleton<
             IManagedCodexCredentialCommandPort,
             ManagedCodexCredentialCommandPort>();
+        services.AddEventSinkProjectionRuntimeCore<
+            ManagedCodexCredentialReadinessProjectionContext,
+            ManagedCodexCredentialReadinessRuntimeLease,
+            ManagedCodexCredentialSnapshot,
+            ProjectionSessionScopeGAgent<ManagedCodexCredentialReadinessProjectionContext>>(
+            static scopeKey => new ManagedCodexCredentialReadinessProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ManagedCodexCredentialReadinessRuntimeLease(context));
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<ManagedCodexCredentialSnapshot>,
+            ManagedCodexCredentialSnapshotCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<ManagedCodexCredentialSnapshot>,
+            ProjectionSessionEventHub<ManagedCodexCredentialSnapshot>>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ManagedCodexCredentialReadinessProjectionContext>,
+            ManagedCodexCredentialReadinessProjector>());
+        services.TryAddSingleton<
+            IManagedCodexCredentialReadinessObservationPort,
+            ManagedCodexCredentialReadinessObservationPort>();
 
         // ─── Committed-fact audit for external-identity bindings ───
         // Subject-bearing: the actor id embeds the raw external subject, so the

@@ -1550,30 +1550,45 @@ public sealed class ChatEndpointsInternalTests
         bareBearerHttp.Request.Headers.Authorization = "Bearer";
         var invalidHttp = CreateHttpContext();
         invalidHttp.Request.Headers.Authorization = "Bearer token 123";
-        var delegationHttp = CreateHttpContext();
-        delegationHttp.Request.Headers.Authorization = "Bearer forwarded-token";
-        delegationHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var bothValidHttp = CreateHttpContext();
+        bothValidHttp.Request.Headers.Authorization = "Bearer forwarded-token";
+        bothValidHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var delegationOnlyHttp = CreateHttpContext();
+        delegationOnlyHttp.Request.Headers["X-NyxID-Delegation-Token"] = "delegation-token";
+        var malformedAuthorizationWithDelegationHttp = CreateHttpContext();
+        malformedAuthorizationWithDelegationHttp.Request.Headers.Authorization = "Bearer token with spaces";
+        malformedAuthorizationWithDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "delegation-token";
         var identityOnlyHttp = CreateHttpContext();
         identityOnlyHttp.Request.Headers["X-NyxID-Identity-Token"] = "identity-assertion";
-        var invalidDelegationHttp = CreateHttpContext();
-        invalidDelegationHttp.Request.Headers.Authorization = "Bearer fallback-token";
-        invalidDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] = "token with spaces";
+        var validAuthorizationWithMalformedDelegationHttp = CreateHttpContext();
+        validAuthorizationWithMalformedDelegationHttp.Request.Headers.Authorization =
+            "Bearer forwarded-token";
+        validAuthorizationWithMalformedDelegationHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "token with spaces";
+        var malformedDelegationOnlyHttp = CreateHttpContext();
+        malformedDelegationOnlyHttp.Request.Headers["X-NyxID-Delegation-Token"] =
+            "token with spaces";
 
         var missing = WorkflowCallerCredentialExtractor.Extract(missingHttp);
         var unsupportedScheme = WorkflowCallerCredentialExtractor.Extract(unsupportedSchemeHttp);
         var valid = WorkflowCallerCredentialExtractor.Extract(validHttp);
         var bareBearer = WorkflowCallerCredentialExtractor.Extract(bareBearerHttp);
         var invalid = WorkflowCallerCredentialExtractor.Extract(invalidHttp);
-        var delegation = WorkflowCallerCredentialExtractor.Extract(delegationHttp);
+        var bothValid = WorkflowCallerCredentialExtractor.Extract(bothValidHttp);
+        var delegationOnly = WorkflowCallerCredentialExtractor.Extract(delegationOnlyHttp);
+        var malformedAuthorizationWithDelegation =
+            WorkflowCallerCredentialExtractor.Extract(malformedAuthorizationWithDelegationHttp);
         var identityOnly = WorkflowCallerCredentialExtractor.Extract(identityOnlyHttp);
-        var invalidDelegation = WorkflowCallerCredentialExtractor.Extract(invalidDelegationHttp);
+        var validAuthorizationWithMalformedDelegation =
+            WorkflowCallerCredentialExtractor.Extract(validAuthorizationWithMalformedDelegationHttp);
+        var malformedDelegationOnly =
+            WorkflowCallerCredentialExtractor.Extract(malformedDelegationOnlyHttp);
 
         missingHttpContext.Succeeded.Should().BeTrue();
         missingHttpContext.Credential.Should().BeNull();
         missing.Succeeded.Should().BeTrue();
         missing.Credential.Should().BeNull();
-        unsupportedScheme.Succeeded.Should().BeTrue();
-        unsupportedScheme.Credential.Should().BeNull();
         valid.Succeeded.Should().BeTrue();
         valid.Credential!.BearerToken.Should().Be("token-123");
         bareBearer.Succeeded.Should().BeFalse();
@@ -1582,12 +1597,24 @@ public sealed class ChatEndpointsInternalTests
         invalid.Succeeded.Should().BeFalse();
         invalid.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
         invalid.Credential.Should().BeNull();
-        delegation.Succeeded.Should().BeTrue();
-        delegation.Credential!.BearerToken.Should().Be("delegation-token");
+        bothValid.Succeeded.Should().BeTrue();
+        bothValid.Credential!.BearerToken.Should().Be("forwarded-token");
+        unsupportedScheme.Succeeded.Should().BeFalse();
+        unsupportedScheme.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        unsupportedScheme.Credential.Should().BeNull();
+        delegationOnly.Succeeded.Should().BeTrue();
+        delegationOnly.Credential!.BearerToken.Should().Be("delegation-token");
+        malformedAuthorizationWithDelegation.Succeeded.Should().BeFalse();
+        malformedAuthorizationWithDelegation.Error.Should().Be(
+            WorkflowChatRunStartError.InvalidCallerCredential);
+        validAuthorizationWithMalformedDelegation.Succeeded.Should().BeTrue();
+        validAuthorizationWithMalformedDelegation.Credential!.BearerToken.Should().Be(
+            "forwarded-token");
         identityOnly.Succeeded.Should().BeTrue();
         identityOnly.Credential.Should().BeNull();
-        invalidDelegation.Succeeded.Should().BeFalse();
-        invalidDelegation.Error.Should().Be(WorkflowChatRunStartError.InvalidCallerCredential);
+        malformedDelegationOnly.Succeeded.Should().BeFalse();
+        malformedDelegationOnly.Error.Should().Be(
+            WorkflowChatRunStartError.InvalidCallerCredential);
     }
 
     [Fact]

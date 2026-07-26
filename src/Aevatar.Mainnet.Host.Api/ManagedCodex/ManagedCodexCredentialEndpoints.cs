@@ -32,16 +32,19 @@ internal static class ManagedCodexCredentialEndpoints
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(queryPort);
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
         if (!TryResolveSubject(http, out var userId))
             return Results.Unauthorized();
 
+        var eligible = options.Value.IsEligible(userId);
         var snapshot = await queryPort.ResolveAsync(Owner(userId), ct).ConfigureAwait(false);
         if (snapshot?.Credential is null)
         {
             return Results.Ok(new
             {
                 enabled = options.Value.Enabled,
+                eligible,
                 status = "not_provisioned",
                 state_version = 0L,
                 cleanup_pending = 0,
@@ -52,6 +55,7 @@ internal static class ManagedCodexCredentialEndpoints
         return Results.Ok(new
         {
             enabled = options.Value.Enabled,
+            eligible,
             status = EffectiveStatus(credential, timeProvider.GetUtcNow()),
             expires_at_unix_ms = credential.ExpiresAt?.ToDateTimeOffset().ToUnixTimeMilliseconds(),
             state_version = snapshot.StateVersion,
@@ -117,10 +121,13 @@ internal static class ManagedCodexCredentialEndpoints
 
     private static int StatusFor(string code) => code switch
     {
+        "managed_user_authorization_unavailable" => StatusCodes.Status401Unauthorized,
         "managed_target_disabled" or
+        "managed_credential_commit_timeout" or
         "managed_credential_cleanup_pending" or
         "managed_credential_persistence_pending" or
-        "managed_credential_vault_unavailable" => StatusCodes.Status503ServiceUnavailable,
+        "managed_credential_vault_unavailable" or
+        "managed_user_services_unavailable" => StatusCodes.Status503ServiceUnavailable,
         "managed_feature_not_enabled" or
         "nyxid_identity_mismatch" => StatusCodes.Status403Forbidden,
         "managed_credential_not_provisioned" => StatusCodes.Status404NotFound,
@@ -149,7 +156,7 @@ internal static class ManagedCodexCredentialEndpoints
 
         foreach (var claimType in new[]
                  {
-                     "scope_id", "uid", "sub", ClaimTypes.NameIdentifier, "user_id",
+                     "uid", "sub", ClaimTypes.NameIdentifier, "user_id",
                  })
         {
             var value = http.User.FindFirst(claimType)?.Value?.Trim();

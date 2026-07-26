@@ -73,6 +73,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
+        services.AddSingleton<
+            INyxIdChatConversationStateQueryPort,
+            ProjectionNyxIdChatConversationStateQueryPort>();
         // Script runtime activity reads the scripting capability's native-document read model;
         // hosts composed without scripting have no reader, and consumers of this port already
         // treat it as optional (resolved via GetService).

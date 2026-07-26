@@ -244,6 +244,49 @@ owner_llm_live_authority_hits="$(
     -g '!**/obj/**'
 )"
 
+nyxid_root="${AEVATAR_QUERY_PROJECTION_NYXID_ROOT:-${REPO_ROOT}}"
+if [[ ! -d "${nyxid_root}/src" || ! -d "${nyxid_root}/agents" ]]; then
+  echo "Missing NyxIdChat query source roots under: ${nyxid_root}" >&2
+  exit 1
+fi
+
+nyxid_state_endpoint_file="agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.State.cs"
+nyxid_state_query_file="src/Aevatar.Studio.Infrastructure/ActorBacked/ProjectionNyxIdChatConversationStateQueryPort.cs"
+nyxid_state_contract_file="src/Aevatar.Studio.Application.Abstractions/Studio/Abstractions/INyxIdChatConversationStateQueryPort.cs"
+require_source_anchor \
+  "${nyxid_root}" \
+  "${nyxid_state_endpoint_file}" \
+  "HandleGetStateAsync" \
+  "NyxIdChat state endpoint"
+require_source_anchor \
+  "${nyxid_root}" \
+  "${nyxid_state_query_file}" \
+  "ProjectionNyxIdChatConversationStateQueryPort" \
+  "NyxIdChat state query"
+require_source_anchor \
+  "${nyxid_root}" \
+  "${nyxid_state_contract_file}" \
+  "INyxIdChatConversationStateQueryPort" \
+  "NyxIdChat state query contract"
+
+nyxid_state_query_authority_hits="$(
+  capture_root_rg_hits "NyxIdChat state query authority scan" \
+    "${nyxid_root}" \
+    -n "IActorRuntime|IEventStore" \
+    "${nyxid_state_endpoint_file}" \
+    "${nyxid_state_query_file}" \
+    "${nyxid_state_contract_file}"
+)"
+
+nyxid_state_query_lifecycle_hits="$(
+  capture_root_rg_hits "NyxIdChat state query lifecycle scan" \
+    "${nyxid_root}" \
+    -n "Ensure[A-Za-z0-9_]*ProjectionAsync|EnsureAndAttachLeaseAsync|AttachLiveSinkAsync|ReleaseActorProjectionAsync|ActivateAsync|PrimeAsync|ReplayAsync|ReplayEventsAsync|RebuildAsync|BackfillAsync" \
+    "${nyxid_state_endpoint_file}" \
+    "${nyxid_state_query_file}" \
+    "${nyxid_state_contract_file}"
+)"
+
 schedule_preflight_contract_error=""
 schedule_preflight_planner_hits="$(
   capture_rg_input_hits "Studio schedule preflight planner anchor scan" \
@@ -256,7 +299,7 @@ elif [[ -z "${schedule_preflight_planner_hits}" ]]; then
   schedule_preflight_contract_error="Studio schedule PreflightAsync must query the authorization planner directly."
 fi
 
-if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}${schedule_preflight_hits}${owner_llm_resolver_hits}${owner_llm_live_authority_hits}${schedule_preflight_contract_error}" ]]; then
+if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${command_path_hits}${chat_route_policy_endpoint_hits}${identity_oauth_hits}${schedule_preflight_hits}${owner_llm_resolver_hits}${owner_llm_live_authority_hits}${nyxid_state_query_authority_hits}${nyxid_state_query_lifecycle_hits}${schedule_preflight_contract_error}" ]]; then
   if [[ -n "${hits}" ]]; then
     echo "${hits}"
   fi
@@ -291,6 +334,14 @@ if [[ -n "${hits}${endpoint_lifecycle_hits}${scope_service_script_stream_hits}${
   if [[ -n "${owner_llm_live_authority_hits}" ]]; then
     echo "${owner_llm_live_authority_hits}"
     echo "Scheduled owner LLM query/planner paths must not call live LLM catalogs or issue access tokens."
+  fi
+  if [[ -n "${nyxid_state_query_authority_hits}" ]]; then
+    echo "${nyxid_state_query_authority_hits}"
+    echo "NyxIdChat state endpoint/query contracts must read the projection document only; IActorRuntime and IEventStore are forbidden."
+  fi
+  if [[ -n "${nyxid_state_query_lifecycle_hits}" ]]; then
+    echo "${nyxid_state_query_lifecycle_hits}"
+    echo "NyxIdChat state query calls must not attach, prime, activate, replay, rebuild, or backfill projection state."
   fi
   if [[ -n "${schedule_preflight_contract_error}" ]]; then
     echo "${schedule_preflight_contract_error}"

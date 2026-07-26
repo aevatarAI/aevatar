@@ -19,9 +19,14 @@ public sealed class ManagedCodexCredentialProjectionQueryPort(
         if (document?.Credential is null)
             return null;
 
-        return new ManagedCodexCredentialSnapshot(
-            document.Credential.Clone(),
-            document.PendingRevocations.Select(static item => item.Clone()).ToArray(),
-            document.StateVersion);
+        var snapshot = new ManagedCodexCredentialSnapshot
+        {
+            Credential = document.Credential.Clone(),
+            StateVersion = document.StateVersion,
+            LastEventId = document.LastEventId,
+        };
+        snapshot.PendingRevocations.Add(
+            document.PendingRevocations.Select(static item => item.Clone()));
+        return snapshot;
     }
 }

@@ -339,12 +339,11 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     [Fact]
-    public async Task ProvisionAsync_DefaultsToOneShotCron_WhenNoCronSupplied()
+    public async Task ProvisionAsync_DefaultsToFirstClassOneShot_WhenNoCronSupplied()
     {
         var member = NewMemberService();
         var schedule = new RecordingScheduleService { ScheduleId = ScheduleId };
         var sut = NewService(member, schedule, out var time);
-        // Pin a deterministic clock so the synthesized one-shot cron is stable.
         time.SetUtcNow(new DateTimeOffset(2026, 6, 19, 10, 30, 15, TimeSpan.Zero));
 
         await sut.ProvisionAsync(
@@ -355,9 +354,10 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 TeamId = TeamId,
             });
 
-        // now=10:30:15, +30s=10:30:45, rounded up to next whole minute = 10:31.
-        // Fixed-minute one-shot cron: "minute hour day month *".
-        schedule.Configuration!.CronExpression.Should().Be("31 10 19 6 *");
+        schedule.Configuration!.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.OneShotAtUtc);
+        schedule.Configuration.OneShotFireAt.Should()
+            .Be(new DateTimeOffset(2026, 6, 19, 10, 30, 45, TimeSpan.Zero));
+        schedule.Configuration.CronExpression.Should().BeEmpty();
         schedule.Configuration.Timezone.Should().Be(ScheduledDispatchCalculator.DefaultTimezone);
     }
 
@@ -381,7 +381,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
                 TeamId = TeamId,
             });
 
-        schedule.Configuration!.CronExpression.Should().Be("*/15 * * * *");
+        schedule.Configuration!.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.RecurringCron);
+        schedule.Configuration.OneShotFireAt.Should().BeNull();
+        schedule.Configuration.CronExpression.Should().Be("*/15 * * * *");
         schedule.Configuration.Timezone.Should().Be("Asia/Shanghai");
     }
 
@@ -430,7 +432,9 @@ public sealed class StudioWorkflowProvisioningServiceTests
             });
 
         schedule.Ensured.Should().BeTrue();
-        schedule.Configuration!.CronExpression.Should().Be("*/15 * * * *");
+        schedule.Configuration!.ScheduleMode.Should().Be(ScheduledDispatchScheduleMode.RecurringCron);
+        schedule.Configuration.OneShotFireAt.Should().BeNull();
+        schedule.Configuration.CronExpression.Should().Be("*/15 * * * *");
         response.ScheduleId.Should().Be(ScheduleId);
     }
 
@@ -969,7 +973,7 @@ public sealed class StudioWorkflowProvisioningServiceTests
     }
 
     /// <summary>
-    /// Manual-set time provider so the synthesized one-shot cron is deterministic.
+    /// Manual-set time provider so the typed one-shot fire time is deterministic.
     /// The service only reads <see cref="GetUtcNow"/> (it never sleeps), so no
     /// timer is needed and no polling-wait magic numbers exist.
     /// </summary>

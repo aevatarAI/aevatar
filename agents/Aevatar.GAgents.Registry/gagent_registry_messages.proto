@@ -47,6 +47,7 @@ enum GAgentRegistryOperation {
   JOIN = 6;
   LIST_PARTICIPANTS = 7;
   DRAFT_RUN_REUSE = 8;
+  CONTROL = 9;
 }
 
 message ScopeResourceAdmissionRequested {
