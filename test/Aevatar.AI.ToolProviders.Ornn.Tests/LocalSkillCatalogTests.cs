@@ -171,7 +171,7 @@ public sealed class LocalSkillCatalogTests
     }
 
     [Fact]
-    public async Task UseSkillTool_MountsWorkflowsByDefault_WhenHostProvidesMountPort()
+    public async Task UseSkillTool_WhenMountWorkflowsIsOmitted_LoadsSkillWithoutMounting()
     {
         var catalog = new LocalSkillCatalog();
         var mountPort = new RecordingSkillWorkflowMountPort();
@@ -196,8 +196,13 @@ public sealed class LocalSkillCatalogTests
         var result = await tool.ExecuteAsync("""{"skill":"workflow-skill"}""");
 
         ExtractLoaded(result).Should().BeTrue();
-        mountPort.Requests.Should().ContainSingle();
-        ExtractWorkflowMount(result).Should().NotBeNull();
+        mountPort.Requests.Should().BeEmpty();
+        ExtractWorkflowMount(result).Should().BeNull();
+        ((IAgentTool)tool).GetCallSafety("""{"skill":"workflow-skill"}""").Should().Be(
+            new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: true,
+                IsDestructive: false));
     }
 
     [Fact]

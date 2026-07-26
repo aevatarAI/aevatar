@@ -18,6 +18,7 @@ using NSubstitute;
 using Xunit;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -1915,6 +1916,146 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_ForNyxIdInventory_UsesSkillThenTypedToolAndStreamsFinalAnswer()
+    {
+        var executionEvents = new List<string>();
+        var providerFactory = new NyxIdInventorySkillStreamingProviderFactory();
+        var remoteSkillFetcher = new RecordingNyxIdRemoteSkillFetcher(executionEvents);
+        var skillCapabilityIssuer = new RecordingNyxIdSkillCapabilityIssuer("sender-skill-token");
+        var inventoryCapabilityIssuer = new RecordingNyxIdInventoryCapabilityIssuer(
+            "sender-inventory-token",
+            executionEvents);
+        var inventoryHandler = new RecordingNyxIdInventoryHandler(executionEvents);
+        var nyxIdOptions = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var inventorySource = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            nyxIdOptions,
+            new FixedNyxIdApiClientFactory(new NyxIdApiClient(
+                nyxIdOptions,
+                new HttpClient(inventoryHandler))),
+            inventoryCapabilityIssuer,
+            NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            toolSources: [inventorySource],
+            localSkillCatalog: new LocalSkillCatalog(),
+            remoteSkillFetcher: remoteSkillFetcher,
+            relayOptions: new global::Aevatar.GAgents.Channel.NyxIdRelay.NyxIdRelayOptions
+            {
+                StreamingPlaceholderText = "…",
+            },
+            remoteSkillAccessTokenResolver: new ChannelRemoteSkillAccessTokenResolver(
+                skillCapabilityIssuer,
+                NullLogger<ChannelRemoteSkillAccessTokenResolver>.Instance));
+        var sink = new RecordingStreamingSink();
+        var toolContext = AgentToolExecutionContext.Empty with
+        {
+            Channel = new AgentToolChannelContext(
+                "lark",
+                "ou-channel-alpha",
+                "scope-channel-alpha",
+                "message-inventory-alpha",
+                null),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-skill-inventory-alpha",
+                NyxUserId: "nyx-user-channel-alpha",
+                SenderTenant: "tenant-channel-alpha"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-authority-alpha",
+                "ou-authority-alpha"),
+        };
+
+        var reply = await generator.GenerateReplyAsync(
+            new ChatActivity
+            {
+                Id = "message-inventory-alpha",
+                ChannelId = ChannelId.From("lark"),
+                Conversation = new ConversationReference
+                {
+                    CanonicalKey = "lark:dm:ou-channel-alpha",
+                },
+                Content = new MessageContent
+                {
+                    Text = "我在 NyxID 上连接了哪些服务",
+                },
+            },
+            new Dictionary<string, string>
+            {
+                [ChannelMetadataKeys.Platform] = "lark",
+                [ChannelMetadataKeys.SenderId] = "ou-channel-alpha",
+                [ChannelMetadataKeys.MessageId] = "message-inventory-alpha",
+            },
+            Control(
+                model: "sender-model",
+                route: "sender-route",
+                rounds: 4,
+                token: "ambient-owner-token",
+                senderToken: null),
+            toolContext,
+            sink,
+            CancellationToken.None);
+
+        providerFactory.ChatStreamCallCount.Should().Be(3);
+        providerFactory.Requests.Should().HaveCount(3);
+        providerFactory.ObservedToolCalls.Should().Equal(
+            "use_skill",
+            "nyxid_service_inventory");
+        executionEvents.Should().Equal(
+            "use_skill",
+            "nyxid_service_inventory",
+            "/api/v1/keys");
+
+        remoteSkillFetcher.Requests.Should().ContainSingle().Which.Should().Be((
+            "sender-skill-token",
+            "nyxid"));
+        remoteSkillFetcher.Requests.Should().NotContain(request =>
+            request.AccessToken == "ambient-owner-token");
+        skillCapabilityIssuer.BindingIds.Should().ContainSingle()
+            .Which.Should().Be("bnd-skill-inventory-alpha");
+        inventoryCapabilityIssuer.BindingIds.Should().ContainSingle()
+            .Which.Should().Be("bnd-skill-inventory-alpha");
+        skillCapabilityIssuer.Subjects.Should().ContainSingle().Which.Should().Be((
+            "lark",
+            "tenant-authority-alpha",
+            "ou-authority-alpha"));
+        inventoryCapabilityIssuer.Subjects.Should().ContainSingle().Which.Should().Be((
+            "lark",
+            "tenant-authority-alpha",
+            "ou-authority-alpha"));
+        inventoryHandler.Authorization.Should().Be("Bearer sender-inventory-token");
+        inventoryHandler.RequestPath.Should().Be("/api/v1/keys");
+
+        var useSkillResult = providerFactory.Requests[1].Messages
+            .Should().ContainSingle(message =>
+                message.Role == "tool" &&
+                message.ToolCallId == "call-use-nyxid")
+            .Which.Content;
+        var inventoryResult = providerFactory.Requests[2].Messages
+            .Should().ContainSingle(message =>
+                message.Role == "tool" &&
+                message.ToolCallId == "call-nyxid-inventory")
+            .Which.Content;
+        useSkillResult.Should().Contain("nyxid_service_inventory");
+        inventoryResult.Should().Contain("GitHub");
+
+        providerFactory.Requests
+            .SelectMany(request => request.Tools ?? [])
+            .Should().NotContain(tool => tool.Name == "code_execute");
+        reply.Text.Should().Be("你已连接 GitHub。");
+        sink.Emissions.Should().NotBeEmpty();
+        sink.Emissions.Last().Should().Be("你已连接 GitHub。");
+
+        var visibleAndToolOutput = string.Join(
+            "\n",
+            new[] { reply.Text, useSkillResult, inventoryResult }
+                .Where(static value => !string.IsNullOrWhiteSpace(value)));
+        visibleAndToolOutput.Should().NotContain("UNAUTHENTICATED");
+        visibleAndToolOutput.Should().NotContain("nyxid service list");
+        visibleAndToolOutput.Should().NotContain("/init");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithToolCallPreamble_DoesNotStreamProcessNarration()
     {
         var providerFactory = new ToolCallingPreambleProviderFactory();
@@ -3161,6 +3302,175 @@ public sealed class ConversationReplyGeneratorTests
             yield return new LLMStreamChunk { IsLast = true };
             await Task.CompletedTask;
         }
+    }
+
+    private sealed class NyxIdInventorySkillStreamingProviderFactory : ILLMProviderFactory, ILLMProvider
+    {
+        public string Name => "nyxid-inventory-skill-streaming";
+
+        public int ChatStreamCallCount { get; private set; }
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public List<string> ObservedToolCalls { get; } = [];
+
+        public ILLMProvider GetProvider(string name) => this;
+
+        public ILLMProvider GetDefault() => this;
+
+        public IReadOnlyList<string> GetAvailableProviders() => [Name];
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            ChatStreamCallCount++;
+            Requests.Add(request);
+
+            if (!HasToolCall(request, "use_skill"))
+            {
+                ObservedToolCalls.Add("use_skill");
+                yield return ToolChunk(
+                    "call-use-nyxid",
+                    "use_skill",
+                    """{"skill":"nyxid"}""");
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            if (!HasToolCall(request, "nyxid_service_inventory"))
+            {
+                ObservedToolCalls.Add("nyxid_service_inventory");
+                yield return ToolChunk(
+                    "call-nyxid-inventory",
+                    "nyxid_service_inventory",
+                    "{}");
+                yield return new LLMStreamChunk { IsLast = true };
+                await Task.CompletedTask;
+                yield break;
+            }
+
+            yield return new LLMStreamChunk { DeltaContent = "你已连接 " };
+            yield return new LLMStreamChunk { DeltaContent = "GitHub。" };
+            yield return new LLMStreamChunk { IsLast = true };
+            await Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingNyxIdRemoteSkillFetcher(List<string> executionEvents)
+        : IRemoteSkillFetcher
+    {
+        public List<(string AccessToken, string NameOrId)> Requests { get; } = [];
+
+        public Task<SkillDefinition?> FetchSkillAsync(
+            string accessToken,
+            string nameOrId,
+            CancellationToken ct = default)
+        {
+            Requests.Add((accessToken, nameOrId));
+            executionEvents.Add("use_skill");
+            return Task.FromResult<SkillDefinition?>(new SkillDefinition
+            {
+                Name = "nyxid",
+                Description = "Use the caller-scoped NyxID tools.",
+                Instructions =
+                    "Use `nyxid_service_inventory` for the sender-scoped connected-service inventory.",
+                Source = SkillSource.Remote,
+                RemoteId = "skill-nyxid-alpha",
+            });
+        }
+    }
+
+    private sealed class RecordingNyxIdSkillCapabilityIssuer(string accessToken)
+        : INyxIdSkillCapabilityIssuer
+    {
+        public List<string> BindingIds { get; } = [];
+
+        public List<(string Platform, string Tenant, string ExternalUserId)> Subjects { get; } = [];
+
+        public Task<CapabilityHandle> IssueByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CancellationToken ct = default)
+        {
+            BindingIds.Add(bindingId);
+            Subjects.Add((
+                externalSubject.Platform,
+                externalSubject.Tenant,
+                externalSubject.ExternalUserId));
+            return Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = accessToken,
+                Scope = "proxy",
+            });
+        }
+    }
+
+    private sealed class RecordingNyxIdInventoryCapabilityIssuer(
+        string accessToken,
+        List<string> executionEvents)
+        : INyxIdConnectedServiceInventoryCapabilityIssuer
+    {
+        public List<string> BindingIds { get; } = [];
+
+        public List<(string Platform, string Tenant, string ExternalUserId)> Subjects { get; } = [];
+
+        public Task<CapabilityHandle> IssueByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CancellationToken ct = default)
+        {
+            executionEvents.Add("nyxid_service_inventory");
+            BindingIds.Add(bindingId);
+            Subjects.Add((
+                externalSubject.Platform,
+                externalSubject.Tenant,
+                externalSubject.ExternalUserId));
+            return Task.FromResult(new CapabilityHandle
+            {
+                AccessToken = accessToken,
+                Scope = "proxy",
+            });
+        }
+    }
+
+    private sealed class RecordingNyxIdInventoryHandler(List<string> executionEvents) : HttpMessageHandler
+    {
+        public string? Authorization { get; private set; }
+
+        public string? RequestPath { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Authorization = request.Headers.Authorization?.ToString();
+            RequestPath = request.RequestUri?.AbsolutePath;
+            executionEvents.Add(RequestPath ?? "unknown-http-path");
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {
+                      "keys": [
+                        {
+                          "id": "user-service-github-alpha",
+                          "slug": "github",
+                          "service_id": "catalog-github-alpha",
+                          "label": "GitHub",
+                          "is_active": true,
+                          "credential_source": { "type": "personal" }
+                        }
+                      ]
+                    }
+                    """),
+            });
+        }
+    }
+
+    private sealed class FixedNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
+    {
+        public NyxIdApiClient CreateClient() => client;
     }
 
     private sealed class ToolResultEchoingProviderFactory : ILLMProviderFactory, ILLMProvider

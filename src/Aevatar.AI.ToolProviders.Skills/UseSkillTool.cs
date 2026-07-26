@@ -68,7 +68,7 @@ public sealed class UseSkillTool : IAgentTool
             "args": { "type": "string", "description": "Optional arguments for the skill" },
             "mount_workflows": {
               "type": "boolean",
-              "description": "When true, mount the skill's workflow YAML bundles into the current scope as callable workflows. When omitted, hosts with workflow mounting support mount workflow skills automatically."
+              "description": "When true, mount the skill's workflow YAML bundles into the current scope as callable workflows. Omit or set false to load instructions without changing workflows."
             }
           },
           "required": ["skill"]
@@ -111,6 +111,15 @@ public sealed class UseSkillTool : IAgentTool
 
     public bool? RequiresApproval(string argumentsJson) => false;
 
+    public AgentToolCallSafety GetCallSafety(string argumentsJson)
+    {
+        var mountsWorkflows = ParseArguments(argumentsJson).MountWorkflows == true;
+        return new AgentToolCallSafety(
+            RequiresApproval: false,
+            IsReadOnly: !mountsWorkflows,
+            IsDestructive: false);
+    }
+
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var arguments = ParseArguments(argumentsJson);
@@ -142,7 +151,7 @@ public sealed class UseSkillTool : IAgentTool
                 status: "success",
                 text: BuildSkillResponse(skill, args),
                 skill: skill,
-                mountWorkflows: ShouldMountWorkflows(skill, requestedMountWorkflows),
+                mountWorkflows: ShouldMountWorkflows(requestedMountWorkflows),
                 ct: ct);
 
         if (_remoteFetcher != null)
@@ -186,7 +195,7 @@ public sealed class UseSkillTool : IAgentTool
                         status: "success",
                         text: BuildSkillResponse(skill, args),
                         skill: skill,
-                        mountWorkflows: ShouldMountWorkflows(skill, requestedMountWorkflows),
+                        mountWorkflows: ShouldMountWorkflows(requestedMountWorkflows),
                         ct: ct);
                 }
             }
@@ -441,10 +450,8 @@ public sealed class UseSkillTool : IAgentTool
         return new UseSkillArguments(skillName, args, mountWorkflows);
     }
 
-    private bool ShouldMountWorkflows(SkillDefinition skill, bool? requestedMountWorkflows) =>
-        requestedMountWorkflows ??
-        skill.Workflows.Count > 0 &&
-        (_workflowMountPort is not NoOpSkillWorkflowMountPort || _scopeWorkflowCommandPort is not null);
+    private static bool ShouldMountWorkflows(bool? requestedMountWorkflows) =>
+        requestedMountWorkflows == true;
 
     private static string BuildSkillResponse(SkillDefinition skill, string args)
     {

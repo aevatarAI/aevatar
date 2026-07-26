@@ -8,9 +8,11 @@ internal static class AgentToolCredentialPolicy
     {
         ArgumentNullException.ThrowIfNull(tool);
 
-        return !tool.IsReadOnly ||
-               tool.IsDestructive ||
+        var callSafety = tool.GetCallSafety(argumentsJson);
+
+        return !callSafety.IsReadOnly ||
+               callSafety.IsDestructive ||
                !string.IsNullOrWhiteSpace(tool.SideEffectKind) ||
-               tool.RequiresApproval(argumentsJson) == true;
+               callSafety.RequiresApproval == true;
     }
 }
