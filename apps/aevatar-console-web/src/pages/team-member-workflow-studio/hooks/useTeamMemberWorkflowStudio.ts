@@ -68,6 +68,7 @@ import {
   prepareWorkflowTemplateApplication,
   restoreWorkflowTemplateSnapshot,
   type WorkflowTemplateEditorSnapshot,
+  type WorkflowTemplateRevision,
 } from "../workflowTemplateApplication";
 
 type TeamMemberWorkflowStudioMode = "new" | "existing";
@@ -75,7 +76,7 @@ type WorkflowPublishTone = "default" | "processing" | "success" | "warning" | "e
 type WorkflowExecutionStatus = "idle" | "running" | "succeeded" | "failed";
 
 export type WorkflowTemplateApplicationDetail = {
-  readonly revision: number;
+  readonly revision: WorkflowTemplateRevision;
   readonly templateId: string;
   readonly workflowYaml: string;
 };

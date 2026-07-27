@@ -42,7 +42,7 @@ describe("workflow template application", () => {
       parseYaml,
       snapshot,
       templateId: "conditional-routing",
-      templateRevision: 3,
+      templateRevision: "3",
       yaml: "name: Template-owned title\nsteps:\n  - id: prepare\n",
     });
 
@@ -73,7 +73,7 @@ describe("workflow template application", () => {
     expect(prepared.snapshot.document).not.toBe(currentDocument);
     expect(prepared.snapshot.layout).not.toBe(currentLayout);
     expect(prepared.templateId).toBe("conditional-routing");
-    expect(prepared.templateRevision).toBe(3);
+    expect(prepared.templateRevision).toBe("3");
   });
 
   it("rejects parser, schema, or primitive findings before producing replacement state", async () => {

@@ -17,6 +17,8 @@ export type WorkflowTemplateEditorSnapshot = {
   readonly title: string;
 };
 
+export type WorkflowTemplateRevision = string | number;
+
 export type PreparedWorkflowTemplateApplication = {
   readonly document: StudioWorkflowDocument;
   readonly layout: unknown;
@@ -24,7 +26,7 @@ export type PreparedWorkflowTemplateApplication = {
   readonly selectedNodeId: string;
   readonly snapshot: WorkflowTemplateEditorSnapshot;
   readonly templateId: string;
-  readonly templateRevision: number;
+  readonly templateRevision: WorkflowTemplateRevision;
 };
 
 type ParseWorkflowYaml = (input: {
@@ -79,11 +81,15 @@ export async function prepareWorkflowTemplateApplication(input: {
   readonly parseYaml: ParseWorkflowYaml;
   readonly snapshot: WorkflowTemplateEditorSnapshot;
   readonly templateId: string;
-  readonly templateRevision: number;
+  readonly templateRevision: WorkflowTemplateRevision;
   readonly yaml: string;
 }): Promise<PreparedWorkflowTemplateApplication> {
   const templateId = input.templateId.trim();
-  if (!templateId || !Number.isInteger(input.templateRevision) || input.templateRevision < 1) {
+  const revisionIsValid =
+    typeof input.templateRevision === "number"
+      ? Number.isInteger(input.templateRevision) && input.templateRevision >= 1
+      : input.templateRevision.trim().length > 0;
+  if (!templateId || !revisionIsValid) {
     throw new Error("Choose a specific workflow template revision and try again.");
   }
 
