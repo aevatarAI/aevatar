@@ -27,13 +27,11 @@ describe("app navigation groups", () => {
     expect(groups.map((group) => group.label)).toEqual([
       "Teams",
       "Chat",
-      "Platform",
       "Settings",
     ]);
     expect(groups.map((group) => group.labelMessageId)).toEqual([
       "nav.groups.teams",
       "nav.groups.chat",
-      "nav.groups.platform",
       "nav.groups.settings",
     ]);
     expect(groups.find((group) => group.key === "chat")?.flattenSingleItem).toBe(true);
@@ -79,7 +77,6 @@ describe("app navigation groups", () => {
     expect(menuItems.map((item) => item.path ?? item.key)).toEqual([
       "menu-group:teams",
       "/chat",
-      "menu-group:platform",
       "/settings",
     ]);
     expect(menuItems[0].children?.map((child) => child.path)).toEqual([

@@ -1100,6 +1100,7 @@ const enUSMessages = {
     'Select a log entry to inspect its input, output, and raw event data.',
   'teamMemberWorkflowStudio.executionPanel.steps': 'Steps',
   'teamMemberWorkflowStudio.executionPanel.status.error': 'Error',
+  'teamMemberWorkflowStudio.executionPanel.status.pending': 'Pending',
   'teamMemberWorkflowStudio.executionPanel.status.recorded': 'Recorded',
   'teamMemberWorkflowStudio.executionPanel.status.running': 'Running',
   'teamMemberWorkflowStudio.executionPanel.status.success': 'Success',
