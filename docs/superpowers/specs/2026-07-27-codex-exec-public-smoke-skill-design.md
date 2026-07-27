@@ -59,7 +59,6 @@ Its Ornn metadata declares:
 - name: `verify-codex-exec`;
 - version: `1.0`;
 - category: `tool-based`;
-- output type: `text`;
 - tool list: exactly `codex_exec`;
 - tags covering Aevatar, Codex, managed sandbox, smoke test, and diagnostics.
 
@@ -144,10 +143,11 @@ flow:
 1. validate the ZIP package;
 2. upload it as a new private skill;
 3. read it back and verify name, version, tool declaration, and package files;
-4. replace permissions with `isPrivate=false` and empty user/org share lists;
-5. verify public search and public read visibility;
-6. run the skill once through Aevatar and record only the verdict, stable
-   diagnostic identifiers, and public Ornn identity.
+4. run the still-private skill once through Aevatar and verify the exact
+   canonical tool call and success marker;
+5. replace permissions with `isPrivate=false` and empty user/org share lists;
+6. verify public search and public read visibility for the same immutable
+   version and package hash.
 
 If any gate fails, do not describe the skill as public or ready.
 
