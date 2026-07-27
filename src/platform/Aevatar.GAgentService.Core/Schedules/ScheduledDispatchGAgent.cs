@@ -342,8 +342,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task HandleDeleteCoreAsync(ScheduledDispatchDeleteCommand command)
     {
-        if (State.Deleted && IsSameCompletedDeleteOperation(command))
+        var normalizedReason = NormalizeOptional(command.Reason);
+        if (State.Deleted &&
+            State.TeamAutomationOperationKind ==
+                TeamAutomationOperationKindState.Delete)
         {
+            if (!IsSameCompletedDeleteOperation(
+                    command,
+                    normalizedReason))
+            {
+                throw TeamAutomationCommandRejectedException.Conflict(
+                    "team_automation_operation_conflict");
+            }
+
             EnsureObservedCredentialAuthorizationOwnerAccess(
                 command.AuthenticatedCredentialOwner,
                 State.TeamCredentialEffectLocator?.CredentialOwner);
@@ -390,11 +401,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 PendingRevocationCredential = State.ActiveTeamCredential?.Clone(),
                 PendingRevocationCredentialOwner = State.ActiveTeamCredentialOwner?.Clone(),
                 OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Reason = normalizedReason,
             });
         }
         await PersistDomainEventAsync(new ScheduledDispatchDeletedEvent
         {
-            Reason = NormalizeOptional(command.Reason),
+            Reason = normalizedReason,
             DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
         await PersistTeamAutomationObservationAsync(
@@ -2121,12 +2133,19 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         State.TeamCredentialEffectLocator != null ||
         State.TeamAutomationLifecycleStatus is not TeamAutomationLifecycleStatusState.Unspecified;
 
-    private bool IsSameCompletedDeleteOperation(ScheduledDispatchDeleteCommand command) =>
+    private bool IsSameCompletedDeleteOperation(
+        ScheduledDispatchDeleteCommand command,
+        string normalizedReason) =>
         State.TeamAutomationOwner != null &&
         command.TeamAutomationOwner != null &&
         TeamAutomationOwnerEquals(State.TeamAutomationOwner, command.TeamAutomationOwner) &&
         string.Equals(State.TeamAutomationOperationId, command.OperationId?.Trim(), StringComparison.Ordinal) &&
-        string.Equals(State.TeamAutomationIdempotencyKey, command.IdempotencyKey?.Trim(), StringComparison.Ordinal);
+        string.Equals(State.TeamAutomationIdempotencyKey, command.IdempotencyKey?.Trim(), StringComparison.Ordinal) &&
+        State.HasTeamAutomationDeleteReason &&
+        string.Equals(
+            State.TeamAutomationDeleteReason,
+            normalizedReason,
+            StringComparison.Ordinal);
 
     private static TeamMemberAutomationOwnerState NormalizeTeamAutomationOwner(TeamMemberAutomationOwnerState? owner)
     {
@@ -3212,6 +3231,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.PendingTeamCredentialExpiryAt = null;
         next.PendingTeamCredentialExpiryGeneration = 0;
         next.TeamAutomationActivationDecision = null;
+        if (next.TeamAutomationOperationKind ==
+                TeamAutomationOperationKindState.Delete &&
+            !next.HasTeamAutomationDeleteReason)
+        {
+            next.TeamAutomationDeleteReason =
+                NormalizeOptional(evt.Reason);
+        }
         next.UpdatedAt = deletedAt;
         if (next.PendingRevocationTeamCredential != null)
             next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
@@ -3327,6 +3353,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.TeamAutomationOperationKind = TeamAutomationOperationKindState.Delete;
         next.TeamAutomationOperationId = evt.OperationId ?? string.Empty;
         next.TeamAutomationIdempotencyKey = evt.IdempotencyKey ?? string.Empty;
+        if (evt.HasReason)
+            next.TeamAutomationDeleteReason = evt.Reason;
+        else
+            next.ClearTeamAutomationDeleteReason();
         next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.Deleting;
         next.CandidateTeamCredential = null;
         next.CandidateTeamCredentialOwner = null;
