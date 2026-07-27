@@ -3,6 +3,8 @@ using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.GAgentService.Application.Schedules;
 
@@ -22,6 +24,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private readonly IScheduledDispatchCredentialRequirementPolicy _credentialRequirementPolicy;
     private readonly ITeamAutomationOperationObservationScopeLeasePreparationPort? _teamOperationObservationPreparation;
     private readonly ITeamAutomationOperationObservationProjectionPort? _teamOperationObservationProjection;
+    private readonly ILogger<ScheduledDispatchApplicationService> _logger;
 
     public ScheduledDispatchApplicationService(
         IScheduledDispatchActorPort actorPort,
@@ -30,7 +33,8 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         IScheduledDispatchCredentialAdmissionPort credentialAdmissionPort,
         IScheduledDispatchCredentialRequirementPolicy? credentialRequirementPolicy = null,
         ITeamAutomationOperationObservationScopeLeasePreparationPort? teamOperationObservationPreparation = null,
-        ITeamAutomationOperationObservationProjectionPort? teamOperationObservationProjection = null)
+        ITeamAutomationOperationObservationProjectionPort? teamOperationObservationProjection = null,
+        ILogger<ScheduledDispatchApplicationService>? logger = null)
     {
         _actorPort = actorPort ?? throw new ArgumentNullException(nameof(actorPort));
         _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
@@ -40,6 +44,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             DefaultScheduledDispatchCredentialRequirementPolicy.Instance;
         _teamOperationObservationPreparation = teamOperationObservationPreparation;
         _teamOperationObservationProjection = teamOperationObservationProjection;
+        _logger = logger ?? NullLogger<ScheduledDispatchApplicationService>.Instance;
     }
 
     public async Task<ScheduledDispatchMutationReceipt> CreateAsync(
@@ -1018,7 +1023,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
 
         TeamAutomationOperationObservationScopeLeasePreparation? preparation = null;
         EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>? attachment = null;
-        var cleanupFailed = false;
         await using var sink = new EventChannel<TeamAutomationOperationCommittedOutcome>(8);
         TeamAutomationCommittedMutationReceipt receipt;
         try
@@ -1070,30 +1074,30 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         {
             if (attachment != null)
             {
-                cleanupFailed |= !await TryCleanupTeamAutomationObservationAsync(
+                await TryCleanupTeamAutomationObservationAsync(
                         () => _teamOperationObservationProjection.DetachLiveSinkAsync(
                             attachment.LiveSinkLease,
-                            CancellationToken.None))
+                            CancellationToken.None),
+                        "detach_live_sink")
                     .ConfigureAwait(false);
-                cleanupFailed |= !await TryCleanupTeamAutomationObservationAsync(
+                await TryCleanupTeamAutomationObservationAsync(
                         () => _teamOperationObservationProjection.ReleaseActorProjectionAsync(
                             attachment.ProjectionLease,
-                            CancellationToken.None))
+                            CancellationToken.None),
+                        "release_projection")
                     .ConfigureAwait(false);
             }
 
             if (preparation != null)
             {
-                cleanupFailed |= !await TryCleanupTeamAutomationObservationAsync(
+                await TryCleanupTeamAutomationObservationAsync(
                         () => _teamOperationObservationPreparation.ReleaseAsync(
                             preparation,
-                            CancellationToken.None))
+                            CancellationToken.None),
+                        "release_preparation")
                     .ConfigureAwait(false);
             }
         }
-
-        if (cleanupFailed)
-            throw TeamAutomationOperationUnavailable();
 
         return receipt;
     }
@@ -1159,17 +1163,20 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         }
     }
 
-    private static async Task<bool> TryCleanupTeamAutomationObservationAsync(
-        Func<Task> cleanup)
+    private async Task TryCleanupTeamAutomationObservationAsync(
+        Func<Task> cleanup,
+        string cleanupOperation)
     {
         try
         {
             await cleanup().ConfigureAwait(false);
-            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            _logger.LogWarning(
+                ex,
+                "Failed to clean up team automation operation observation resource {CleanupOperation}.",
+                cleanupOperation);
         }
     }
 

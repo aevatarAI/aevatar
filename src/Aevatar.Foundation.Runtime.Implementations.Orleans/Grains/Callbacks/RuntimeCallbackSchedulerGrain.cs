@@ -18,19 +18,24 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private static readonly TimeSpan OneShotReminderRetryPeriod = TimeSpan.FromMinutes(1);
 
     private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
+    private readonly IRuntimeCallbackReminderRegistry _reminderRegistry;
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
 
     public RuntimeCallbackSchedulerGrain(
         [PersistentState(SchedulerStateName, OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName)]
-        IPersistentState<RuntimeCallbackSchedulerState> state)
+        IPersistentState<RuntimeCallbackSchedulerState> state,
+        IRuntimeCallbackReminderRegistry reminderRegistry)
     {
         _state = state;
+        _reminderRegistry = reminderRegistry ??
+            throw new ArgumentNullException(nameof(reminderRegistry));
     }
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         _streams = ServiceProvider.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
         await base.OnActivateAsync(cancellationToken);
+        await RecoverPendingReminderUnregistrationsAsync(cancellationToken);
         await RecoverOverdueCallbacksAsync(cancellationToken);
     }
 
@@ -41,6 +46,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         RuntimeCallbackDeliveryMode deliveryMode = RuntimeCallbackDeliveryMode.FiredSelfEvent)
     {
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
+        await RecoverPendingReminderUnregistrationsAsync();
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
         var nextGeneration = await ResetExistingCallbackAndGetNextGenerationAsync(callbackId);
         await UpsertReminderCallbackAsync(
@@ -63,6 +69,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     {
         ValidateScheduleRequest(callbackId, triggerEnvelope, dueTimeMs);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(periodMs, 0);
+        await RecoverPendingReminderUnregistrationsAsync();
 
         var dueTime = TimeSpan.FromMilliseconds(dueTimeMs);
         var nextGeneration = await ResetExistingCallbackAndGetNextGenerationAsync(callbackId);
@@ -83,6 +90,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         int expectedSlotEpoch = RuntimeCallbackSlotEpoch.Unspecified)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        await RecoverPendingReminderUnregistrationsAsync();
         if (!_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
             return;
 
@@ -99,21 +107,77 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
     public async Task PurgeAsync()
     {
-        if (_state.State.ReminderCallbacks.Count == 0 && _state.State.CallbackGenerations.Count == 0)
-        {
-            DeactivateOnIdle();
-            return;
-        }
+        var persistedIds = _state.State.PendingReminderUnregistrations
+            .Concat(_state.State.ReminderCallbacks.Keys)
+            .Concat(_state.State.CallbackGenerations.Keys)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (StagePendingReminderUnregistrations(persistedIds))
+            await _state.WriteStateAsync();
 
-        var callbackIds = _state.State.ReminderCallbacks.Keys.ToArray();
-        _state.State.ReminderCallbacks.Clear();
-        _state.State.CallbackGenerations.Clear();
-        await _state.WriteStateAsync();
+        var registeredIds = (await _reminderRegistry.ListReminderNamesAsync(this.GetGrainId()))
+            .Select(static reminderName =>
+                TryParseReminderName(reminderName, out var callbackId)
+                    ? callbackId
+                    : null)
+            .Where(static callbackId => callbackId != null)
+            .Cast<string>()
+            .ToArray();
+        if (StagePendingReminderUnregistrations(registeredIds))
+            await _state.WriteStateAsync();
 
-        foreach (var callbackId in callbackIds)
-            await TryUnregisterReminderAsync(callbackId);
+        await RecoverPendingReminderUnregistrationsAsync();
 
         DeactivateOnIdle();
+    }
+
+    private bool StagePendingReminderUnregistrations(IEnumerable<string> callbackIds)
+    {
+        var pending = _state.State.PendingReminderUnregistrations
+            .Concat(callbackIds)
+            .Where(static callbackId => !string.IsNullOrWhiteSpace(callbackId))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var changed =
+            !_state.State.PendingReminderUnregistrations.SequenceEqual(
+                pending,
+                StringComparer.Ordinal) ||
+            _state.State.ReminderCallbacks.Count != 0 ||
+            _state.State.CallbackGenerations.Count != 0;
+        if (!changed)
+            return false;
+
+        _state.State.PendingReminderUnregistrations.Clear();
+        _state.State.PendingReminderUnregistrations.Add(pending);
+        _state.State.ReminderCallbacks.Clear();
+        _state.State.CallbackGenerations.Clear();
+        return true;
+    }
+
+    private async Task RecoverPendingReminderUnregistrationsAsync(
+        CancellationToken ct = default)
+    {
+        if (_state.State.PendingReminderUnregistrations.Count == 0)
+            return;
+
+        var pending = _state.State.PendingReminderUnregistrations.ToArray();
+        foreach (var callbackId in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            await TryUnregisterReminderAsync(callbackId);
+        }
+
+        _state.State.PendingReminderUnregistrations.Clear();
+        try
+        {
+            await _state.WriteStateAsync();
+        }
+        catch
+        {
+            _state.State.PendingReminderUnregistrations.Add(pending);
+            throw;
+        }
     }
 
     private static void ValidateScheduleRequest(string callbackId, EventEnvelope triggerEnvelope, int dueTimeMs)
@@ -277,7 +341,11 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             : OneShotReminderRetryPeriod;
         try
         {
-            await this.RegisterOrUpdateReminder(reminderName, dueTime, period);
+            await _reminderRegistry.RegisterOrUpdateAsync(
+                this.GetGrainId(),
+                reminderName,
+                dueTime,
+                period);
         }
         catch
         {
@@ -311,9 +379,9 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private async Task TryUnregisterReminderAsync(string callbackId)
     {
         var reminderName = BuildReminderName(callbackId);
-        var reminder = await this.GetReminder(reminderName);
-        if (reminder != null)
-            await this.UnregisterReminder(reminder);
+        await _reminderRegistry.UnregisterIfExistsAsync(
+            this.GetGrainId(),
+            reminderName);
     }
 
     private static string BuildReminderName(string callbackId) =>

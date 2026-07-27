@@ -154,9 +154,143 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
         state.CallbackGenerations[callbackId].Should().Be(8);
     }
 
+    [Fact]
+    public async Task PurgeAsync_WhenSecondReminderUnregistrationFails_ShouldReplayToTerminalState()
+    {
+        const string actorId = "scheduled-purge-recovery-actor";
+        const string firstCallbackId = "scheduled-dispatch-credential-expiry";
+        const string secondCallbackId = "scheduled-dispatch-next-fire";
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        var reminderRegistry = new RecordingReminderRegistry();
+        using var host = await StartSiloHostAsync(streamProvider, storage, reminderRegistry);
+
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        var grainId = grain.GetGrainId();
+        storage.SeedSchedulerState(grainId, new RuntimeCallbackSchedulerState
+        {
+            ReminderCallbacks =
+            {
+                [firstCallbackId] = CreateScheduledCallback(firstCallbackId, generation: 3),
+                [secondCallbackId] = CreateScheduledCallback(secondCallbackId, generation: 5),
+            },
+            CallbackGenerations =
+            {
+                [firstCallbackId] = 3,
+                [secondCallbackId] = 5,
+            },
+        });
+        reminderRegistry.Seed(grainId, firstCallbackId);
+        reminderRegistry.Seed(grainId, secondCallbackId);
+        reminderRegistry.FailNextUnregistration(secondCallbackId);
+
+        var firstPurge = () => grain.PurgeAsync();
+
+        await firstPurge.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"forced unregister failure: {secondCallbackId}");
+        var pending = storage.ReadSchedulerState(grainId);
+        pending.ReminderCallbacks.Should().BeEmpty();
+        pending.CallbackGenerations.Should().BeEmpty();
+        pending.PendingReminderUnregistrations.Should().BeEquivalentTo(
+            [firstCallbackId, secondCallbackId]);
+        reminderRegistry.Contains(grainId, firstCallbackId).Should().BeFalse();
+        reminderRegistry.Contains(grainId, secondCallbackId).Should().BeTrue();
+
+        await grain.PurgeAsync();
+
+        var terminal = storage.ReadSchedulerState(grainId);
+        terminal.ReminderCallbacks.Should().BeEmpty();
+        terminal.CallbackGenerations.Should().BeEmpty();
+        terminal.PendingReminderUnregistrations.Should().BeEmpty();
+        reminderRegistry.Contains(grainId, firstCallbackId).Should().BeFalse();
+        reminderRegistry.Contains(grainId, secondCallbackId).Should().BeFalse();
+        reminderRegistry.UnregistrationAttempts.Should().Equal(
+            firstCallbackId,
+            secondCallbackId,
+            secondCallbackId);
+    }
+
+    [Fact]
+    public async Task OnActivateAsync_WhenPendingUnregistrationFails_ShouldBlockNewScheduleUntilRecovery()
+    {
+        const string actorId = "scheduled-pending-activation-actor";
+        const string pendingCallbackId = "scheduled-dispatch-next-fire";
+        const string newCallbackId = "scheduled-dispatch-new-fire";
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        var reminderRegistry = new RecordingReminderRegistry();
+        using var host = await StartSiloHostAsync(streamProvider, storage, reminderRegistry);
+
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        var grainId = grain.GetGrainId();
+        storage.SeedSchedulerState(grainId, new RuntimeCallbackSchedulerState
+        {
+            PendingReminderUnregistrations = { pendingCallbackId },
+        });
+        reminderRegistry.Seed(grainId, pendingCallbackId);
+        reminderRegistry.FailNextUnregistration(pendingCallbackId);
+
+        var firstSchedule = () => grain.ScheduleTimeoutAsync(
+            newCallbackId,
+            CreateEnvelope("evt-new"),
+            dueTimeMs: 60_000);
+
+        await firstSchedule.Should()
+            .ThrowAsync<InvalidOperationException>()
+            .WithMessage($"forced unregister failure: {pendingCallbackId}");
+        var blocked = storage.ReadSchedulerState(grainId);
+        blocked.PendingReminderUnregistrations.Should().ContainSingle()
+            .Which.Should().Be(pendingCallbackId);
+        blocked.ReminderCallbacks.Should().NotContainKey(newCallbackId);
+        reminderRegistry.Contains(grainId, pendingCallbackId).Should().BeTrue();
+        reminderRegistry.Contains(grainId, newCallbackId).Should().BeFalse();
+
+        await grain.ScheduleTimeoutAsync(
+            newCallbackId,
+            CreateEnvelope("evt-new"),
+            dueTimeMs: 60_000);
+
+        var recovered = storage.ReadSchedulerState(grainId);
+        recovered.PendingReminderUnregistrations.Should().BeEmpty();
+        recovered.ReminderCallbacks.Should().ContainKey(newCallbackId);
+        reminderRegistry.Contains(grainId, pendingCallbackId).Should().BeFalse();
+        reminderRegistry.Contains(grainId, newCallbackId).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PurgeAsync_WhenOnlyLegacyOrphanReminderExists_ShouldDiscoverAndUnregisterIt()
+    {
+        const string actorId = "scheduled-orphan-purge-actor";
+        const string callbackId = "scheduled-dispatch-next-fire";
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        var reminderRegistry = new RecordingReminderRegistry();
+        using var host = await StartSiloHostAsync(streamProvider, storage, reminderRegistry);
+
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        var grainId = grain.GetGrainId();
+        reminderRegistry.Seed(grainId, callbackId);
+
+        await grain.PurgeAsync();
+
+        reminderRegistry.Contains(grainId, callbackId).Should().BeFalse();
+        var terminal = storage.ReadSchedulerState(grainId);
+        terminal.ReminderCallbacks.Should().BeEmpty();
+        terminal.CallbackGenerations.Should().BeEmpty();
+        terminal.PendingReminderUnregistrations.Should().BeEmpty();
+    }
+
     private static async Task<IHost> StartSiloHostAsync(
         RecordingStreamProvider streamProvider,
-        TestRuntimeCallbackSchedulerStateStorage storage) =>
+        TestRuntimeCallbackSchedulerStateStorage storage,
+        IRuntimeCallbackReminderRegistry? reminderRegistry = null) =>
         await SharedOrleansPortAllocator.StartHostAsync(ports => Host.CreateDefaultBuilder()
             .UseOrleans(siloBuilder =>
             {
@@ -172,6 +306,11 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
                 });
                 siloBuilder.ConfigureServices(services =>
                 {
+                    if (reminderRegistry != null)
+                    {
+                        services.Replace(
+                            ServiceDescriptor.Singleton(reminderRegistry));
+                    }
                     services.RemoveAll<IStreamProvider>();
                     services.RemoveAll<OrleansStreamProviderAdapter>();
                     services.RemoveAll<IStreamLifecycleManager>();
@@ -289,6 +428,88 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
     private sealed class NoopAsyncDisposable : IAsyncDisposable
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingReminderRegistry : IRuntimeCallbackReminderRegistry
+    {
+        private readonly object _gate = new();
+        private readonly HashSet<(GrainId GrainId, string ReminderName)> _reminders = [];
+        private readonly HashSet<string> _failNextUnregistrations = new(StringComparer.Ordinal);
+        private readonly List<string> _unregistrationAttempts = [];
+
+        public IReadOnlyList<string> UnregistrationAttempts
+        {
+            get
+            {
+                lock (_gate)
+                    return _unregistrationAttempts.ToArray();
+            }
+        }
+
+        public Task RegisterOrUpdateAsync(
+            GrainId grainId,
+            string reminderName,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            _ = dueTime;
+            _ = period;
+            lock (_gate)
+            {
+                _reminders.Add((grainId, reminderName));
+                return Task.CompletedTask;
+            }
+        }
+
+        public Task UnregisterIfExistsAsync(GrainId grainId, string reminderName)
+        {
+            lock (_gate)
+            {
+                if (!_reminders.Contains((grainId, reminderName)))
+                    return Task.CompletedTask;
+
+                var callbackId = reminderName["runtime-callback:".Length..];
+                _unregistrationAttempts.Add(callbackId);
+                if (_failNextUnregistrations.Remove(callbackId))
+                {
+                    throw new InvalidOperationException(
+                        $"forced unregister failure: {callbackId}");
+                }
+
+                _reminders.Remove((grainId, reminderName));
+                return Task.CompletedTask;
+            }
+        }
+
+        public Task<IReadOnlyList<string>> ListReminderNamesAsync(GrainId grainId)
+        {
+            lock (_gate)
+            {
+                return Task.FromResult<IReadOnlyList<string>>(
+                    _reminders
+                        .Where(entry => entry.GrainId == grainId)
+                        .Select(static entry => entry.ReminderName)
+                        .ToList());
+            }
+        }
+
+        public void Seed(GrainId grainId, string reminderName)
+        {
+            lock (_gate)
+                _reminders.Add((grainId, $"runtime-callback:{reminderName}"));
+        }
+
+        public void FailNextUnregistration(string reminderName)
+        {
+            lock (_gate)
+                _failNextUnregistrations.Add(reminderName);
+        }
+
+        public bool Contains(GrainId grainId, string reminderName)
+        {
+            lock (_gate)
+                return _reminders.Contains((grainId, $"runtime-callback:{reminderName}"));
+        }
     }
 
     private sealed class TestRuntimeCallbackSchedulerStateStorage : IGrainStorage

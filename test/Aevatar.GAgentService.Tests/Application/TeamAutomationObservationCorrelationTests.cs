@@ -177,7 +177,7 @@ public sealed class TeamAutomationObservationCorrelationTests
     }
 
     [Fact]
-    public async Task DetachFailure_ShouldUseStableObservationUnavailableCode_AndContinueCleanup()
+    public async Task DetachFailure_AfterCommittedOutcome_ShouldReturnReceipt_AndContinueCleanup()
     {
         var projection = new BroadcastingObservationProjection(
             expectedAttachments: 1,
@@ -188,16 +188,16 @@ public sealed class TeamAutomationObservationCorrelationTests
             preparation,
             projection);
 
-        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+        var result = await service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("team_automation_commit_observation_unavailable");
+        result.Outcome.Status.Should().Be(TeamAutomationOperationObservationStatus.Committed);
+        result.Outcome.OwnsEffectAttempt.Should().BeTrue();
         projection.ReleaseCalls.Should().Be(1);
         preparation.ReleaseCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task ProjectionReleaseFailure_ShouldUseStableObservationUnavailableCode_AndContinueCleanup()
+    public async Task ProjectionReleaseFailure_AfterCommittedOutcome_ShouldReturnReceipt_AndContinueCleanup()
     {
         var projection = new BroadcastingObservationProjection(
             expectedAttachments: 1,
@@ -208,16 +208,16 @@ public sealed class TeamAutomationObservationCorrelationTests
             preparation,
             projection);
 
-        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+        var result = await service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("team_automation_commit_observation_unavailable");
+        result.Outcome.Status.Should().Be(TeamAutomationOperationObservationStatus.Committed);
+        result.Outcome.OwnsEffectAttempt.Should().BeTrue();
         projection.DetachCalls.Should().Be(1);
         preparation.ReleaseCalls.Should().Be(1);
     }
 
     [Fact]
-    public async Task PreparationReleaseFailure_ShouldUseStableObservationUnavailableCode()
+    public async Task PreparationReleaseFailure_AfterCommittedOutcome_ShouldReturnReceipt()
     {
         var projection = new BroadcastingObservationProjection(expectedAttachments: 1);
         var preparation = new ObservationPreparationPort(
@@ -227,10 +227,10 @@ public sealed class TeamAutomationObservationCorrelationTests
             preparation,
             projection);
 
-        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+        var result = await service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("team_automation_commit_observation_unavailable");
+        result.Outcome.Status.Should().Be(TeamAutomationOperationObservationStatus.Committed);
+        result.Outcome.OwnsEffectAttempt.Should().BeTrue();
         projection.DetachCalls.Should().Be(1);
         projection.ReleaseCalls.Should().Be(1);
     }

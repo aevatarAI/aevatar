@@ -1185,6 +1185,7 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         call.Reason.Should().Be("scheduled_agent_key_canary_cleanup");
         materializer.RevocationCalls.Should().ContainSingle().Which.Should().Be(
             ("fresh-bearer-sensitive", true, true));
+        scheduleService.CompleteRevocationCallCount.Should().Be(1);
 
         var serialized = JsonSerializer.Serialize(
             result,
