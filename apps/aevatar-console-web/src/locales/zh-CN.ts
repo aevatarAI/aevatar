@@ -1171,6 +1171,9 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': '节点库',
   'teamMemberWorkflowStudio.nodeLibrary.title': '节点库',
   'teamMemberWorkflowStudio.templates.allCategories': '全部分类',
+  'teamMemberWorkflowStudio.templates.applied': '模板已应用。请检查并在准备好后保存。',
+  'teamMemberWorkflowStudio.templates.applyFailed': '未应用模板。{reason}',
+  'teamMemberWorkflowStudio.templates.applyUnknown': '无法应用工作流模板。',
   'teamMemberWorkflowStudio.templates.backToCatalog': '返回目录',
   'teamMemberWorkflowStudio.templates.browserAria': '工作流模板浏览器',
   'teamMemberWorkflowStudio.templates.cancel': '取消',
@@ -1178,8 +1181,14 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.templates.categoryAria': '按分类筛选模板',
   'teamMemberWorkflowStudio.templates.closeAria': '关闭模板浏览器',
   'teamMemberWorkflowStudio.templates.compatible': '兼容',
+  'teamMemberWorkflowStudio.templates.confirmReplace':
+    '用此模板替换当前未保存的步骤和 YAML？此操作不会保存或发布工作流。',
+  'teamMemberWorkflowStudio.templates.confirmReplacePublished':
+    '用此模板替换当前未保存的步骤和 YAML？此操作不会保存或发布工作流。现有活动运行不受影响。后续显式保存仍将沿用当前版本和绑定路径。',
   'teamMemberWorkflowStudio.templates.defaultLLMRoute': '默认 LLM 路由',
   'teamMemberWorkflowStudio.templates.detailLoading': '正在加载模板详情和图预览...',
+  'teamMemberWorkflowStudio.templates.draftChanged':
+    '检查模板期间草稿已更改。请检查当前草稿后重试。',
   'teamMemberWorkflowStudio.templates.edgePlural': '条连线',
   'teamMemberWorkflowStudio.templates.edgeSingular': '条连线',
   'teamMemberWorkflowStudio.templates.edgeSummary':
@@ -1208,6 +1217,7 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.templates.previewUnavailableDescription':
     '当前草稿未发生变化。请重试或选择其他模板。',
   'teamMemberWorkflowStudio.templates.requirements': '模板要求',
+  'teamMemberWorkflowStudio.templates.replaceAction': '替换为模板...',
   'teamMemberWorkflowStudio.templates.retry': '重试模板目录',
   'teamMemberWorkflowStudio.templates.retryDetail': '重试详情',
   'teamMemberWorkflowStudio.templates.revision': '修订 {revision}',
@@ -1230,6 +1240,8 @@ const zhCNMessages = {
   'teamMemberWorkflowStudio.templates.unavailablePrimitive': '所需 primitive 不可用',
   'teamMemberWorkflowStudio.templates.unsupportedSchema': '不支持此工作流 schema',
   'teamMemberWorkflowStudio.templates.useTemplate': '使用模板',
+  'teamMemberWorkflowStudio.templates.undo': '撤销',
+  'teamMemberWorkflowStudio.templates.undone': '已撤销模板应用。',
   'teamMemberWorkflowStudio.templates.viewAria': '查看 {title}',
   'teamMemberWorkflowStudio.resize.executionPanel': '调整运行控制台大小',
   'teamMemberWorkflowStudio.resize.sidePanel': '调整侧边面板大小',

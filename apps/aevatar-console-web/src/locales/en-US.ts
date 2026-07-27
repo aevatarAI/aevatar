@@ -1242,6 +1242,12 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
   'teamMemberWorkflowStudio.templates.allCategories': 'All categories',
+  'teamMemberWorkflowStudio.templates.applied':
+    'Template applied. Review and save when ready.',
+  'teamMemberWorkflowStudio.templates.applyFailed':
+    'Template was not applied. {reason}',
+  'teamMemberWorkflowStudio.templates.applyUnknown':
+    'The workflow template could not be applied.',
   'teamMemberWorkflowStudio.templates.backToCatalog': 'Back to catalog',
   'teamMemberWorkflowStudio.templates.browserAria': 'Workflow template browser',
   'teamMemberWorkflowStudio.templates.cancel': 'Cancel',
@@ -1249,9 +1255,15 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.templates.categoryAria': 'Filter templates by category',
   'teamMemberWorkflowStudio.templates.closeAria': 'Close template browser',
   'teamMemberWorkflowStudio.templates.compatible': 'Compatible',
+  'teamMemberWorkflowStudio.templates.confirmReplace':
+    'Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow.',
+  'teamMemberWorkflowStudio.templates.confirmReplacePublished':
+    'Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow. Existing active runs are not affected. A later explicit Save will continue through the current revision and binding path.',
   'teamMemberWorkflowStudio.templates.defaultLLMRoute': 'Default LLM route',
   'teamMemberWorkflowStudio.templates.detailLoading':
     'Loading template detail and graph preview...',
+  'teamMemberWorkflowStudio.templates.draftChanged':
+    'The draft changed while the template was being checked. Review the current draft and try again.',
   'teamMemberWorkflowStudio.templates.edgePlural': 'edges',
   'teamMemberWorkflowStudio.templates.edgeSingular': 'edge',
   'teamMemberWorkflowStudio.templates.edgeSummary':
@@ -1284,6 +1296,7 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.templates.previewUnavailableDescription':
     'The current draft is unchanged. Retry or choose another template.',
   'teamMemberWorkflowStudio.templates.requirements': 'Template requirements',
+  'teamMemberWorkflowStudio.templates.replaceAction': 'Replace with template...',
   'teamMemberWorkflowStudio.templates.retry': 'Retry templates',
   'teamMemberWorkflowStudio.templates.retryDetail': 'Retry detail',
   'teamMemberWorkflowStudio.templates.revision': 'Revision {revision}',
@@ -1310,6 +1323,8 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.templates.unsupportedSchema':
     'Workflow schema unsupported',
   'teamMemberWorkflowStudio.templates.useTemplate': 'Use template',
+  'teamMemberWorkflowStudio.templates.undo': 'Undo',
+  'teamMemberWorkflowStudio.templates.undone': 'Template application undone.',
   'teamMemberWorkflowStudio.templates.viewAria': 'View {title}',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',

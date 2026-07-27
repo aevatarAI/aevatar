@@ -1,4 +1,5 @@
 import {
+  AppstoreOutlined,
   ArrowLeftOutlined,
   ClockCircleOutlined,
   CloudUploadOutlined,
@@ -23,6 +24,7 @@ type WorkflowStudioHeaderProps = {
   readonly automationsHref: string;
   readonly automationsPlaceholderReason?: string;
   readonly canOpenAutomations: boolean;
+  readonly canBrowseTemplates: boolean;
   readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
   readonly invokeHref: string;
@@ -48,6 +50,7 @@ type WorkflowStudioHeaderProps = {
   readonly dirty: boolean;
   readonly currentDraftRunPlaceholderReason?: string;
   readonly onPublishMember: () => void;
+  readonly onBrowseTemplates: () => void;
   readonly onOpenAutomations: () => void;
   readonly onOpenInvoke: () => void;
   readonly onOpenPublishedRuns: () => void;
@@ -68,6 +71,7 @@ type WorkflowStudioHeaderProps = {
   readonly selectedNodeId: string;
   readonly teamHref: string;
   readonly teamName: string;
+  readonly templateBrowserTriggerRef?: React.Ref<HTMLButtonElement>;
   readonly teamsHref: string;
   readonly workflowTitle: string;
 };
@@ -637,6 +641,7 @@ type HeaderActionsProps = {
   readonly automationsHref: string;
   readonly automationsPlaceholderReason?: string;
   readonly canOpenAutomations: boolean;
+  readonly canBrowseTemplates: boolean;
   readonly canOpenDraftRunPanel: boolean;
   readonly canOpenInvoke: boolean;
   readonly canOpenPublishedRuns: boolean;
@@ -645,6 +650,7 @@ type HeaderActionsProps = {
   readonly invokeHref: string;
   readonly invokePlaceholderReason?: string;
   readonly onAddNode: () => void;
+  readonly onBrowseTemplates: () => void;
   readonly onDeleteConnection: () => void;
   readonly onDeleteNode: () => void;
   readonly onOpenAutomations: () => void;
@@ -667,6 +673,7 @@ type HeaderActionsProps = {
   readonly selectedNodeId: string;
   readonly showPublishAction: boolean;
   readonly showRefreshPublishStatus: boolean;
+  readonly templateBrowserTriggerRef?: React.Ref<HTMLButtonElement>;
 };
 
 const HeaderActions: React.FC<HeaderActionsProps> = ({
@@ -674,6 +681,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   automationsHref,
   automationsPlaceholderReason,
   canOpenAutomations,
+  canBrowseTemplates,
   canOpenDraftRunPanel,
   canOpenInvoke,
   canOpenPublishedRuns,
@@ -682,6 +690,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   invokeHref,
   invokePlaceholderReason,
   onAddNode,
+  onBrowseTemplates,
   onDeleteConnection,
   onDeleteNode,
   onOpenAutomations,
@@ -704,6 +713,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   selectedNodeId,
   showPublishAction,
   showRefreshPublishStatus,
+  templateBrowserTriggerRef,
 }) => {
   const hasSelectedConnection = Boolean(selectedEdgeId);
   const hasSelectedNode = Boolean(selectedNodeId);
@@ -718,6 +728,16 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         'Delete selected node',
       );
   const moreMenuItems: WorkflowHeaderMenuItem[] = [
+    canBrowseTemplates
+      ? {
+          icon: <AppstoreOutlined />,
+          key: 'replace-template',
+          label: t(
+            'teamMemberWorkflowStudio.templates.replaceAction',
+            'Replace with template...',
+          ),
+        }
+      : null,
     hasSelectedConnection || hasSelectedNode
       ? {
           danger: true,
@@ -833,6 +853,11 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
             menu={{
               items: moreMenuItems,
               onClick: ({ key }) => {
+                if (key === 'replace-template') {
+                  onBrowseTemplates();
+                  return;
+                }
+
                 if (key === 'delete-node') {
                   const confirmed =
                     typeof window === 'undefined' ||
@@ -873,6 +898,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
               )}
               className="workflow-studio-header__icon-button"
               icon={<MoreOutlined />}
+              ref={templateBrowserTriggerRef}
               size="small"
               title={t('teamMemberWorkflowStudio.header.more', 'More')}
             />
@@ -1020,6 +1046,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   automationsHref,
   automationsPlaceholderReason,
   canOpenAutomations,
+  canBrowseTemplates,
   canOpenInvoke,
   canOpenPublishedRuns,
   invokeHref,
@@ -1040,6 +1067,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   dirty,
   currentDraftRunPlaceholderReason,
   onPublishMember,
+  onBrowseTemplates,
   onOpenAutomations,
   onOpenInvoke,
   onOpenPublishedRuns,
@@ -1060,6 +1088,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
   selectedNodeId,
   teamHref,
   teamName,
+  templateBrowserTriggerRef,
   teamsHref,
   workflowTitle,
 }) => {
@@ -1110,6 +1139,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           automationsHref={automationsHref}
           automationsPlaceholderReason={automationsPlaceholderReason}
           canOpenAutomations={canOpenAutomations}
+          canBrowseTemplates={canBrowseTemplates}
           canOpenDraftRunPanel={canOpenDraftRunPanel}
           canOpenInvoke={canOpenInvoke}
           canOpenPublishedRuns={canOpenPublishedRuns}
@@ -1118,6 +1148,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           invokeHref={invokeHref}
           invokePlaceholderReason={invokePlaceholderReason}
           onAddNode={onAddNode}
+          onBrowseTemplates={onBrowseTemplates}
           onDeleteConnection={onDeleteConnection}
           onDeleteNode={onDeleteNode}
           onOpenAutomations={onOpenAutomations}
@@ -1140,6 +1171,7 @@ const WorkflowStudioHeader: React.FC<WorkflowStudioHeaderProps> = ({
           selectedNodeId={selectedNodeId}
           showPublishAction={showPublishAction}
           showRefreshPublishStatus={showRefreshStatusAction}
+          templateBrowserTriggerRef={templateBrowserTriggerRef}
         />
       </div>
     </header>

@@ -16,6 +16,7 @@ import TeamMemberWorkflowStudioPage from "./index";
 jest.mock("@/shared/graphs/GraphCanvas", () => ({
   __esModule: true,
   default: (props: {
+    autoFitKey?: string;
     nodes?: Array<{
       data?: { executionFocused?: boolean; executionStatus?: string };
       id?: string;
@@ -34,7 +35,10 @@ jest.mock("@/shared/graphs/GraphCanvas", () => ({
     const React = require("react");
     return React.createElement(
       "div",
-      { "data-testid": "graph-canvas" },
+      {
+        "data-auto-fit-key": props.autoFitKey,
+        "data-testid": "graph-canvas",
+      },
       React.createElement(
         "span",
         { key: "count" },
@@ -493,6 +497,16 @@ steps:
   });
 }
 
+async function selectSimpleAssistantTemplate(browser: HTMLElement) {
+  fireEvent.click(
+    await within(browser).findByRole("button", { name: "View Simple assistant" }),
+  );
+  await within(browser).findByText("A user request");
+  return within(browser).getByRole("button", {
+    name: /Use template|Replace with template/,
+  });
+}
+
 async function flushAsyncWork() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();
@@ -741,7 +755,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(within(browser).getByText("A helpful answer")).toBeTruthy();
     expect(within(browser).getByText("1 role, 1 step, 0 edges")).toBeTruthy();
     expect(within(browser).getByText(/Step answer uses LLM call/)).toBeTruthy();
-    expect(within(browser).getByRole("button", { name: "Use template" })).toBeDisabled();
+    expect(within(browser).getByRole("button", { name: "Use template" })).toBeEnabled();
     expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:0");
 
     fireEvent.click(within(browser).getByRole("button", { name: "Close template browser" }));
@@ -750,6 +764,255 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(new URLSearchParams(window.location.search).get("templateId")).toBeNull();
     expect(new URLSearchParams(window.location.search).get("workflowId")).toBe("wf-alpha");
     expect(launcher).toHaveFocus();
+  });
+
+  it("atomically applies a template, preserves title, selects and fits its first step, and fully undoes", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const title = await screen.findByLabelText("Workflow title");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start from a workflow template" }),
+    );
+    const browser = await screen.findByLabelText("Workflow template browser");
+    const useTemplate = await selectSimpleAssistantTemplate(browser);
+    expect(useTemplate).toBeEnabled();
+    fireEvent.click(useTemplate);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Workflow template browser")).toBeNull();
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+    });
+    expect(title).toHaveValue("Untitled member");
+    expect(screen.getByRole("button", { name: "node:step:answer" })).toBeTruthy();
+    expect(screen.getByTestId("graph-canvas")).toHaveAttribute(
+      "data-auto-fit-key",
+      expect.stringContaining('"fitRequest":1'),
+    );
+    expect(
+      screen.getByText("Template applied. Review and save when ready."),
+    ).toBeTruthy();
+    openMoreActionsMenu();
+    expect(
+      screen.getByRole("menuitem", { name: "Delete selected node" }),
+    ).toBeTruthy();
+    closeOpenMenu();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+
+    expect(studioApi.serializeYaml).not.toHaveBeenCalled();
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.saveAndBindWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.createMember).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.startExecution).not.toHaveBeenCalled();
+    expect(studioApi.updateMemberImplementationRef).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:0");
+    });
+    expect(title).toHaveValue("Untitled member");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+  });
+
+  it("cancels or confirms non-empty replacement and restores the prior dirty layout and selection on Undo", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const confirmSpy = jest
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "move first node" }));
+    openMoreActionsMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Replace with template..." }),
+    );
+    const browser = await screen.findByLabelText("Workflow template browser");
+    const replace = await selectSimpleAssistantTemplate(browser);
+    expect(replace).toHaveTextContent("Replace with template...");
+
+    fireEvent.click(replace);
+    expect(confirmSpy).toHaveBeenLastCalledWith(
+      "Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow.",
+    );
+    expect(screen.getByLabelText("Workflow template browser")).toBeTruthy();
+    expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:1");
+    expect(
+      within(screen.getAllByTestId("graph-canvas")[0]).queryByRole("button", {
+        name: "node:step:answer",
+      }),
+    ).toBeNull();
+
+    fireEvent.click(replace);
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Workflow template browser")).toBeNull();
+      expect(screen.getByRole("button", { name: "node:step:answer" })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "node:step:llm_step" })).toBeTruthy();
+    });
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    openMoreActionsMenu();
+    expect(
+      screen.getByRole("menuitem", { name: "Delete selected node" }),
+    ).toBeTruthy();
+    closeOpenMenu();
+    confirmSpy.mockRestore();
+  });
+
+  it("keeps document and selection unchanged on template validation failure", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+    fireEvent.click(await screen.findByRole("button", { name: "Add first step" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Insert LLM call node" }),
+    );
+    openMoreActionsMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Replace with template..." }),
+    );
+    const browser = await screen.findByLabelText("Workflow template browser");
+    const replace = await selectSimpleAssistantTemplate(browser);
+    (studioApi.parseYaml as jest.Mock).mockRejectedValueOnce(
+      new Error("Primitive llm_call is unavailable in this scope."),
+    );
+
+    fireEvent.click(replace);
+    expect(
+      await screen.findByText(
+        "Template was not applied. Primitive llm_call is unavailable in this scope.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Workflow template browser")).toBeTruthy();
+    expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:1");
+    expect(
+      within(screen.getAllByTestId("graph-canvas")[0]).queryByRole("button", {
+        name: "node:step:answer",
+      }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.saveAndBindWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.createMember).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("explains active-run and revision-binding behavior before replacing a published member draft", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha",
+    );
+    const confirmSpy = jest.spyOn(window, "confirm").mockReturnValue(false);
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: {
+        implementationKind: "workflow",
+        workflowId: "wf-alpha",
+      },
+      summary: {
+        createdAt: "2026-06-08T00:00:00Z",
+        description: "",
+        displayName: "Published member",
+        implementationKind: "workflow",
+        lastBoundRevisionId: "rev-1",
+        lifecycleStage: "bind_ready",
+        memberId: "m-alpha",
+        publishedServiceId: "svc-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+        updatedAt: "2026-06-08T00:00:00Z",
+      },
+      lastBinding: {
+        boundAt: "2026-06-08T00:00:00Z",
+        implementationKind: "workflow",
+        publishedServiceId: "svc-alpha",
+        revisionId: "rev-1",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      draftExists: true,
+      fileName: "wf-alpha.yaml",
+      filePath: "scope://scope-1/wf-alpha.yaml",
+      findings: [],
+      layout: null,
+      name: "Published workflow title",
+      workflowId: "wf-alpha",
+      yaml: "name: Published workflow title\nsteps: []\n",
+      document: {
+        ...mockWorkflowDocument,
+        name: "Published workflow title",
+      },
+      updatedAtUtc: "2026-06-08T00:00:00Z",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+    await waitFor(() => {
+      expect(screen.getByTestId("graph-canvas")).toHaveTextContent("nodes:1");
+      expect(screen.getByText("Published")).toBeTruthy();
+    });
+    openMoreActionsMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Replace with template..." }),
+    );
+    const browser = await screen.findByLabelText("Workflow template browser");
+    fireEvent.click(await selectSimpleAssistantTemplate(browser));
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow. Existing active runs are not affected. A later explicit Save will continue through the current revision and binding path.",
+    );
+    expect(screen.getByLabelText("Workflow template browser")).toBeTruthy();
+    expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:1");
+    expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.saveAndBindWorkflow).not.toHaveBeenCalled();
+    expect(studioApi.bindMemberWorkflow).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("invalidates template Undo on the next document edit", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow",
+    );
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Start from a workflow template" }),
+    );
+    const browser = await screen.findByLabelText("Workflow template browser");
+    fireEvent.click(await selectSimpleAssistantTemplate(browser));
+    await screen.findByRole("button", { name: "Undo" });
+
+    fireEvent.change(screen.getByLabelText("Workflow title"), {
+      target: { value: "Renamed after template" },
+    });
+    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(screen.getByDisplayValue("Renamed after template")).toBeTruthy();
   });
 
   it("renders recoverable template catalog empty, failure, and incompatible states without changing the draft", async () => {
@@ -3189,9 +3452,14 @@ describe("TeamMemberWorkflowStudioPage", () => {
     })).toBeNull();
     expect(screen.getByText("nodes:2")).toBeTruthy();
     expect(screen.queryByTestId("workflow-node-inspector")).toBeNull();
+    openMoreActionsMenu();
     expect(
-      screen.queryByRole("button", { name: "More workflow actions" }),
+      screen.getByRole("menuitem", { name: "Replace with template..." }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Delete selected connection" }),
     ).toBeNull();
+    closeOpenMenu();
     expect(confirmSpy).toHaveBeenCalledWith(
       "Delete the selected connection? This cannot be undone.",
     );
@@ -4323,10 +4591,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
       within(headerPrimaryActions).getByRole("button", { name: "Edit YAML" }),
     ).toBeTruthy();
     expect(
-      within(headerPrimaryActions).queryByRole("button", {
+      within(headerPrimaryActions).getByRole("button", {
         name: "More workflow actions",
       }),
-    ).toBeNull();
+    ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Paste YAML" })).toBeNull();
     expect(screen.queryByRole("button", { name: "View YAML" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete node" })).toBeNull();
@@ -4599,15 +4867,16 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "Run",
       "Add node",
       "Edit YAML",
+      "More workflow actions",
       "Save",
     ]);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
     expect(
-      within(headerPrimaryActions).queryByRole("button", {
+      within(headerPrimaryActions).getByRole("button", {
         name: "More workflow actions",
       }),
-    ).toBeNull();
+    ).toBeTruthy();
     expect(
       screen.queryByRole("menuitem", { name: "Delete selected node" }),
     ).toBeNull();
@@ -4631,6 +4900,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "Run",
       "Add node",
       "Edit YAML",
+      "More workflow actions",
       "Save",
     ]);
 

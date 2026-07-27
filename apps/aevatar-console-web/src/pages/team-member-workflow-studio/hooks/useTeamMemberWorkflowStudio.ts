@@ -259,6 +259,7 @@ type TeamMemberWorkflowStudioState = {
   readonly savePlaceholderReason: string;
   readonly templateApplicationActionLabel: string;
   readonly templateApplicationPending: boolean;
+  readonly templateReplacementAvailable: boolean;
   readonly templateUndoAvailable: boolean;
   readonly draftRunPanelOpen: boolean;
   readonly selectedEdgeId: string;
@@ -946,11 +947,16 @@ function confirmReplaceWithWorkflowTemplate(memberPublished: boolean): boolean {
     return true;
   }
 
-  const publishedNotice = memberPublished
-    ? " Existing active runs are not affected. A later explicit Save will continue through the current revision and binding path."
-    : "";
   return window.confirm(
-    `Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow.${publishedNotice}`,
+    memberPublished
+      ? t(
+          "teamMemberWorkflowStudio.templates.confirmReplacePublished",
+          "Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow. Existing active runs are not affected. A later explicit Save will continue through the current revision and binding path.",
+        )
+      : t(
+          "teamMemberWorkflowStudio.templates.confirmReplace",
+          "Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow.",
+        ),
   );
 }
 
@@ -3204,7 +3210,10 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           draftRevisionRef.current !== baseRevision
         ) {
           throw new Error(
-            "The draft changed while the template was being checked. Review the current draft and try again.",
+            t(
+              "teamMemberWorkflowStudio.templates.draftChanged",
+              "The draft changed while the template was being checked. Review the current draft and try again.",
+            ),
           );
         }
 
@@ -3220,14 +3229,28 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         closeDraftRunPanel();
         setTemplateUndoSnapshot(prepared.snapshot);
         setCanvasFitRequest((current) => current + 1);
-        void message.success("Template applied. Review and save when ready.");
+        void message.success(
+          t(
+            "teamMemberWorkflowStudio.templates.applied",
+            "Template applied. Review and save when ready.",
+          ),
+        );
         return true;
       } catch (error) {
         const reason =
           error instanceof Error
             ? error.message
-            : "The workflow template could not be applied.";
-        void message.error(`Template was not applied. ${reason}`);
+            : t(
+                "teamMemberWorkflowStudio.templates.applyUnknown",
+                "The workflow template could not be applied.",
+              );
+        void message.error(
+          t(
+            "teamMemberWorkflowStudio.templates.applyFailed",
+            "Template was not applied. {reason}",
+            { reason },
+          ),
+        );
         return false;
       } finally {
         if (templateApplicationRequestIdRef.current === requestId) {
@@ -3271,7 +3294,12 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setSelectedStepConfigurationError("");
     setTemplateUndoSnapshot(null);
     setCanvasFitRequest((current) => current + 1);
-    void message.info("Template application undone.");
+    void message.info(
+      t(
+        "teamMemberWorkflowStudio.templates.undone",
+        "Template application undone.",
+      ),
+    );
   }, [advanceDraftRevision, templateUndoSnapshot]);
   const selectExecutionLog = React.useCallback(
     (index: number | null) => {
@@ -3573,9 +3601,19 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       createUnlinkedMemberDraftMutation.isPending,
     savePlaceholderReason,
     templateApplicationActionLabel: workflowHasSteps
-      ? "Replace with template..."
-      : "Use template",
+      ? t(
+          "teamMemberWorkflowStudio.templates.replaceAction",
+          "Replace with template...",
+        )
+      : t("teamMemberWorkflowStudio.templates.useTemplate", "Use template"),
     templateApplicationPending,
+    templateReplacementAvailable: Boolean(
+      route.templatesEnabled &&
+        workflowHasSteps &&
+        editableDocument &&
+        !workflowLoading &&
+        !workflowDraftEditingBlocked,
+    ),
     templateUndoAvailable: Boolean(templateUndoSnapshot),
     draftRunPanelOpen,
     selectedEdgeId,

@@ -246,6 +246,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         refreshPublishStatusPending={studio.refreshPublishStatusPending}
         showRefreshPublishStatus={studio.showRefreshPublishStatus}
         canOpenDraftRunPanel={studio.canOpenDraftRunPanel}
+        canBrowseTemplates={studio.templateReplacementAvailable}
         canSave={studio.canSave}
         canEditYaml={studio.canEditYaml}
         dirty={studio.dirty}
@@ -259,6 +260,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         onDeleteConnection={studio.deleteSelectedConnection}
         onDeleteNode={studio.deleteSelectedNode}
         onOpenDraftRunPanel={studio.openDraftRunPanel}
+        onBrowseTemplates={studio.openTemplateBrowser}
         onEditYaml={studio.openYamlPanel}
         onNavigateBack={studio.navigateBack}
         onNavigateToTeam={studio.navigateToTeam}
@@ -271,6 +273,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
         selectedNodeId={studio.selectedNodeId}
         teamHref={studio.teamHref}
         teamName={studio.teamName}
+        templateBrowserTriggerRef={templateLauncherRef}
         teamsHref={studio.teamsHref}
         workflowTitle={studio.workflowTitle}
       />
@@ -368,11 +371,21 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           open={studio.nodeLibraryOpen}
         />
         <WorkflowStudioTemplateBrowser
+          actionDisabled={!studio.canApplyWorkflowTemplate}
+          actionLabel={studio.templateApplicationActionLabel}
+          actionPending={studio.templateApplicationPending}
           onClose={() => {
             studio.closeTemplateBrowser();
             templateLauncherRef.current?.focus();
           }}
           onSelectTemplate={studio.selectTemplate}
+          onUseTemplate={async (detail) => {
+            const applied = await studio.applyWorkflowTemplate(detail);
+            if (applied) {
+              studio.closeTemplateBrowser();
+              templateLauncherRef.current?.focus();
+            }
+          }}
           open={studio.templateBrowserOpen}
           selectedTemplateId={studio.templateId}
         />
