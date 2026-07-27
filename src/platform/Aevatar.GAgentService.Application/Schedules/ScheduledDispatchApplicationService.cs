@@ -9,6 +9,12 @@ namespace Aevatar.GAgentService.Application.Schedules;
 public sealed class ScheduledDispatchApplicationService : IScheduledDispatchApplicationService
 {
     private const string ScheduleIdAllowedCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
+    private const string TeamAutomationCommitObservationUnavailableCode =
+        "team_automation_commit_observation_unavailable";
+    private const string TeamAutomationCommitObservationEndedCode =
+        "team_automation_commit_observation_ended";
+    private const string TeamAutomationDispatchRejectedCode =
+        "team_automation_dispatch_rejected";
     private readonly IScheduledDispatchActorPort _actorPort;
     private readonly IScheduledDispatchQueryPort _queryPort;
     private readonly IScheduledDispatchTargetPreparationService _targetPreparationService;
@@ -1008,32 +1014,102 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct)
     {
         if (_teamOperationObservationPreparation == null || _teamOperationObservationProjection == null)
-            throw new InvalidOperationException("team_automation_commit_observation_unavailable");
+            throw TeamAutomationOperationUnavailable();
 
         TeamAutomationOperationObservationScopeLeasePreparation? preparation = null;
         EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>? attachment = null;
+        var cleanupFailed = false;
         await using var sink = new EventChannel<TeamAutomationOperationCommittedOutcome>(8);
+        TeamAutomationCommittedMutationReceipt receipt;
         try
         {
-            preparation = await _teamOperationObservationPreparation.PrepareAsync(actorId, operationId, ct)
+            preparation = await InvokeWithStableFailureAsync(
+                    () => _teamOperationObservationPreparation.PrepareAsync(actorId, operationId, ct),
+                    ct,
+                    TeamAutomationCommitObservationUnavailableCode)
                 .ConfigureAwait(false);
             if (preparation == null)
-                throw new InvalidOperationException("team_automation_commit_observation_unavailable");
+                throw TeamAutomationOperationUnavailable();
 
-            attachment = await _teamOperationObservationProjection.AttachExistingOperationProjectionAsync(
-                    actorId,
-                    operationId,
-                    sink,
-                    ct)
+            attachment = await InvokeWithStableFailureAsync(
+                    () => _teamOperationObservationProjection.AttachExistingOperationProjectionAsync(
+                        actorId,
+                        operationId,
+                        sink,
+                        ct),
+                    ct,
+                    TeamAutomationCommitObservationUnavailableCode)
                 .ConfigureAwait(false);
             if (attachment == null)
-                throw new InvalidOperationException("team_automation_commit_observation_unavailable");
+                throw TeamAutomationOperationUnavailable();
 
             var observationRequestId = Guid.NewGuid().ToString("N");
-            var admission = await dispatchAsync(observationRequestId, ct).ConfigureAwait(false);
+            var admission = await InvokeWithStableFailureAsync(
+                    () => dispatchAsync(observationRequestId, ct),
+                    ct,
+                    TeamAutomationDispatchRejectedCode)
+                .ConfigureAwait(false);
             if (!admission.Accepted)
-                throw new InvalidOperationException("team_automation_dispatch_rejected");
+                throw new InvalidOperationException(TeamAutomationDispatchRejectedCode);
 
+            var outcome = await ReadCorrelatedTeamAutomationOutcomeAsync(
+                    sink,
+                    scheduleId,
+                    operationId,
+                    idempotencyKey,
+                    expectedStage,
+                    observationRequestId,
+                    ct)
+                .ConfigureAwait(false);
+            ThrowIfTeamAutomationOperationRejected(scheduleId, outcome);
+            receipt = new TeamAutomationCommittedMutationReceipt(
+                CreateMutationReceipt(scheduleId, actorId, admission),
+                outcome);
+        }
+        finally
+        {
+            if (attachment != null)
+            {
+                cleanupFailed |= !await TryCleanupTeamAutomationObservationAsync(
+                        () => _teamOperationObservationProjection.DetachLiveSinkAsync(
+                            attachment.LiveSinkLease,
+                            CancellationToken.None))
+                    .ConfigureAwait(false);
+                cleanupFailed |= !await TryCleanupTeamAutomationObservationAsync(
+                        () => _teamOperationObservationProjection.ReleaseActorProjectionAsync(
+                            attachment.ProjectionLease,
+                            CancellationToken.None))
+                    .ConfigureAwait(false);
+            }
+
+            if (preparation != null)
+            {
+                cleanupFailed |= !await TryCleanupTeamAutomationObservationAsync(
+                        () => _teamOperationObservationPreparation.ReleaseAsync(
+                            preparation,
+                            CancellationToken.None))
+                    .ConfigureAwait(false);
+            }
+        }
+
+        if (cleanupFailed)
+            throw TeamAutomationOperationUnavailable();
+
+        return receipt;
+    }
+
+    private static async Task<TeamAutomationOperationCommittedOutcome>
+        ReadCorrelatedTeamAutomationOutcomeAsync(
+            EventChannel<TeamAutomationOperationCommittedOutcome> sink,
+            string scheduleId,
+            string operationId,
+            string idempotencyKey,
+            string expectedStage,
+            string observationRequestId,
+            CancellationToken ct)
+    {
+        try
+        {
             await foreach (var outcome in sink.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 if (!string.Equals(outcome.ScheduleId, scheduleId, StringComparison.Ordinal) ||
@@ -1049,37 +1125,56 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
                 }
 
                 sink.Complete();
-                ThrowIfTeamAutomationOperationRejected(scheduleId, outcome);
-                return new TeamAutomationCommittedMutationReceipt(
-                    CreateMutationReceipt(scheduleId, actorId, admission),
-                    outcome);
+                return outcome;
             }
-
-            throw new InvalidOperationException("team_automation_commit_observation_ended");
         }
-        finally
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            if (attachment != null)
-            {
-                await _teamOperationObservationProjection.DetachLiveSinkAsync(
-                        attachment.LiveSinkLease,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-                await _teamOperationObservationProjection.ReleaseActorProjectionAsync(
-                        attachment.ProjectionLease,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
+            throw;
+        }
+        catch
+        {
+            throw new InvalidOperationException(TeamAutomationCommitObservationEndedCode);
+        }
 
-            if (preparation != null)
-            {
-                await _teamOperationObservationPreparation.ReleaseAsync(
-                        preparation,
-                        CancellationToken.None)
-                    .ConfigureAwait(false);
-            }
+        throw new InvalidOperationException(TeamAutomationCommitObservationEndedCode);
+    }
+
+    private static async Task<T> InvokeWithStableFailureAsync<T>(
+        Func<Task<T>> operation,
+        CancellationToken callerCancellationToken,
+        string stableFailureCode)
+    {
+        try
+        {
+            return await operation().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (callerCancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new InvalidOperationException(stableFailureCode);
         }
     }
+
+    private static async Task<bool> TryCleanupTeamAutomationObservationAsync(
+        Func<Task> cleanup)
+    {
+        try
+        {
+            await cleanup().ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static InvalidOperationException TeamAutomationOperationUnavailable() =>
+        new(TeamAutomationCommitObservationUnavailableCode);
 
     private static void ThrowIfTeamAutomationOperationRejected(
         string scheduleId,

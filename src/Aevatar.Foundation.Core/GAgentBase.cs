@@ -377,6 +377,10 @@ public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerCo
             .CancelAsync(lease, ct);
     }
 
+    protected Task PurgeDurableCallbacksAsync(CancellationToken ct = default) =>
+        Services.GetRequiredService<IActorRuntimeCallbackScheduler>()
+            .PurgeActorAsync(Id, ct);
+
     // Internal methods
 
     /// <summary>Sets agent ID (called by runtime).</summary>

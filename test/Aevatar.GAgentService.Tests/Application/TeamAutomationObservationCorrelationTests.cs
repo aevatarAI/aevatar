@@ -12,6 +12,8 @@ namespace Aevatar.GAgentService.Tests.Application;
 
 public sealed class TeamAutomationObservationCorrelationTests
 {
+    private const string BackendFailureDetail = "backend-secret-should-not-escape";
+
     [Fact]
     public async Task ConcurrentExactBeginDispatches_ShouldConsumeOnlyTheirCorrelatedObservation()
     {
@@ -101,6 +103,196 @@ public sealed class TeamAutomationObservationCorrelationTests
         result.Outcome.Stage.Should().Be(TeamAutomationOperationObservationStages.Revocation);
     }
 
+    [Fact]
+    public async Task PreparationFailure_ShouldUseStableObservationUnavailableCode()
+    {
+        var projection = new BroadcastingObservationProjection(expectedAttachments: 1);
+        var preparation = new ObservationPreparationPort(
+            prepareException: new InvalidOperationException(BackendFailureDetail));
+        var service = CreateService(
+            new CorrelatedBeginActorPort(projection),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_commit_observation_unavailable");
+    }
+
+    [Fact]
+    public async Task AttachmentFailure_ShouldUseStableObservationUnavailableCode()
+    {
+        var projection = new BroadcastingObservationProjection(
+            expectedAttachments: 1,
+            attachException: new InvalidOperationException(BackendFailureDetail));
+        var preparation = new ObservationPreparationPort();
+        var service = CreateService(
+            new CorrelatedBeginActorPort(projection),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_commit_observation_unavailable");
+        preparation.ReleaseCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ActorDispatchFailure_ShouldUseStableDispatchRejectedCode()
+    {
+        var projection = new BroadcastingObservationProjection(expectedAttachments: 1);
+        var preparation = new ObservationPreparationPort();
+        var service = CreateService(
+            new CorrelatedBeginActorPort(
+                projection,
+                dispatchException: new InvalidOperationException(BackendFailureDetail)),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_dispatch_rejected");
+        projection.DetachCalls.Should().Be(1);
+        projection.ReleaseCalls.Should().Be(1);
+        preparation.ReleaseCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ObservationSinkEndingBeforeCorrelatedOutcome_ShouldUseStableEndedCode()
+    {
+        var projection = new BroadcastingObservationProjection(expectedAttachments: 1);
+        var preparation = new ObservationPreparationPort();
+        var service = CreateService(
+            new CorrelatedBeginActorPort(projection, completeObservationWithoutOutcome: true),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_commit_observation_ended");
+    }
+
+    [Fact]
+    public async Task DetachFailure_ShouldUseStableObservationUnavailableCode_AndContinueCleanup()
+    {
+        var projection = new BroadcastingObservationProjection(
+            expectedAttachments: 1,
+            detachException: new InvalidOperationException(BackendFailureDetail));
+        var preparation = new ObservationPreparationPort();
+        var service = CreateService(
+            new CorrelatedBeginActorPort(projection),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_commit_observation_unavailable");
+        projection.ReleaseCalls.Should().Be(1);
+        preparation.ReleaseCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ProjectionReleaseFailure_ShouldUseStableObservationUnavailableCode_AndContinueCleanup()
+    {
+        var projection = new BroadcastingObservationProjection(
+            expectedAttachments: 1,
+            releaseException: new InvalidOperationException(BackendFailureDetail));
+        var preparation = new ObservationPreparationPort();
+        var service = CreateService(
+            new CorrelatedBeginActorPort(projection),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_commit_observation_unavailable");
+        projection.DetachCalls.Should().Be(1);
+        preparation.ReleaseCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task PreparationReleaseFailure_ShouldUseStableObservationUnavailableCode()
+    {
+        var projection = new BroadcastingObservationProjection(expectedAttachments: 1);
+        var preparation = new ObservationPreparationPort(
+            releaseException: new InvalidOperationException(BackendFailureDetail));
+        var service = CreateService(
+            new CorrelatedBeginActorPort(projection),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_commit_observation_unavailable");
+        projection.DetachCalls.Should().Be(1);
+        projection.ReleaseCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task CallerCancellationDuringObservationRead_ShouldNotBeWrappedOrReplacedByCleanupFailure()
+    {
+        using var cts = new CancellationTokenSource();
+        var projection = new BroadcastingObservationProjection(
+            expectedAttachments: 1,
+            detachException: new InvalidOperationException(BackendFailureDetail));
+        var preparation = new ObservationPreparationPort();
+        var service = CreateService(
+            new CorrelatedBeginActorPort(
+                projection,
+                beforeOutcome: cts.Cancel,
+                omitOutcome: true),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation(), cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        projection.ReleaseCalls.Should().Be(1);
+        preparation.ReleaseCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task CommittedBusinessRejection_ShouldNotBeWrappedOrReplacedByCleanupFailure()
+    {
+        var projection = new BroadcastingObservationProjection(
+            expectedAttachments: 1,
+            detachException: new InvalidOperationException(BackendFailureDetail));
+        var preparation = new ObservationPreparationPort();
+        var service = CreateService(
+            new CorrelatedBeginActorPort(
+                projection,
+                TeamAutomationOperationObservationStatus.RejectedConflict,
+                "team_automation_operation_conflict"),
+            preparation,
+            projection);
+
+        var act = () => service.BeginTeamAutomationCredentialOperationAsync(CreateOperation());
+
+        await act.Should().ThrowAsync<ScheduledDispatchConflictException>()
+            .WithMessage("team_automation_operation_conflict");
+        projection.ReleaseCalls.Should().Be(1);
+        preparation.ReleaseCalls.Should().Be(1);
+    }
+
+    private static ScheduledDispatchApplicationService CreateService(
+        IScheduledDispatchActorPort actorPort,
+        ITeamAutomationOperationObservationScopeLeasePreparationPort preparation,
+        ITeamAutomationOperationObservationProjectionPort projection) =>
+        new(
+            actorPort,
+            new EmptyScheduleQueryPort(),
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort(),
+            teamOperationObservationPreparation: preparation,
+            teamOperationObservationProjection: projection);
+
     private static TeamAutomationCredentialOperation CreateOperation() =>
         new(
             "schedule-1",
@@ -180,7 +372,11 @@ public sealed class TeamAutomationObservationCorrelationTests
         BroadcastingObservationProjection projection,
         TeamAutomationOperationObservationStatus status =
             TeamAutomationOperationObservationStatus.Committed,
-        string errorCode = "")
+        string errorCode = "",
+        Exception? dispatchException = null,
+        bool completeObservationWithoutOutcome = false,
+        Action? beforeOutcome = null,
+        bool omitOutcome = false)
         : IScheduledDispatchActorPort
     {
         private int _dispatchCount;
@@ -198,7 +394,32 @@ public sealed class TeamAutomationObservationCorrelationTests
             CancellationToken ct = default)
         {
             await projection.WaitUntilReadyAsync(ct);
+            if (dispatchException != null)
+                throw dispatchException;
+
             var dispatchNumber = Interlocked.Increment(ref _dispatchCount);
+            beforeOutcome?.Invoke();
+            if (omitOutcome)
+            {
+                return new DispatchAdmission(
+                    true,
+                    "command-" + dispatchNumber,
+                    DateTimeOffset.UtcNow,
+                    actorId,
+                    "correlation-" + dispatchNumber);
+            }
+
+            if (completeObservationWithoutOutcome)
+            {
+                projection.Complete();
+                return new DispatchAdmission(
+                    true,
+                    "command-" + dispatchNumber,
+                    DateTimeOffset.UtcNow,
+                    actorId,
+                    "correlation-" + dispatchNumber);
+            }
+
             projection.Broadcast(new TeamAutomationOperationCommittedOutcome(
                 operation.ScheduleId,
                 operation.OperationId,
@@ -339,22 +560,42 @@ public sealed class TeamAutomationObservationCorrelationTests
             CancellationToken ct = default) => throw new NotSupportedException();
     }
 
-    private sealed class ObservationPreparationPort
+    private sealed class ObservationPreparationPort(
+        Exception? prepareException = null,
+        Exception? releaseException = null)
         : ITeamAutomationOperationObservationScopeLeasePreparationPort
     {
+        public int ReleaseCalls { get; private set; }
+
         public Task<TeamAutomationOperationObservationScopeLeasePreparation?> PrepareAsync(
             string actorId,
             string operationId,
-            CancellationToken ct = default) =>
-            Task.FromResult<TeamAutomationOperationObservationScopeLeasePreparation?>(
+            CancellationToken ct = default)
+        {
+            if (prepareException != null)
+                return Task.FromException<TeamAutomationOperationObservationScopeLeasePreparation?>(
+                    prepareException);
+
+            return Task.FromResult<TeamAutomationOperationObservationScopeLeasePreparation?>(
                 new TeamAutomationOperationObservationScopeLeasePreparation(actorId, operationId));
+        }
 
         public Task ReleaseAsync(
             TeamAutomationOperationObservationScopeLeasePreparation preparation,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ReleaseCalls++;
+            return releaseException == null
+                ? Task.CompletedTask
+                : Task.FromException(releaseException);
+        }
     }
 
-    private sealed class BroadcastingObservationProjection(int expectedAttachments)
+    private sealed class BroadcastingObservationProjection(
+        int expectedAttachments,
+        Exception? attachException = null,
+        Exception? detachException = null,
+        Exception? releaseException = null)
         : ITeamAutomationOperationObservationProjectionPort
     {
         private readonly object _gate = new();
@@ -363,7 +604,20 @@ public sealed class TeamAutomationObservationCorrelationTests
 
         public bool ProjectionEnabled => true;
 
+        public int DetachCalls { get; private set; }
+
+        public int ReleaseCalls { get; private set; }
+
         public Task WaitUntilReadyAsync(CancellationToken ct) => _ready.Task.WaitAsync(ct);
+
+        public void Complete()
+        {
+            IEventSink<TeamAutomationOperationCommittedOutcome>[] sinks;
+            lock (_gate)
+                sinks = _sinks.ToArray();
+            foreach (var sink in sinks)
+                sink.Complete();
+        }
 
         public void Broadcast(TeamAutomationOperationCommittedOutcome outcome)
         {
@@ -389,6 +643,13 @@ public sealed class TeamAutomationObservationCorrelationTests
                 IEventSink<TeamAutomationOperationCommittedOutcome> sink,
                 CancellationToken ct = default)
         {
+            if (attachException != null)
+            {
+                return Task.FromException<
+                    EventSinkProjectionAttachment<ITeamAutomationOperationObservationProjectionLease>?>(
+                    attachException);
+            }
+
             lock (_gate)
             {
                 _sinks.Add(sink);
@@ -407,12 +668,23 @@ public sealed class TeamAutomationObservationCorrelationTests
             IEventSink<TeamAutomationOperationCommittedOutcome> sink,
             CancellationToken ct = default) => throw new NotSupportedException();
 
-        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default) =>
-            liveSinkLease?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+        public Task DetachLiveSinkAsync(IAsyncDisposable? liveSinkLease, CancellationToken ct = default)
+        {
+            DetachCalls++;
+            return detachException != null
+                ? Task.FromException(detachException)
+                : liveSinkLease?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+        }
 
         public Task ReleaseActorProjectionAsync(
             ITeamAutomationOperationObservationProjectionLease lease,
-            CancellationToken ct = default) => Task.CompletedTask;
+            CancellationToken ct = default)
+        {
+            ReleaseCalls++;
+            return releaseException == null
+                ? Task.CompletedTask
+                : Task.FromException(releaseException);
+        }
 
         private void Remove(IEventSink<TeamAutomationOperationCommittedOutcome> sink)
         {
