@@ -337,6 +337,134 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeGAgent_ShouldResolveActorInOwnerScope_WhenLarkChannelCarriesOwnerScope()
+    {
+        var harness = new Harness();
+        harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
+            "owner-scope-1",
+            [new GAgentActorGroup("RoleGAgent", ["owner-actor-1"])],
+            7,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(
+            callId: "call-gagent-lark-owner-scope",
+            scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: "lark",
+            channelRegistrationScopeId: "registration-scope-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "owner-actor-1",
+              "payload": { "prompt": "hello" }
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ActorRegistry.LastScopeId.Should().Be("owner-scope-1");
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var payload = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        payload.ScopeId.Should().Be("owner-scope-1");
+    }
+
+    [Fact]
+    public async Task InvokeGAgent_ShouldResolveActorInOwnerScope_WhenFeishuChannelCarriesOwnerScope()
+    {
+        var harness = new Harness();
+        harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
+            "owner-scope-1",
+            [new GAgentActorGroup("RoleGAgent", ["owner-actor-1"])],
+            7,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(
+            callId: "call-gagent-feishu-owner-scope",
+            scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: "feishu",
+            channelRegistrationScopeId: "registration-scope-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "owner-actor-1",
+              "payload": { "prompt": "hello" }
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ActorRegistry.LastScopeId.Should().Be("owner-scope-1");
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var payload = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        payload.ScopeId.Should().Be("owner-scope-1");
+    }
+
+    [Fact]
+    public async Task InvokeGAgent_ShouldKeepCallerScope_WhenLarkChannelHasNoOwnerScope()
+    {
+        var harness = new Harness();
+        harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
+            "registration-scope-1",
+            [new GAgentActorGroup("RoleGAgent", ["registration-actor-1"])],
+            7,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(
+            callId: "call-gagent-lark-no-owner-scope",
+            scopeId: "registration-scope-1",
+            ownerScopeId: null,
+            channelPlatform: "lark",
+            channelRegistrationScopeId: "registration-scope-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "registration-actor-1",
+              "payload": { "prompt": "hello" }
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ActorRegistry.LastScopeId.Should().Be("registration-scope-1");
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var payload = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        payload.ScopeId.Should().Be("registration-scope-1");
+    }
+
+    [Fact]
+    public async Task InvokeGAgent_ShouldKeepCallerScope_WhenApiChatContextCarriesOwnerScope()
+    {
+        var harness = new Harness();
+        harness.ActorRegistry.Snapshot = new GAgentActorRegistrySnapshot(
+            "registration-scope-1",
+            [new GAgentActorGroup("RoleGAgent", ["registration-actor-1"])],
+            7,
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow);
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_gagent");
+
+        using var _ = PushContext(
+            callId: "call-gagent-api-registration-scope",
+            scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: null,
+            channelRegistrationScopeId: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "actor_id": "registration-actor-1",
+              "payload": { "prompt": "hello" }
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.ActorRegistry.LastScopeId.Should().Be("registration-scope-1");
+        harness.ActorDispatch.Calls.Should().ContainSingle();
+        var payload = harness.ActorDispatch.Calls.Single().Envelope.Payload.Unpack<ChatRequestEvent>();
+        payload.ScopeId.Should().Be("registration-scope-1");
+    }
+
+    [Fact]
     public async Task InvokeGAgent_ShouldNotResolveCallerScopeFromExternalMetadata()
     {
         var harness = new Harness();
@@ -1089,6 +1217,60 @@ public sealed class AevatarInvocationToolSourceTests
         result.GetProperty("run_id").GetString().Should().Be("call-workflow");
         result.GetProperty("actor_id").GetString().Should().Be("workflow-actor");
         result.GetProperty("stream_topic").GetString().Should().Be("aevatar://actors/workflow-actor/runs/call-workflow");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ShouldUseOwnerScope_WhenLarkChannelCarriesOwnerScope()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-lark-owner-scope",
+            scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: "lark",
+            channelRegistrationScopeId: "registration-scope-1");
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.ScopeId.Should().Be("owner-scope-1");
+    }
+
+    [Fact]
+    public async Task StartWorkflow_ShouldKeepCallerScope_WhenApiChatContextCarriesOwnerScope()
+    {
+        var harness = new Harness();
+        harness.WorkflowDispatch.Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+            .Success(new WorkflowChatRunAcceptedReceipt("workflow-actor", "wf-main", "wf-command", "wf-correlation"));
+        var tool = await harness.DiscoverToolAsync("aevatar_start_workflow");
+
+        using var _ = PushContext(
+            callId: "call-workflow-api-registration-scope",
+            scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: null,
+            channelRegistrationScopeId: null);
+        var output = await tool.ExecuteAsync("""
+            {
+              "workflow_id": "wf-main",
+              "inputs": { "prompt": "run workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.WorkflowDispatch.Command.Should().NotBeNull();
+        harness.WorkflowDispatch.Command!.ScopeId.Should().Be("registration-scope-1");
     }
 
     [Fact]
@@ -2873,6 +3055,8 @@ public sealed class AevatarInvocationToolSourceTests
         string? senderNyxUserId = null,
         string? senderBindingId = "binding-1",
         string? ownerScopeId = null,
+        string? channelPlatform = "telegram",
+        string? channelRegistrationScopeId = "registration-scope-1",
         AgentWorkflowRuntimeContext? workflowRuntime = null,
         string? durableReplyCredentialRef = "secrets://nyx/default-reply",
         long durableReplyCredentialExpiresAtUnixMs = 0,
@@ -2882,9 +3066,9 @@ public sealed class AevatarInvocationToolSourceTests
             new AgentToolCredentials(accessToken, "org-token", "sender-token"),
             new AgentToolCallerContext(scopeId, "owner-1", "response-1", ownerScopeId),
             new AgentToolChannelContext(
-                "telegram",
+                channelPlatform,
                 "sender-1",
-                "registration-scope-1",
+                channelRegistrationScopeId,
                 "message-1",
                 "platform-message-1",
                 null,

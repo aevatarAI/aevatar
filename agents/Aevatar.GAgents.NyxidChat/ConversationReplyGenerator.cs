@@ -634,14 +634,30 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
             foreach (var attachment in source.Attachments)
             {
-                if (attachment.Kind != AttachmentKind.Image)
+                if (!IsLarkImageInputAttachment(attachment))
                 {
+                    _logger.LogDebug(
+                        "Skipping non-image Lark attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
                     unseenCount++;
                     continue;
                 }
 
                 if (attachment.SizeBytes > MaxInlineImageBytes)
                 {
+                    _logger.LogWarning(
+                        "Skipping oversized Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name} sizeBytes={SizeBytes} maxBytes={MaxBytes}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name,
+                        attachment.SizeBytes,
+                        MaxInlineImageBytes);
                     unseenCount++;
                     continue;
                 }
@@ -649,10 +665,18 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 var resourceKey = NormalizeOptional(attachment.AttachmentId);
                 if (resourceKey is null)
                 {
+                    _logger.LogWarning(
+                        "Skipping Lark image attachment without resource key for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
                     unseenCount++;
                     continue;
                 }
 
+                var resourceKind = ToLarkMessageResourceKind(attachment);
                 LarkMessageResourceDownloadResult downloaded;
                 try
                 {
@@ -661,7 +685,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                             new LarkMessageResourceDownloadRequest(
                                 messageId,
                                 resourceKey,
-                                LarkMessageResourceKind.Image),
+                                resourceKind),
                             ct)
                         .ConfigureAwait(false);
                 }
@@ -673,37 +697,68 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                 {
                     _logger.LogWarning(
                         ex,
-                        "Failed to download Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey}",
+                        "Failed to download Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
                         providerSlug,
                         messageId,
-                        resourceKey);
+                        resourceKey,
+                        resourceKind,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
                     unseenCount++;
                     continue;
                 }
 
-                 if (!downloaded.Succeeded ||
+                var mediaType = ResolveDownloadedImageMediaType(
+                    downloaded.ContentType,
+                    attachment.ContentType,
+                    downloaded.FileName,
+                    attachment.Name);
+                if (!downloaded.Succeeded ||
                     downloaded.Content.Length == 0 ||
                     downloaded.Content.Length > MaxInlineImageBytes ||
-                    !IsSupportedImageMediaType(downloaded.ContentType ?? attachment.ContentType))
+                    mediaType is null)
                 {
                     _logger.LogWarning(
-                        "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} status={Status} detail={Detail}",
+                        "Lark image attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} attachmentKind={AttachmentKind} contentType={ContentType} downloadedContentType={DownloadedContentType} name={Name} downloadedName={DownloadedName} status={Status} detail={Detail}",
                         providerSlug,
                         messageId,
                         resourceKey,
+                        resourceKind,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        downloaded.ContentType,
+                        attachment.Name,
+                        downloaded.FileName,
                         downloaded.HttpStatus,
                         downloaded.Detail);
                     unseenCount++;
                     continue;
                 }
 
+                _logger.LogDebug(
+                    "Downloaded Lark image attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind} attachmentKind={AttachmentKind} mediaType={MediaType} name={Name} sizeBytes={SizeBytes}",
+                    providerSlug,
+                    messageId,
+                    resourceKey,
+                    resourceKind,
+                    attachment.Kind,
+                    mediaType,
+                    NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name),
+                    downloaded.Content.Length);
+
                 if (_fileIngressPort is null)
                 {
+                    _logger.LogWarning(
+                        "File ingress port is unavailable for Lark image attachment chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} resourceKind={ResourceKind}",
+                        providerSlug,
+                        messageId,
+                        resourceKey,
+                        resourceKind);
                     unseenCount++;
                     continue;
                 }
 
-                var mediaType = NormalizeImageMediaType(downloaded.ContentType ?? attachment.ContentType);
                 var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name);
                 FileArtifactIngressResult ingressResult;
                 try
@@ -968,21 +1023,76 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsSupportedImageMediaType(string? mediaType)
+    private static bool IsLarkImageInputAttachment(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.Image ||
+        attachment.Kind == AttachmentKind.File && ResolveImageMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
+
+    private static LarkMessageResourceKind ToLarkMessageResourceKind(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.Image
+            ? LarkMessageResourceKind.Image
+            : LarkMessageResourceKind.File;
+
+    private static bool IsSupportedImageMediaType(string? mediaType) =>
+        ResolveImageMediaType(mediaType) is not null;
+
+    private static string NormalizeImageMediaType(string? mediaType) =>
+        ResolveImageMediaType(mediaType) ?? "image/png";
+
+    private static string? ResolveDownloadedImageMediaType(
+        string? mediaType,
+        string? fallbackMediaType,
+        string? fileName,
+        string? fallbackFileName)
     {
         var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
-        return normalized is "image" or "image/png" or "image/jpeg" or "image/jpg" or "image/webp" or "image/gif";
+        if (normalized is not null && normalized is not "application/octet-stream" and not "binary/octet-stream")
+            return ResolveImageMediaType(normalized);
+
+        return ResolveImageMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
     }
 
-    private static string NormalizeImageMediaType(string? mediaType)
+    private static string? ResolveImageMediaType(
+        string? mediaType,
+        string? fallbackMediaType = null,
+        string? fileName = null,
+        string? fallbackFileName = null)
     {
         var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
-        return normalized switch
+        var resolved = normalized switch
         {
+            "image" => "image/png",
             "image/jpg" => "image/jpeg",
             "image/png" or "image/jpeg" or "image/webp" or "image/gif" => normalized,
-            _ => "image/png",
+            _ => null,
         };
+        if (resolved is not null)
+            return resolved;
+
+        if (fallbackMediaType is not null)
+            resolved = ResolveImageMediaType(fallbackMediaType);
+        if (resolved is not null)
+            return resolved;
+
+        return ResolveImageMediaTypeFromFileName(fileName) ?? ResolveImageMediaTypeFromFileName(fallbackFileName);
+    }
+
+    private static string? ResolveImageMediaTypeFromFileName(string? fileName)
+    {
+        var normalized = NormalizeOptional(fileName)?.ToLowerInvariant();
+        if (normalized is null)
+            return null;
+
+        if (normalized.EndsWith(".jpg", StringComparison.Ordinal) ||
+            normalized.EndsWith(".jpeg", StringComparison.Ordinal))
+            return "image/jpeg";
+        if (normalized.EndsWith(".png", StringComparison.Ordinal))
+            return "image/png";
+        if (normalized.EndsWith(".webp", StringComparison.Ordinal))
+            return "image/webp";
+        if (normalized.EndsWith(".gif", StringComparison.Ordinal))
+            return "image/gif";
+
+        return null;
     }
 
     private static string? NormalizeOptional(string? value) =>

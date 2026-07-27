@@ -142,7 +142,7 @@ public sealed class AevatarInvocationDispatcher
         if (error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(error), error);
 
-        var scope = ResolveCallerScope();
+        var scope = ResolveChannelAwareInvocationScope();
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
@@ -330,7 +330,7 @@ public sealed class AevatarInvocationDispatcher
                 ct);
         }
 
-        var scope = ResolveCallerScope();
+        var scope = ResolveChannelAwareInvocationScope();
         if (scope.Error != null)
             return ToChatRunRequest(chatRunRequest, AevatarInvocationJson.Error(scope.Error), scope.Error);
 
@@ -1751,6 +1751,33 @@ public sealed class AevatarInvocationDispatcher
             scopeId,
             ownerSubject ?? string.Empty,
             responseId));
+    }
+
+    private CallerScopeResolution ResolveChannelAwareInvocationScope() =>
+        ResolveLarkOwnerInvocationScope() ?? ResolveCallerScope();
+
+    private CallerScopeResolution? ResolveLarkOwnerInvocationScope()
+    {
+        var context = AgentToolRequestContext.Current;
+        if (!IsLarkChannel(context) || Normalize(context?.Caller.OwnerScopeId) is not { } ownerScopeId)
+            return null;
+
+        var baseScope = ResolveCallerScope(requireOwner: false);
+        if (baseScope.Error != null)
+            return baseScope;
+
+        return CallerScopeResolution.Success(baseScope.Value! with
+        {
+            ScopeId = ownerScopeId,
+            OwnerSubject = ownerScopeId,
+        });
+    }
+
+    private static bool IsLarkChannel(AgentToolExecutionContext? context)
+    {
+        var platform = Normalize(context?.Channel.Platform);
+        return string.Equals(platform, "lark", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(platform, "feishu", StringComparison.OrdinalIgnoreCase);
     }
 
     private CallerScopeResolution ResolveTeamInvocationScope()

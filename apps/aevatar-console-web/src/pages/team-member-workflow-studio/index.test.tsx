@@ -1,16 +1,16 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { history } from "@/shared/navigation/history";
+import { StudioApiError, studioApi } from "@/shared/studio/api";
 import {
   cleanupTestQueryClients,
   createTestQueryClient,
   renderWithQueryClient,
 } from "../../../tests/reactQueryTestUtils";
-import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
-import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
-import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { history } from "@/shared/navigation/history";
 import TeamMemberWorkflowStudioPage from "./index";
-import { StudioApiError, studioApi } from "@/shared/studio/api";
 
 jest.mock("@/shared/graphs/GraphCanvas", () => ({
   __esModule: true,
@@ -4430,7 +4430,7 @@ describe("TeamMemberWorkflowStudioPage", () => {
       name: "Workflow Alpha",
       workflowId: "workflow-alpha",
       yaml: "name: Workflow Alpha\nsteps: []\n",
-      document: mockWorkflowDocument,
+      document: mockBranchingWorkflowDocument,
       updatedAtUtc: "2026-06-08T00:00:00Z",
     });
     (runtimeRunsApi.streamDraftRun as jest.Mock).mockResolvedValue(
@@ -4459,6 +4459,21 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     const consolePanel = await screen.findByLabelText("Draft run console");
     expect(consolePanel).toHaveTextContent("running");
+    expect(
+      within(consolePanel).getByRole("button", { name: "Clear logs" }),
+    ).toBeDisabled();
+    const executionPanelResponsiveRules = findRenderedStyleText(
+      ".workflow-studio-execution-panel__body",
+    );
+    expect(executionPanelResponsiveRules).toContain("@media (max-width: 720px)");
+    expect(executionPanelResponsiveRules).toContain(
+      "grid-template-columns: minmax(0, 1fr);",
+    );
+    expect(executionPanelResponsiveRules).toContain("grid-auto-rows: max-content;");
+    expect(executionPanelResponsiveRules).toContain(
+      "grid-template-rows: min-content max-content;",
+    );
+    expect(executionPanelResponsiveRules).not.toContain("!important");
 
     await act(async () => {
       stream.emit({
@@ -4472,11 +4487,43 @@ describe("TeamMemberWorkflowStudioPage", () => {
       });
       await flushAsyncWork();
     });
-    expect(consolePanel).toHaveTextContent("Run started");
-    expect(consolePanel).toHaveTextContent("RUN_STARTED");
+    fireEvent.click(within(consolePanel).getByRole("radio", { name: "Events" }));
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Run started",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "RUN_STARTED",
+    );
+    fireEvent.click(within(consolePanel).getByRole("radio", { name: "Nodes" }));
+    const pendingTriageRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-node-triage",
+    );
+    const pendingGuardRow = within(consolePanel).getByTestId(
+      "workflow-execution-log-row-node-guard",
+    );
+    expect(pendingTriageRow).toHaveTextContent("Pending");
+    expect(pendingGuardRow).toHaveTextContent("Pending");
+    expect(pendingTriageRow).toBeDisabled();
+    expect(pendingGuardRow).toBeDisabled();
+    expect(pendingTriageRow).toHaveStyle({ height: "80px", minHeight: "80px" });
+    expect(pendingGuardRow).toHaveStyle({ height: "80px", minHeight: "80px" });
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Select a log entry",
+    );
+
+    const confirmSpy = jest
+      .spyOn(window, "confirm")
+      .mockImplementation(() => true);
+    fireEvent.click(screen.getByRole("button", { name: "node:step:guard" }));
+    clickMoreAction("Delete selected node");
+    await waitFor(() => {
+      expect(screen.getByText("nodes:1")).toBeTruthy();
+    });
     expect(
-      within(consolePanel).queryByTestId("workflow-execution-log-row-node-triage"),
-    ).toBeNull();
+      within(consolePanel).getByTestId("workflow-execution-log-row-node-guard"),
+    ).toHaveTextContent("Pending");
+    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+    confirmSpy.mockRestore();
 
     await act(async () => {
       stream.emit({
@@ -4496,6 +4543,10 @@ describe("TeamMemberWorkflowStudioPage", () => {
       "workflow-execution-log-row-node-triage",
     );
     expect(runningTriageRow).toHaveTextContent("Running");
+    expect(runningTriageRow).toBeEnabled();
+    expect(
+      within(consolePanel).getByTestId("workflow-execution-log-row-node-guard"),
+    ).toHaveTextContent("Pending");
     expect(runningTriageRow).not.toHaveTextContent("Run the workflow");
     fireEvent.click(runningTriageRow);
     expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
@@ -4504,8 +4555,15 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
       "No output captured for this node.",
     );
+    fireEvent.keyDown(within(consolePanel).getByLabelText("Logs overview"), {
+      key: "ArrowDown",
+    });
+    expect(runningTriageRow).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(consolePanel).getByTestId("workflow-execution-log-row-node-guard"),
+    ).toBeDisabled();
     expect(consolePanel).toHaveTextContent(/Events\s*2/);
-    expect(consolePanel).toHaveTextContent(/Steps\s*1/);
+    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
 
     await act(async () => {
       stream.emit({
@@ -4531,11 +4589,71 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     await act(async () => {
       stream.emit({
+        name: "aevatar.step.request",
+        payload: {
+          input: "Second pass input",
+          stepId: "triage",
+          stepType: "llm_call",
+          targetRole: "assistant",
+        },
+        timestamp: Date.parse("2026-06-08T00:00:03Z"),
+        type: "CUSTOM",
+      });
+      await flushAsyncWork();
+    });
+    let triageAttemptRows = within(consolePanel).getAllByTestId(
+      "workflow-execution-log-row-node-triage",
+    );
+    expect(triageAttemptRows).toHaveLength(2);
+    fireEvent.click(triageAttemptRows[1]);
+    expect(
+      triageAttemptRows.filter((row) => row.getAttribute("aria-pressed") === "true"),
+    ).toHaveLength(1);
+    expect(triageAttemptRows[0]).toHaveAttribute("aria-pressed", "false");
+    expect(triageAttemptRows[1]).toHaveAttribute("aria-pressed", "true");
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Second pass input",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "No output captured for this node.",
+    );
+
+    await act(async () => {
+      stream.emit({
+        name: "aevatar.step.completed",
+        payload: {
+          output: "Second pass output",
+          stepId: "triage",
+          success: true,
+        },
+        timestamp: Date.parse("2026-06-08T00:00:04Z"),
+        type: "CUSTOM",
+      });
+      await flushAsyncWork();
+    });
+    triageAttemptRows = within(consolePanel).getAllByTestId(
+      "workflow-execution-log-row-node-triage",
+    );
+    expect(
+      triageAttemptRows.filter((row) => row.getAttribute("aria-pressed") === "true"),
+    ).toHaveLength(1);
+    expect(triageAttemptRows[0]).toHaveAttribute("aria-pressed", "false");
+    expect(triageAttemptRows[1]).toHaveAttribute("aria-pressed", "true");
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Second pass input",
+    );
+    expect(within(consolePanel).getByLabelText("Log details")).toHaveTextContent(
+      "Second pass output",
+    );
+    expect(consolePanel).toHaveTextContent(/Steps\s*2/);
+
+    await act(async () => {
+      stream.emit({
         result: {
-          output: "Workflow complete",
+          output: "Second pass output",
         },
         runId: "run-1",
-        timestamp: Date.parse("2026-06-08T00:00:03Z"),
+        timestamp: Date.parse("2026-06-08T00:00:05Z"),
         type: "RUN_FINISHED",
       });
       stream.finish();
@@ -4544,6 +4662,56 @@ describe("TeamMemberWorkflowStudioPage", () => {
     await waitFor(() => {
       expect(consolePanel).toHaveTextContent("succeeded");
     });
+    expect(
+      within(consolePanel).getByRole("button", { name: "Clear logs" }),
+    ).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    const settledDraftRunPanel = await screen.findByLabelText("Draft run panel");
+    await waitFor(() => {
+      expect(
+        within(settledDraftRunPanel).getByRole("button", {
+          name: /Start draft run/,
+        }),
+      ).toBeEnabled();
+    });
+    const startSecondRunButton = within(settledDraftRunPanel).getByRole("button", {
+      name: /Start draft run/,
+    });
+
+    let finishSecondSerialization: (() => void) | undefined;
+    (studioApi.serializeYaml as jest.Mock).mockImplementationOnce(
+      ({ document }) =>
+        new Promise((resolve) => {
+          finishSecondSerialization = () => {
+            resolve({
+              document,
+              findings: [],
+              yaml: `name: ${document.name}\nsteps:\n${(document.steps ?? [])
+                .map(
+                  (step: { id?: string; type?: string }) =>
+                    `  - id: ${step.id}\n    type: ${step.type}`,
+                )
+                .join("\n")}`,
+            });
+          };
+        }),
+    );
+    fireEvent.click(startSecondRunButton);
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Draft run console")).toBeNull();
+    });
+    await act(async () => {
+      finishSecondSerialization?.();
+      await flushAsyncWork();
+    });
+    const secondRunConsole = await screen.findByLabelText("Draft run console");
+    expect(
+      within(secondRunConsole).getByTestId("workflow-execution-log-row-node-triage"),
+    ).toHaveTextContent("Pending");
+    expect(
+      within(secondRunConsole).queryByTestId("workflow-execution-log-row-node-guard"),
+    ).toBeNull();
+    expect(secondRunConsole).toHaveTextContent(/Steps\s*1/);
   });
 
   it("starts a failed draft run from the draft run panel and keeps the error visible", async () => {
@@ -4615,6 +4783,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
       );
     });
     expect(resultPanel).toHaveTextContent("failed");
+    expect(
+      within(resultPanel).getByTestId("workflow-execution-log-row-node-triage"),
+    ).toHaveTextContent("Pending");
     expect(screen.queryByTestId("member-run-summary")).toBeNull();
     expect(resultPanel).not.toHaveTextContent("Member run");
     expect(runtimeRunsApi.streamChat).not.toHaveBeenCalled();

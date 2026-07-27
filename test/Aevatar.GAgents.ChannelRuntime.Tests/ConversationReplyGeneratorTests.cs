@@ -344,6 +344,70 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithLarkFileCardImageAttachment_BuildsImageContentPart()
+    {
+        var imageBytes = new byte[] { 9, 10, 11, 12 };
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, imageBytes, "image/jpeg", "IMG_20260708_091630.jpg"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
+        var activity = CreateLarkActivity(
+            "msg-file-card-image",
+            "describe it",
+            "om_file_card_image",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_img_key",
+            Kind = AttachmentKind.File,
+            ContentType = "image/jpeg",
+            Name = "IMG_20260708_091630.jpg",
+            SizeBytes = 512,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "describe it");
+        var imagePart = userMessage.ContentParts!.Single(part => part.Kind == ContentPartKind.Image);
+        imagePart.DataBase64.Should().Be(Convert.ToBase64String(imageBytes));
+        imagePart.MediaType.Should().Be("image/jpeg");
+        imagePart.Name.Should().Be("IMG_20260708_091630.jpg");
+        imagePart.FileRef.Should().BeNull();
+        userMessage.ContentParts!.Should().NotContain(part =>
+            part.Text != null &&
+            part.Text.Contains("Attachment visibility warning", StringComparison.Ordinal));
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_file_card_image",
+            "file_img_key",
+            LarkMessageResourceKind.File));
+        fileArtifacts.IngressRequests.Should().ContainSingle().Which.Should().Match<FileArtifactIngressRequest>(request =>
+            request.Content.ToArray().SequenceEqual(imageBytes) &&
+            request.SourceKind == FileArtifactSourceKind.ChatInput &&
+            request.SourceMessageId == "om_file_card_image" &&
+            request.SourceResourceKey == "file_img_key" &&
+            request.FileName == "IMG_20260708_091630.jpg" &&
+            request.MediaType == "image/jpeg");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithCurrentLarkImageAttachment_ShouldUseInboundProviderSlugClient()
     {
         var imageBytes = new byte[] { 5, 6, 7, 8 };
