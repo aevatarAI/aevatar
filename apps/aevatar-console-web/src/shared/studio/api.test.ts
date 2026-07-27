@@ -114,6 +114,100 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('loads and decodes workflow template summaries with bounded filters', async () => {
+    const payload = {
+      items: [
+        {
+          templateId: 'simple-assistant',
+          revision: '1',
+          title: { 'en-US': 'Simple assistant', 'zh-CN': '简易助手' },
+          summary: { 'en-US': 'A starter.', 'zh-CN': '起步模板。' },
+          description: { 'en-US': 'A compact starter.', 'zh-CN': '精简起步模板。' },
+          category: 'Assistants',
+          tags: ['starter'],
+          expectedIO: {
+            input: { 'en-US': 'A request', 'zh-CN': '请求' },
+            output: { 'en-US': 'An answer', 'zh-CN': '回答' },
+          },
+          requirements: {
+            requiredPrimitives: ['llm_call'],
+            workflowSchemaVersion: '1',
+            requiresDefaultLLMRoute: true,
+            requiresHumanInteraction: false,
+          },
+          compatibility: { status: 'Compatible', reason: 'None' },
+        },
+      ],
+      nextCursor: null,
+      eTag: '"templates-v1"',
+    };
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => payload,
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.listWorkflowTemplates({
+        category: 'Assistants',
+        pageSize: 20,
+        query: 'simple assistant',
+      }),
+    ).resolves.toEqual(payload);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      '/api/studio/workflow-templates?query=simple+assistant&category=Assistants&pageSize=20',
+    );
+  });
+
+  it('loads workflow template detail by exact revision and rejects malformed typed responses', async () => {
+    const validDetail = {
+      templateId: 'simple-assistant',
+      revision: '1',
+      title: { 'en-US': 'Simple assistant', 'zh-CN': '简易助手' },
+      summary: { 'en-US': 'A starter.', 'zh-CN': '起步模板。' },
+      description: { 'en-US': 'A compact starter.', 'zh-CN': '精简起步模板。' },
+      category: 'Assistants',
+      tags: ['starter'],
+      expectedIO: {
+        input: { 'en-US': 'A request', 'zh-CN': '请求' },
+        output: { 'en-US': 'An answer', 'zh-CN': '回答' },
+      },
+      requirements: {
+        requiredPrimitives: ['llm_call'],
+        workflowSchemaVersion: '1',
+        requiresDefaultLLMRoute: true,
+        requiresHumanInteraction: false,
+      },
+      compatibility: { status: 'Compatible', reason: 'None' },
+      workflowYaml: 'name: simple_assistant\nsteps: []\n',
+    };
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => validDetail,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ...validDetail, workflowYaml: 42 }),
+      } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.getWorkflowTemplate('simple-assistant', '1'),
+    ).resolves.toEqual(validDetail);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      '/api/studio/workflow-templates/simple-assistant/revisions/1',
+    );
+    await expect(
+      studioApi.getWorkflowTemplate('simple-assistant', '1'),
+    ).rejects.toThrow('WorkflowTemplateDetail.workflowYaml must be a string.');
+  });
+
   it('loads user config from the Studio host using bearer auth', async () => {
     persistAuthSession({
       tokens: {

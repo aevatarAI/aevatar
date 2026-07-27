@@ -20,10 +20,20 @@ const TEAM_FIRST_ENABLED = parseBooleanFlag(
   true,
 );
 
+const WORKFLOW_TEMPLATES_ENABLED = parseBooleanFlag(
+  process.env.AEVATAR_CONSOLE_WORKFLOW_TEMPLATES_ENABLED,
+  false,
+);
+
 export function isTeamFirstEnabled(): boolean {
   return TEAM_FIRST_ENABLED;
 }
 
+export function isWorkflowTemplatesEnabled(): boolean {
+  return WORKFLOW_TEMPLATES_ENABLED;
+}
+
 export const CONSOLE_FEATURES = {
   teamFirstEnabled: TEAM_FIRST_ENABLED,
+  workflowTemplatesEnabled: WORKFLOW_TEMPLATES_ENABLED,
 } as const;

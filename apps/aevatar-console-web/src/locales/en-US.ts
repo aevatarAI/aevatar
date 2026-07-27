@@ -1241,6 +1241,76 @@ const enUSMessages = {
   'teamMemberWorkflowStudio.nodeLibrary.searchPlaceholder': 'Search nodes',
   'teamMemberWorkflowStudio.nodeLibrary.sectionAria': 'Node library',
   'teamMemberWorkflowStudio.nodeLibrary.title': 'Node library',
+  'teamMemberWorkflowStudio.templates.allCategories': 'All categories',
+  'teamMemberWorkflowStudio.templates.backToCatalog': 'Back to catalog',
+  'teamMemberWorkflowStudio.templates.browserAria': 'Workflow template browser',
+  'teamMemberWorkflowStudio.templates.cancel': 'Cancel',
+  'teamMemberWorkflowStudio.templates.catalogUnavailable': 'Catalog unavailable',
+  'teamMemberWorkflowStudio.templates.categoryAria': 'Filter templates by category',
+  'teamMemberWorkflowStudio.templates.closeAria': 'Close template browser',
+  'teamMemberWorkflowStudio.templates.compatible': 'Compatible',
+  'teamMemberWorkflowStudio.templates.defaultLLMRoute': 'Default LLM route',
+  'teamMemberWorkflowStudio.templates.detailLoading':
+    'Loading template detail and graph preview...',
+  'teamMemberWorkflowStudio.templates.edgePlural': 'edges',
+  'teamMemberWorkflowStudio.templates.edgeSingular': 'edge',
+  'teamMemberWorkflowStudio.templates.edgeSummary':
+    'Edge connects {source} to {target}.',
+  'teamMemberWorkflowStudio.templates.empty': 'No templates match these filters.',
+  'teamMemberWorkflowStudio.templates.expectedIO': 'Expected input and output',
+  'teamMemberWorkflowStudio.templates.expectedInput': 'Expected input',
+  'teamMemberWorkflowStudio.templates.expectedOutput': 'Expected output',
+  'teamMemberWorkflowStudio.templates.graphPreview': 'Workflow graph preview',
+  'teamMemberWorkflowStudio.templates.graphSummary':
+    '{roles} {roleLabel}, {steps} {stepLabel}, {edges} {edgeLabel}',
+  'teamMemberWorkflowStudio.templates.graphTextSummary':
+    'Workflow graph text summary',
+  'teamMemberWorkflowStudio.templates.humanInteraction': 'Human interaction',
+  'teamMemberWorkflowStudio.templates.incompatibleDescription':
+    'This template cannot be used with the current Studio schema or primitive catalog.',
+  'teamMemberWorkflowStudio.templates.launcher': 'or start from a template',
+  'teamMemberWorkflowStudio.templates.launcherAria':
+    'Start from a workflow template',
+  'teamMemberWorkflowStudio.templates.loadFailed':
+    'The template catalog could not be loaded.',
+  'teamMemberWorkflowStudio.templates.loading': 'Loading workflow templates',
+  'teamMemberWorkflowStudio.templates.notFound': 'Template not found',
+  'teamMemberWorkflowStudio.templates.notFoundDescription':
+    'This template is unavailable or no longer published.',
+  'teamMemberWorkflowStudio.templates.offline':
+    'You appear to be offline. Reconnect and retry the template catalog.',
+  'teamMemberWorkflowStudio.templates.previewUnavailable':
+    'Template preview unavailable',
+  'teamMemberWorkflowStudio.templates.previewUnavailableDescription':
+    'The current draft is unchanged. Retry or choose another template.',
+  'teamMemberWorkflowStudio.templates.requirements': 'Template requirements',
+  'teamMemberWorkflowStudio.templates.retry': 'Retry templates',
+  'teamMemberWorkflowStudio.templates.retryDetail': 'Retry detail',
+  'teamMemberWorkflowStudio.templates.revision': 'Revision {revision}',
+  'teamMemberWorkflowStudio.templates.rolePlural': 'roles',
+  'teamMemberWorkflowStudio.templates.roleSingular': 'role',
+  'teamMemberWorkflowStudio.templates.roleSummary':
+    'Role {role} supports this workflow.',
+  'teamMemberWorkflowStudio.templates.schema': 'Schema {version}',
+  'teamMemberWorkflowStudio.templates.searchAria': 'Search workflow templates',
+  'teamMemberWorkflowStudio.templates.searchPlaceholder': 'Search templates',
+  'teamMemberWorkflowStudio.templates.selectPrompt':
+    'Select a template to inspect its workflow graph.',
+  'teamMemberWorkflowStudio.templates.stepPlural': 'steps',
+  'teamMemberWorkflowStudio.templates.stepSingular': 'step',
+  'teamMemberWorkflowStudio.templates.stepSummary':
+    'Step {step} uses {type}.',
+  'teamMemberWorkflowStudio.templates.subtitle':
+    'Choose a complete workflow starting point.',
+  'teamMemberWorkflowStudio.templates.timeout':
+    'The template catalog request timed out. Retry when the connection is stable.',
+  'teamMemberWorkflowStudio.templates.title': 'Workflow templates',
+  'teamMemberWorkflowStudio.templates.unavailablePrimitive':
+    'Required primitive unavailable',
+  'teamMemberWorkflowStudio.templates.unsupportedSchema':
+    'Workflow schema unsupported',
+  'teamMemberWorkflowStudio.templates.useTemplate': 'Use template',
+  'teamMemberWorkflowStudio.templates.viewAria': 'View {title}',
   'teamMemberWorkflowStudio.resize.executionPanel': 'Resize run console',
   'teamMemberWorkflowStudio.resize.sidePanel': 'Resize side panel',
   'teamMemberWorkflowStudio.draftRunPanel.closeAria': 'Close draft run panel',
