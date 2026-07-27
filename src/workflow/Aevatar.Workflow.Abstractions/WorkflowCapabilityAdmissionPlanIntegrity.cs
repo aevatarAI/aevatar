@@ -277,13 +277,12 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         if (selector is null || selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.None)
             throw new InvalidOperationException("Workflow external invocation selector is required.");
 
-        var values = selector.SelectorCase switch
+        var requiredValues = selector.SelectorCase switch
         {
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector => new[]
             {
                 selector.HostConnector.ConnectorCapabilityRef,
                 selector.HostConnector.OperationId,
-                selector.HostConnector.ContractDigest,
             },
             ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation => new[]
             {
@@ -292,9 +291,18 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             },
             _ => [],
         };
-        if (values.Any(static value =>
+        if (requiredValues.Any(static value =>
                 string.IsNullOrWhiteSpace(value) ||
                 !string.Equals(value, value.Trim(), StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException("Workflow external invocation selector identity is invalid.");
+        }
+
+        if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector &&
+            !string.Equals(
+                selector.HostConnector.ContractDigest,
+                selector.HostConnector.ContractDigest.Trim(),
+                StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Workflow external invocation selector identity is invalid.");
         }

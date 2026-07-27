@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
@@ -6,6 +7,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.Tools;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
 namespace Aevatar.AI.Tests;
@@ -31,6 +33,25 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
         request.Path.Should().Be("/api/v1/proxy/s/api-lark-bot-2/open-apis/im/v1/messages/om_x1/resources/file%207");
         request.Query.Should().Be("?_nyxid_via=us-lark-alpha");
         request.Method.Should().Be("GET");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldAcceptDynamicMessageResourceAsAFileArtifact()
+    {
+        var handler = new RecordingHandler(binaryResponse: true);
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(handler, ingress);
+        using var scope = PushContext(MessageResourceAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"message_id":"om_runtime_7","file_key":"file_runtime_9"},"response_mode":"file_artifact"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("success").GetBoolean().Should().BeTrue();
+        handler.ProxyRequests.Should().ContainSingle().Which.Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot-2/open-apis/im/v1/messages/om_runtime_7/resources/file_runtime_9");
+        ingress.Requests.Should().ContainSingle().Which.SourceResourceKey.Should().Be(
+            "/open-apis/im/v1/messages/om_runtime_7/resources/file_runtime_9");
     }
 
     [Fact]
@@ -142,6 +163,23 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldBuildDynamicApprovalInstancePathFromTheProof()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(handler);
+        using var scope = PushContext(GetApprovalInstanceAdmission());
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"instance_code":"approval_runtime_42"}}""");
+
+        result.Should().NotContain("error_code");
+        var request = handler.ProxyRequests.Should().ContainSingle().Subject;
+        request.Method.Should().Be("GET");
+        request.Path.Should().Be(
+            "/api/v1/proxy/s/api-lark-bot-2/open-apis/approval/v4/instances/approval_runtime_42");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ShouldUseTheSameBuilderForEveryIterationOfAnIndirectCallSite()
     {
         var handler = new RecordingHandler();
@@ -214,22 +252,37 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     false)),
             AgentToolOperationResponsePolicy.TextOnly);
 
+    private static AgentToolOperationAdmission GetApprovalInstanceAdmission() =>
+        new(
+            "us-lark-alpha",
+            "api-lark-bot-2",
+            "lark_get_approval_instance",
+            "GET",
+            "/open-apis/approval/v4/instances/{instance_code}",
+            "sha256:get-approval-instance",
+            [PathParameter("instance_code")],
+            null,
+            AgentToolOperationResponsePolicy.TextOnly);
+
     private static AgentToolOperationParameter PathParameter(string name) =>
         new(name, AgentToolOperationParameterLocation.Path, true, AgentToolOperationValueSchema.Text);
 
     private static AgentToolOperationParameter QueryParameter(string name, bool required) =>
         new(name, AgentToolOperationParameterLocation.Query, required, AgentToolOperationValueSchema.Text);
 
-    private static NyxIdProxyTool CreateTool(RecordingHandler handler) =>
+    private static NyxIdProxyTool CreateTool(
+        RecordingHandler handler,
+        INyxIdProxyFileArtifactIngress? ingress = null) =>
         new(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
-            new HttpClient(handler)));
+            new HttpClient(handler)),
+            fileArtifactIngress: ingress);
 
     private static AgentToolContextScope PushContext(AgentToolOperationAdmission admission) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
             AgentToolRequestIdentity.Empty,
             new AgentToolCredentials("user-token", null, null),
-            AgentToolCallerContext.Empty,
+            new AgentToolCallerContext("scope-alpha", null, null),
             AgentToolChannelContext.Empty,
             AgentToolSenderBindingContext.Empty,
             LLMRequestRoutingContext.Empty,
@@ -238,11 +291,17 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             new Dictionary<string, string>(StringComparer.Ordinal))
         {
             OperationAdmission = admission,
+            WorkflowRuntime = new AgentWorkflowRuntimeContext(
+                "workflow-run-actor-alpha",
+                "run-alpha",
+                "step-alpha",
+                "run-alpha",
+                1),
         });
 
     private sealed record RecordedProxyRequest(string Method, string Path, string Query, string Body);
 
-    private sealed class RecordingHandler : HttpMessageHandler
+    private sealed class RecordingHandler(bool binaryResponse = false) : HttpMessageHandler
     {
         public int RequestCount { get; private set; }
 
@@ -271,10 +330,41 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     body));
             }
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                Content = binaryResponse
+                    ? new ByteArrayContent(Encoding.UTF8.GetBytes("fixture-resource"))
+                    : new StringContent("{}", Encoding.UTF8, "application/json"),
             };
+            if (binaryResponse)
+                response.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/octet-stream");
+            return response;
+        }
+    }
+
+    private sealed class RecordingFileArtifactIngress : INyxIdProxyFileArtifactIngress
+    {
+        public List<FileArtifactIngressRequest> Requests { get; } = [];
+
+        public ValueTask<FileArtifactIngressResult> IngestAsync(
+            FileArtifactIngressRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return ValueTask.FromResult(new FileArtifactIngressResult(new FileArtifactRef
+            {
+                FileId = "file-fixture",
+                ArtifactId = "artifact-fixture",
+                SourceKind = request.SourceKind,
+                SourceMessageId = request.SourceMessageId,
+                SourceResourceKey = request.SourceResourceKey,
+                FileName = request.FileName,
+                MediaType = request.MediaType,
+                SizeBytes = request.Content.Length,
+                Sha256 = "fixture-sha",
+                OwnerRunId = request.OwnerRunId,
+                OwnerScopeId = request.OwnerScopeId,
+            }));
         }
     }
 }

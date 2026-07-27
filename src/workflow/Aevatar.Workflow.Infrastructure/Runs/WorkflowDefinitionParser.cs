@@ -79,6 +79,10 @@ internal sealed class WorkflowDefinitionParser : IWorkflowDefinitionParser
                 workflowName,
                 WorkflowAuthorizationDependencyEvaluator.Evaluate(workflow)));
         }
+        catch (WorkflowExternalCapabilityValidationException ex)
+        {
+            return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message, ex.Readiness));
+        }
         catch (Exception ex)
         {
             return Task.FromResult(WorkflowYamlParseResult.Invalid(ex.Message));

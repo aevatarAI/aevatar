@@ -6,7 +6,7 @@ owner: eanzhao
 
 # NyxID Connected-Service LLM Tools
 
-NyxID connected-service 工具以 `user_service_id` 为实例身份。Aevatar 在请求期从 NyxID `/keys` live surface 读取调用者可见的实例与 proxy-aware OpenAPI，构造 request-local `IAgentTool`；不保存 service/endpoint 影子目录，不从 slug 猜实例，也不在 prompt 里另建权限目录。
+NyxID connected-service 工具以 `user_service_id` 为实例身份。NyxID 是 catalog service、exact UserService 及其 effective OpenAPI 的唯一权威 owner；Aevatar 在请求期从 NyxID `/keys` live surface 读取调用者可见的实例，并只通过 `GET /api/v1/proxy/services/{user_service_id}/openapi.json` 读取该 exact UserService 的有效契约。Aevatar 不托管 OpenAPI、不保存 service/endpoint 影子目录、不从 slug 猜实例，也不在 prompt 里另建权限目录。
 
 模型看到的最终 tool schema 与实际执行对象来自同一份 `LLMRequest.Tools`。工具调用仍经 NyxID proxy 下发，凭证注入、proxy/broker 审计、approval、node routing 和 delegation 由 NyxID 负责；Aevatar 只记录自己的平台 tool invocation 与 typed receipt 审计。
 
@@ -29,16 +29,31 @@ NyxID connected-service 工具以 `user_service_id` 为实例身份。Aevatar �
 | 工具 | 语义 | 审批 |
 |---|---|---|
 | `nyxid_service_inventory` | 列出或查看本次请求已冻结的 exact 实例 | 只读，不审批 |
-| `nyxid_service_update` | 更新一个 exact 实例的 label、endpoint 或 active 状态 | 必须审批 |
+| `nyxid_service_update` | 更新一个 exact 实例的 label、endpoint、OpenAPI override 或 active 状态 | 必须审批 |
 | `nyxid_service_route` | 把一个 exact 实例设为 direct 或指定 node | 必须审批 |
 | `nyxid_service_delete` | 删除一个 exact 实例 | destructive，必须审批 |
 | `nyxid_service_request` | 通过一个 exact 实例调用 JSON endpoint | safe method 不审批，写方法审批 |
 
 每个需要选实例的 schema 都把 `user_service_id` 收紧为当前 request-local 实例枚举。inventory 允许省略 ID 以列出全部实例；其他固定工具必须提供枚举中的 exact ID。变更、删除和请求返回 typed Protobuf result，NyxID 原始响应只放在 `response_json`，不承担内部控制语义。
 
+`nyxid_service_update.openapi_spec_url` 是 approval-gated 的 A′ 更新选项，复用 NyxID 已发布的 exact UserService update wire：省略字段表示保持不变，非空字符串设置 UserService override，空字符串 `""` 清除 override。这个选项不改变 connected-service create/provisioning；创建仍只提交既有的 service slug、credential 与 label，不由 Aevatar 托管或自动注入 spec URL。设置或清除后的 effective contract 仍由 NyxID exact UserService endpoint 解释和发布。
+
 OpenAPI 中通过 `x-aevatar-tool` 准入的 operation 还会生成 `nyxid_service_operation__{name|operationId}` 工具。名称不嵌入 slug 或实例 ID；contract 与 route constraint 完全相同的多个实例共用一个 operation tool，并在 schema 的 `user_service_id` 枚举中显式选择。相同工具名若出现不同 contract、不同 route constraint 或同 ID 不同对象，整名删除，而不是保留任一候选。
 
 ## 3. OpenAPI 准入
+
+有效契约遵循一条权威链：
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A["NyxID catalog or UserService override"] --> B["Exact UserService effective OpenAPI"]
+    B --> C["Aevatar typed operation discovery"]
+    C --> D["Server-owned workflow admission proof"]
+    D --> E["Proof-bound NyxID Proxy request"]
+```
+
+Workflow admission 只读 exact UserService effective contract。无 contract、读取失败、无权访问、文档无效或 contract drift 都 fail closed，并返回 typed blocker/remediation；不存在 Aevatar contract pack、catalog contract fallback、本地 OpenAPI cache 或 runtime/query-time side read。
 
 注册是 allow-list：没有标记的 operation 不会成为工具。标记可写在文档根、`info` 或单个 operation 上：
 
@@ -58,7 +73,7 @@ paths:
         approval: always
 ```
 
-准入规则默认拒绝：operation `enabled: false` 始终排除；operation `enabled: true` 始终准入；没有 operation 标记时才继承 service 级 `enabled: true`。标记只能收紧方法推导出的安全属性：`GET`/`HEAD`/`OPTIONS` 才可只读，写方法和 destructive operation 必须审批，标记不能把它们降成免审批。
+准入规则默认拒绝：operation `enabled: false` 始终排除；operation `enabled: true` 始终准入；没有 operation 标记时才继承 service 级 `enabled: true`。标记只能收紧方法推导出的安全属性：`GET`/`HEAD`/`OPTIONS` 才可只读，写方法和 destructive operation 必须审批，标记不能把它们降成免审批。Workflow operation identity 必须来自文档中显式且全局唯一、大小写敏感的 `operationId`；缺失或重复时整份 admission fail closed，不生成 method/path fallback，也不任选一个重复候选。
 
 OpenAPI 参数通过结构化解析生成 JSON Schema：path/query/header 参数成为顶层属性，path 参数恒为 required；JSON request body 使用 `body`，冲突时使用 `request_body`；本地 `$ref` 会做带环保护的内联。operation tool 只接受其 spec 声明的参数，并额外要求 exact `user_service_id`。
 
@@ -100,7 +115,7 @@ Voice realtime attach 也遵循同一边界。带 `voice-tool:` credential ref �
 
 ## 6. 审计与架构边界
 
-- NyxID 是实例、credential、route 与 spec 的唯一真实源；Aevatar 不维护 process-local catalog 或 spec cache。
+- NyxID 是实例、credential、route 与 exact UserService effective OpenAPI 的唯一真实源；Aevatar 不维护 process-local catalog、contract pack 或 spec cache。
 - Aevatar 不新增 NyxID endpoint，不绕过 proxy 直连下游，不引入第二条投影或 read model。
 - 外部 JSON 只在 NyxID adapter 边界解析；内部实例、请求与结果语义使用 Protobuf。
 - 平台审计只由 canonical `ToolExecutionAuditMiddleware` 消费 typed execution context、credential source 和 receipt；默认不记录完整 arguments、result 或 `receipt.result_json`。

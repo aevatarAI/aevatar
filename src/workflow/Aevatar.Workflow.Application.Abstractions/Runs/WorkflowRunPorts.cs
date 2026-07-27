@@ -5,7 +5,8 @@ namespace Aevatar.Workflow.Application.Abstractions.Runs;
 public sealed record WorkflowYamlParseResult(
     string WorkflowName,
     string Error,
-    WorkflowAuthorizationDependencies? AuthorizationDependencies = null)
+    WorkflowAuthorizationDependencies? AuthorizationDependencies = null,
+    ExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
 {
     public bool Succeeded => string.IsNullOrWhiteSpace(Error);
 
@@ -14,8 +15,14 @@ public sealed record WorkflowYamlParseResult(
         WorkflowAuthorizationDependencies? authorizationDependencies = null) =>
         new(workflowName ?? string.Empty, string.Empty, authorizationDependencies?.Clone());
 
-    public static WorkflowYamlParseResult Invalid(string error) =>
-        new(string.Empty, error ?? "Workflow YAML is invalid.", null);
+    public static WorkflowYamlParseResult Invalid(
+        string error,
+        ExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+        new(
+            string.Empty,
+            error ?? "Workflow YAML is invalid.",
+            null,
+            externalCapabilityReadiness?.Clone());
 }
 
 public enum WorkflowActorKind

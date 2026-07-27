@@ -854,6 +854,60 @@ public sealed class ServiceImplementationAdaptersTests
     }
 
     [Fact]
+    public async Task WorkflowAdapter_ShouldPreserveTypedV2RebindBeforeParsingLegacyYaml()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                    Code = WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode,
+                    SafeMessage = "The persisted workflow capability admission plan must be rebound.",
+                },
+            },
+        };
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = WorkflowYamlParseResult.Invalid("legacy authoring is invalid"),
+        };
+        var admission = new RecordingWorkflowCapabilityAdmissionService
+        {
+            Failure = new WorkflowExternalCapabilityAdmissionException(readiness),
+        };
+        var adapter = new WorkflowServiceImplementationAdapter(workflowPort, admission);
+
+        var action = () => adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "r-legacy",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowYaml = "name: legacy\nsteps: []\n",
+                    CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
+                    {
+                        SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+                        ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                    },
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+            },
+        });
+
+        var exception = await action.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be(WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+        admission.PersistedRequest.Should().NotBeNull();
+        workflowPort.ParseCalls.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowAdapter_ShouldRejectInvalidWorkflowYaml_WhenWorkflowNameProvided()
     {
         var adapter = new WorkflowServiceImplementationAdapter(
@@ -994,11 +1048,15 @@ public sealed class ServiceImplementationAdaptersTests
 
         public WorkflowCapabilityAdmissionPlan? Result { get; init; }
 
+        public Exception? Failure { get; init; }
+
         public Task<WorkflowCapabilityAdmissionPlan> AdmitAsync(
             WorkflowExternalCapabilityAdmissionRequest request,
             CancellationToken cancellationToken = default)
         {
             LiveRequest = request;
+            if (Failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(Failure);
             return Task.FromResult(Result?.Clone()
                 ?? WorkflowCapabilityAdmissionPlanIntegrity.Create(
                     request.WorkflowYaml,
@@ -1013,6 +1071,8 @@ public sealed class ServiceImplementationAdaptersTests
             CancellationToken cancellationToken = default)
         {
             PersistedRequest = request;
+            if (Failure is not null)
+                return Task.FromException<WorkflowCapabilityAdmissionPlan>(Failure);
             return Task.FromResult(Result?.Clone() ?? request.Plan.Clone());
         }
     }

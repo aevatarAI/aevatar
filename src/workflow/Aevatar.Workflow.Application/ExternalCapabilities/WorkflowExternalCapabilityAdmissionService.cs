@@ -34,6 +34,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             request.WorkflowYaml,
             request.InlineWorkflowYamls,
             request.WorkflowYamls,
+            request.ExecutionMode,
             cancellationToken);
 
         var admissions = new List<WorkflowCapabilityInvocationAdmission>();
@@ -85,20 +86,60 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (string.Equals(
+                request.Plan.SchemaVersion,
+                WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+                StringComparison.Ordinal))
+        {
+            throw new WorkflowExternalCapabilityAdmissionException(
+                BuildRebindRequiredReadiness(request.ExpectedExecutionMode));
+        }
+
         var definition = await ParseDefinitionAsync(
             request.WorkflowYaml,
             request.InlineWorkflowYamls,
             request.WorkflowYamls,
-            cancellationToken);
-        WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
-            request.Plan,
-            definition.WorkflowYaml,
-            definition.InlineWorkflowYamls,
             request.ExpectedExecutionMode,
-            definition.Invocations);
+            cancellationToken);
+        try
+        {
+            WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+                request.Plan,
+                definition.WorkflowYaml,
+                definition.InlineWorkflowYamls,
+                request.ExpectedExecutionMode,
+                definition.Invocations);
+        }
+        catch (WorkflowCapabilityAdmissionRebindRequiredException)
+        {
+            throw new WorkflowExternalCapabilityAdmissionException(
+                BuildRebindRequiredReadiness(request.ExpectedExecutionMode));
+        }
         EnsureDurableCatalogMatchesPlanOwner(request.Plan);
         EnsureSourcesAreFresh(request.Plan);
         return request.Plan.Clone();
+    }
+
+    private static ExternalCapabilityReadiness BuildRebindRequiredReadiness(
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = executionMode,
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+            Code = WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode,
+            SafeMessage = "The persisted workflow capability admission plan must be rebound.",
+        });
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.RebindWorkflow,
+            Label = "Rebind workflow",
+        });
+        return readiness;
     }
 
     private static ExternalCapabilityReadiness? ValidateReadinessProof(
@@ -218,10 +259,11 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         string workflowYaml,
         IReadOnlyDictionary<string, string> inlineWorkflowYamls,
         IReadOnlyList<string>? workflowYamls,
+        ExternalCapabilityExecutionMode executionMode,
         CancellationToken cancellationToken)
     {
         if (workflowYamls is not null)
-            return await ParseWorkflowBundleAsync(workflowYamls, cancellationToken);
+            return await ParseWorkflowBundleAsync(workflowYamls, executionMode, cancellationToken);
 
         var definitions = new List<(string Key, string Yaml)>
         {
@@ -237,6 +279,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             var parse = await _parser.ParseWorkflowYamlAsync(yaml, cancellationToken);
             if (!parse.Succeeded)
             {
+                ThrowTypedAuthoringFailure(parse, executionMode);
                 throw new InvalidOperationException(
                     $"Workflow definition '{key}' is invalid: {parse.Error}");
             }
@@ -252,6 +295,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
 
     private async Task<ParsedAdmissionDefinition> ParseWorkflowBundleAsync(
         IReadOnlyList<string> workflowYamls,
+        ExternalCapabilityExecutionMode executionMode,
         CancellationToken cancellationToken)
     {
         string? rootYaml = null;
@@ -268,6 +312,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             var parse = await _parser.ParseWorkflowYamlAsync(yaml, cancellationToken);
             if (!parse.Succeeded)
             {
+                ThrowTypedAuthoringFailure(parse, executionMode);
                 throw new InvalidOperationException(
                     $"Workflow definition at index {index} is invalid: {parse.Error}");
             }
@@ -290,6 +335,18 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             rootYaml ?? throw new InvalidOperationException("Workflow YAML bundle has no root definition."),
             inlineWorkflowYamls,
             SortInvocations(invocations));
+    }
+
+    private static void ThrowTypedAuthoringFailure(
+        WorkflowYamlParseResult parse,
+        ExternalCapabilityExecutionMode executionMode)
+    {
+        if (parse.ExternalCapabilityReadiness is null)
+            return;
+
+        var readiness = parse.ExternalCapabilityReadiness.Clone();
+        readiness.ExecutionMode = executionMode;
+        throw new WorkflowExternalCapabilityAdmissionException(readiness);
     }
 
     private static void AddInvocations(

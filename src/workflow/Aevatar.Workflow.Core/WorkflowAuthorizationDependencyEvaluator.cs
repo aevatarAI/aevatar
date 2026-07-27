@@ -131,7 +131,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.None or
                 ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation))
         {
-            throw Invalid(invocation.Step, "nyxid_proxy requires a NyxID operation selector.");
+            throw SelectionInvalid(invocation.Step, "nyxid_proxy requires a NyxID operation selector.");
         }
 
         if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
@@ -173,11 +173,11 @@ public static class WorkflowAuthorizationDependencyEvaluator
         if (string.IsNullOrWhiteSpace(selector.UserServiceId) ||
             string.IsNullOrWhiteSpace(selector.OperationId))
         {
-            throw Invalid(step, "NyxID capability must select an exact connected service and operation.");
+            throw SelectionInvalid(step, "NyxID capability must select an exact connected service and operation.");
         }
 
         if (ContainsTemplate(selector.UserServiceId) || ContainsTemplate(selector.OperationId))
-            throw Invalid(step, "NyxID service and operation selectors must be static.");
+            throw SelectionInvalid(step, "NyxID service and operation selectors must be static.");
     }
 
     private static void ValidateNyxIdRuntimeArguments(StepDefinition step)
@@ -192,19 +192,19 @@ public static class WorkflowAuthorizationDependencyEvaluator
         {
             using var document = JsonDocument.Parse(arguments);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
-                throw Invalid(step, "nyxid_proxy arguments must be a JSON object.");
+                throw ArgumentInvalid(step, "nyxid_proxy arguments must be a JSON object.");
 
             foreach (var property in document.RootElement.EnumerateObject())
             {
                 if (NyxIdServerDerivedArgumentNames.Contains(property.Name))
                 {
-                    throw Invalid(
+                    throw MigrationInvalid(
                         step,
                         $"nyxid_proxy derived field '{property.Name}' cannot be authored; select a connected-service operation and rebind.");
                 }
 
                 if (!NyxIdRuntimeArgumentNames.Contains(property.Name))
-                    throw Invalid(step, $"nyxid_proxy runtime argument '{property.Name}' is not supported.");
+                    throw ArgumentInvalid(step, $"nyxid_proxy runtime argument '{property.Name}' is not supported.");
             }
 
             ValidateObjectSlot(step, document.RootElement, "path_params");
@@ -213,12 +213,12 @@ public static class WorkflowAuthorizationDependencyEvaluator
             if (document.RootElement.TryGetProperty("response_mode", out var responseMode) &&
                 responseMode.ValueKind != JsonValueKind.String)
             {
-                throw Invalid(step, "nyxid_proxy response_mode must be a string.");
+                throw ArgumentInvalid(step, "nyxid_proxy response_mode must be a string.");
             }
         }
         catch (JsonException)
         {
-            throw Invalid(step, "nyxid_proxy arguments must be valid JSON.");
+            throw ArgumentInvalid(step, "nyxid_proxy arguments must be valid JSON.");
         }
     }
 
@@ -227,7 +227,7 @@ public static class WorkflowAuthorizationDependencyEvaluator
         if (arguments.TryGetProperty(propertyName, out var value) &&
             value.ValueKind != JsonValueKind.Object)
         {
-            throw Invalid(step, $"nyxid_proxy {propertyName} must be a JSON object.");
+            throw ArgumentInvalid(step, $"nyxid_proxy {propertyName} must be a JSON object.");
         }
     }
 
@@ -236,13 +236,13 @@ public static class WorkflowAuthorizationDependencyEvaluator
         if (!arguments.TryGetProperty("headers", out var headers))
             return;
         if (headers.ValueKind != JsonValueKind.Object)
-            throw Invalid(step, "nyxid_proxy headers must be a JSON object.");
+            throw ArgumentInvalid(step, "nyxid_proxy headers must be a JSON object.");
 
         foreach (var header in headers.EnumerateObject())
         {
             if (IsSensitiveHeader(header.Name))
             {
-                throw Invalid(
+                throw ArgumentInvalid(
                     step,
                     $"nyxid_proxy sensitive header '{header.Name}' cannot be supplied by Workflow YAML.");
             }
@@ -365,7 +365,96 @@ public static class WorkflowAuthorizationDependencyEvaluator
     private static WorkflowExternalCapabilityValidationException Invalid(
         StepDefinition step,
         string detail) =>
-        new($"Workflow step '{step.Id}' external capability is invalid: {detail}");
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.ContractDrift,
+            "WORKFLOW_EXTERNAL_CAPABILITY_DECLARATION_INVALID",
+            "The workflow external capability declaration is invalid.",
+            ExternalCapabilityRemediationActionKind.RebindWorkflow);
+
+    private static WorkflowExternalCapabilityValidationException SelectionInvalid(
+        StepDefinition step,
+        string detail) =>
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            "NYXID_OPERATION_SELECTION_REQUIRED",
+            "Select an exact connected service operation.",
+            ExternalCapabilityRemediationActionKind.SelectOperation);
+
+    private static WorkflowExternalCapabilityValidationException MigrationInvalid(
+        StepDefinition step,
+        string detail) =>
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.ContractDrift,
+            "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+            "The workflow contains legacy NyxID operation proof fields.",
+            ExternalCapabilityRemediationActionKind.RebindWorkflow);
+
+    private static WorkflowExternalCapabilityValidationException ArgumentInvalid(
+        StepDefinition step,
+        string detail) =>
+        TypedInvalid(
+            step,
+            detail,
+            ExternalCapabilityReadinessStatus.ContractDrift,
+            "NYXID_OPERATION_ARGUMENT_INVALID",
+            "The NyxID operation runtime arguments are invalid.",
+            ExternalCapabilityRemediationActionKind.RebindWorkflow);
+
+    private static WorkflowExternalCapabilityValidationException TypedInvalid(
+        StepDefinition step,
+        string detail,
+        ExternalCapabilityReadinessStatus status,
+        string code,
+        string safeMessage,
+        ExternalCapabilityRemediationActionKind remediationKind)
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = status,
+            SelectedSelector = SafeSelector(step.Capability),
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = status,
+            Code = code,
+            SafeMessage = safeMessage,
+        });
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = remediationKind,
+            Label = remediationKind == ExternalCapabilityRemediationActionKind.SelectOperation
+                ? "Select operation"
+                : "Update and rebind workflow",
+        });
+        return new WorkflowExternalCapabilityValidationException(
+            $"Workflow step '{step.Id}' external capability is invalid: {detail}",
+            readiness);
+    }
+
+    private static ExternalWorkflowCapabilitySelector? SafeSelector(
+        ExternalWorkflowCapabilitySelector? selector)
+    {
+        if (selector?.SelectorCase !=
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
+        {
+            return null;
+        }
+
+        var userServiceId = selector.NyxIdOperation.UserServiceId;
+        var operationId = selector.NyxIdOperation.OperationId;
+        return string.IsNullOrWhiteSpace(userServiceId) ||
+               string.IsNullOrWhiteSpace(operationId) ||
+               ContainsTemplate(userServiceId) ||
+               ContainsTemplate(operationId)
+            ? null
+            : selector.Clone();
+    }
 
     private static IEnumerable<StepDefinition> EnumerateSteps(IEnumerable<StepDefinition> steps)
     {

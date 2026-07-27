@@ -57,7 +57,7 @@ public sealed class AgentProfileRolloutProvisioningTests
     }
 
     [Fact]
-    public async Task Provision_should_use_GrpcTools_protoc_when_no_global_compiler_exists()
+    public async Task Provision_should_use_path_protoc_or_packaged_fallback()
     {
         using var releaseInput = new TemporaryDirectory();
         using var output = new TemporaryDirectory();
@@ -67,10 +67,13 @@ public sealed class AgentProfileRolloutProvisioningTests
         var releaseSpecPath = await WriteReleaseFixtureAsync(releaseInput);
         var originalPath = Environment.GetEnvironmentVariable("PATH");
         var originalProtoc = Environment.GetEnvironmentVariable("PROTOC");
+        var pathProtoc = FindProtocOnPath(originalPath);
 
         try
         {
-            Environment.SetEnvironmentVariable("PATH", emptyPath.Path);
+            Environment.SetEnvironmentVariable(
+                "PATH",
+                pathProtoc is null ? emptyPath.Path : System.IO.Path.GetDirectoryName(pathProtoc));
             Environment.SetEnvironmentVariable("PROTOC", null);
 
             var exitCode = await commands.ProvisionAsync(
@@ -86,6 +89,15 @@ public sealed class AgentProfileRolloutProvisioningTests
             Environment.SetEnvironmentVariable("PATH", originalPath);
             Environment.SetEnvironmentVariable("PROTOC", originalProtoc);
         }
+    }
+
+    private static string? FindProtocOnPath(string? path)
+    {
+        var executableName = OperatingSystem.IsWindows() ? "protoc.exe" : "protoc";
+        return (path ?? string.Empty)
+            .Split(System.IO.Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => System.IO.Path.Combine(directory, executableName))
+            .FirstOrDefault(File.Exists);
     }
 
     [Fact]

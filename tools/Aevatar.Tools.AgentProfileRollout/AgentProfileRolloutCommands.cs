@@ -823,6 +823,13 @@ internal static class ReviewedReleaseTextProto
             return configuredPath;
 
         var executableName = OperatingSystem.IsWindows() ? "protoc.exe" : "protoc";
+        var pathCompiler = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => Path.Combine(directory, executableName))
+            .FirstOrDefault(File.Exists);
+        if (pathCompiler is not null)
+            return pathCompiler;
+
         var bundledPath = Path.Combine(AppContext.BaseDirectory, executableName);
         return File.Exists(bundledPath) ? bundledPath : executableName;
     }
