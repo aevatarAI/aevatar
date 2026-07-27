@@ -969,41 +969,17 @@ Verify `isPrivate=true` before reporting the publication failure.
 
 ---
 
-### Task 8: Document the compatibility follow-up and final verification
+### Task 8: Complete documentation and final verification
 
 **Files:**
 - Modify if needed: `docs/superpowers/specs/2026-07-27-scheduled-agent-key-canary-skill-design.md`
 - Modify if needed: `docs/superpowers/plans/2026-07-27-scheduled-agent-key-canary-skill.md`
 
 **Interfaces:**
-- Consumes: final Ornn GUID/version/audit, production canary verdict, and the current compatibility fire-origin read.
-- Produces: linted Aevatar documentation, a follow-up issue for the canonical Team-owned fire diagnostic surface, and verified pushed source branches.
+- Consumes: final Ornn GUID/version/audit and the production canary verdict.
+- Produces: linted Aevatar documentation and verified pushed source branches; canonical owner detail supplies fire-origin evidence without compatibility follow-up work.
 
-- [ ] **Step 1: Create the narrow follow-up issue**
-
-Create an Aevatar issue describing only this compatibility risk:
-
-```text
-The public canary currently reads
-GET /api/schedules/{scheduleId}?scopeId={scopeId}&teamId={teamId}&memberId={memberId}
-to prove recentFires[].manual=false. Add a canonical Team-owned diagnostic
-read or typed query tool before removing the generic schedule compatibility
-branch. Preserve the full owner tuple, expose only committed fire facts, and
-do not add a generic mutation path.
-```
-
-Use:
-
-```bash
-gh issue create \
-  --repo aevatarAI/aevatar \
-  --title "Add canonical Team schedule fire diagnostic read" \
-  --body $'## Problem\n\nThe public `aevatar-scheduled-agent-key-canary` currently reads `GET /api/schedules/{scheduleId}?scopeId={scopeId}&teamId={teamId}&memberId={memberId}` to prove `recentFires[].manual=false`. The generic schedule compatibility branch is planned for removal.\n\n## Required contract\n\nAdd a canonical Team-owned diagnostic read or typed query tool before removing that branch. Preserve the complete `scopeId/teamId/memberId/scheduleId` owner tuple, expose only committed fire facts including scheduled time, completion time, error, and `manual`, and do not add a generic mutation path.\n\n## Acceptance\n\n- Owner mismatch remains not-found.\n- The read consumes committed schedule fire facts only.\n- The public canary can replace the compatibility route without weakening its real-cron proof.\n- Tests and canonical scheduled-dispatch documentation are updated.'
-```
-
-The issue is follow-up work and does not weaken or bypass the v1.0 canary gate.
-
-- [ ] **Step 2: Run Aevatar documentation lint**
+- [ ] **Step 1: Run Aevatar documentation lint**
 
 ```bash
 bash tools/docs/lint.sh
@@ -1011,7 +987,7 @@ bash tools/docs/lint.sh
 
 Expected: zero documentation errors.
 
-- [ ] **Step 3: Verify both repositories**
+- [ ] **Step 2: Verify both repositories**
 
 ```bash
 git -C /Users/eanzhao/Code/aevatar/.worktrees/scheduled-agent-key-canary-skill status --short --branch
@@ -1023,7 +999,7 @@ git -C /Users/eanzhao/Code/.worktrees/ornn-scheduled-agent-key-canary ls-remote 
 
 Expected: both worktrees clean after their commits; Ornn remote branch points at the local commit.
 
-- [ ] **Step 4: Push the Aevatar documentation to `origin/feature/integrate`**
+- [ ] **Step 3: Push the Aevatar documentation to `origin/feature/integrate`**
 
 ```bash
 git -C /Users/eanzhao/Code/aevatar/.worktrees/scheduled-agent-key-canary-skill fetch origin feature/integrate
@@ -1037,7 +1013,7 @@ Expected: fast-forward push without force. If the ancestry check fails, stop,
 reconcile the remote changes in this isolated worktree, rerun docs lint, and
 then push.
 
-- [ ] **Step 5: Report only verified outcomes**
+- [ ] **Step 4: Report only verified outcomes**
 
 Final handoff includes:
 
@@ -1052,7 +1028,6 @@ five evidence booleans
 cleanup terminal states
 Ornn source commit/branch
 Aevatar docs commit/branch
-follow-up issue number
 ```
 
 Do not claim completion from an earlier successful command if a later public, cleanup, audit, git, or lint gate failed.
