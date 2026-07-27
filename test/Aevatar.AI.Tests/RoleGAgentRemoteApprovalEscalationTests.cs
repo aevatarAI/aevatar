@@ -7,6 +7,7 @@ using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
 using FluentAssertions;
+using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.AI.Tests;
@@ -160,6 +161,76 @@ public sealed class RoleGAgentRemoteApprovalEscalationTests
             .Contain("approval_cancelled: cancelled remotely");
     }
 
+    [Fact]
+    public async Task HandleRemoteApprovalStatusCheck_WhenCancelled_ShouldDeliverCommittedRunTerminalFact()
+    {
+        using var provider = BuildServiceProvider();
+        var remotePort = new StubRemoteApprovalPort(
+            submit: _ => throw new InvalidOperationException("submit should not be called"),
+            status: _ => Task.FromResult(new RemoteToolApprovalStatusSnapshot(
+                RemoteToolApprovalStatus.Cancelled,
+                "cancelled remotely")));
+        var notificationPort = new StubRemoteApprovalNotificationPort(
+            _ => throw new InvalidOperationException("support should not be checked"),
+            _ => throw new InvalidOperationException("notification should not be sent"));
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateRoleAgent(
+            provider,
+            "role-status-cancelled-run",
+            remotePort,
+            notificationPort);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        var runContext = new RoleChatRunContext
+        {
+            RunId = "run-1",
+            CommandId = "command-1",
+            CorrelationId = "correlation-1",
+            CompletionNotificationActorId = "service-run:scope-1:service-1:run-1",
+        };
+        await agent.PersistForTestAsync(new RoleChatSessionStartedEvent
+        {
+            SessionId = "session-a",
+            Prompt = "perform approved work",
+            RunContext = runContext.Clone(),
+        });
+        await agent.PersistForTestAsync(new PendingToolApprovalPersistedEvent
+        {
+            Pending = new PendingToolApprovalState
+            {
+                RequestId = "req-1",
+                SessionId = "session-a",
+                ToolName = "dangerous_tool",
+                ToolCallId = "call-1",
+                ArgumentsJson = "{}",
+                RemoteApprovalId = "remote-1",
+                RemoteStatusCheckAttempt = 1,
+            },
+        });
+
+        await agent.HandleRemoteApprovalStatusCheck(new ToolApprovalRemoteStatusCheckFiredEvent
+        {
+            RequestId = "req-1",
+            SessionId = "session-a",
+            RemoteApprovalId = "remote-1",
+            Attempt = 1,
+        });
+
+        agent.State.PendingApproval.Should().BeNull();
+        agent.State.Sessions["session-a"].RunContext.Should().BeEquivalentTo(runContext);
+        var sent = publisher.Sends.Should().ContainSingle().Subject;
+        sent.TargetActorId.Should().Be(runContext.CompletionNotificationActorId);
+        sent.Options!.Delivery!.DeduplicationOperationId.Should()
+            .Be("role-chat-terminal:run-1:command-1");
+        var terminal = sent.Event.Should().BeOfType<RoleChatSessionCompletedEvent>().Subject;
+        terminal.ActorId.Should().Be("role-status-cancelled-run");
+        terminal.RunContext.Should().BeEquivalentTo(runContext);
+        terminal.Outcome.Should().Be(RoleChatSessionOutcome.Failed);
+        terminal.FailureCode.Should().Be("APPROVAL_CANCELLED");
+        terminal.SafeMessage.Should().Be("cancelled remotely");
+        terminal.TerminalTime.Should().NotBeNull();
+    }
+
     private static ServiceProvider BuildServiceProvider()
     {
         return new ServiceCollection()
@@ -171,7 +242,7 @@ public sealed class RoleGAgentRemoteApprovalEscalationTests
             .BuildServiceProvider();
     }
 
-    private static RoleGAgent CreateRoleAgent(
+    private static TestRoleGAgent CreateRoleAgent(
         IServiceProvider provider,
         string actorId,
         IRemoteToolApprovalPort remoteToolApprovalPort,
@@ -213,6 +284,37 @@ public sealed class RoleGAgentRemoteApprovalEscalationTests
             remoteToolApprovalPort: remoteToolApprovalPort,
             remoteToolApprovalNotificationPort: remoteToolApprovalNotificationPort)
     {
+        public Task PersistForTestAsync(IMessage evt) => PersistDomainEventAsync(evt);
+    }
+
+    private sealed class RecordingEventPublisher : IEventPublisher
+    {
+        public List<(string TargetActorId, IMessage Event, EventEnvelopePublishOptions? Options)> Sends { get; } = [];
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelope? sourceEnvelope = null,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            ct.ThrowIfCancellationRequested();
+            Sends.Add((targetActorId, evt, options));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class StubRemoteApprovalPort(

@@ -99,7 +99,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
     public async Task PurgeAsync()
     {
-        if (_state.State.ReminderCallbacks.Count == 0)
+        if (_state.State.ReminderCallbacks.Count == 0 && _state.State.CallbackGenerations.Count == 0)
         {
             DeactivateOnIdle();
             return;
@@ -107,6 +107,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
         var callbackIds = _state.State.ReminderCallbacks.Keys.ToArray();
         _state.State.ReminderCallbacks.Clear();
+        _state.State.CallbackGenerations.Clear();
         await _state.WriteStateAsync();
 
         foreach (var callbackId in callbackIds)
@@ -126,16 +127,25 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
     private async Task<long> ResetExistingCallbackAndGetNextGenerationAsync(string callbackId)
     {
-        var generation = 0L;
+        var generation = _state.State.CallbackGenerations.GetValueOrDefault(callbackId);
+        var removedExistingCallback = false;
         if (_state.State.ReminderCallbacks.TryGetValue(callbackId, out var reminderCallback))
         {
             generation = Math.Max(generation, reminderCallback.Generation);
             _state.State.ReminderCallbacks.Remove(callbackId);
+            removedExistingCallback = true;
+        }
+
+        var nextGeneration = generation + 1;
+        _state.State.CallbackGenerations[callbackId] = nextGeneration;
+
+        if (removedExistingCallback)
+        {
             await _state.WriteStateAsync();
             await TryUnregisterReminderAsync(callbackId);
         }
 
-        return generation + 1;
+        return nextGeneration;
     }
 
     public async Task ReceiveReminder(string reminderName, TickStatus status)
@@ -168,6 +178,29 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         }
     }
 
+    internal static bool TryClearCompletedOneShotCallback(
+        RuntimeCallbackSchedulerState state,
+        string callbackId,
+        RuntimeScheduledCallback firedCallback)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(callbackId);
+        ArgumentNullException.ThrowIfNull(firedCallback);
+
+        if (!state.ReminderCallbacks.TryGetValue(callbackId, out var current) ||
+            current.Generation != firedCallback.Generation ||
+            current.SlotEpoch != firedCallback.SlotEpoch)
+        {
+            return false;
+        }
+
+        state.ReminderCallbacks.Remove(callbackId);
+        state.CallbackGenerations[callbackId] = Math.Max(
+            state.CallbackGenerations.GetValueOrDefault(callbackId),
+            firedCallback.Generation);
+        return true;
+    }
+
     private async Task FireCallbackAsync(
         string callbackId,
         DateTimeOffset observedAtUtc,
@@ -191,9 +224,11 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
 
         if (!scheduled.Periodic)
         {
-            _state.State.ReminderCallbacks.Remove(callbackId);
-            await _state.WriteStateAsync();
-            await TryUnregisterReminderAsync(callbackId);
+            if (TryClearCompletedOneShotCallback(_state.State, callbackId, scheduled))
+            {
+                await _state.WriteStateAsync();
+                await TryUnregisterReminderAsync(callbackId);
+            }
             return;
         }
 
@@ -234,6 +269,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             NextDueAtUnixTimeMs = nextDueAt.ToUnixTimeMilliseconds(),
             OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
         };
+        _state.State.CallbackGenerations[callbackId] = generation;
         await _state.WriteStateAsync();
 
         var period = periodic

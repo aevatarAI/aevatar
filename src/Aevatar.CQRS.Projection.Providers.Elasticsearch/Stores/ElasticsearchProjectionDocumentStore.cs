@@ -35,6 +35,7 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private readonly bool _autoCreateIndex;
     private readonly string _defaultSortField;
     private readonly ElasticsearchMissingIndexBehavior _missingIndexBehavior;
+    private readonly TimeSpan _repairRequestTimeout;
     private readonly bool _supportsDynamicIndexing;
     private readonly DocumentIndexMetadata _indexMetadata;
     private readonly Func<TReadModel, string?>? _indexScopeSelector;
@@ -71,7 +72,8 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             ? new HttpClient()
             : new HttpClient(httpMessageHandler, disposeHandler: true);
         _httpClient.BaseAddress = endpoint;
-        _httpClient.Timeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
+        _repairRequestTimeout = TimeSpan.FromMilliseconds(Math.Max(500, options.RequestTimeoutMs));
+        _httpClient.Timeout = _repairRequestTimeout;
 
         if (!string.IsNullOrWhiteSpace(options.Username))
         {
@@ -204,6 +206,84 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         return DeserializeOrNull(sourceNode.GetRawText());
     }
 
+    internal async Task<ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>?> InspectRepairAsync(
+        TKey key,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ThrowIfDynamicReadModelQueriesUnsupported("repair inspection");
+
+        var keyValue = FormatKey(key);
+        if (keyValue.Length == 0)
+            return null;
+
+        return await ReadRepairLeaseAsync(key, keyValue, _indexName, ct);
+    }
+
+    internal async Task<ElasticsearchProjectionDocumentRepairDeleteDisposition>
+        DeleteRepairIfUnchangedCoreAsync(
+        ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey> lease,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ct.ThrowIfCancellationRequested();
+
+        var keyValue = FormatKey(lease.Key);
+        if (keyValue.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"ReadModel '{typeof(TReadModel).FullName}' resolved an empty key for Elasticsearch repair deletion.");
+        }
+
+        using var response = await _httpClient.DeleteAsync(
+            $"{lease.ConcreteIndexName}/_doc/{Uri.EscapeDataString(keyValue)}" +
+            $"?if_seq_no={lease.SequenceNumber}&if_primary_term={lease.PrimaryTerm}",
+            ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var payload = await response.Content.ReadAsStringAsync(ct);
+            if (IsExactRepairDocumentNotFound(
+                    payload,
+                    lease.ConcreteIndexName,
+                    keyValue,
+                    deleteResponse: true))
+            {
+                return ElasticsearchProjectionDocumentRepairDeleteDisposition.AlreadyAbsent;
+            }
+
+            throw ElasticsearchProjectionDocumentStoreHttpSupport.CreateFailure(
+                response,
+                "repair-delete",
+                payload);
+        }
+        if (response.StatusCode == HttpStatusCode.Conflict)
+            return ElasticsearchProjectionDocumentRepairDeleteDisposition.RevisionConflict;
+
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(
+            response,
+            "repair-delete",
+            ct);
+        return ElasticsearchProjectionDocumentRepairDeleteDisposition.Deleted;
+    }
+
+    internal Task<ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>?>
+        InspectRepairLeaseRevisionAsync(
+            ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey> lease,
+            CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        var keyValue = FormatKey(lease.Key);
+        if (keyValue.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"ReadModel '{typeof(TReadModel).FullName}' resolved an empty key for Elasticsearch repair inspection.");
+        }
+
+        return ReadRepairLeaseAsync(lease.Key, keyValue, lease.ConcreteIndexName, ct);
+    }
+
+    internal TimeSpan RepairRequestTimeout => _repairRequestTimeout;
+
     public async Task<ProjectionDocumentQueryResult<TReadModel>> QueryAsync(
         ProjectionDocumentQuery query,
         CancellationToken ct = default)
@@ -308,6 +388,132 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
             consistency.IndexAlias,
             consistency.CurrentPhysicalIndex ?? consistency.IndexAlias,
             consistency.ExpectedPhysicalIndex);
+    }
+
+    private async Task<ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>?> ReadRepairLeaseAsync(
+        TKey key,
+        string keyValue,
+        string indexName,
+        CancellationToken ct)
+    {
+        using var response = await _httpClient.GetAsync(
+            $"{indexName}/_doc/{Uri.EscapeDataString(keyValue)}",
+            ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            var notFoundPayload = await response.Content.ReadAsStringAsync(ct);
+            if (IsExactRepairDocumentNotFound(
+                    notFoundPayload,
+                    indexName,
+                    keyValue,
+                    deleteResponse: false))
+            {
+                return null;
+            }
+
+            throw ElasticsearchProjectionDocumentStoreHttpSupport.CreateFailure(
+                response,
+                "repair-inspect",
+                notFoundPayload);
+        }
+
+        await ElasticsearchProjectionDocumentStoreHttpSupport.EnsureSuccessAsync(
+            response,
+            "repair-inspect",
+            ct);
+        var payload = await response.Content.ReadAsStringAsync(ct);
+        using var jsonDoc = JsonDocument.Parse(payload);
+        var root = jsonDoc.RootElement;
+        var concreteIndexName = ReadRequiredString(root, "_index");
+        var sequenceNumber = ReadRequiredLong(root, "_seq_no");
+        var primaryTerm = ReadRequiredLong(root, "_primary_term");
+        if (!root.TryGetProperty("_source", out var sourceNode))
+        {
+            throw new InvalidOperationException(
+                $"Elasticsearch repair inspection did not return '_source' for read-model '{typeof(TReadModel).FullName}' key '{keyValue}'.");
+        }
+
+        var document = DeserializeOrNull(sourceNode.GetRawText())
+                       ?? throw new InvalidOperationException(
+                           $"Elasticsearch repair inspection returned an invalid read-model '{typeof(TReadModel).FullName}' for key '{keyValue}'.");
+        return new ElasticsearchProjectionDocumentRepairLease<TReadModel, TKey>(
+            key,
+            document,
+            concreteIndexName,
+            sequenceNumber,
+            primaryTerm);
+    }
+
+    private static string ReadRequiredString(JsonElement root, string propertyName)
+    {
+        if (root.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(property.GetString()))
+        {
+            return property.GetString()!;
+        }
+
+        throw new InvalidOperationException(
+            $"Elasticsearch repair inspection response is missing required string property '{propertyName}'.");
+    }
+
+    private static long ReadRequiredLong(JsonElement root, string propertyName)
+    {
+        if (root.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.Number &&
+            property.TryGetInt64(out var value))
+        {
+            return value;
+        }
+
+        throw new InvalidOperationException(
+            $"Elasticsearch repair inspection response is missing required integer property '{propertyName}'.");
+    }
+
+    private static bool IsExactRepairDocumentNotFound(
+        string payload,
+        string expectedIndexName,
+        string expectedDocumentId,
+        bool deleteResponse)
+    {
+        try
+        {
+            using var jsonDoc = JsonDocument.Parse(payload);
+            var root = jsonDoc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("_index", out var indexNode) ||
+                indexNode.ValueKind != JsonValueKind.String ||
+                !string.Equals(
+                    indexNode.GetString(),
+                    expectedIndexName,
+                    StringComparison.Ordinal) ||
+                !root.TryGetProperty("_id", out var idNode) ||
+                idNode.ValueKind != JsonValueKind.String ||
+                !string.Equals(
+                    idNode.GetString(),
+                    expectedDocumentId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (deleteResponse)
+            {
+                return root.TryGetProperty("result", out var resultNode) &&
+                       resultNode.ValueKind == JsonValueKind.String &&
+                       string.Equals(
+                           resultNode.GetString(),
+                           "not_found",
+                           StringComparison.Ordinal);
+            }
+
+            return root.TryGetProperty("found", out var foundNode) &&
+                   foundNode.ValueKind is JsonValueKind.False;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private string ResolveReadModelKey(TReadModel readModel)

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Claims;
+using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting.Controllers;
 using FluentAssertions;
@@ -8,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Tests;
 
@@ -19,6 +21,7 @@ public sealed class ChatHistoryEndpointsTests
     [Theory]
     [InlineData("HandleGetIndex")]
     [InlineData("HandleGetConversation")]
+    [InlineData("HandleGetCreateRecovery")]
     [InlineData("HandleDeleteConversation")]
     public async Task Handler_ShouldRejectDifferentCallerScopeBeforeAccessingHistory(string methodName)
     {
@@ -36,6 +39,7 @@ public sealed class ChatHistoryEndpointsTests
     [Theory]
     [InlineData("HandleGetIndex")]
     [InlineData("HandleGetConversation")]
+    [InlineData("HandleGetCreateRecovery")]
     [InlineData("HandleDeleteConversation")]
     public async Task Handler_ShouldAllowMatchingCallerScope(string methodName)
     {
@@ -50,6 +54,52 @@ public sealed class ChatHistoryEndpointsTests
         port.Calls.Should().ContainSingle().Which.Should().StartWith(methodName);
     }
 
+    [Fact]
+    public async Task HandleGetCreateRecovery_ShouldSerializeStatusAsStableWireName()
+    {
+        var port = new RecordingChatHistoryPort();
+        var http = CreateAuthenticatedContext(RequestedScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandlerAsync(
+            "HandleGetCreateRecovery",
+            http,
+            port);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        body.RootElement.GetProperty("status").GetString().Should().Be("reserved");
+        body.RootElement.GetProperty("conversationId").GetString().Should().Be("conversation-1");
+        body.RootElement.GetProperty("turnId").GetString().Should().Be("turn-1");
+    }
+
+    [Fact]
+    public async Task HandleGetConversation_ShouldSerializeMessagesWithSourceStateVersion()
+    {
+        var port = new RecordingChatHistoryPort();
+        var http = CreateAuthenticatedContext(RequestedScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandlerAsync(
+            "HandleGetConversation",
+            http,
+            port);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+
+        body.RootElement.GetProperty("stateVersion").GetInt64().Should().Be(7);
+        body.RootElement.GetProperty("messages").EnumerateArray()
+            .Should()
+            .ContainSingle()
+            .Which.GetProperty("content").GetString()
+            .Should()
+            .Be("Choose a Team: team01 or team02.");
+    }
+
     private static async Task<IResult> InvokeHandlerAsync(
         string methodName,
         HttpContext http,
@@ -61,9 +111,11 @@ public sealed class ChatHistoryEndpointsTests
             ?? throw new InvalidOperationException($"{methodName} not found.");
         object?[] arguments = methodName switch
         {
-            "HandleGetIndex" => [http, RequestedScopeId, port, CancellationToken.None],
+            "HandleGetIndex" => [http, RequestedScopeId, 75, "cursor-1", port, CancellationToken.None],
             "HandleGetConversation" =>
                 [http, RequestedScopeId, ConversationId, port, CancellationToken.None],
+            "HandleGetCreateRecovery" =>
+                [http, RequestedScopeId, "create-command-1", port, CancellationToken.None],
             "HandleDeleteConversation" =>
                 [http, RequestedScopeId, ConversationId, port, CancellationToken.None],
             _ => throw new ArgumentOutOfRangeException(nameof(methodName), methodName, null),
@@ -80,6 +132,7 @@ public sealed class ChatHistoryEndpointsTests
                     ["Aevatar:Authentication:Enabled"] = "true",
                 })
                 .Build())
+            .AddLogging()
             .AddSingleton<IHostEnvironment>(new TestHostEnvironment())
             .BuildServiceProvider();
         return new DefaultHttpContext
@@ -98,19 +151,51 @@ public sealed class ChatHistoryEndpointsTests
     {
         public List<string> Calls { get; } = [];
 
-        public Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
+        public Task<ChatHistoryIndexPage> GetIndexAsync(
+            ChatHistoryIndexPageRequest request,
+            CancellationToken ct = default)
         {
-            Calls.Add($"HandleGetIndex:{scopeId}");
-            return Task.FromResult(new ChatHistoryIndex([]));
+            Calls.Add($"HandleGetIndex:{request.ScopeId}:{request.PageSize}:{request.Cursor}");
+            return Task.FromResult(new ChatHistoryIndexPage([], null));
         }
 
-        public Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
+        public Task<ChatHistoryConversationMessagesResult> GetMessagesAsync(
             string scopeId,
             string conversationId,
             CancellationToken ct = default)
         {
             Calls.Add($"HandleGetConversation:{scopeId}:{conversationId}");
-            return Task.FromResult<IReadOnlyList<StoredChatMessage>>([]);
+            return Task.FromResult(ChatHistoryConversationMessagesResult.Found(
+                [
+                    new StoredChatMessage(
+                        "turn-1:assistant",
+                        "assistant",
+                        "Choose a Team: team01 or team02.",
+                        1784700000000,
+                        "complete",
+                        TurnId: "turn-1"),
+                ],
+                7));
+        }
+
+        public Task<ChatHistoryCreateRecoveryResult> GetCreateRecoveryAsync(
+            string scopeId,
+            string commandId,
+            CancellationToken ct = default)
+        {
+            Calls.Add($"HandleGetCreateRecovery:{scopeId}:{commandId}");
+            return Task.FromResult(new ChatHistoryCreateRecoveryResult(
+                ChatHistoryCreateRecoveryStatus.Reserved,
+                scopeId,
+                commandId,
+                "conversation-1",
+                "turn-1",
+                "run-1",
+                commandId,
+                commandId,
+                "fingerprint-1",
+                1,
+                DateTimeOffset.Parse("2026-07-21T01:00:00Z")));
         }
 
         public Task SaveMessagesAsync(
@@ -124,13 +209,13 @@ public sealed class ChatHistoryEndpointsTests
             return Task.CompletedTask;
         }
 
-        public Task DeleteConversationAsync(
+        public Task<ChatHistoryDeleteResult> DeleteConversationAsync(
             string scopeId,
             string conversationId,
             CancellationToken ct = default)
         {
             Calls.Add($"HandleDeleteConversation:{scopeId}:{conversationId}");
-            return Task.CompletedTask;
+            return Task.FromResult(new ChatHistoryDeleteResult(ChatHistoryDeleteResultStatus.Accepted));
         }
     }
 

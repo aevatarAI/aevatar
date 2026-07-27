@@ -1975,6 +1975,71 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeTeam_WhenChannelWorkflowDeliveryIsUnavailable_ShouldCreateProviderOwnedErrorReceipt()
+    {
+        var harness = new Harness();
+        harness.TeamResolver.Resolution = new TeamEntryMemberResolution(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "workflow-service");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "workflow-service",
+            endpointId: "chat",
+            primaryActorId: "deployed-workflow-definition-actor");
+        harness.ServiceInvocationResolution.Result!.Artifact.DeploymentPlan.WorkflowPlan =
+            new WorkflowServiceDeploymentPlan
+            {
+                WorkflowName = "published-workflow",
+                WorkflowYaml = "name: published-workflow",
+                DefinitionActorId = "published-definition-actor",
+            };
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_team");
+        const string arguments = """
+            {
+              "team_id": "team-1",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "run published workflow" }
+            }
+            """;
+
+        using var _ = PushContext(
+            callId: "call-team-workflow-no-channel-delivery-receipt",
+            durableReplyCredentialRef: string.Empty);
+        var output = await tool.ExecuteAsync(arguments);
+        var receipt = tool.CreateResultReceipt(
+            "call-team-workflow-no-channel-delivery-receipt",
+            tool.Name,
+            arguments,
+            output);
+
+        receipt.Should().NotBeNull();
+        receipt!.CallId.Should().Be("call-team-workflow-no-channel-delivery-receipt");
+        receipt.ToolName.Should().Be("aevatar_invoke_team");
+        receipt.Status.Should().Be(AgentToolReceiptStatus.Error);
+        receipt.ApprovalMode.Should().Be(AgentToolReceiptApprovalMode.NeverRequire);
+        receipt.ErrorCode.Should().Be(
+            AgentToolFailureCodes.ChannelWorkflowResultDeliveryUnavailable);
+        receipt.ErrorMessage.Should().Contain("Repair workflow replies");
+        receipt.ErrorMessage.Should().Contain("provider webhook settings usually do not need changes");
+        receipt.ErrorMessage.Should().NotContain("Lark");
+        receipt.ErrorMessage.Should().NotContain("lark");
+        receipt.ErrorMessage.Should().NotContain("developer-console");
+        receipt.ErrorMessage.Should().NotContain("developer console");
+        receipt.ResultJson.Should().Be(output);
+        receipt.ResultJson.Should().NotContain("secrets://");
+        harness.ServiceInvocationDispatcher.Calls.Should().BeEmpty();
+
+        tool.CreateResultReceipt(
+                "call-team-success",
+                tool.Name,
+                arguments,
+                """{"run_id":"run-alpha","status":"accepted"}""")
+            .Should().BeNull("successful invoke-team results retain their existing receipt behavior");
+    }
+
+    [Fact]
     public async Task StartWorkflow_WhenServerSetCallerCredentialIsMalformed_ShouldReturnStructuredError()
     {
         var harness = new Harness();

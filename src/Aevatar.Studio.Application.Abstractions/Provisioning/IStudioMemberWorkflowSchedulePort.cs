@@ -1,21 +1,7 @@
 namespace Aevatar.Studio.Application.Provisioning;
 
-public interface IStudioMemberWorkflowSchedulePort
+public interface IStudioMemberAutomationQueryPort
 {
-    Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
-        StudioMemberWorkflowScheduleRequest request,
-        CancellationToken ct = default);
-
-    Task<StudioMemberWorkflowScheduleResult> CreateAsync(
-        StudioMemberWorkflowScheduleRequest request,
-        string confirmedPermissionDigest,
-        CancellationToken ct = default);
-
-    Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
-        StudioMemberWorkflowScheduleRequest request,
-        string confirmedPermissionDigest,
-        CancellationToken ct = default);
-
     Task<StudioMemberAutomationListResponse> ListAsync(
         string scopeId,
         string teamId,
@@ -30,6 +16,27 @@ public interface IStudioMemberWorkflowSchedulePort
         string teamId,
         string memberId,
         string scheduleId,
+        CancellationToken ct = default);
+}
+
+public interface IStudioMemberWorkflowSchedulePort : IStudioMemberAutomationQueryPort
+{
+    Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        CancellationToken ct = default);
+
+    Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        CancellationToken ct = default);
+
+    Task<StudioMemberWorkflowScheduleResult> CreateAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
+        CancellationToken ct = default);
+
+    Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+        StudioMemberWorkflowScheduleRequest request,
+        string confirmedPermissionDigest,
         CancellationToken ct = default);
 
     Task<StudioMemberAutomationMutationReceipt> UpdateAsync(

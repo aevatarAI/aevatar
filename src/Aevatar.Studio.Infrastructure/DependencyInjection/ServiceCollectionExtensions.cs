@@ -5,6 +5,7 @@ using Aevatar.Foundation.Core.TypeSystem;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Authoring;
+using Aevatar.Studio.Application.Studio.ProjectionRecovery;
 using Aevatar.GAgentService.Abstractions.ScopeGAgents;
 using Aevatar.GAgents.ChatHistory.DependencyInjection;
 using Aevatar.Studio.Infrastructure.Authoring;
@@ -14,6 +15,7 @@ using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.Middleware;
 using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Infrastructure.Storage;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -47,6 +49,9 @@ public static class ServiceCollectionExtensions
         //   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts
         //   New principle: workspace facts authoritatively owned by StudioWorkspaceGAgent (per CLAUDE.md "权威状态" + Auric 2026-05-19 "架构级清晰")
         services.AddSingleton<IStudioWorkspaceCommandPort, ActorDispatchStudioWorkspaceCommandPort>();
+        services.TryAddSingleton<
+            IStudioWorkspaceProjectionRepublishPort,
+            ActorDispatchStudioWorkspaceProjectionRepublishPort>();
         services.AddSingleton<IUserConfigDefaults, ConfiguredUserConfigDefaults>();
         services.AddSingleton<IConnectorCatalogImportParser, ConnectorCatalogImportParser>();
         services.AddSingleton<IRoleCatalogImportParser, RoleCatalogImportParser>();
@@ -71,6 +76,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ActorBackedChatHistoryStore>();
         services.AddSingleton<IChatHistoryQueryPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
         services.AddSingleton<IChatHistoryCommandPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
+        services.AddSingleton<IWorkflowChatHistoryCreateRecoveryReadPort>(sp => sp.GetRequiredService<ActorBackedChatHistoryStore>());
+        services.AddSingleton<
+            INyxIdChatConversationStateQueryPort,
+            ProjectionNyxIdChatConversationStateQueryPort>();
         // Script runtime activity reads the scripting capability's native-document read model;
         // hosts composed without scripting have no reader, and consumers of this port already
         // treat it as optional (resolved via GetService).

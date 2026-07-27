@@ -70,7 +70,12 @@ public sealed class ChatbotClassifierGAgent : RoleGAgent
             //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
             //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
             result = await ChatStreamContentAggregator.AggregateContentAsync(
-                ChatStreamAsync(request.Prompt, request.SessionId, metadata, CancellationToken.None),
+                ChatStreamAsync(
+                    request.Prompt,
+                    request.SessionId,
+                    turnCatalog: null,
+                    metadata: metadata,
+                    ct: CancellationToken.None),
                 ct: CancellationToken.None);
         }
         catch (Exception ex)

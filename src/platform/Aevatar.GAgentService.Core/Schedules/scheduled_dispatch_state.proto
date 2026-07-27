@@ -7,6 +7,7 @@ import "google/protobuf/any.proto";
 import "agent_messages.proto";
 import "Credentials/credential_secret_references.proto";
 import "service_endpoint.proto";
+import "scheduled_invocation_authorization_plan.proto";
 
 message ScheduledDispatchState
 {
@@ -78,6 +79,7 @@ message ScheduledDispatchState
   ScheduledDispatchRuntimeCallbackLeaseState team_credential_expiry_lease = 61;
   google.protobuf.Timestamp pending_team_credential_expiry_at = 62;
   int64 pending_team_credential_expiry_generation = 63;
+  TeamAutomationActivationDecisionState team_automation_activation_decision = 64;
 }
 
 message TeamMemberAutomationOwnerState
@@ -87,6 +89,8 @@ message TeamMemberAutomationOwnerState
   // Legacy read compatibility only. Team containment is resolved from the
   // canonical member read model and is not part of the durable owner key.
   string current_team_id = 3 [deprecated = true];
+  // Authoritative team assignment snapshot resolved from the Studio member read model.
+  string team_id = 4;
 }
 
 enum TeamAutomationLifecycleStatusState
@@ -198,7 +202,9 @@ message ScheduledInvocationAuthorizationFactState
   bool service_grants_not_required = 7;
   ScheduledInvocationAuthorizationDisclosureState disclosure = 8;
   ScheduledInvocationAuthorizationAuthorityState authority = 9;
-  repeated ScheduledInvocationAuthorizationNodeGrantState node_grants = 10;
+  reserved 10;
+  reserved "node_grants";
+  aevatar.gagentservice.schedules.authorization.ScheduledInvocationOwnerLLMSelection owner_llm_selection = 11;
 }
 
 message ScheduledInvocationAuthorizationOwnerState
@@ -215,17 +221,6 @@ message ScheduledInvocationAuthorizationServiceGrantState
   bool node_grants_not_required = 3;
 }
 
-message ScheduledInvocationAuthorizationNodeGrantState
-{
-  string user_service_id = 1;
-  string node_id = 2;
-  string display_name = 3;
-  string role = 4;
-  string edge_kind = 5;
-  string binding_id = 6;
-  int32 route_priority = 7;
-}
-
 message ScheduledInvocationAuthorizationDisclosureState
 {
   bool dedicated_to_schedule = 1;
@@ -237,6 +232,9 @@ message ScheduledInvocationAuthorizationDisclosureState
 
 message ScheduledInvocationAuthorizationAuthorityState
 {
+  reserved 8;
+  reserved "catalog_external_revision";
+
   int64 member_state_version = 1;
   int64 workflow_state_version = 2;
   int64 connector_state_version = 3;
@@ -244,8 +242,10 @@ message ScheduledInvocationAuthorizationAuthorityState
   int64 catalog_state_version = 5;
   google.protobuf.Timestamp catalog_observed_at = 6;
   google.protobuf.Timestamp catalog_fresh_until = 7;
-  string catalog_external_revision = 8;
   string catalog_content_digest = 9;
+  string catalog_contract_version = 10;
+  string catalog_policy_version = 11;
+  google.protobuf.Timestamp catalog_evaluated_at = 12;
 }
 
 message ScheduledServiceInvocationAuthState
@@ -262,6 +262,7 @@ message ScheduledServiceInvocationAuthState
     ScheduledServiceInvocationDurableCredentialReferenceState durable = 6;
     ScheduledInvocationAgentKeyCredentialReferenceState scheduled_invocation_agent_key = 7;
   }
+  aevatar.credentials.ScheduledCallerNyxIdAuthority caller_authority = 8;
 }
 
 message ScheduledInvocationAgentKeyCredentialReferenceState
@@ -278,6 +279,28 @@ message ScheduledCredentialEffectLocatorState
   string secret_purpose = 3;
   string secret_owner_scope_key = 4;
   ScheduledInvocationAuthorizationOwnerState credential_owner = 5;
+}
+
+message TeamAutomationActivationDecisionState
+{
+  string schedule_id = 1;
+  string display_name = 2;
+  TeamMemberAutomationOwnerState owner = 3;
+  aevatar.gagentservice.ServiceIdentity service_identity = 4;
+  string endpoint_id = 5;
+  google.protobuf.Any payload = 6;
+  aevatar.credentials.ScheduledCallerNyxIdAuthority caller_authority = 7;
+  ScheduledInvocationAuthorizationFactState authorization_fact = 8;
+  string cron_expression = 9;
+  string timezone = 10;
+  bool enabled = 11;
+  ScheduledDispatchScheduleKindState schedule_kind = 12;
+  map<string, string> headers = 13;
+  ScheduledDispatchScheduleModeState schedule_mode = 14;
+  google.protobuf.Timestamp one_shot_fire_at = 15;
+  ScheduledDispatchCredentialRequirementTargetKindState credential_requirement_target_kind = 16;
+  string revision_id = 17;
+  aevatar.gagentservice.ServiceInvocationCaller caller = 18;
 }
 
 message ScheduledServiceInvocationScopeOwnerNyxIdCredentialSourceState
@@ -468,6 +491,7 @@ message BeginTeamAutomationCredentialOperationCommand
   ScheduledCredentialEffectLocatorState credential_effect_locator = 8;
   string mutation_digest = 9;
   string observation_request_id = 10;
+  TeamAutomationActivationDecisionState activation_decision = 11;
 }
 
 message TeamAutomationCredentialOperationBeganEvent
@@ -482,6 +506,7 @@ message TeamAutomationCredentialOperationBeganEvent
   string schedule_id = 8;
   ScheduledCredentialEffectLocatorState credential_effect_locator = 9;
   string mutation_digest = 10;
+  TeamAutomationActivationDecisionState activation_decision = 11;
 }
 
 message RecordTeamAutomationCredentialCandidateCommand
@@ -649,6 +674,7 @@ message TeamAutomationOperationObservedEvent
   string mutation_digest = 20;
   string observation_request_id = 21;
   TeamAutomationOperationObservationStatusState observation_status = 22;
+  bool new_operation_committed = 23;
 }
 
 enum TeamAutomationOperationObservationStatusState

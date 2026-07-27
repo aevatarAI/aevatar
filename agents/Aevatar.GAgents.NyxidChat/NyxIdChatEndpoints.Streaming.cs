@@ -8,8 +8,10 @@ using Aevatar.AGUI.Contracts;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -25,13 +27,18 @@ public static partial class NyxIdChatEndpoints
         NyxIdChatStreamRequest request,
         [FromServices] IScopeResourceAdmissionPort admissionPort,
         [FromServices] ICommandInteractionService<NyxIdChatCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> interactionService,
+        [FromServices] ICommandInteractionService<NyxIdActionContinuationCommand, NyxIdChatAcceptedReceipt, NyxIdChatStartError, AGUIEvent, NyxIdChatCompletionStatus> actionContinuationInteractionService,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
         var accessToken = string.Empty;
         var prompt = string.Empty;
-        var turnId = CreateTurnId(actorId, ResolveClientRequestId(http, request.ClientRequestId));
+        var streamType = request.Type?.Trim() ?? string.Empty;
+        var clientRequestId = ResolveClientRequestId(http, request.ClientRequestId);
+        var turnId = CreateTurnId(actorId, clientRequestId);
+        var ownerSubject = string.Empty;
+        IReadOnlyList<NyxIdChatActionReport> actionReports = [];
 
         try
         {
@@ -48,8 +55,34 @@ public static partial class NyxIdChatEndpoints
                 return;
             }
 
-            prompt = request.Prompt?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(prompt) && request.InputParts is not { Count: > 0 })
+            if (string.Equals(streamType, "text", StringComparison.Ordinal))
+            {
+                prompt = request.Prompt?.Trim() ?? string.Empty;
+                if ((string.IsNullOrWhiteSpace(prompt) && request.InputParts is not { Count: > 0 }) ||
+                    !string.IsNullOrWhiteSpace(request.OriginTurnId) ||
+                    request.Actions is { Count: > 0 })
+                {
+                    http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                    return;
+                }
+            }
+            else if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
+            {
+                ownerSubject = ResolveAuthenticatedOwnerSubject(http) ?? string.Empty;
+                if (!TryValidateControlIdentity(clientRequestId, out clientRequestId) ||
+                    !TryValidateControlIdentity(request.OriginTurnId, out var originTurnId) ||
+                    string.IsNullOrWhiteSpace(ownerSubject) ||
+                    !string.IsNullOrWhiteSpace(request.Prompt) ||
+                    request.InputParts is { Count: > 0 } ||
+                    !TryMapActionReports(request.Actions, originTurnId, out actionReports))
+                {
+                    http.Response.StatusCode = string.IsNullOrWhiteSpace(ownerSubject)
+                        ? StatusCodes.Status401Unauthorized
+                        : StatusCodes.Status400BadRequest;
+                    return;
+                }
+            }
+            else
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
@@ -92,45 +125,64 @@ public static partial class NyxIdChatEndpoints
             await writer.StartAsync(ct);
             await WriteSerializedAsync(writerLock, token => writer.WriteRunStartedAsync(actorId, turnId, token), ct);
             heartbeat.Start();
-            var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
-            var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
-            await InjectConnectedServicesAsync(http, accessToken, metadata, ct);
+            async ValueTask EmitAsync(AGUIEvent evt, CancellationToken token)
+            {
+                var isTerminal = IsTerminalFrame(evt);
+                if (isTerminal)
+                    heartbeat.Stop();
 
-            // Refactor (iter56/cluster-868-endpoint-runtime-lifecycle): old=endpoint direct IActorRuntime, new=IGAgentDraftRunInteractionPort + CQRS Core
-            // Streaming endpoints no longer pre-read runtime state before command dispatch.
-            // The CQRS command target resolver owns actor lookup and reports typed start errors.
-            // Endpoint responsibility stays at auth, admission, input mapping, and SSE writing.
-            var result = await interactionService.ExecuteAsync(
-                new NyxIdChatCommand(
-                    actorId,
-                    scopeId,
-                    prompt,
-                    turnId,
-                    accessToken,
-                    request.InputParts,
-                    metadata,
-                    llmControl),
-                async (evt, token) =>
-                {
-                    var isTerminal = IsTerminalFrame(evt);
-                    if (isTerminal)
-                        heartbeat.Stop();
+                await WriteSerializedAsync(
+                    writerLock,
+                    async writeToken =>
+                    {
+                        if (terminalWritten)
+                            return;
 
-                    await WriteSerializedAsync(
-                        writerLock,
-                        async writeToken =>
-                        {
-                            if (terminalWritten)
-                                return;
+                        await NyxIdChatAguiSseEventWriter.WriteAsync(evt, turnId, writer, writeToken);
+                        if (isTerminal)
+                            terminalWritten = true;
+                    },
+                    token);
+            }
 
-                            await NyxIdChatAguiSseEventWriter.WriteAsync(evt, turnId, writer, writeToken);
-                            if (isTerminal)
-                                terminalWritten = true;
-                        },
-                        token);
-                },
-                null,
-                terminalDeadline.Token);
+            CommandInteractionResult<NyxIdChatAcceptedReceipt, NyxIdChatStartError, NyxIdChatCompletionStatus> result;
+            if (string.Equals(streamType, "action.continue", StringComparison.Ordinal))
+            {
+                result = await actionContinuationInteractionService.ExecuteAsync(
+                    new NyxIdActionContinuationCommand(
+                        actorId,
+                        scopeId,
+                        request.OriginTurnId!.Trim(),
+                        turnId,
+                        ownerSubject,
+                        clientRequestId!,
+                        actionReports),
+                    EmitAsync,
+                    null,
+                    terminalDeadline.Token);
+            }
+            else
+            {
+                var metadata = new Dictionary<string, string>(StringComparer.Ordinal);
+                var llmControl = await BuildLlmControlAsync(http, accessToken, ct);
+
+                // Streaming endpoints do not pre-read runtime state before command dispatch.
+                // The shared CQRS resolver owns actor lookup and attach-existing observation.
+                result = await interactionService.ExecuteAsync(
+                    new NyxIdChatCommand(
+                        actorId,
+                        scopeId,
+                        prompt,
+                        turnId,
+                        accessToken,
+                        request.InputParts,
+                        metadata,
+                        llmControl,
+                        ClientRequestId: clientRequestId),
+                    EmitAsync,
+                    null,
+                    terminalDeadline.Token);
+            }
 
             if (!result.Succeeded)
                 heartbeat.Stop();
@@ -139,7 +191,9 @@ public static partial class NyxIdChatEndpoints
                 writer,
                 writerLock,
                 turnId,
-                "The chat request failed. Please try again.");
+                string.Equals(streamType, "action.continue", StringComparison.Ordinal)
+                    ? "The action continuation failed. Please try again."
+                    : "The chat request failed. Please try again.");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested && terminalDeadline.IsCancellationRequested)
         {
@@ -153,6 +207,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "STREAM_TIMEOUT",
                         "The chat request timed out. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -173,6 +228,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "STREAM_FAILURE",
                         "The chat request failed. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -308,6 +364,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "APPROVAL_STREAM_TIMEOUT",
                         "The approval continuation timed out. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -328,6 +385,7 @@ public static partial class NyxIdChatEndpoints
                         turnId,
                         "STREAM_FAILURE",
                         "The approval continuation failed. Please try again.",
+                        0,
                         token),
                     CancellationToken.None);
             }
@@ -360,6 +418,7 @@ public static partial class NyxIdChatEndpoints
                     NyxIdChatStartError.ActorNotFound => "NyxID chat conversation was not found.",
                     _ => message,
                 },
+                0,
                 token),
             CancellationToken.None);
     }
@@ -390,6 +449,157 @@ public static partial class NyxIdChatEndpoints
 
         var headerValue = http.Request.Headers["Idempotency-Key"].ToString();
         return string.IsNullOrWhiteSpace(headerValue) ? null : headerValue.Trim();
+    }
+
+    private static string? ResolveAuthenticatedOwnerSubject(HttpContext http)
+    {
+        foreach (var claimType in new[] { "sub", ClaimTypes.NameIdentifier })
+        {
+            var value = http.User.FindFirst(claimType)?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
+
+    private static bool TryMapActionReports(
+        IReadOnlyList<NyxIdChatActionReportDto>? reports,
+        string originTurnId,
+        out IReadOnlyList<NyxIdChatActionReport> mapped)
+    {
+        mapped = [];
+        if (reports is not { Count: > 0 })
+            return false;
+
+        var values = new List<NyxIdChatActionReport>(reports.Count);
+        var actionIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var report in reports)
+        {
+            if (report is null ||
+                !TryValidateControlIdentity(report.ActionRequestId, out var actionRequestId) ||
+                !TryValidateControlIdentity(report.OriginTurnId, out var reportOriginTurnId) ||
+                !string.Equals(reportOriginTurnId, originTurnId, StringComparison.Ordinal) ||
+                !actionIds.Add(actionRequestId) ||
+                !TryParseActionDisposition(report.Disposition, out var disposition) ||
+                !TryMapActionResource(report.Resource, out var resource))
+            {
+                return false;
+            }
+
+            var value = new NyxIdChatActionReport
+            {
+                ActionRequestId = actionRequestId,
+                OriginTurnId = reportOriginTurnId,
+                Disposition = disposition,
+            };
+            if (resource is not null)
+                value.Resource = resource;
+            values.Add(value);
+        }
+
+        mapped = values;
+        return true;
+    }
+
+    private static bool TryParseActionDisposition(
+        string? value,
+        out NyxIdChatActionDisposition disposition)
+    {
+        disposition = value?.Trim() switch
+        {
+            "completed" => NyxIdChatActionDisposition.Completed,
+            "declined" => NyxIdChatActionDisposition.Declined,
+            "failed" => NyxIdChatActionDisposition.Failed,
+            "cancelled" => NyxIdChatActionDisposition.Cancelled,
+            "expired" => NyxIdChatActionDisposition.Expired,
+            _ => NyxIdChatActionDisposition.Unspecified,
+        };
+        return disposition != NyxIdChatActionDisposition.Unspecified;
+    }
+
+    private static bool TryMapActionResource(
+        NyxIdChatActionResourceDto? resource,
+        out NyxIdChatSafeResourceRef? mapped)
+    {
+        mapped = null;
+        if (resource is null)
+            return true;
+
+        var variants = new object?[]
+        {
+            resource.UserService,
+            resource.Key,
+            resource.Node,
+            resource.ServiceAccount,
+            resource.DeveloperApp,
+            resource.Device,
+        };
+        if (variants.Count(static value => value is not null) != 1)
+            return false;
+
+        if (resource.UserService is { } userService &&
+            TryValidateControlIdentity(userService.UserServiceId, out var userServiceId))
+        {
+            mapped = new NyxIdChatSafeResourceRef
+            {
+                UserService = new NyxIdChatUserServiceRef { UserServiceId = userServiceId },
+            };
+            return true;
+        }
+
+        if (resource.Key is { } key && TryValidateControlIdentity(key.KeyId, out var keyId))
+        {
+            mapped = new NyxIdChatSafeResourceRef
+            {
+                Key = new NyxIdChatKeyRef { KeyId = keyId },
+            };
+            return true;
+        }
+
+        if (resource.Node is { } node && TryValidateControlIdentity(node.NodeId, out var nodeId))
+        {
+            mapped = new NyxIdChatSafeResourceRef
+            {
+                Node = new NyxIdChatNodeRef { NodeId = nodeId },
+            };
+            return true;
+        }
+
+        if (resource.ServiceAccount is { } serviceAccount &&
+            TryValidateControlIdentity(serviceAccount.ServiceAccountId, out var serviceAccountId))
+        {
+            mapped = new NyxIdChatSafeResourceRef
+            {
+                ServiceAccount = new NyxIdChatServiceAccountRef
+                {
+                    ServiceAccountId = serviceAccountId,
+                },
+            };
+            return true;
+        }
+
+        if (resource.DeveloperApp is { } developerApp &&
+            TryValidateControlIdentity(developerApp.ClientId, out var clientId))
+        {
+            mapped = new NyxIdChatSafeResourceRef
+            {
+                DeveloperApp = new NyxIdChatDeveloperAppRef { ClientId = clientId },
+            };
+            return true;
+        }
+
+        if (resource.Device is { } device &&
+            TryValidateControlIdentity(device.DeviceId, out var deviceId))
+        {
+            mapped = new NyxIdChatSafeResourceRef
+            {
+                Device = new NyxIdChatDeviceRef { DeviceId = deviceId },
+            };
+            return true;
+        }
+
+        return false;
     }
 
     private static string CreateTurnId(string actorId, string? clientRequestId)
@@ -500,12 +710,50 @@ public static partial class NyxIdChatEndpoints
         [property: Obsolete("sessionId is deprecated and ignored. Approval continuation turn identity is server-owned.")]
         string? SessionId = null);
 
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     public sealed record NyxIdChatStreamRequest(
         string? Prompt,
         [property: Obsolete("sessionId is deprecated and ignored. Use clientRequestId for retry idempotency.")]
         string? SessionId = null,
         IReadOnlyList<ContentPartDto>? InputParts = null,
-        string? ClientRequestId = null);
+        string? ClientRequestId = null,
+        string? Type = null,
+        string? OriginTurnId = null,
+        IReadOnlyList<NyxIdChatActionReportDto>? Actions = null);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatActionReportDto(
+        string? ActionRequestId,
+        string? OriginTurnId,
+        string? Disposition,
+        NyxIdChatActionResourceDto? Resource = null);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatActionResourceDto(
+        NyxIdChatUserServiceRefDto? UserService = null,
+        NyxIdChatKeyRefDto? Key = null,
+        NyxIdChatNodeRefDto? Node = null,
+        NyxIdChatServiceAccountRefDto? ServiceAccount = null,
+        NyxIdChatDeveloperAppRefDto? DeveloperApp = null,
+        NyxIdChatDeviceRefDto? Device = null);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatUserServiceRefDto(string? UserServiceId);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatKeyRefDto(string? KeyId);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatNodeRefDto(string? NodeId);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatServiceAccountRefDto(string? ServiceAccountId);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatDeveloperAppRefDto(string? ClientId);
+
+    [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+    public sealed record NyxIdChatDeviceRefDto(string? DeviceId);
 
     public sealed record ContentPartDto(
         string Type,

@@ -3,6 +3,7 @@ using Aevatar.Audit.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions.Maintenance;
@@ -83,6 +84,32 @@ public static class ChannelRuntimeServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionActivationPlanProvider,
             ConversationDeliveryCommittedStateProjectionActivationPlanProvider>());
+
+        // ─── Workflow result delivery repair committed-outcome observation ───
+        services.AddEventSinkProjectionRuntimeCore<
+            ChannelWorkflowResultDeliveryRepairProjectionContext,
+            ChannelWorkflowResultDeliveryRepairRuntimeLease,
+            ChannelBotWorkflowResultDeliveryRepairOutcome,
+            ProjectionSessionScopeGAgent<ChannelWorkflowResultDeliveryRepairProjectionContext>>(
+            static scopeKey => new ChannelWorkflowResultDeliveryRepairProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ChannelWorkflowResultDeliveryRepairRuntimeLease(context));
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<ChannelBotWorkflowResultDeliveryRepairOutcome>,
+            ChannelWorkflowResultDeliveryRepairOutcomeCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<ChannelBotWorkflowResultDeliveryRepairOutcome>,
+            ProjectionSessionEventHub<ChannelBotWorkflowResultDeliveryRepairOutcome>>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ChannelWorkflowResultDeliveryRepairProjectionContext>,
+            ChannelWorkflowResultDeliveryRepairOutcomeProjector>());
+        services.TryAddSingleton<
+            IChannelWorkflowResultDeliveryRepairObservationPort,
+            ChannelWorkflowResultDeliveryRepairObservationPort>();
 
         // ─── Channel Bot Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<

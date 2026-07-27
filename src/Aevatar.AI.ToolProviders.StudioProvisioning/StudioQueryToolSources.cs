@@ -1,5 +1,5 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.GAgentService.Abstractions.Schedules;
+using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
@@ -44,9 +44,9 @@ public sealed class StudioMemberQueryToolSource : IAgentToolSource
 
 public sealed class StudioScheduleQueryToolSource : IAgentToolSource
 {
-    private readonly IScheduledDispatchApplicationService? _schedules;
+    private readonly IStudioMemberAutomationQueryPort? _schedules;
 
-    public StudioScheduleQueryToolSource(IScheduledDispatchApplicationService? schedules = null)
+    public StudioScheduleQueryToolSource(IStudioMemberAutomationQueryPort? schedules = null)
     {
         _schedules = schedules;
     }

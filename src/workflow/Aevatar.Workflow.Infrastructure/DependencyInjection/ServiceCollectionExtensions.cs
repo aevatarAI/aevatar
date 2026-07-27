@@ -59,8 +59,9 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<WorkflowRunActorPort>());
         services.TryAddSingleton<IWorkflowRunProvisioningPort>(sp =>
             sp.GetRequiredService<WorkflowRunActorPort>());
+        services.TryAddSingleton<WorkflowDefinitionParser>();
         services.TryAddSingleton<IWorkflowDefinitionParser>(sp =>
-            sp.GetRequiredService<WorkflowRunActorPort>());
+            sp.GetRequiredService<WorkflowDefinitionParser>());
         // 06-20-observatory-run-state-feed (R2): read ports backing the ad-hoc run reclaim gate.
         //   - committed head version from the run actor's event-store head;
         //   - durable materialization watermark from the projection-scope status readmodel (optional:

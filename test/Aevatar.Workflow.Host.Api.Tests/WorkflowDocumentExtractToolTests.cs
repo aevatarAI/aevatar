@@ -975,6 +975,9 @@ public sealed class WorkflowDocumentExtractToolTests
             using var document = JsonDocument.Parse(output.ResultJson);
             document.RootElement.GetProperty("error").GetString().Should().Be("unsupported_media_type");
             document.RootElement.GetProperty("detail").GetString().Should().Contain("spreadsheetml.sheet");
+            output.Failure.Should().NotBeNull();
+            output.Failure!.ErrorCode.Should().Be("unsupported_media_type");
+            output.Failure.ErrorMessage.Should().Contain("spreadsheetml.sheet");
             output.ResultJson.Contains("base64", StringComparison.OrdinalIgnoreCase).Should().BeFalse();
         }
         finally

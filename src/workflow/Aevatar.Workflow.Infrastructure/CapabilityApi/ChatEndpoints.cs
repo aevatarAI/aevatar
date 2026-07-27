@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.RunForks;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Abstractions;
@@ -167,7 +168,8 @@ public static class WorkflowCapabilityEndpoints
         IWorkflowChatRunInteractionPort chatRunService,
         CancellationToken ct = default,
         Func<WorkflowChatRunAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedHook = null,
-        IFileArtifactIngressPort? fileIngressPort = null)
+        IFileArtifactIngressPort? fileIngressPort = null,
+        bool allowEmptyInputForResolvedMemberWorkflow = false)
     {
         using var scope = ApiRequestScope.BeginHttp();
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
@@ -178,7 +180,11 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+                http,
+                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                logger,
+                ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -202,7 +208,8 @@ public static class WorkflowCapabilityEndpoints
                 defaultMetadata,
                 trustedCallerCredential: callerCredential.Credential,
                 cancellationToken: ct,
-                trustedScopeId: trustedScopeId);
+                trustedScopeId: trustedScopeId,
+                allowEmptyInputForResolvedMemberWorkflow: allowEmptyInputForResolvedMemberWorkflow);
             if (!normalizedRequest.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(normalizedRequest.Error);
@@ -278,7 +285,11 @@ public static class WorkflowCapabilityEndpoints
         try
         {
             var defaultMetadata = TryResolveRuntimeDefaultMetadata(serviceProvider, logger);
-            var callerCredential = WorkflowCallerCredentialExtractor.Extract(http);
+            var callerCredential = await WorkflowCallerCredentialExtractor.ExtractAsync(
+                http,
+                serviceProvider?.GetService<IExternalIdentityBindingQueryPort>(),
+                logger,
+                ct);
             if (!callerCredential.Succeeded)
             {
                 var (code, message) = ChatRunStartErrorMapper.ToCommandError(callerCredential.Error);
@@ -322,6 +333,16 @@ public static class WorkflowCapabilityEndpoints
                     scope.RecordFirstResponse();
                 },
                 ct);
+
+            if (result is { Succeeded: true, Receipt: not null } && !writer.Started)
+            {
+                CapabilityTraceContext.ApplyCorrelationHeader(http.Response, result.Receipt.Run.CorrelationId);
+                await writer.StartAsync(ct);
+                if (result.Receipt.ChatContext != null)
+                    await writer.WriteAsync(BuildChatContextFrame(result.Receipt.ChatContext), ct);
+                await writer.WriteAsync(BuildRunContextFrame(result.Receipt.Run), ct);
+                scope.RecordFirstResponse();
+            }
 
             if (!result.Succeeded && !writer.Started)
             {
@@ -774,6 +795,7 @@ public static class WorkflowCapabilityEndpoints
                     ScopeId = context.ScopeId,
                     ConversationId = context.ConversationId,
                     TurnId = context.TurnId,
+                    StateVersion = Math.Max(0, context.StateVersion),
                 }),
             },
         };

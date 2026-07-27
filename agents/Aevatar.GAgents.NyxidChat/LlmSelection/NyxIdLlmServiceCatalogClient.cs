@@ -40,7 +40,17 @@ public sealed class NyxIdLlmServiceCatalogClient : INyxIdLlmServiceCatalogClient
         var response = await _nyxClient.GetLlmServicesAsync(accessToken, ct).ConfigureAwait(false);
         var result = NyxIdLlmServiceCatalogParser.ParseServicesResult(response);
         result = await MergeUserKeyRouteCandidatesAsync(result, accessToken, ct).ConfigureAwait(false);
-        return await MergeProxyRouteCandidatesAsync(result, accessToken, ct).ConfigureAwait(false);
+        result = await MergeProxyRouteCandidatesAsync(result, accessToken, ct).ConfigureAwait(false);
+
+        var inventoryResponse = await _nyxClient.ListUserServicesAsync(accessToken, ct).ConfigureAwait(false);
+        var inventory = NyxIdApiAccessResponseParser.ParseUserServices(inventoryResponse);
+        if (!inventory.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"NyxID user services inventory was rejected: {inventory.Failure?.Code ?? "unknown"}.");
+        }
+
+        return NyxIdLlmServiceCatalogParser.ComposeUserServiceInventory(result, inventory.Value!);
     }
 
     public async Task<UserLlmSetupHint> GetSetupHintAsync(

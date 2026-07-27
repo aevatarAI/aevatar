@@ -18,6 +18,7 @@ public sealed class DefaultMemberPublishedServiceResolverTests
         result.ScopeId.Should().Be("scope-a");
         result.MemberId.Should().Be("member-a");
         result.PublishedServiceId.Should().Be("member-a");
+        result.IsMemberAuthorityBacked.Should().BeFalse();
     }
 
     [Fact]

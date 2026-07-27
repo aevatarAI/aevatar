@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -19,23 +20,15 @@ internal static class StudioMemberAutomationEndpoints
 {
     private const string BasePath =
         "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
+    private static readonly EventId CreateAcceptedEventId =
+        new(
+            StudioMemberAutomationAuditContract.CreateAcceptedEventId,
+            StudioMemberAutomationAuditContract.CreateAcceptedEventName);
 
     public static void Map(IEndpointRouteBuilder app)
     {
         ArgumentNullException.ThrowIfNull(app);
         app.MapPost($"{BasePath}/preflight", HandlePreflightAsync).WithTags("StudioTeamAutomations");
-        app.MapGet(BasePath, HandleListAsync).WithTags("StudioTeamAutomations");
-        app.MapPost(BasePath, HandleCreateAsync).WithTags("StudioTeamAutomations");
-        app.MapGet($"{BasePath}/{{scheduleId}}", HandleGetAsync).WithTags("StudioTeamAutomations");
-        app.MapPut($"{BasePath}/{{scheduleId}}", HandleUpdateAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/reauthorize", HandleReauthorizeAsync)
-            .WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/retry-revocation", HandleRetryRevocationAsync)
-            .WithTags("StudioTeamAutomations");
-        app.MapDelete($"{BasePath}/{{scheduleId}}", HandleDeleteAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/pause", HandlePauseAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/resume", HandleResumeAsync).WithTags("StudioTeamAutomations");
-        app.MapPost($"{BasePath}/{{scheduleId}}/run-now", HandleRunNowAsync).WithTags("StudioTeamAutomations");
     }
 
     internal static async Task<IResult> HandlePreflightAsync(
@@ -55,7 +48,7 @@ internal static class StudioMemberAutomationEndpoints
         {
             var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
             return Results.Ok(await schedules.PreflightAsync(
-                BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, bearerToken: null),
+                BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, ResolveBearerToken(http)),
                 ct));
         }
         catch (Exception ex) when (TryMapError(ex, scopeId, teamId, memberId, out var error))
@@ -72,6 +65,7 @@ internal static class StudioMemberAutomationEndpoints
         StudioMemberAutomationMutationRequest body,
         [FromServices] IStudioMemberWorkflowSchedulePort schedules,
         [FromServices] IExternalIdentityBindingQueryPort bindingQuery,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
@@ -89,6 +83,20 @@ internal static class StudioMemberAutomationEndpoints
                 ConfirmedPolicyVersion = body.ConfirmedPolicyVersion,
             };
             var result = await schedules.CreateAsync(request, body.ConfirmedPermissionDigest, ct);
+            if (result.Success && result.NewOperationCommitted)
+            {
+                loggerFactory.CreateLogger(StudioMemberAutomationAuditContract.Category).LogInformation(
+                    CreateAcceptedEventId,
+                    "Accepted Studio member automation create for scope {ScopeId}, team {TeamId}, member {MemberId}, " +
+                    "schedule {ScheduleId}, operation {OperationId}, and verified binding {BindingId}.",
+                    scopeId,
+                    teamId,
+                    memberId,
+                    result.ScheduleId,
+                    result.OperationId,
+                    owner.Context.VerifiedBindingId);
+            }
+
             return Results.Accepted(value: new StudioMemberAutomationMutationReceipt(
                 result.Success,
                 result.Status,
@@ -230,6 +238,7 @@ internal static class StudioMemberAutomationEndpoints
             {
                 DisplayName = body.DisplayName,
                 Prompt = body.Prompt,
+                ProvisioningBearerToken = ResolveBearerToken(http),
             }, ct);
             return Results.Accepted(value: receipt);
         }
@@ -457,6 +466,31 @@ internal static class StudioMemberAutomationEndpoints
             StudioMemberAutomationNotFoundException => AutomationNotFound(),
             StudioMemberNotFoundException => AutomationNotFound(),
             ScheduledDispatchNotFoundException => AutomationNotFound(),
+            StudioMemberAutomationProjectionPendingException pending => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_PROJECTION_PENDING",
+                    message = "The refreshed authorization catalog is still being projected. Retry this request.",
+                    retryable = true,
+                    requiredStateVersion = pending.RequiredStateVersion,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRefreshSupersededException => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_SUPERSEDED",
+                    message = "A newer authorization catalog refresh superseded this request. Retry this request.",
+                    retryable = true,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
+            StudioMemberAutomationCatalogRefreshUnavailableException => Results.Json(
+                new
+                {
+                    code = "TEAM_AUTOMATION_AUTHORIZATION_REFRESH_UNAVAILABLE",
+                    message = "The authorization catalog could not be refreshed. Retry this request.",
+                    retryable = true,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable),
             StudioMemberAutomationPlanConflictException conflict => Results.Json(
                 new
                 {

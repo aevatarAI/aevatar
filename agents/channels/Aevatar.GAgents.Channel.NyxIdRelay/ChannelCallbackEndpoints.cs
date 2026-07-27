@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Audit;
 using Aevatar.Audit.Hosting.EndpointAudit;
@@ -40,6 +42,16 @@ public static class ChannelCallbackEndpoints
             .RequireAuthorization();
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapGet("/registrations/{registrationId}/status", HandleGetStatusAsync).RequireAuthorization();
+        group.MapPost(
+                "/registrations/{registrationId}/workflow-result-delivery/repair",
+                HandleRepairWorkflowResultDeliveryAsync)
+            .WithEndpointAudit(
+                "channel.registration.workflow-result-delivery.repair",
+                AuditSensitivityLevel.Confidential,
+                "channel-registration",
+                EndpointAuditTargetResolvers.FromRouteValue("channel-registration", "registrationId"),
+                EndpointAuditSanitizers.WithRouteValues("registrationId"))
+            .RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync)
             .WithEndpointAudit(
                 "channel.registration.delete",
@@ -74,6 +86,7 @@ public static class ChannelCallbackEndpoints
     private static readonly JsonSerializerOptions RegistrationJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     private static async Task<IResult> HandleRegisterAsync(
@@ -147,6 +160,9 @@ public static class ChannelCallbackEndpoints
             nyx_conversation_route_id = result.NyxConversationRouteId ?? string.Empty,
             relay_callback_url = result.RelayCallbackUrl ?? string.Empty,
             webhook_url = result.WebhookUrl ?? string.Empty,
+            workflow_result_delivery_status = result.WorkflowResultDeliveryEnabled
+                ? "enabled"
+                : "repair_required",
             error = result.Error ?? string.Empty,
             note = result.Note ?? string.Empty,
         };
@@ -198,24 +214,82 @@ public static class ChannelCallbackEndpoints
             ? registrations
             : registrations.Where(e => string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal));
 
-        var result = visible.Select(e => new
+        var result = visible.Select(e =>
         {
-            id = e.Id,
-            platform = e.Platform,
-            registration_mode = "nyx_relay_webhook",
-            nyx_provider_slug = e.NyxProviderSlug,
-            scope_id = e.ScopeId,
-            callback_url = string.Empty,
-            nyx_channel_bot_id = e.NyxChannelBotId,
-            nyx_agent_api_key_id = e.NyxAgentApiKeyId,
-            nyx_conversation_route_id = e.NyxConversationRouteId,
-            default_skill_name = e.DefaultSkillName,
-            // Whether this bot belongs to the caller's account. Cross-account bots
-            // (admin all-view) cannot have their live status read from NyxID.
-            owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
+            var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(e);
+            var repairFailed = capabilityStatus ==
+                ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
+            return new
+            {
+                id = e.Id,
+                platform = e.Platform,
+                registration_mode = "nyx_relay_webhook",
+                nyx_provider_slug = e.NyxProviderSlug,
+                scope_id = e.ScopeId,
+                callback_url = string.Empty,
+                nyx_channel_bot_id = e.NyxChannelBotId,
+                nyx_agent_api_key_id = e.NyxAgentApiKeyId,
+                nyx_conversation_route_id = e.NyxConversationRouteId,
+                default_skill_name = e.DefaultSkillName,
+                workflow_result_delivery_status = MapCapabilityStatus(capabilityStatus),
+                workflow_result_delivery_failure_phase = repairFailed
+                    ? MapRepairPhase(e.WorkflowResultDeliveryRepair?.FailurePhase ??
+                        ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
+                    : null,
+                workflow_result_delivery_failure_reason = repairFailed
+                    ? MapRepairFailureReason(e.WorkflowResultDeliveryRepair?.FailureReason ??
+                        ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+                    : null,
+                // Whether this bot belongs to the caller's account. Cross-account bots
+                // (admin all-view) cannot have their live status read from NyxID.
+                owned = string.Equals(e.ScopeId, callerScope, StringComparison.Ordinal),
+            };
         });
 
-        return Results.Ok(result);
+        return Results.Json(result, RegistrationJsonOptions);
+    }
+
+    private static async Task<IResult> HandleRepairWorkflowResultDeliveryAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IChannelWorkflowResultDeliveryRepairService repairService,
+        CancellationToken ct)
+    {
+        var accessToken = ResolveBearerAccessToken(http);
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return Results.Unauthorized();
+
+        var callerScopeId = ResolveScopeId(http, null, required: false).ScopeId;
+        var requestedBySubjectId = ResolveSubjectId(http.User);
+        if (string.IsNullOrWhiteSpace(callerScopeId) ||
+            string.IsNullOrWhiteSpace(requestedBySubjectId))
+        {
+            return Results.NotFound(new { error = "Registration not found" });
+        }
+
+        var result = await repairService.RepairAsync(
+            registrationId,
+            callerScopeId,
+            requestedBySubjectId,
+            accessToken,
+            ct);
+        var repairFailed = result.Status ==
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed;
+        var payload = new
+        {
+            status = MapRepairResultStatus(result.Status),
+            repair_request_id = result.RequestId,
+            registration_id = result.RegistrationId,
+            nyx_agent_api_key_id = result.NyxAgentApiKeyId,
+            workflow_result_delivery_status = MapRepairCapabilityStatus(result.Status),
+            failure_phase = repairFailed ? MapRepairPhase(result.FailurePhase) : null,
+            failure_reason = repairFailed ? MapRepairFailureReason(result.FailureReason) : null,
+            note = MapRepairResultNote(result.Status),
+        };
+        return Results.Json(
+            payload,
+            RegistrationJsonOptions,
+            statusCode: MapRepairResultStatusCode(result.Status));
     }
 
     /// <summary>
@@ -271,6 +345,18 @@ public static class ChannelCallbackEndpoints
         var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
             return Results.NotFound(new { error = "Registration not found" });
+        var capabilityStatus = ChannelWorkflowResultDeliveryCapability.Resolve(registration);
+        var repairFailed = capabilityStatus ==
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed;
+        var capabilityStatusValue = MapCapabilityStatus(capabilityStatus);
+        var failurePhaseValue = repairFailed
+            ? MapRepairPhase(registration.WorkflowResultDeliveryRepair?.FailurePhase ??
+                ChannelWorkflowResultDeliveryRepairPhase.Unspecified)
+            : null;
+        var failureReasonValue = repairFailed
+            ? MapRepairFailureReason(registration.WorkflowResultDeliveryRepair?.FailureReason ??
+                ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified)
+            : null;
 
         // Cross-account bot: NyxID's channel-bot API is strictly owner-scoped, so we can't query its live status.
         // Instead report aevatar's OWN observation: the relay-activity read model marks a bot
@@ -298,8 +384,11 @@ public static class ChannelCallbackEndpoints
                 nyx_channel_bot_id = registration.NyxChannelBotId,
                 status = observedAt is not null ? "active" : "pending_webhook",
                 last_event_at = observedAt?.ToDateTimeOffset(),
+                workflow_result_delivery_status = capabilityStatusValue,
+                workflow_result_delivery_failure_phase = failurePhaseValue,
+                workflow_result_delivery_failure_reason = failureReasonValue,
                 owned = false,
-            });
+            }, RegistrationJsonOptions);
         }
 
         var accessToken = ResolveBearerAccessToken(http);
@@ -307,7 +396,17 @@ public static class ChannelCallbackEndpoints
             return Results.Unauthorized();
 
         if (string.IsNullOrWhiteSpace(registration.NyxChannelBotId))
-            return Results.Json(new { registration_id = registrationId, status = "unknown", note = "no channel bot id" });
+        {
+            return Results.Json(new
+            {
+                registration_id = registrationId,
+                status = "unknown",
+                workflow_result_delivery_status = capabilityStatusValue,
+                workflow_result_delivery_failure_phase = failurePhaseValue,
+                workflow_result_delivery_failure_reason = failureReasonValue,
+                note = "no channel bot id",
+            }, RegistrationJsonOptions);
+        }
 
         string raw;
         try
@@ -321,7 +420,16 @@ public static class ChannelCallbackEndpoints
                 "Nyx channel-bot status read failed: registration={RegistrationId}, botId={BotId}",
                 registrationId,
                 registration.NyxChannelBotId);
-            return Results.Json(new { registration_id = registrationId, nyx_channel_bot_id = registration.NyxChannelBotId, status = "unknown", error = "status_query_failed" });
+            return Results.Json(new
+            {
+                registration_id = registrationId,
+                nyx_channel_bot_id = registration.NyxChannelBotId,
+                status = "unknown",
+                workflow_result_delivery_status = capabilityStatusValue,
+                workflow_result_delivery_failure_phase = failurePhaseValue,
+                workflow_result_delivery_failure_reason = failureReasonValue,
+                error = "status_query_failed",
+            }, RegistrationJsonOptions);
         }
 
         var (status, lastEventAt) = ParseChannelBotStatus(raw);
@@ -331,7 +439,10 @@ public static class ChannelCallbackEndpoints
             nyx_channel_bot_id = registration.NyxChannelBotId,
             status,
             last_event_at = lastEventAt,
-        });
+            workflow_result_delivery_status = capabilityStatusValue,
+            workflow_result_delivery_failure_phase = failurePhaseValue,
+            workflow_result_delivery_failure_reason = failureReasonValue,
+        }, RegistrationJsonOptions);
     }
 
     private static (string Status, string? LastEventAt) ParseChannelBotStatus(string response)
@@ -369,6 +480,24 @@ public static class ChannelCallbackEndpoints
             accessToken = accessToken[bearerPrefix.Length..].Trim();
 
         return string.IsNullOrWhiteSpace(accessToken) ? null : accessToken;
+    }
+
+    private static string? ResolveSubjectId(ClaimsPrincipal principal)
+    {
+        foreach (var claimType in new[]
+                 {
+                     "uid",
+                     "sub",
+                     ClaimTypes.NameIdentifier,
+                     "user_id",
+                 })
+        {
+            var value = NormalizeOptional(principal.FindFirst(claimType)?.Value);
+            if (value is not null)
+                return value;
+        }
+
+        return null;
     }
 
     private static async Task<IResult> HandleDeleteRegistrationAsync(
@@ -475,6 +604,121 @@ public static class ChannelCallbackEndpoints
             _ => StatusCodes.Status502BadGateway,
         };
     }
+
+    private static int MapRepairResultStatusCode(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired or
+                ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled =>
+                StatusCodes.Status200OK,
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing =>
+                StatusCodes.Status202Accepted,
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound =>
+                StatusCodes.Status404NotFound,
+            ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                StatusCodes.Status409Conflict,
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed =>
+                StatusCodes.Status502BadGateway,
+            _ => StatusCodes.Status502BadGateway,
+        };
+
+    private static string MapRepairResultStatus(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired => "repaired",
+            ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled => "already_enabled",
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing => "repairing",
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed => "repair_failed",
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound => "not_found",
+            ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                "unsupported_platform",
+            _ => "repair_failed",
+        };
+
+    private static string MapRepairCapabilityStatus(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired or
+                ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled => "enabled",
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing => "repairing",
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed => "repair_failed",
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound or
+                ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                "repair_required",
+            _ => "repair_failed",
+        };
+
+    private static string MapRepairResultNote(
+        ChannelWorkflowResultDeliveryRepairResultStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repaired =>
+                "Workflow result delivery was repaired. No Lark developer-console changes are required.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.AlreadyEnabled =>
+                "Workflow result delivery is already enabled.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.Repairing =>
+                "Workflow result delivery repair is still in progress.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.RepairFailed =>
+                "Workflow result delivery repair did not complete. Retry from the committed repair state.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.NotFound =>
+                "Registration not found.",
+            ChannelWorkflowResultDeliveryRepairResultStatus.UnsupportedPlatform =>
+                "Workflow result delivery repair is supported only for Lark registrations.",
+            _ => "Workflow result delivery repair did not complete.",
+        };
+
+    private static string MapCapabilityStatus(
+        ChannelWorkflowResultDeliveryCapabilityStatus status) => status switch
+        {
+            ChannelWorkflowResultDeliveryCapabilityStatus.Enabled => "enabled",
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairRequired => "repair_required",
+            ChannelWorkflowResultDeliveryCapabilityStatus.Repairing => "repairing",
+            ChannelWorkflowResultDeliveryCapabilityStatus.RepairFailed => "repair_failed",
+            ChannelWorkflowResultDeliveryCapabilityStatus.Unspecified => "repair_required",
+            _ => "repair_required",
+        };
+
+    private static string MapRepairPhase(
+        ChannelWorkflowResultDeliveryRepairPhase phase) => phase switch
+        {
+            ChannelWorkflowResultDeliveryRepairPhase.RequestAdmission => "request_admission",
+            ChannelWorkflowResultDeliveryRepairPhase.RotatedKeyRecovery => "rotated_key_recovery",
+            ChannelWorkflowResultDeliveryRepairPhase.ApiKeyRotation => "api_key_rotation",
+            ChannelWorkflowResultDeliveryRepairPhase.VaultStorage => "vault_storage",
+            ChannelWorkflowResultDeliveryRepairPhase.CredentialPreparation =>
+                "credential_preparation",
+            ChannelWorkflowResultDeliveryRepairPhase.RouteRebinding => "route_rebinding",
+            ChannelWorkflowResultDeliveryRepairPhase.ActorCompletion => "actor_completion",
+            ChannelWorkflowResultDeliveryRepairPhase.Unspecified => "unspecified",
+            _ => "unspecified",
+        };
+
+    private static string MapRepairFailureReason(
+        ChannelWorkflowResultDeliveryRepairFailureReason reason) => reason switch
+        {
+            ChannelWorkflowResultDeliveryRepairFailureReason.RegistrationNotFound =>
+                "registration_not_found",
+            ChannelWorkflowResultDeliveryRepairFailureReason.UnauthorizedOwner =>
+                "unauthorized_owner",
+            ChannelWorkflowResultDeliveryRepairFailureReason.UnsupportedPlatform =>
+                "unsupported_platform",
+            ChannelWorkflowResultDeliveryRepairFailureReason.AlreadyEnabled => "already_enabled",
+            ChannelWorkflowResultDeliveryRepairFailureReason.InvalidRequest => "invalid_request",
+            ChannelWorkflowResultDeliveryRepairFailureReason.RequestConflict => "request_conflict",
+            ChannelWorkflowResultDeliveryRepairFailureReason.StaleActiveKey => "stale_active_key",
+            ChannelWorkflowResultDeliveryRepairFailureReason.RotationFailed => "rotation_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.VaultStorageFailed =>
+                "vault_storage_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.RouteUpdateFailed =>
+                "route_update_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.CompletionFailed =>
+                "completion_failed",
+            ChannelWorkflowResultDeliveryRepairFailureReason.AmbiguousRotatedKeyRecovery =>
+                "ambiguous_rotated_key_recovery",
+            ChannelWorkflowResultDeliveryRepairFailureReason.ObservationUnavailable =>
+                "observation_unavailable",
+            ChannelWorkflowResultDeliveryRepairFailureReason.Unspecified => "unspecified",
+            _ => "unspecified",
+        };
 
     private static ScopeIdResolution ResolveScopeId(HttpContext http, string? explicitScopeId, bool required)
     {

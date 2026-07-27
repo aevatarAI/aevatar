@@ -1,8 +1,12 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Credentials;
+using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Application.Schedules;
 using FluentAssertions;
+using Any = Google.Protobuf.WellKnownTypes.Any;
+using StringValue = Google.Protobuf.WellKnownTypes.StringValue;
 
 namespace Aevatar.GAgentService.Tests.Application;
 
@@ -20,21 +24,7 @@ public sealed class TeamAutomationObservationCorrelationTests
             new NoopScheduledDispatchCredentialAdmissionPort(),
             teamOperationObservationPreparation: new ObservationPreparationPort(),
             teamOperationObservationProjection: projection);
-        var operation = new TeamAutomationCredentialOperation(
-            "schedule-1",
-            new TeamMemberAutomationOwner("scope-1", "member-1"),
-            "operation-1",
-            "idempotency-1",
-            "permission-1",
-            "policy-1",
-            TeamAutomationOperationKind.Create,
-            new ScheduledCredentialEffectLocator(
-                "credential-1",
-                "secret-1",
-                "scheduled-invocation-agent-key",
-                "schedule:schedule-1",
-                new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "owner-1")),
-            "mutation-1");
+        var operation = CreateOperation();
 
         var results = await Task.WhenAll(
             service.BeginTeamAutomationCredentialOperationAsync(operation),
@@ -97,7 +87,7 @@ public sealed class TeamAutomationObservationCorrelationTests
 
         var result = await service.CompleteTeamAutomationRevocationAsync(
             "schedule-1",
-            new TeamMemberAutomationOwner("scope-1", "member-1"),
+            new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"),
             "operation-1",
             "idempotency-committed",
             "attempt-1",
@@ -114,7 +104,7 @@ public sealed class TeamAutomationObservationCorrelationTests
     private static TeamAutomationCredentialOperation CreateOperation() =>
         new(
             "schedule-1",
-            new TeamMemberAutomationOwner("scope-1", "member-1"),
+            new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"),
             "operation-1",
             "idempotency-1",
             "permission-1",
@@ -126,7 +116,65 @@ public sealed class TeamAutomationObservationCorrelationTests
                 "scheduled-invocation-agent-key",
                 "schedule:schedule-1",
                 new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "owner-1")),
+            CreateActivationDecision(),
             "mutation-1");
+
+    private static TeamAutomationActivationDecision CreateActivationDecision()
+    {
+        var observedAt = new DateTimeOffset(2026, 7, 24, 0, 0, 0, TimeSpan.Zero);
+        return new TeamAutomationActivationDecision(
+            "schedule-1",
+            "Schedule 1",
+            new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"),
+            new ServiceIdentity
+            {
+                TenantId = "scope-1",
+                AppId = "app-1",
+                Namespace = "default",
+                ServiceId = "service-1",
+            },
+            "chat",
+            Any.Pack(new StringValue { Value = "payload-1" }),
+            new ScheduledCallerNyxIdAuthority
+            {
+                Platform = "nyxid",
+                Tenant = "tenant-1",
+                ExternalUserId = "owner-1",
+                Scope = "proxy",
+                BindingId = "binding-1",
+            },
+            new ScheduledInvocationAuthorizationFact(
+                "permission-1",
+                "policy-1",
+                new ScheduledInvocationAuthorizationOwner("nyxid", "Personal", "owner-1"),
+                [],
+                "proxy",
+                observedAt.AddHours(1),
+                true,
+                new ScheduledInvocationAuthorizationDisclosure(true, true, false, true, false),
+                new ScheduledInvocationAuthorizationAuthority(
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    observedAt,
+                    observedAt.AddMinutes(30),
+                    "catalog-digest-1",
+                    "catalog-contract-1",
+                    "catalog-policy-1",
+                    observedAt)),
+            "0 * * * *",
+            "UTC",
+            false,
+            ScheduledDispatchScheduleKind.Workflow,
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            ScheduledDispatchScheduleMode.RecurringCron,
+            null,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            string.Empty,
+            null);
+    }
 
     private class CorrelatedBeginActorPort(
         BroadcastingObservationProjection projection,

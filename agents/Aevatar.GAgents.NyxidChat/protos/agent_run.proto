@@ -234,6 +234,8 @@ message AgentRunReplyStepState {
 // facts with its current AgentRunReplyStepState before persisting the next
 // waterline.
 message AgentRunLlmStepResult {
+  reserved 9;
+  reserved "tool_step_result";
   string accumulated_text = 1;
   string content = 2;
   string reasoning_content = 3;
@@ -244,16 +246,16 @@ message AgentRunLlmStepResult {
   bool has_streamed_text_content = 8;
 }
 
-// Typed tool IO facts returned by the executor. The run actor owns round
-// advancement and message/state persistence.
+// Typed tool IO facts returned after the run actor has reconciled and persisted
+// the preceding LLM facts. The run actor owns round advancement and
+// message/state persistence.
 message AgentRunToolStepResult {
   repeated AgentRunChatMessage result_messages = 1;
   bool advance_round = 2;
   repeated aevatar.ai.AgentToolReceipt tool_receipts = 3;
-  // Interactive reply intent captured while the tool step executed (for example
-  // reply_with_interaction). Tools run during the tool step, not the LLM step,
-  // so the executor surfaces the captured intent here for the run actor to
-  // merge into AgentRunReplyStepState.outbound_intent.
+  // Interactive reply intent captured while an authorized tool executed (for
+  // example reply_with_interaction). The executor surfaces the captured intent
+  // here for the run actor to merge into AgentRunReplyStepState.outbound_intent.
   aevatar.gagents.channel.abstractions.MessageContent outbound_intent = 4;
 }
 
@@ -736,6 +738,7 @@ message NyxIdChatConversationDeletionCompensationRequested {
 message NyxIdChatConversationCreateCommand {
   string scope_id = 1;
   bool created_locally = 2;
+  aevatar.ai.AgentProfileSnapshot agent_profile = 3;
 }
 
 message NyxIdChatConversationDeleteCommand {

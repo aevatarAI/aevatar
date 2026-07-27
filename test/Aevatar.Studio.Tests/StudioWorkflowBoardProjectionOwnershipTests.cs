@@ -1,6 +1,7 @@
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Projection.DependencyInjection;
 using Aevatar.Studio.Projection.ReadModels;
@@ -92,6 +93,39 @@ public sealed class StudioWorkflowBoardProjectionOwnershipTests
         services.Should().Contain(descriptor => descriptor.ServiceType == elasticsearchStoreType);
         services.Should().Contain(descriptor => descriptor.ServiceType == readerType);
         services.Should().Contain(descriptor => descriptor.ServiceType == writerType);
+    }
+
+    [Fact]
+    public async Task AddStudioProjectionReadModelProviders_ShouldKeyCreateRecoveryDocumentByRecoveryId()
+    {
+        var services = new ServiceCollection();
+        var configuration = new ConfigurationBuilder().Build();
+        var recoveryId = ChatHistoryCreateRecoveryIds.FromScopeAndCommandId("scope-a", "create-command-1");
+
+        services.AddStudioProjectionComponents();
+        services.AddStudioProjectionReadModelProviders(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var writer = provider.GetRequiredService<IProjectionDocumentWriter<ChatHistoryCreateRecoveryCurrentStateDocument>>();
+        var reader = provider.GetRequiredService<IProjectionDocumentReader<ChatHistoryCreateRecoveryCurrentStateDocument, string>>();
+
+        await writer.UpsertAsync(new ChatHistoryCreateRecoveryCurrentStateDocument
+        {
+            Id = recoveryId,
+            ActorId = "chat-history-delivery:actor",
+            StateVersion = 1,
+            LastEventId = "evt-1",
+            UpdatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                DateTimeOffset.Parse("2026-07-21T01:00:00Z")),
+            ScopeId = "scope-a",
+            WorkflowCommandId = "create-command-1",
+            Status = "reserved",
+        });
+
+        var document = await reader.GetAsync(recoveryId);
+
+        document.Should().NotBeNull();
+        document!.Id.Should().Be(recoveryId);
     }
 
     private static Type? ResolveStudioBoardDocumentType() =>

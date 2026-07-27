@@ -1,6 +1,8 @@
 namespace Aevatar.Studio.Application.Studio.Contracts;
 
 using System.Text.Json.Serialization;
+using Aevatar.GAgentService.Abstractions;
+using Aevatar.Workflow.Abstractions;
 
 /// <summary>
 /// Wire-format implementation kind for HTTP/JSON. Uses lowercase strings so
@@ -206,8 +208,9 @@ public sealed record CreateStudioMemberRequest(
     string ImplementationKind,
     string? Description = null,
     string? MemberId = null,
-    // Optional initial team assignment (ADR-0017). Empty string is rejected
-    // at the application boundary; null / absent means "do not assign".
+    // Initial team assignment. Required for workflow members; optional for
+    // other member kinds. Empty string is rejected at the application boundary;
+    // null / absent means "do not assign" only for non-workflow members.
     string? TeamId = null,
     StudioMemberImplementationRefResponse? ImplementationRef = null);
 
@@ -277,7 +280,11 @@ public sealed record UpdateStudioMemberBindingRequest(
     string? RevisionId = null,
     StudioMemberWorkflowBindingSpec? Workflow = null,
     StudioMemberScriptBindingSpec? Script = null,
-    StudioMemberGAgentBindingSpec? GAgent = null);
+    StudioMemberGAgentBindingSpec? GAgent = null)
+{
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+}
 
 public sealed record StudioMemberWorkflowBindingSpec
 {
@@ -298,6 +305,9 @@ public sealed record StudioMemberWorkflowBindingSpec
     public string WorkflowId { get; init; }
 
     public IReadOnlyList<string> WorkflowYamls { get; init; }
+
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan { get; init; }
 }
 
 public sealed record StudioMemberScriptBindingSpec(

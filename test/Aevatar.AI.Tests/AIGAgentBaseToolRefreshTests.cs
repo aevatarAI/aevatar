@@ -120,7 +120,7 @@ public class AIGAgentBaseToolRefreshTests
         public async Task<IReadOnlyList<LLMStreamChunk>> StreamAsync(string userMessage)
         {
             var chunks = new List<LLMStreamChunk>();
-            await foreach (var chunk in ChatStreamAsync(userMessage))
+            await foreach (var chunk in ChatStreamAsync(userMessage, turnCatalog: null))
                 chunks.Add(chunk);
             return chunks;
         }

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 
 namespace Aevatar.AI.Core.Chat;
@@ -9,12 +10,24 @@ internal static class SkillRecoveryToolResultViews
     private const string OrnnSearchSkillsToolName = "ornn_search_skills";
     private const string UseSkillToolName = "use_skill";
 
-    public static ChatMessage Attach(ChatMessage message, string? toolName, string rawToolResult)
+    public static ChatMessage Attach(
+        ChatMessage message,
+        string? toolName,
+        string rawToolResult,
+        AgentToolReceipt? receipt = null)
     {
-        var view = Parse(toolName, rawToolResult);
-        if (view is null)
+        var parsedView = Parse(toolName, rawToolResult);
+        var failureView = CreateFailureView(receipt);
+        if (parsedView is null && failureView is null)
             return message;
 
+        var view = parsedView is null
+            ? new ToolResultView(
+                NormalizeToolName(toolName, receipt),
+                SkillSearch: null,
+                SkillLoad: null,
+                Failure: failureView)
+            : parsedView with { Failure = failureView };
         var displayText = view.SkillSearch?.DisplayText ?? view.SkillLoad?.DisplayText ?? message.Content;
         return new ChatMessage
         {
@@ -26,6 +39,39 @@ internal static class SkillRecoveryToolResultViews
             ToolCalls = message.ToolCalls,
             ToolResultView = view,
         };
+    }
+
+    private static ToolFailureResultView? CreateFailureView(AgentToolReceipt? receipt)
+    {
+        if (receipt?.Status is not (
+                AgentToolReceiptStatus.Error or
+                AgentToolReceiptStatus.Denied or
+                AgentToolReceiptStatus.AuthorizationRequired))
+        {
+            return null;
+        }
+
+        var safeMessage = receipt.Status == AgentToolReceiptStatus.AuthorizationRequired
+            ? receipt.AuthorizationRequired?.SafeMessage
+            : null;
+        if (string.IsNullOrWhiteSpace(safeMessage))
+            safeMessage = receipt.ErrorMessage;
+
+        return new ToolFailureResultView(
+            receipt.Status,
+            receipt.ErrorCode?.Trim() ?? string.Empty,
+            safeMessage?.Trim() ?? string.Empty);
+    }
+
+    private static string NormalizeToolName(
+        string? toolName,
+        AgentToolReceipt? receipt)
+    {
+        var normalized = toolName?.Trim();
+        if (!string.IsNullOrWhiteSpace(normalized))
+            return normalized;
+
+        return receipt?.ToolName?.Trim() ?? string.Empty;
     }
 
     public static ToolResultView? Parse(string? toolName, string? rawToolResult)

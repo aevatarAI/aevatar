@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -163,7 +164,13 @@ internal static class StudioMemberEndpoints
 
         try
         {
-            var receipt = await memberService.BindAsync(scopeId, memberId, request, ct);
+            var admittedRequest = request with
+            {
+                CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
+                    http,
+                    ExternalCapabilityExecutionMode.Interactive),
+            };
+            var receipt = await memberService.BindAsync(scopeId, memberId, admittedRequest, ct);
             return Results.Accepted(
                 $"/api/scopes/{Uri.EscapeDataString(scopeId)}/members/{Uri.EscapeDataString(memberId)}/binding-runs/{Uri.EscapeDataString(receipt.BindingRunId)}",
                 receipt);

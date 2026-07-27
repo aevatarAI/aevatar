@@ -9,6 +9,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Core.Auditing;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Microsoft.Extensions.Logging;
@@ -49,6 +50,7 @@ internal static class ToolExecutionResultHistory
 //   New principle: Tool execution state kept in owning chat/actor turn,或 narrow runtime-neutral tool scheduling abstraction(no process-local progress storage)。Streaming tool progress advanced by owning execution flow;process-local channels 仅作 transport mechanics,不作 business progress 来源。
 public sealed class StreamingToolExecutor
 {
+    private const string SafeToolFailureMessage = "The tool request failed.";
     private readonly ToolManager _tools;
     private readonly AgentHookPipeline? _hooks;
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
@@ -139,7 +141,9 @@ public sealed class StreamingToolExecutor
         ArgumentNullException.ThrowIfNull(state);
         CompleteFinishedTools(state);
         Advance(state);
-        return DrainReadyResults(state);
+        return DrainReadyResults(state)
+            .Select(NormalizeFailureReceipt)
+            .ToList();
     }
 
     /// <summary>
@@ -214,12 +218,12 @@ public sealed class StreamingToolExecutor
             }
             else if (execution.IsFaulted)
             {
-                var ex = execution.Exception.GetBaseException();
+                _ = execution.Exception;
                 completion = new ToolExecutionCompletion(
                     new ToolExecutionResult(
                         tracked.Call.Id,
                         tracked.Call.Name,
-                        ToolManager.BuildErrorJson(ex.Message),
+                        BuildSafeFailureResult(),
                         IsError: true),
                     SchedulerFault: false);
             }
@@ -297,6 +301,28 @@ public sealed class StreamingToolExecutor
         state.ReadyResults = [];
         return results;
     }
+
+    private static ToolExecutionResult NormalizeFailureReceipt(ToolExecutionResult result)
+    {
+        if (!result.IsError || result.Receipt is not null)
+            return result;
+
+        return result with
+        {
+            Receipt = new AgentToolReceipt
+            {
+                CallId = result.CallId,
+                ToolName = result.ToolName,
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "tool_execution_error",
+                ErrorMessage = "The tool request failed.",
+                ResultJson = result.Result,
+            },
+        };
+    }
+
+    private static string BuildSafeFailureResult() =>
+        ToolManager.BuildErrorJson(SafeToolFailureMessage);
 
     private static void CompletePendingToolsAsDiscarded(ExecutionState state)
     {
@@ -383,6 +409,7 @@ public sealed class StreamingToolExecutor
                 CancellationToken = ct, ExecutionContext = executionContext,
             };
 
+            var executionFailed = false;
             await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
             {
                 if (toolCallContext.Terminate) return;
@@ -398,13 +425,28 @@ public sealed class StreamingToolExecutor
                 toolCallContext.Result = result;
                 if (error is not null)
                 {
+                    executionFailed = true;
+                    var safeFailureResult = BuildSafeFailureResult();
+                    toolCallContext.Result = safeFailureResult;
                     toolCallContext.Receipt = AgentToolReceiptFactory.CreateError(
                         effectiveTool,
                         toolCallContext.ToolCallId,
                         toolCallContext.ToolName,
+                        callSafety: effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
+                        resultJson: safeFailureResult,
+                        errorCode: "tool_execution_error",
+                        errorMessage: SafeToolFailureMessage) ??
+                        ToolCallReceiptFinalizer.Finalize(toolCallContext, error).Receipt;
+                }
+                else
+                {
+                    toolCallContext.Receipt = AgentToolReceiptFactory.CreateSuccess(
+                        effectiveTool,
+                        toolCallContext.ToolCallId,
+                        toolCallContext.ToolName,
+                        effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
                         result,
-                        "tool_execution_error",
-                        error.Message);
+                        toolCallContext.ArgumentsJson);
                 }
             });
 
@@ -412,14 +454,18 @@ public sealed class StreamingToolExecutor
                 ?? (toolCallContext.Terminate
                     ? "Tool call terminated by middleware"
                     : $"Tool '{toolCallContext.ToolName}' returned no result");
-            var receipt = toolCallContext.Receipt ??
-                          AgentToolReceiptFactory.CreateSuccess(
-                              effectiveTool,
-                              toolCallContext.ToolCallId,
-                              toolCallContext.ToolName,
-                              toolResult,
-                              toolCallContext.ArgumentsJson);
-            var isErrorReceipt = receipt?.Status is AgentToolReceiptStatus.Error or
+            var receipt = toolCallContext.Receipt;
+            if (receipt is null && toolCallContext.Terminate)
+                receipt = ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt;
+            receipt ??= AgentToolReceiptFactory.CreateSuccess(
+                effectiveTool,
+                toolCallContext.ToolCallId,
+                toolCallContext.ToolName,
+                effectiveTool.GetCallSafety(toolCallContext.ArgumentsJson),
+                toolResult,
+                toolCallContext.ArgumentsJson);
+            var isErrorReceipt = executionFailed ||
+                receipt?.Status is AgentToolReceiptStatus.Error or
                 AgentToolReceiptStatus.Denied or
                 AgentToolReceiptStatus.AuthorizationRequired;
             var safeToolResult = isErrorReceipt && !string.IsNullOrWhiteSpace(receipt?.ResultJson)
@@ -462,13 +508,13 @@ public sealed class StreamingToolExecutor
                     IsError: true),
                 SchedulerFault: false);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             return new ToolExecutionCompletion(
                 new ToolExecutionResult(
                     tracked.Call.Id,
                     tracked.Call.Name,
-                    ToolManager.BuildErrorJson(ex.Message),
+                    BuildSafeFailureResult(),
                     IsError: true),
                 SchedulerFault: false);
         }

@@ -5,16 +5,31 @@ namespace Aevatar.AI.ToolProviders.NyxId;
 
 internal static class NyxIdProxyReceiptFactory
 {
+    private const string UserServiceSubjectKind = "nyxid.user-service";
+
     public static AgentToolReceipt? TryCreate(
         string callId,
         string toolName,
         string serviceSlug,
+        string? userServiceId,
         string? serviceLabel,
         string? resourceUri,
         string resultJson)
     {
+        var normalizedUserServiceId = NormalizeUserServiceId(userServiceId);
         if (!NyxIdApiClient.TryParseProxyError(resultJson, out var error) || error is null)
-            return null;
+        {
+            return normalizedUserServiceId == null
+                ? null
+                : new AgentToolReceipt
+                {
+                    CallId = callId ?? string.Empty,
+                    ToolName = toolName ?? string.Empty,
+                    Status = AgentToolReceiptStatus.Success,
+                    SubjectKind = UserServiceSubjectKind,
+                    SubjectId = normalizedUserServiceId,
+                };
+        }
 
         var normalizedSlug = NormalizeSlug(serviceSlug);
         if (error.IsAuthorizationRequired)
@@ -22,6 +37,7 @@ internal static class NyxIdProxyReceiptFactory
                 callId,
                 toolName,
                 normalizedSlug,
+                normalizedUserServiceId,
                 serviceLabel,
                 resourceUri);
 
@@ -35,7 +51,7 @@ internal static class NyxIdProxyReceiptFactory
             ? "The service request was denied."
             : "The service request failed.";
 
-        return new AgentToolReceipt
+        var receipt = new AgentToolReceipt
         {
             CallId = callId ?? string.Empty,
             ToolName = toolName ?? string.Empty,
@@ -44,12 +60,15 @@ internal static class NyxIdProxyReceiptFactory
             ErrorMessage = safeMessage,
             ResultJson = BuildSafeResult(errorCode, safeMessage),
         };
+        AttachUserServiceSubject(receipt, normalizedUserServiceId);
+        return receipt;
     }
 
     private static AgentToolReceipt CreateAuthorizationRequired(
         string callId,
         string toolName,
         string serviceSlug,
+        string? userServiceId,
         string? serviceLabel,
         string? resourceUri)
     {
@@ -61,13 +80,15 @@ internal static class NyxIdProxyReceiptFactory
             ReasonCode = reasonCode,
             SafeMessage = safeMessage,
         };
+        if (userServiceId != null)
+            authorizationRequired.UserServiceId = userServiceId;
         if (!string.IsNullOrWhiteSpace(serviceLabel))
             authorizationRequired.ServiceLabel = serviceLabel.Trim();
         var safeResourceUri = NormalizeResourceUri(resourceUri);
         if (safeResourceUri != null)
             authorizationRequired.ResourceUri = safeResourceUri;
 
-        return new AgentToolReceipt
+        var receipt = new AgentToolReceipt
         {
             CallId = callId ?? string.Empty,
             ToolName = toolName ?? string.Empty,
@@ -77,6 +98,8 @@ internal static class NyxIdProxyReceiptFactory
             ResultJson = BuildSafeResult(reasonCode, safeMessage),
             AuthorizationRequired = authorizationRequired,
         };
+        AttachUserServiceSubject(receipt, userServiceId);
+        return receipt;
     }
 
     private static string NormalizeSlug(string? serviceSlug)
@@ -88,6 +111,27 @@ internal static class NyxIdProxyReceiptFactory
                    char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')
             ? normalized
             : "unknown";
+    }
+
+    private static string? NormalizeUserServiceId(string? userServiceId)
+    {
+        var normalized = userServiceId?.Trim();
+        return !string.IsNullOrWhiteSpace(normalized) &&
+               normalized.Length <= 256 &&
+               normalized.All(static character => !char.IsControl(character))
+            ? normalized
+            : null;
+    }
+
+    private static void AttachUserServiceSubject(
+        AgentToolReceipt receipt,
+        string? normalizedUserServiceId)
+    {
+        if (normalizedUserServiceId == null)
+            return;
+
+        receipt.SubjectKind = UserServiceSubjectKind;
+        receipt.SubjectId = normalizedUserServiceId;
     }
 
     private static string BuildSafeResult(string errorCode, string safeMessage) =>

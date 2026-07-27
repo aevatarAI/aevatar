@@ -1923,6 +1923,44 @@ ADR-0012 / issue `#308` 之后，`ChannelBotRegistrationEntry` / registration qu
 
 这些约束由 Conformance Suite §8.3 `RawPayload_DoesNotLeakCredentials` + `EmitResult_ErrorMessage_DoesNotContainVendorRawBody` 验证。契约违反立即在 CI 报错。
 
+### 9.6.2 Existing Lark registration workflow-result delivery repair
+
+Workflow terminal delivery 是现有 channel registration 的 capability，不是一个新 Lark bot，也不是已加载 Ornn skill 的属性。`ChannelBotRegistrationGAgent` 是 active NyxID agent key id、typed workflow-delivery `SecretReference` 与 repair progress 的唯一权威拥有者；NyxID 持有外部 key/route，`ISecretVault` 持有 raw key，registration read model 与 `/channels` 只复制 actor 已提交的能力状态。
+
+Owner 通过 `POST /api/channels/registrations/{registrationId}/workflow-result-delivery/repair` 启动原地修复。Host 只做认证、owner-scope 约束、审计和 HTTP 映射；application service 通过标准 command skeleton、committed-outcome Projection session、NyxID port 与 vault port 编排。修复必须保留 registration id、Lark app 配置、NyxID channel bot id、conversation route id、webhook URL、scope、provider slug 与 `default_skill_name`；完成事件只提升 rotated agent key id 和 typed vault handle。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+sequenceDiagram
+    actor Owner as "Channel owner"
+    participant API as "Channel Host"
+    participant App as "Repair application service"
+    participant Reg as "ChannelBotRegistrationGAgent"
+    participant Proj as "Projection outcome session"
+    participant Nyx as "NyxID"
+    participant Vault as "ISecretVault"
+    Owner->>API: POST repair
+    API->>App: registration + owner scope + bearer
+    App->>Proj: bind request id
+    App->>Reg: repair request command
+    Reg-->>Proj: committed requested outcome
+    App->>Nyx: rotate existing agent key
+    Nyx-->>App: new key id + one-time full_key
+    App->>Vault: store full_key
+    Vault-->>App: SecretReference
+    App->>Reg: prepare command
+    Reg-->>Proj: committed prepared outcome
+    App->>Nyx: update existing route to new key id
+    App->>Reg: complete command
+    Reg-->>Proj: committed completed outcome
+    App-->>API: repaired + non-secret ids
+    API-->>Owner: no Lark-side change required
+```
+
+Rotation is forward-only because NyxID immediately deactivates the old key. The actor-owned `REQUESTED`, `CREDENTIAL_PREPARED`, and `FAILED` states therefore define retry behavior: a prepared repair repeats only the idempotent existing-route update and completion; a vault-storage failure may rotate the recorded active replacement again. Requested-state recovery may retry the original key only when NyxID explicitly reports it active; otherwise it requires exactly one active replacement matching the deterministic repair key name and request time. An inactive original with no replacement, or multiple replacements, fails with a typed ambiguity reason and never guesses. The one-time `full_key` moves directly from the NyxID response parser to `ISecretVault.PutAsync`; it must not enter Protobuf state/events, read models, logs, audit summaries, repair results, or browser responses.
+
+`channel_workflow_delivery_unavailable` is an exact configuration-required tool failure. It fails closed before workflow dispatch and instructs the owner to use `/channels` -> `Repair workflow replies`; `SkillRecoveryPlanner` must not call `ornn_search_skills` for this code. This decision is keyed by the typed error code, not by matching Chinese or English display text.
+
 ## 10. 每个 Channel 的 Adapter 细节
 
 ### 10.1 Lark（`agents/platforms/Aevatar.GAgents.Platform.Lark`）

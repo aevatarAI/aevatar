@@ -121,6 +121,8 @@ jobs:
               - 'src/Aevatar.Foundation.Runtime.Persistence.Implementations.Garnet/**'
               - 'test/Aevatar.Foundation.Core.Tests/**'
               - 'test/Aevatar.Foundation.Runtime.Hosting.Tests/**'
+              - 'test/Aevatar.SecretStore.Tools.Tests/**'
+              - 'tools/secret-store/**'
               - 'tools/ci/event_sourcing_regression.sh'
               - 'tools/ci/orleans_garnet_persistence_smoke.sh'
               - 'tools/ci/architecture_guards.sh'
