@@ -155,6 +155,32 @@ public sealed class RuntimeCallbackSchedulerGrainRecoveryTests
     }
 
     [Fact]
+    public async Task PurgeAsync_WithOrleansReminderRegistry_ShouldPreserveGrainContextAcrossUnregistration()
+    {
+        const string actorId = "scheduled-real-reminder-purge-actor";
+        const string callbackId = "scheduled-dispatch-next-fire";
+        var streamProvider = new RecordingStreamProvider();
+        var storage = new TestRuntimeCallbackSchedulerStateStorage();
+        using var host = await StartSiloHostAsync(streamProvider, storage);
+
+        var grain = host.Services
+            .GetRequiredService<IGrainFactory>()
+            .GetGrain<IRuntimeCallbackSchedulerGrain>(actorId);
+        await grain.ScheduleTimeoutAsync(
+            callbackId,
+            CreateEnvelope("evt-real-reminder"),
+            dueTimeMs: 600_000);
+
+        var purge = () => grain.PurgeAsync();
+
+        await purge.Should().NotThrowAsync();
+        var state = storage.ReadSchedulerState(grain.GetGrainId());
+        state.ReminderCallbacks.Should().BeEmpty();
+        state.CallbackGenerations.Should().BeEmpty();
+        state.PendingReminderUnregistrations.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task PurgeAsync_WhenSecondReminderUnregistrationFails_ShouldReplayToTerminalState()
     {
         const string actorId = "scheduled-purge-recovery-actor";

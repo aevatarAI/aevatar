@@ -33,20 +33,19 @@ internal sealed class OrleansRuntimeCallbackReminderRegistry(
                 grainId,
                 reminderName,
                 dueTime,
-                period)
-            .ConfigureAwait(false);
+                period);
     }
 
     public async Task<IReadOnlyList<string>> ListReminderNamesAsync(GrainId grainId)
     {
-        var reminders = await _reminderRegistry.GetReminders(grainId).ConfigureAwait(false);
+        var reminders = await _reminderRegistry.GetReminders(grainId);
         return reminders.Select(static reminder => reminder.ReminderName).ToArray();
     }
 
     public async Task UnregisterIfExistsAsync(GrainId grainId, string reminderName)
     {
-        var reminder = await _reminderRegistry.GetReminder(grainId, reminderName).ConfigureAwait(false);
+        var reminder = await _reminderRegistry.GetReminder(grainId, reminderName);
         if (reminder != null)
-            await _reminderRegistry.UnregisterReminder(grainId, reminder).ConfigureAwait(false);
+            await _reminderRegistry.UnregisterReminder(grainId, reminder);
     }
 }
