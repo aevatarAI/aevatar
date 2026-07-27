@@ -3905,6 +3905,58 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task TeamAutomationDelete_MalformedOwnerReplay_ShouldRejectConflict()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-canonical-owner",
+        };
+        await agent.HandleDeleteAsync(delete);
+
+        var replay = delete.Clone();
+        replay.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = " ",
+            MemberId = "member-alpha",
+        };
+        replay.ObservationRequestId = "delete-malformed-owner-replay";
+        await agent.HandleDeleteAsync(replay);
+
+        var rejection = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-malformed-owner-replay");
+        rejection.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.RejectedConflict);
+        rejection.ErrorCode.Should().Be(
+            "team_automation_operation_conflict");
+        rejection.OwnsEffectAttempt.Should().BeFalse();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task TeamAutomationDelete_ReasonDriftWhileRevocationPending_ShouldRejectConflict()
     {
         var eventStore = new TestEventStore();
