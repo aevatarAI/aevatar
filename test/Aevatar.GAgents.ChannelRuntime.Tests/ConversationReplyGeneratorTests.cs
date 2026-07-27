@@ -1023,6 +1023,49 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateReplyAsync_WithLongLarkPdfFileAttachment_MarksExtractedTextAsTruncated()
+    {
+        var pdfBytes = BuildSimplePdf(new string('A', 21_000));
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "long-report.pdf"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var activity = CreateLarkActivity(
+            "msg-file-long-pdf",
+            "read this",
+            "om_file_long_pdf",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = "application/pdf",
+            Name = "long-report.pdf",
+            SizeBytes = pdfBytes.Length,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains("PDF attachment 'long-report.pdf' extracted text", StringComparison.Ordinal) &&
+            part.Text.Contains("truncated to first 20000 characters", StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+    }
+
+    [Fact]
     public async Task GenerateReplyAsync_WithUnsupportedFileAttachment_AddsHonestVisibilityWarning()
     {
         var lark = new RecordingLarkNyxClient(

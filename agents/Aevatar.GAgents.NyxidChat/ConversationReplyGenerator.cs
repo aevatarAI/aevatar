@@ -930,9 +930,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         string extractedText;
+        bool truncated;
         try
         {
-            extractedText = ExtractPdfText(downloaded.Content, MaxInlineDocumentTextChars);
+            (extractedText, truncated) = ExtractPdfText(downloaded.Content, MaxInlineDocumentTextChars);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -958,7 +959,10 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name) ?? "attachment.pdf";
-        parts.Add(ContentPart.TextPart($"PDF attachment '{fileName}' extracted text:\n{extractedText}"));
+        var extractionHeader = truncated
+            ? $"PDF attachment '{fileName}' extracted text (truncated to first {MaxInlineDocumentTextChars} characters):"
+            : $"PDF attachment '{fileName}' extracted text:";
+        parts.Add(ContentPart.TextPart($"{extractionHeader}\n{extractedText}"));
         return true;
     }
 
@@ -1281,20 +1285,25 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return normalized?.EndsWith(extension, StringComparison.Ordinal) == true;
     }
 
-    private static string ExtractPdfText(byte[] content, int maxChars)
+    private static (string Text, bool Truncated) ExtractPdfText(byte[] content, int maxChars)
     {
         using var document = PdfDocument.Open(content);
         var builder = new StringBuilder(Math.Min(maxChars, 4096));
+        var truncated = false;
         foreach (var page in document.GetPages())
         {
+            truncated |= WouldExceedLimit(builder, page.Text, maxChars);
             AppendCapped(builder, page.Text, maxChars);
             if (builder.Length >= maxChars)
+            {
+                truncated = true;
                 break;
+            }
 
             AppendCapped(builder, "\n", maxChars);
         }
 
-        return builder.ToString().Trim();
+        return (builder.ToString().Trim(), truncated);
     }
 
     private static void AppendCapped(StringBuilder builder, string? value, int maxChars)
@@ -1305,6 +1314,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var remaining = maxChars - builder.Length;
         builder.Append(value.Length <= remaining ? value : value[..remaining]);
     }
+
+    private static bool WouldExceedLimit(StringBuilder builder, string? value, int maxChars) =>
+        !string.IsNullOrEmpty(value) && value.Length > maxChars - builder.Length;
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

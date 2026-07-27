@@ -1721,7 +1721,7 @@ public sealed class AgentRunGAgentTests
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
     }
 
     [Fact]
