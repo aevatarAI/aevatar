@@ -758,6 +758,20 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(within(browser).getByRole("button", { name: "Use template" })).toBeEnabled();
     expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:0");
 
+    fireEvent.change(
+      within(browser).getByRole("searchbox", {
+        name: "Search workflow templates",
+      }),
+      { target: { value: "routing" } },
+    );
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("templateId")).toBeNull();
+    });
+    expect(within(browser).queryByText("Template not found")).toBeNull();
+    expect(
+      within(browser).getByText("Select a template to inspect its workflow graph."),
+    ).toBeTruthy();
+
     fireEvent.click(within(browser).getByRole("button", { name: "Close template browser" }));
     await waitFor(() => expect(screen.queryByLabelText("Workflow template browser")).toBeNull());
     expect(new URLSearchParams(window.location.search).get("panel")).toBeNull();

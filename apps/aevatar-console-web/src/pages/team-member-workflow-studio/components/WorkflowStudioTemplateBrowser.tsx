@@ -494,7 +494,12 @@ const WorkflowStudioTemplateBrowser: React.FC<
                 "teamMemberWorkflowStudio.templates.searchAria",
                 "Search workflow templates",
               )}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                if (selectedTemplateId) {
+                  onSelectTemplate("");
+                }
+              }}
               placeholder={t(
                 "teamMemberWorkflowStudio.templates.searchPlaceholder",
                 "Search templates",
@@ -508,7 +513,12 @@ const WorkflowStudioTemplateBrowser: React.FC<
                 "teamMemberWorkflowStudio.templates.categoryAria",
                 "Filter templates by category",
               )}
-              onChange={setCategory}
+              onChange={(value) => {
+                setCategory(value);
+                if (selectedTemplateId) {
+                  onSelectTemplate("");
+                }
+              }}
               options={[
                 {
                   label: t(
@@ -540,19 +550,21 @@ const WorkflowStudioTemplateBrowser: React.FC<
               </div>
             ) : catalogQuery.isError ? (
               <Alert
-                action={
-                  <Button
-                    onClick={() => void catalogQuery.refetch()}
-                    size="small"
-                  >
-                    {t(
-                      "teamMemberWorkflowStudio.templates.retry",
-                      "Retry templates",
-                    )}
-                  </Button>
+                description={
+                  <Space orientation="vertical" size={10}>
+                    <span>{describeCatalogFailure(catalogQuery.error)}</span>
+                    <Button
+                      onClick={() => void catalogQuery.refetch()}
+                      size="small"
+                    >
+                      {t(
+                        "teamMemberWorkflowStudio.templates.retry",
+                        "Retry templates",
+                      )}
+                    </Button>
+                  </Space>
                 }
-                description={describeCatalogFailure(catalogQuery.error)}
-                message={t(
+                title={t(
                   "teamMemberWorkflowStudio.templates.catalogUnavailable",
                   "Catalog unavailable",
                 )}
@@ -633,7 +645,7 @@ const WorkflowStudioTemplateBrowser: React.FC<
                   "teamMemberWorkflowStudio.templates.notFoundDescription",
                   "This template is unavailable or no longer published.",
                 )}
-                message={t(
+                title={t(
                   "teamMemberWorkflowStudio.templates.notFound",
                   "Template not found",
                 )}
@@ -661,7 +673,7 @@ const WorkflowStudioTemplateBrowser: React.FC<
                   "teamMemberWorkflowStudio.templates.incompatibleDescription",
                   "This template cannot be used with the current Studio schema or primitive catalog.",
                 )}
-                message={formatCompatibilityReason(
+                title={formatCompatibilityReason(
                   selectedSummary.compatibility.reason,
                 )}
                 showIcon
@@ -708,7 +720,7 @@ const WorkflowStudioTemplateBrowser: React.FC<
                     "The current draft is unchanged. Retry or choose another template.",
                   )
                 }
-                message={t(
+                title={t(
                   "teamMemberWorkflowStudio.templates.previewUnavailable",
                   "Template preview unavailable",
                 )}
