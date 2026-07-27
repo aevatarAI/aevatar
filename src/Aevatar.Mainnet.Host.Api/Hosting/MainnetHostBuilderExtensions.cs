@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Application.CodexExecution;
 using Aevatar.AI.Infrastructure.ChronoSandbox;
+using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.AgentCatalog;
 using Aevatar.AI.ToolProviders.AevatarInvocation;
@@ -26,6 +27,7 @@ using Aevatar.Audit.Hosting;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Bootstrap.Extensions.AI;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.ChatRouting.Core;
 using Aevatar.GAgentService.Abstractions.Responses;
 using Aevatar.GAgentService.Application.Responses;
@@ -66,6 +68,7 @@ using Aevatar.Mainnet.Host.Api.Voice;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Integration.AI;
 using Microsoft.AspNetCore.Builder;
@@ -74,6 +77,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.Mainnet.Host.Api.Hosting;
@@ -409,6 +413,20 @@ public static class MainnetHostBuilderExtensions
             agentProfileRolloutSelector.AddReviewedRouteToolSet(
                 options,
                 ToolSetNames.WorkspaceDefault);
+        });
+        builder.Services.AddSingleton<IWorkflowToolSource>(serviceProvider =>
+        {
+            var studioLocal = serviceProvider.GetRequiredService<IToolSetRegistry>()
+                .Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.StudioLocal });
+            if (!studioLocal.IsSuccess)
+                throw new InvalidOperationException(studioLocal.Error?.Message);
+
+            return new VisibleAgentWorkflowToolSource(
+                studioLocal.Sources,
+                serviceProvider.GetServices<IToolCallMiddleware>(),
+                serviceProvider.GetService<IToolApprovalHandler>(),
+                serviceProvider.GetServices<IAIGAgentExecutionHook>(),
+                serviceProvider.GetService<ILogger<VisibleAgentWorkflowToolSource>>());
         });
 
         return builder;

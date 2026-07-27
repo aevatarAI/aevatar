@@ -97,6 +97,22 @@ public sealed class MainnetHostCompositionTests
         typeof(ScheduleStudioMemberWorkflowToolSource),
     ];
 
+    private static readonly string[] StudioLocalWorkflowToolNames =
+    [
+        "aevatar_provision_workflow_schedule",
+        "aevatar_create_team",
+        "aevatar_list_teams",
+        "aevatar_get_team",
+        "aevatar_create_member",
+        "aevatar_list_members",
+        "aevatar_get_member",
+        "aevatar_list_workflows",
+        "aevatar_list_schedules",
+        "aevatar_get_schedule",
+        "aevatar_bind_member_workflow",
+        "aevatar_schedule_member_workflow",
+    ];
+
     [Fact]
     public void GAgentServiceAndStudioCapabilities_ShouldOwnTheirCompositionDependencies()
     {
@@ -648,13 +664,31 @@ public sealed class MainnetHostCompositionTests
         app.Services.GetServices<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowConnectedServiceResourceFetchAdapter>()
             .Should()
             .ContainSingle(adapter => adapter.GetType().Name == "LarkMessageResourceFetchAdapter");
+        var workflowToolSources = app.Services.GetServices<Aevatar.Workflow.Core.Modules.IWorkflowToolSource>().ToArray();
         var workflowToolNames = new List<string>();
-        foreach (var source in app.Services.GetServices<Aevatar.Workflow.Core.Modules.IWorkflowToolSource>())
+        foreach (var source in workflowToolSources)
         {
             var tools = await source.GetToolsAsync();
             workflowToolNames.AddRange(tools.Select(static tool => tool.Name));
         }
         workflowToolNames.Should().ContainSingle(name => name == "workflow_connected_service_resource_fetch");
+        workflowToolNames.Should().NotContain(StudioLocalWorkflowToolNames);
+        workflowToolSources.Should().ContainSingle(source => source is VisibleAgentWorkflowToolSource);
+
+        using (AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+               {
+                   ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(StudioLocalWorkflowToolNames),
+               }))
+        {
+            var visibleWorkflowToolNames = new List<string>();
+            foreach (var source in workflowToolSources)
+            {
+                var tools = await source.GetToolsAsync();
+                visibleWorkflowToolNames.AddRange(tools.Select(static tool => tool.Name));
+            }
+
+            visibleWorkflowToolNames.Should().Contain(StudioLocalWorkflowToolNames);
+        }
 
         var larkSelfNotify = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.LarkSelfNotify });
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);

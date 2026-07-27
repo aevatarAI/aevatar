@@ -41,124 +41,159 @@ public sealed class AgentWorkflowToolSourceAdapter(
         return workflowTools;
     }
 
-    private sealed class AgentWorkflowToolAdapter(
-        IAgentTool tool,
-        IReadOnlyList<IToolCallMiddleware> toolMiddlewares,
-        ILogger logger) : IWorkflowTool
+}
+
+public sealed class VisibleAgentWorkflowToolSource(
+    IEnumerable<IAgentToolSource> agentToolSources,
+    IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
+    IToolApprovalHandler? approvalHandler = null,
+    IEnumerable<IAIGAgentExecutionHook>? hooks = null,
+    ILogger<VisibleAgentWorkflowToolSource>? logger = null) : IWorkflowToolSource
+{
+    private readonly IEnumerable<IAgentToolSource> _agentToolSources =
+        agentToolSources ?? throw new ArgumentNullException(nameof(agentToolSources));
+    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
+        ToolCallMiddlewareChainFactory.ForAgentRuntime(
+            toolMiddlewares ?? [],
+            approvalHandler,
+            hooks == null ? null : new AgentHookPipeline(hooks));
+    private readonly ILogger<VisibleAgentWorkflowToolSource> _logger =
+        logger ?? NullLogger<VisibleAgentWorkflowToolSource>.Instance;
+
+    public async Task<IReadOnlyList<IWorkflowTool>> GetToolsAsync(CancellationToken ct = default)
     {
-        private readonly IAgentTool _tool = tool ?? throw new ArgumentNullException(nameof(tool));
-        private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
-            toolMiddlewares ?? throw new ArgumentNullException(nameof(toolMiddlewares));
-        private readonly ILogger _logger = logger ?? NullLogger.Instance;
+        var visibility = AgentToolRequestContext.ToolVisibility;
+        if (!visibility.IsRestricted)
+            return [];
 
-        public string Name => _tool.Name;
-
-        public async Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+        var workflowTools = new List<IWorkflowTool>();
+        foreach (var source in _agentToolSources)
         {
-            ArgumentNullException.ThrowIfNull(request);
+            var tools = await source.DiscoverToolsAsync(ct).ConfigureAwait(false);
+            foreach (var tool in tools.Where(tool => visibility.Allows(tool.Name)))
+                workflowTools.Add(new AgentWorkflowToolAdapter(tool, _toolMiddlewares, _logger));
+        }
 
-            var workflowRuntimeContext = new AgentWorkflowRuntimeContext(
-                Normalize(request.RuntimeContext.ParentActorId),
-                Normalize(request.RuntimeContext.ParentRunId),
-                Normalize(request.RuntimeContext.ParentStepId),
-                Normalize(request.RuntimeContext.RootRunId),
-                Math.Max(0, request.RuntimeContext.Depth));
-            var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
-                request.CallerCredential,
-                workflowRuntimeContext);
-            var toolContext = credentialContext with
+        return workflowTools;
+    }
+}
+
+file sealed class AgentWorkflowToolAdapter(
+    IAgentTool tool,
+    IReadOnlyList<IToolCallMiddleware> toolMiddlewares,
+    ILogger logger) : IWorkflowTool
+{
+    private readonly IAgentTool _tool = tool ?? throw new ArgumentNullException(nameof(tool));
+    private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares =
+        toolMiddlewares ?? throw new ArgumentNullException(nameof(toolMiddlewares));
+    private readonly ILogger _logger = logger ?? NullLogger.Instance;
+
+    public string Name => _tool.Name;
+
+    public async Task<WorkflowToolExecutionResult> ExecuteAsync(WorkflowToolExecutionRequest request, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var workflowRuntimeContext = new AgentWorkflowRuntimeContext(
+            Normalize(request.RuntimeContext.ParentActorId),
+            Normalize(request.RuntimeContext.ParentRunId),
+            Normalize(request.RuntimeContext.ParentStepId),
+            Normalize(request.RuntimeContext.RootRunId),
+            Math.Max(0, request.RuntimeContext.Depth));
+        var credentialContext = WorkflowCallerCredentialToolContextMapper.FromCredential(
+            request.CallerCredential,
+            workflowRuntimeContext);
+        var toolContext = credentialContext with
+        {
+            Request = credentialContext.Request with
             {
-                Request = credentialContext.Request with
-                {
-                    CallId = Normalize(request.CallId),
-                    IdempotencyKey = Normalize(request.IdempotencyKey),
-                },
-                Caller = credentialContext.Caller with
-                {
-                    ScopeId = Normalize(request.ScopeId),
-                },
-                Schedule = new AgentToolScheduleContext(Normalize(request.ScheduleId)),
-            };
-            _logger.LogInformation(
-                "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
-                _tool.Name,
-                request.ScopeId ?? string.Empty,
-                request.RuntimeContext.RootRunId ?? string.Empty,
-                request.RuntimeContext.ParentRunId ?? string.Empty,
-                request.RuntimeContext.ParentStepId ?? string.Empty,
-                !string.IsNullOrWhiteSpace(request.CallerCredential?.BearerToken),
-                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken),
-                !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdOrgToken));
-            using var scope = AgentToolContextScope.Push(toolContext);
-            var toolCallContext = new ToolCallContext
+                CallId = Normalize(request.CallId),
+                IdempotencyKey = Normalize(request.IdempotencyKey),
+            },
+            Caller = credentialContext.Caller with
             {
-                Tool = _tool,
-                ToolName = _tool.Name,
-                ToolCallId = Normalize(request.CallId) ?? string.Empty,
-                ArgumentsJson = request.ArgumentsJson,
-                CancellationToken = ct,
-                ExecutionContext = toolContext,
-                ApprovalGrant = request.ApprovalGrant == null
-                    ? null
-                    : new Aevatar.AI.Abstractions.Middleware.ToolApprovalGrant(
-                        request.ApprovalGrant.ApprovalRequestId,
-                        request.ApprovalGrant.ToolName,
-                        request.ApprovalGrant.ToolCallId),
-            };
+                ScopeId = Normalize(request.ScopeId),
+            },
+            Schedule = new AgentToolScheduleContext(Normalize(request.ScheduleId)),
+        };
+        _logger.LogInformation(
+            "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",
+            _tool.Name,
+            request.ScopeId ?? string.Empty,
+            request.RuntimeContext.RootRunId ?? string.Empty,
+            request.RuntimeContext.ParentRunId ?? string.Empty,
+            request.RuntimeContext.ParentStepId ?? string.Empty,
+            !string.IsNullOrWhiteSpace(request.CallerCredential?.BearerToken),
+            !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdAccessToken),
+            !string.IsNullOrWhiteSpace(toolContext.Credentials.NyxIdOrgToken));
+        using var scope = AgentToolContextScope.Push(toolContext);
+        var toolCallContext = new ToolCallContext
+        {
+            Tool = _tool,
+            ToolName = _tool.Name,
+            ToolCallId = Normalize(request.CallId) ?? string.Empty,
+            ArgumentsJson = request.ArgumentsJson,
+            CancellationToken = ct,
+            ExecutionContext = toolContext,
+            ApprovalGrant = request.ApprovalGrant == null
+                ? null
+                : new Aevatar.AI.Abstractions.Middleware.ToolApprovalGrant(
+                    request.ApprovalGrant.ApprovalRequestId,
+                    request.ApprovalGrant.ToolName,
+                    request.ApprovalGrant.ToolCallId),
+        };
 
-            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-            {
-                if (toolCallContext.Terminate)
-                    return;
-
-                toolCallContext.Result = await _tool.ExecuteAsync(toolCallContext.ArgumentsJson, ct).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-
-            if (toolCallContext.Terminate &&
-                toolCallContext.TerminationKind == ToolCallTerminationKind.ApprovalPending &&
-                toolCallContext.PendingApproval != null)
-            {
-                return new WorkflowToolExecutionResult(
-                    string.Empty,
-                    PendingApproval: ToWorkflowToolApprovalPendingOutcome(toolCallContext.PendingApproval));
-            }
-
+        await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
+        {
             if (toolCallContext.Terminate)
-                throw new InvalidOperationException(FormatMiddlewareTermination(toolCallContext));
+                return;
 
-            var resultJson = toolCallContext.Result
-                             ?? throw new InvalidOperationException(
-                                 $"Tool '{_tool.Name}' returned no result.");
-            return AgentWorkflowToolReceiptOutcomeMapper.Map(
-                ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt,
-                resultJson);
-        }
+            toolCallContext.Result = await _tool.ExecuteAsync(toolCallContext.ArgumentsJson, ct).ConfigureAwait(false);
+        }).ConfigureAwait(false);
 
-        private static WorkflowToolApprovalPendingOutcome ToWorkflowToolApprovalPendingOutcome(
-            ToolApprovalPendingContext pending) =>
-            new(
-                pending.ApprovalRequestId,
-                pending.ToolName,
-                pending.ToolCallId,
-                pending.ArgumentsJson,
-                pending.ApprovalMode.ToString(),
-                pending.IsReadOnly,
-                pending.IsDestructive);
-
-        private static string? Normalize(string? value) =>
-            string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-
-        private static string FormatMiddlewareTermination(ToolCallContext context)
+        if (toolCallContext.Terminate &&
+            toolCallContext.TerminationKind == ToolCallTerminationKind.ApprovalPending &&
+            toolCallContext.PendingApproval != null)
         {
-            var reason = string.IsNullOrWhiteSpace(context.TerminationReason)
-                ? context.Result
-                : context.TerminationReason;
-            var suffix = string.IsNullOrWhiteSpace(reason)
-                ? string.Empty
-                : $": {reason}";
-            return $"Tool '{context.ToolName}' execution terminated by middleware ({context.TerminationKind}){suffix}";
+            return new WorkflowToolExecutionResult(
+                string.Empty,
+                PendingApproval: ToWorkflowToolApprovalPendingOutcome(toolCallContext.PendingApproval));
         }
 
+        if (toolCallContext.Terminate)
+            throw new InvalidOperationException(FormatMiddlewareTermination(toolCallContext));
+
+        var resultJson = toolCallContext.Result
+                         ?? throw new InvalidOperationException(
+                             $"Tool '{_tool.Name}' returned no result.");
+        return AgentWorkflowToolReceiptOutcomeMapper.Map(
+            ToolCallReceiptFinalizer.Finalize(toolCallContext).Receipt,
+            resultJson);
+    }
+
+    private static WorkflowToolApprovalPendingOutcome ToWorkflowToolApprovalPendingOutcome(
+        ToolApprovalPendingContext pending) =>
+        new(
+            pending.ApprovalRequestId,
+            pending.ToolName,
+            pending.ToolCallId,
+            pending.ArgumentsJson,
+            pending.ApprovalMode.ToString(),
+            pending.IsReadOnly,
+            pending.IsDestructive);
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string FormatMiddlewareTermination(ToolCallContext context)
+    {
+        var reason = string.IsNullOrWhiteSpace(context.TerminationReason)
+            ? context.Result
+            : context.TerminationReason;
+        var suffix = string.IsNullOrWhiteSpace(reason)
+            ? string.Empty
+            : $": {reason}";
+        return $"Tool '{context.ToolName}' execution terminated by middleware ({context.TerminationKind}){suffix}";
     }
 }
 

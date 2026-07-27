@@ -122,11 +122,18 @@ the resource boundary enforceable without relying on prompt compliance.
 
 ### Host Composition
 
-Register `StudioWorkflowQueryToolSource` through
-`AddStudioProvisioningTools()` and compose it into `workspace.default` alongside
-the existing Studio query sources. Keep `WorkflowCatalogAgentToolSource` in the
-same tool set because explicit template discovery remains supported under its
-new tool names.
+Register `StudioWorkflowQueryToolSource` as part of the explicit `studio.local`
+tool set alongside the existing Studio provisioning, member, binding, schedule,
+and query sources. `workspace.default` stays the public/default workspace
+surface and must not include Studio-local sources. Keep
+`WorkflowCatalogAgentToolSource` in `workspace.default` because explicit
+template discovery remains supported under its new tool names.
+
+The built-in Studio workflow reaches `studio.local` through a workflow-only
+source that is gated by the workflow's explicit `allowed_tools` list. This keeps
+normal direct/default workflow runs and public chat routes from inheriting
+Studio-local tools while preserving Studio authoring requests that select the
+built-in `studio` workflow.
 
 ## Error Semantics
 
