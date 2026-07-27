@@ -1,10 +1,17 @@
+using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.CodexExecution;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Auditing;
+using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.Core.Tools;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
 using Aevatar.Audit;
 using Aevatar.Audit.Abstractions.Identity;
 using Aevatar.Audit.Abstractions.Models;
+using Aevatar.Audit.Abstractions.Ports;
 using Aevatar.Audit.Core.Sanitization;
 using FluentAssertions;
 
@@ -14,9 +21,9 @@ public sealed class CodexExecutionFailureAuditTests
 {
     [Theory]
     [InlineData(
-        CodexExecutionFailureKind.MalformedOutput,
+        CodexExecutionFailureKind.ProvisioningFailed,
         "managed_response_invalid",
-        "codex_execution_malformed_output",
+        "codex_execution_provisioning_failed",
         AuditTerminalOutcome.Failed,
         AuditFailureCategory.Execution)]
     [InlineData(
@@ -37,39 +44,56 @@ public sealed class CodexExecutionFailureAuditTests
         "codex_execution_capacity_unavailable",
         AuditTerminalOutcome.Failed,
         AuditFailureCategory.Execution)]
-    public void Finalize_CodexExecutionException_ShouldPreserveClosedFailureClassInAudit(
+    public async Task StreamingExecution_WhenManagedPortFails_ShouldPreserveClosedFailureClassInAudit(
         CodexExecutionFailureKind failureKind,
         string providerCode,
         string expectedAuditCode,
         AuditTerminalOutcome expectedTerminalOutcome,
         AuditFailureCategory expectedCategory)
     {
-        var context = new ToolCallContext
-        {
-            Tool = new TestCodexTool(),
-            ToolName = "codex_exec",
-            ToolCallId = "call-codex",
-            ArgumentsJson = "{}",
-            ExecutionContext = AgentToolExecutionContext.Empty,
-        };
-        var exception = new CodexExecutionException(new CodexExecutionFailure(
+        var failure = new CodexExecutionFailure(
             failureKind,
             providerCode,
-            "Provider-owned detail must not become audit classification."));
+            "Provider-owned detail must not become audit classification.");
+        var tools = new ToolManager();
+        tools.Register(new NyxIdCodexExecTool(
+            [new FailingManagedPort(failure)],
+            new NyxIdToolOptions()));
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = new ToolExecutionAuditMiddleware(
+            appender,
+            new ToolAuditRecordFactory(new StableAuditIdentityHasher()));
+        var executor = new StreamingToolExecutor(tools, toolMiddlewares: [middleware]);
+        using var state = executor.CreateExecutionState();
+        executor.AddTool(state, new ToolCall
+        {
+            Id = "call-codex",
+            Name = "codex_exec",
+            ArgumentsJson = """
+                {
+                  "target": { "kind": "managed_sandbox" },
+                  "workspace": { "kind": "empty_git" },
+                  "prompt": "task"
+                }
+                """,
+        });
 
-        var finalized = ToolCallReceiptFinalizer.Finalize(context, exception);
-        var audit = new ToolAuditRecordFactory(new StableAuditIdentityHasher())
-            .Create(context, finalized);
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(state, CancellationToken.None))
+            results.Add(result);
 
-        finalized.IsSynthetic.Should().BeTrue();
-        finalized.Receipt.ErrorCode.Should().Be(expectedAuditCode);
-        finalized.Receipt.ErrorMessage.Should().Be(nameof(CodexExecutionException));
+        var receipt = results.Should().ContainSingle().Which.Receipt;
+        receipt.Should().NotBeNull();
+        receipt!.ErrorCode.Should().Be(expectedAuditCode);
+        receipt.ErrorMessage.Should().Be(nameof(CodexExecutionException));
+        var audit = appender.Records.Should().ContainSingle().Which;
         audit.ErrorCode.Should().Be(expectedAuditCode);
         audit.TerminalOutcome.Should().Be(expectedTerminalOutcome);
         audit.Failure.Should().NotBeNull();
         audit.Failure!.Code.Should().Be(expectedAuditCode);
         audit.Failure.Category.Should().Be(expectedCategory);
         audit.Failure.SanitizedMessage.Should().Be(nameof(CodexExecutionException));
+        audit.ToString().Should().NotContain(providerCode);
     }
 
     [Fact]
@@ -132,6 +156,34 @@ public sealed class CodexExecutionFailureAuditTests
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
+    }
+
+    private sealed class FailingManagedPort(CodexExecutionFailure failure) : ICodexExecutionPort
+    {
+        public CodexExecutionTarget.TargetOneofCase TargetKind =>
+            CodexExecutionTarget.TargetOneofCase.ManagedSandbox;
+
+        public async IAsyncEnumerable<CodexExecutionEvent> ExecuteAsync(
+            CodexExecutionRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            yield return CodexExecutionEvent.Failed(failure);
+        }
+    }
+
+    private sealed class RecordingAuditTrailAppender : IAuditTrailAppender
+    {
+        public List<AuditRecord> Records { get; } = [];
+
+        public Task<AuditTrailAppendResult> AppendAsync(
+            AuditRecord record,
+            CancellationToken cancellationToken = default)
+        {
+            Records.Add(record);
+            return Task.FromResult(AuditTrailAppendResult.Appended(record.AuditId));
+        }
     }
 
     private sealed class StableAuditIdentityHasher : IAuditActorIdentityHasher
