@@ -114,6 +114,22 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
+    public async Task InvokeMemberSchema_ShouldNotRequireEndpointId()
+    {
+        var tool = await DiscoverSingleAsync(new InvokeMemberToolSource(new Harness().CreateDispatcher()));
+        using var doc = JsonDocument.Parse(tool.ParametersSchema);
+
+        var required = doc.RootElement.GetProperty("required")
+            .EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToArray();
+
+        required.Should().BeEquivalentTo("member_id", "payload");
+        doc.RootElement.GetProperty("properties").TryGetProperty("endpoint_id", out _).Should().BeTrue();
+        tool.Description.Should().Contain("defaults to chat");
+    }
+
+    [Fact]
     public async Task ReadWorkflowRunArtifactTool_ShouldExposeStrictReadOnlySchema()
     {
         var harness = new Harness();
@@ -719,7 +735,7 @@ public sealed class AevatarInvocationToolSourceTests
     }
 
     [Fact]
-    public async Task InvokeMember_WhenServiceIsWorkflow_ResolvesMemberAndDispatchesPublishedService()
+    public async Task InvokeMember_WhenEndpointIsOmitted_DefaultsToChatAndDispatchesPublishedService()
     {
         var harness = new Harness();
         harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
@@ -752,7 +768,6 @@ public sealed class AevatarInvocationToolSourceTests
             """
             {
               "member_id": "m-alpha",
-              "endpoint_id": "chat",
               "payload": {
                 "prompt": "run member workflow",
                 "headers": { "x-workflow": "yes" }
@@ -785,6 +800,49 @@ public sealed class AevatarInvocationToolSourceTests
         dispatch.Request.EndpointId.Should().Be("chat");
         dispatch.Request.Payload!.Unpack<ChatRequestEvent>().Prompt.Should().Be("run member workflow");
         harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task InvokeMember_WhenEndpointIsExplicit_UsesRequestedEndpoint()
+    {
+        var harness = new Harness();
+        harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
+            "scope-1",
+            "m-alpha",
+            "svc-alpha");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "svc-alpha",
+            endpointId: "diagnose",
+            primaryActorId: "workflow-definition-actor");
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "member-workflow-command",
+            ServiceKey = "tenant:aevatar-service:default:svc-alpha",
+            DeploymentId = "deployment-member-workflow",
+            TargetActorId = "workflow-run-actor",
+            EndpointId = "diagnose",
+            CommandId = "member-workflow-command",
+            CorrelationId = "member-workflow-correlation",
+            RunId = "member-workflow-service-run",
+        };
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_member");
+
+        using var _ = PushContext(callId: "call-member-explicit-endpoint");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-alpha",
+              "endpoint_id": "diagnose",
+              "payload": { "prompt": "run member workflow" },
+              "wait": "stream"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        var dispatch = harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle().Subject;
+        dispatch.Request.EndpointId.Should().Be("diagnose");
+        harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
+        harness.AdmissionAuthorizer.Calls.Single().Endpoint.EndpointId.Should().Be("diagnose");
     }
 
     [Fact]
