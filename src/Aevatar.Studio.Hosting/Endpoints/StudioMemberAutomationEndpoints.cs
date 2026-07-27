@@ -1,11 +1,10 @@
-using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.Capabilities;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
+using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Builder;
@@ -46,9 +45,19 @@ internal static class StudioMemberAutomationEndpoints
 
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             return Results.Ok(await schedules.PreflightAsync(
-                BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, ResolveBearerToken(http)),
+                BuildScheduleRequest(
+                    scopeId,
+                    teamId,
+                    memberId,
+                    body,
+                    authority.AuthenticatedOwner,
+                    authority.ProvisioningBearerToken),
                 ct));
         }
         catch (Exception ex) when (TryMapError(ex, scopeId, teamId, memberId, out var error))
@@ -73,9 +82,18 @@ internal static class StudioMemberAutomationEndpoints
 
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
-            var bearer = ResolveBearerToken(http);
-            var request = BuildScheduleRequest(scopeId, teamId, memberId, body, owner.Context, bearer) with
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
+            var request = BuildScheduleRequest(
+                scopeId,
+                teamId,
+                memberId,
+                body,
+                authority.AuthenticatedOwner,
+                authority.ProvisioningBearerToken) with
             {
                 OperationId = body.OperationId,
                 IdempotencyKey = body.IdempotencyKey,
@@ -94,7 +112,7 @@ internal static class StudioMemberAutomationEndpoints
                     memberId,
                     result.ScheduleId,
                     result.OperationId,
-                    owner.Context.VerifiedBindingId);
+                    authority.AuthenticatedOwner.VerifiedBindingId);
             }
 
             return Results.Accepted(value: new StudioMemberAutomationMutationReceipt(
@@ -126,14 +144,18 @@ internal static class StudioMemberAutomationEndpoints
 
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var request = BuildScheduleRequest(
                 scopeId,
                 teamId,
                 memberId,
                 body,
-                owner.Context,
-                ResolveBearerToken(http)) with
+                authority.AuthenticatedOwner,
+                authority.ProvisioningBearerToken) with
             {
                 ScheduleId = scheduleId,
                 OperationId = body.OperationId,
@@ -223,7 +245,11 @@ internal static class StudioMemberAutomationEndpoints
             return denied;
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var receipt = await schedules.UpdateAsync(new StudioMemberAutomationUpdateCommand(
                 scopeId,
                 teamId,
@@ -234,11 +260,11 @@ internal static class StudioMemberAutomationEndpoints
                 body.Enabled,
                 body.OperationId,
                 body.IdempotencyKey,
-                owner.Context)
+                authority.AuthenticatedOwner)
             {
                 DisplayName = body.DisplayName,
                 Prompt = body.Prompt,
-                ProvisioningBearerToken = ResolveBearerToken(http),
+                ProvisioningBearerToken = authority.ProvisioningBearerToken,
             }, ct);
             return Results.Accepted(value: receipt);
         }
@@ -296,7 +322,11 @@ internal static class StudioMemberAutomationEndpoints
             return denied;
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var receipt = await schedules.DeleteAsync(
                 new StudioMemberAutomationActionCommand(
                     scopeId,
@@ -306,8 +336,8 @@ internal static class StudioMemberAutomationEndpoints
                     body.OperationId,
                     body.IdempotencyKey)
                 {
-                    AuthenticatedOwner = owner.Context,
-                    ProvisioningBearerToken = ResolveBearerToken(http),
+                    AuthenticatedOwner = authority.AuthenticatedOwner,
+                    ProvisioningBearerToken = authority.ProvisioningBearerToken,
                 },
                 ct);
             return Results.Accepted(value: receipt);
@@ -333,7 +363,11 @@ internal static class StudioMemberAutomationEndpoints
             return denied;
         try
         {
-            var owner = await ResolveOwnerAsync(http, bindingQuery, ct);
+            var authority =
+                await StudioMemberAutomationHttpAuthorityResolver.ResolveAsync(
+                    http,
+                    bindingQuery,
+                    ct);
             var receipt = await schedules.RetryRevocationAsync(
                 new StudioMemberAutomationActionCommand(
                     scopeId,
@@ -343,8 +377,8 @@ internal static class StudioMemberAutomationEndpoints
                     body.OperationId,
                     body.IdempotencyKey)
                 {
-                    AuthenticatedOwner = owner.Context,
-                    ProvisioningBearerToken = ResolveBearerToken(http),
+                    AuthenticatedOwner = authority.AuthenticatedOwner,
+                    ProvisioningBearerToken = authority.ProvisioningBearerToken,
                 },
                 ct);
             return Results.Accepted(value: receipt);
@@ -405,51 +439,6 @@ internal static class StudioMemberAutomationEndpoints
             Enabled = body.Enabled,
             ProvisioningBearerToken = bearerToken,
         };
-
-    private static async Task<ResolvedOwner> ResolveOwnerAsync(
-        HttpContext http,
-        IExternalIdentityBindingQueryPort bindingQuery,
-        CancellationToken ct)
-    {
-        var subject = http.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-            ?? http.User.FindFirst("sub")?.Value;
-        if (string.IsNullOrWhiteSpace(subject))
-            throw new UnauthorizedAccessException("nyxid_subject_missing");
-
-        var normalizedSubject = subject.Trim();
-        var externalSubject = new ExternalSubjectRef
-        {
-            Platform = OwnerScope.NyxIdPlatform,
-            Tenant = string.Empty,
-            ExternalUserId = normalizedSubject,
-        };
-        var binding = await bindingQuery.ResolveAsync(externalSubject, ct);
-        if (binding == null || string.IsNullOrWhiteSpace(binding.Value))
-            throw new InvalidOperationException("nyxid_binding_missing");
-        return new ResolvedOwner(new AuthenticatedAuthorizationOwnerContext(
-            new AuthorizationOwnerIdentity
-            {
-                Authority = NyxIdAuthorizationAuthorities.NyxId,
-                OwnerKind = AuthorizationOwnerKind.Personal,
-                OwnerSubject = normalizedSubject,
-            },
-            OwnerScope.NyxIdPlatform,
-            string.Empty,
-            normalizedSubject,
-            binding.Value));
-    }
-
-    private static string ResolveBearerToken(HttpContext http)
-    {
-        var header = http.Request.Headers.Authorization.FirstOrDefault()?.Trim();
-        const string prefix = "Bearer ";
-        if (header == null || !header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            throw new UnauthorizedAccessException("provisioning_bearer_missing");
-        var token = header[prefix.Length..].Trim();
-        if (token.Length == 0 || token.Contains(','))
-            throw new UnauthorizedAccessException("provisioning_bearer_invalid");
-        return token;
-    }
 
     private static bool TryMapError(
         Exception exception,
@@ -535,8 +524,6 @@ internal static class StudioMemberAutomationEndpoints
     private static string BuildPreflightLocator(string scopeId, string teamId, string memberId) =>
         $"/api/scopes/{Uri.EscapeDataString(scopeId.Trim())}/teams/{Uri.EscapeDataString(teamId.Trim())}" +
         $"/members/{Uri.EscapeDataString(memberId.Trim())}/automations/preflight";
-
-    private sealed record ResolvedOwner(AuthenticatedAuthorizationOwnerContext Context);
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

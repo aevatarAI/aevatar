@@ -131,6 +131,67 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
+    public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnUnauthorizedWithoutSecrets()
+    {
+        var schedules = new StubSchedules();
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery { Binding = null },
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status401Unauthorized);
+        StringProperty(Value(result), "code").Should().Be(
+            "TEAM_AUTOMATION_UNAUTHORIZED");
+        schedules.LastPreflight.Should().BeNull();
+        var json = JsonSerializer.Serialize(Value(result));
+        json.Should().NotContain("binding-alpha");
+        json.Should().NotContain("nyx-owner-alpha");
+        json.Should().NotContain("fresh-owner-bearer");
+    }
+
+    [Fact]
+    public async Task Preflight_WhenBearerIsMalformed_ShouldReturnUnauthorizedWithoutEchoingHeader()
+    {
+        var schedules = new StubSchedules();
+        var context = CreateContext(ScopeId);
+        context.Request.Headers.Authorization =
+            "Bearer secret-one, secret-two";
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            context,
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status401Unauthorized);
+        StringProperty(Value(result), "code").Should().Be(
+            "TEAM_AUTOMATION_UNAUTHORIZED");
+        schedules.LastPreflight.Should().BeNull();
+        var json = JsonSerializer.Serialize(Value(result));
+        json.Should().NotContain("secret-one");
+        json.Should().NotContain("secret-two");
+    }
+
+    [Fact]
     public async Task Create_ShouldKeepCanonicalOwnerIdentityAndReturnPendingReceipt()
     {
         var schedules = new StubSchedules();
