@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.CodexExecution;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Audit;
@@ -80,7 +81,7 @@ public sealed class ToolAuditRecordFactory
             OperationKind = AuditOperationKind.Tool,
             OperationName = operationName,
             SensitivityLevel = AuditSensitivityLevel.Internal,
-            Outcome = MapOutcome(receipt.Status),
+            Outcome = MapOutcome(receipt),
             LifecyclePhase = MapLifecyclePhase(receipt.Status),
             TerminalOutcome = MapTerminalOutcome(receipt),
             CapturePlane = AuditCapturePlane.ToolExecution,
@@ -147,7 +148,9 @@ public sealed class ToolAuditRecordFactory
                 FailedPhase = string.IsNullOrWhiteSpace(receipt.ApprovalRequestId)
                     ? AuditLifecyclePhase.Running
                     : AuditLifecyclePhase.WaitingApproval,
-                SanitizedMessage = record.ErrorCode,
+                SanitizedMessage = CodexExecutionAuditFailureSemantics.IsOwned(record.ErrorCode)
+                    ? nameof(CodexExecutionException)
+                    : record.ErrorCode,
             };
         }
     }
@@ -155,7 +158,8 @@ public sealed class ToolAuditRecordFactory
     private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status)
     {
         var normalized = value?.Trim();
-        if (IsOwnedNyxIdProxyFailureCode(normalized))
+        if (IsOwnedNyxIdProxyFailureCode(normalized) ||
+            CodexExecutionAuditFailureSemantics.IsOwned(normalized))
             return normalized!;
 
         return normalized switch
@@ -269,8 +273,10 @@ public sealed class ToolAuditRecordFactory
             _ => AuditCredentialSource.System,
         };
 
-    private static AuditOutcome MapOutcome(AgentToolReceiptStatus status) =>
-        status switch
+    private static AuditOutcome MapOutcome(AgentToolReceipt receipt) =>
+        ResolveFailureCode(receipt.ErrorCode, receipt.Status) == "codex_execution_cancelled"
+            ? AuditOutcome.Cancelled
+            : receipt.Status switch
         {
             AgentToolReceiptStatus.Success => AuditOutcome.Success,
             AgentToolReceiptStatus.ApprovalRequired => AuditOutcome.Accepted,
@@ -288,6 +294,8 @@ public sealed class ToolAuditRecordFactory
         ResolveFailureCode(receipt.ErrorCode, receipt.Status) switch
         {
             "approval_timeout" => AuditTerminalOutcome.TimedOut,
+            "codex_execution_timed_out" => AuditTerminalOutcome.TimedOut,
+            "codex_execution_cancelled" => AuditTerminalOutcome.Cancelled,
             _ => receipt.Status switch
             {
                 AgentToolReceiptStatus.Success => AuditTerminalOutcome.Succeeded,
