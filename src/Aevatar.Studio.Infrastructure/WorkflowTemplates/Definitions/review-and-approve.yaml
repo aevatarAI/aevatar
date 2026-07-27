@@ -1,0 +1,36 @@
+name: review_and_approve
+roles:
+  - id: writer
+    name: Writer
+    system_prompt: Prepare concise drafts and summarize review outcomes.
+steps:
+  - id: generate_draft
+    type: llm_call
+    target_role: writer
+    next: review_draft
+  - id: review_draft
+    type: human_approval
+    parameters:
+      prompt: Review the generated draft and approve or reject it.
+      timeout_seconds: 3600
+      on_reject: branch
+    branches:
+      "true": mark_approved
+      "false": mark_rejected
+  - id: mark_approved
+    type: assign
+    parameters:
+      target: review_decision
+      value: approved
+    next: summarize_result
+  - id: mark_rejected
+    type: assign
+    parameters:
+      target: review_decision
+      value: rejected
+    next: summarize_result
+  - id: summarize_result
+    type: llm_call
+    target_role: writer
+    parameters:
+      prompt_prefix: "Summarize the review outcome. Draft: ${steps.generate_draft.output}. Decision: ${review_decision}."
