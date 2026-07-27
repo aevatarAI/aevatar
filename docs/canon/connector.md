@@ -112,6 +112,14 @@ Builder 当前行为：
 - `http`、`cli`、`host_callback` builder 在 `AddAevatarBootstrap()` 默认注册；
 - `mcp` builder 只有在 `AddAevatarAIFeatures(..., options => options.EnableMCPTools = true)` 时注册。
 
+## 2.5 Workflow 外部能力所有权与 readiness
+
+Connector 是否需要认证不改变它的所有权。只要 operation 由部署配置并进入 Host Connector catalog，它就是 Host-owned capability；`public`、`client_credentials` 和 `secret_ref_header` 都走同一条 Connector 主链。反过来，用户/org credential、OAuth connection、NyxID UserService 或 local Node 拥有的 operation 必须走 NyxID capability，不能因为它看起来像 HTTP 就改写成 Connector。
+
+Workflow authoring 只消费 `ConnectorExternalWorkflowCapabilitySource` 从 `IConnectorCatalogQueryPort` 读取的 typed descriptor。每个 descriptor 使用三元组 `connector_capability_ref + operation_id + contract_digest` 标识一个 exact operation；digest 是安全的 contract fingerprint，不包含 secret value。只有 connector 当前存在、启用、operation 仍在 allowlist 且 digest 匹配时，point-in-time readiness 才是 `READY`。缺失、禁用和 contract drift 返回 typed blocker 与 `studio:connectors` trusted remediation，不在 Chat 中接收凭据。
+
+所有普通 Workflow write 仍由服务器端 `IWorkflowExternalCapabilityAdmissionService` 重新解析 YAML 和校验 readiness。Chat 的 `list_external_workflow_capabilities` / `inspect_external_workflow_capability_readiness` 只负责只读引导，不是安全边界，也不创建或刷新 Connector。Definition actor 会独立重算 capability tuple，并把 definition 与 admission digest 在同一个 actor transition 中提交。
+
 ---
 
 ## 3. Workflow/Agent 如何使用 Connector
@@ -368,6 +376,8 @@ steps:
     role: coordinator
     parameters:
       connector: maker_post_processor
+      operation: "<exact operation_id from capability listing>"
+      contract_digest: "<exact contract_digest from READY capability>"
       timeout_ms: "8000"
       retry: "1"
       on_missing: "skip"

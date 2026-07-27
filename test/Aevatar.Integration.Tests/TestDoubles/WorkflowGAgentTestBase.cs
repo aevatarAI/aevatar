@@ -65,7 +65,8 @@ public abstract class WorkflowGAgentTestBase
         internal static async Task<(WorkflowRoleGAgent Agent, RecordingEventPublisher Publisher)> CreateActivatedWorkflowRoleAgentAsync(
             IEventStore eventStore,
             ILLMProviderFactory llmProviderFactory,
-            string agentId)
+            string agentId,
+            IEnumerable<IAgentTool>? tools = null)
         {
             var services = new ServiceCollection()
                 .AddSingleton<IEventStore>(eventStore)
@@ -74,12 +75,14 @@ public abstract class WorkflowGAgentTestBase
                 .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
                 .BuildServiceProvider();
             var publisher = new RecordingEventPublisher();
-            var agent = new WorkflowRoleGAgent(llmProviderFactory)
+            var agent = new TestWorkflowRoleGAgent(llmProviderFactory)
             {
                 Services = services,
                 EventPublisher = publisher,
                 EventSourcingBehaviorFactory = services.GetRequiredService<IEventSourcingBehaviorFactory<RoleGAgentState>>(),
             };
+            foreach (var tool in tools ?? [])
+                agent.RegisterToolForTest(tool);
             SetAgentId(agent, agentId);
             await agent.ActivateAsync();
             await agent.HandleWorkflowRoleInitialize(new WorkflowRoleInitializeEvent
@@ -90,6 +93,22 @@ public abstract class WorkflowGAgentTestBase
                 SystemPrompt = "workflow role",
             });
             return (agent, publisher);
+        }
+
+        internal sealed class SuccessfulWorkflowTool(string name) : IAgentTool
+        {
+            public string Name => name;
+            public string Description => "Workflow integration test tool";
+            public string ParametersSchema => "{}";
+
+            public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+                Task.FromResult("{}");
+        }
+
+        private sealed class TestWorkflowRoleGAgent(ILLMProviderFactory llmProviderFactory)
+            : WorkflowRoleGAgent(llmProviderFactory)
+        {
+            public void RegisterToolForTest(IAgentTool tool) => RegisterTool(tool);
         }
 
         internal static WorkflowRunGAgent CreateRunAgent(

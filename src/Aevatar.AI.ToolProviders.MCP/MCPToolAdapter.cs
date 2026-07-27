@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Microsoft.Extensions.Logging;
@@ -27,6 +28,14 @@ public sealed class MCPToolAdapter : IAgentTool
 
     /// <summary>参数 JSON Schema。</summary>
     public string ParametersSchema { get; }
+
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.Mcp(
+            Name,
+            _mcpToolName,
+            Description,
+            _serverName,
+            _mcpToolName);
 
     public MCPToolAdapter(
         string name, string description, string parametersSchema,

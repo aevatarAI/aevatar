@@ -73,7 +73,8 @@ public sealed class TeamAutomationOperationObservationSessionEventCodec
             ToCredentialEffectLocator(observed.CredentialEffectLocator),
             observed.MutationDigest ?? string.Empty,
             observed.ObservationRequestId ?? string.Empty,
-            ToObservationStatus(observed.ObservationStatus));
+            ToObservationStatus(observed.ObservationStatus),
+            observed.NewOperationCommitted);
     }
 
     private static TeamAutomationOperationObservedEvent ToProto(
@@ -105,6 +106,7 @@ public sealed class TeamAutomationOperationObservationSessionEventCodec
             MutationDigest = outcome.MutationDigest ?? string.Empty,
             ObservationRequestId = outcome.ObservationRequestId ?? string.Empty,
             ObservationStatus = ToObservationStatusState(outcome.Status),
+            NewOperationCommitted = outcome.NewOperationCommitted,
         };
 
     private static TeamAutomationOperationObservationStatus ToObservationStatus(

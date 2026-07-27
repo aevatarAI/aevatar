@@ -44,7 +44,8 @@ public sealed class NyxIdAuthorizationCatalogCurrentStateProjector
             LastEventId = stateEvent.EventId ?? string.Empty,
             UpdatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow),
             Owner = state.Owner.Clone(),
-            ExternalRevision = state.ExternalRevision,
+            ContractVersion = state.ContractVersion,
+            PolicyVersion = state.PolicyVersion,
             ContentDigest = state.ContentDigest,
             Invalidated = state.Invalidated,
             InvalidationReason = state.InvalidationReason,
@@ -62,6 +63,8 @@ public sealed class NyxIdAuthorizationCatalogCurrentStateProjector
             document.ObservedAt = state.ObservedAt.ToDateTimeOffset();
         if (state.FreshUntil != null)
             document.FreshUntil = state.FreshUntil.ToDateTimeOffset();
+        if (state.EvaluatedAt != null)
+            document.EvaluatedAt = state.EvaluatedAt.ToDateTimeOffset();
         document.Services.Add(state.Services.Select(static service => service.Clone()));
 
         var result = await _writeDispatcher.UpsertAsync(document, ct);

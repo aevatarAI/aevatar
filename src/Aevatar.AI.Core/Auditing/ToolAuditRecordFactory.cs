@@ -11,6 +11,8 @@ namespace Aevatar.AI.Core.Auditing;
 
 public sealed class ToolAuditRecordFactory
 {
+    private const string NyxIdProxyHttpFailurePrefix = "NYXID_PROXY_HTTP_";
+
     private readonly IAuditActorIdentityHasher _identityHasher;
     private readonly TimeProvider _timeProvider;
 
@@ -150,8 +152,13 @@ public sealed class ToolAuditRecordFactory
         }
     }
 
-    private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status) =>
-        value?.Trim() switch
+    private static string ResolveFailureCode(string? value, AgentToolReceiptStatus status)
+    {
+        var normalized = value?.Trim();
+        if (IsOwnedNyxIdProxyFailureCode(normalized))
+            return normalized!;
+
+        return normalized switch
         {
             "approval_denied" => "approval_denied",
             "approval_timeout" => "approval_timeout",
@@ -161,6 +168,20 @@ public sealed class ToolAuditRecordFactory
             "tool_execution_exception" => "tool_execution_exception",
             _ => DefaultErrorCode(status),
         };
+    }
+
+    private static bool IsOwnedNyxIdProxyFailureCode(string? value)
+    {
+        if (value is "NYXID_PROXY_UNAUTHORIZED" or "NYXID_PROXY_FORBIDDEN")
+            return true;
+
+        return value != null &&
+               value.Length == NyxIdProxyHttpFailurePrefix.Length + 3 &&
+               value.StartsWith(NyxIdProxyHttpFailurePrefix, StringComparison.Ordinal) &&
+               value[NyxIdProxyHttpFailurePrefix.Length] is >= '1' and <= '5' &&
+               value[NyxIdProxyHttpFailurePrefix.Length + 1] is >= '0' and <= '9' &&
+               value[NyxIdProxyHttpFailurePrefix.Length + 2] is >= '0' and <= '9';
+    }
 
     private static AuditCorrelation BuildCorrelation(
         ToolCallContext context,

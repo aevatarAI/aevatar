@@ -2,8 +2,45 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 public static class UserConfigLlmRouteDefaults
 {
-    public const string Gateway = "";
+    public const string Gateway = "/api/v1/llm/gateway/v1";
 }
+
+public enum UserLlmSelectionKind
+{
+    Unspecified = 0,
+    Gateway = 1,
+    NyxIdUserService = 2,
+}
+
+public static class UserLlmSelectionKindWire
+{
+    public const string Unspecified = "unspecified";
+    public const string Gateway = "gateway";
+    public const string NyxIdUserService = "nyx_id_user_service";
+
+    public static string From(UserLlmSelectionKind kind) => kind switch
+    {
+        UserLlmSelectionKind.Unspecified => Unspecified,
+        UserLlmSelectionKind.Gateway => Gateway,
+        UserLlmSelectionKind.NyxIdUserService => NyxIdUserService,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+}
+
+public sealed record UserLlmSelectionValue(
+    UserLlmSelectionKind Kind,
+    string RouteValue,
+    string NyxIdUserServiceId,
+    string ServiceSlugSnapshot);
+
+public sealed record UserConfigUpdate(
+    string? DefaultModel = null,
+    UserLlmSelectionValue? LlmSelection = null,
+    string? RuntimeMode = null,
+    string? LocalRuntimeBaseUrl = null,
+    string? RemoteRuntimeBaseUrl = null,
+    string? GithubUsername = null,
+    int? MaxToolRounds = null);
 
 public static class UserConfigLlmRoute
 {
@@ -174,9 +211,10 @@ public sealed record UserConfigRuntimeView(
 
 public sealed record UserConfig(
     string DefaultModel,
-    string PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
+    string PreferredLlmRoute = "",
     string RuntimeMode = UserConfigRuntimeDefaults.LocalMode,
     string LocalRuntimeBaseUrl = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
     string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
     string? GithubUsername = null,
-    int MaxToolRounds = 0);
+    int MaxToolRounds = 0,
+    UserLlmSelectionValue? LlmSelection = null);

@@ -61,6 +61,7 @@ import type {
   StudioUserConfig,
   StudioUserConfigSaveReceipt,
   StudioUserConfigRuntime,
+  StudioUserLlmSavedRouteKind,
   StudioUserLlmSettings,
   StudioWorkflowDraft,
   StudioWorkflowDraftCreateAcceptedReceipt,
@@ -377,6 +378,16 @@ function decodeOrnnSkillSearchResult(
   };
 }
 
+function decodeStudioUserLlmSavedRouteKind(
+  value: unknown,
+  label: string
+): StudioUserLlmSavedRouteKind {
+  const kind = expectString(value, label);
+  return kind === "gateway" || kind === "nyx_id_user_service"
+    ? kind
+    : "unknown";
+}
+
 function decodeStudioUserLlmSettings(
   value: unknown,
   label = "StudioUserLlmSettings"
@@ -385,6 +396,20 @@ function decodeStudioUserLlmSettings(
   return {
     savedRoute: readString(record, "savedRoute", `${label}.savedRoute`),
     savedRouteLabel: readString(record, "savedRouteLabel", `${label}.savedRouteLabel`),
+    savedRouteKind: decodeStudioUserLlmSavedRouteKind(
+      record.savedRouteKind,
+      `${label}.savedRouteKind`
+    ),
+    savedUserServiceId: readNullableString(
+      record,
+      "savedUserServiceId",
+      `${label}.savedUserServiceId`
+    ),
+    savedServiceSlug: readNullableString(
+      record,
+      "savedServiceSlug",
+      `${label}.savedServiceSlug`
+    ),
     effectiveRoute: readString(record, "effectiveRoute", `${label}.effectiveRoute`),
     effectiveRouteLabel: readString(record, "effectiveRouteLabel", `${label}.effectiveRouteLabel`),
     routeFallbackActive: readBoolean(record, "routeFallbackActive", `${label}.routeFallbackActive`),
@@ -402,8 +427,13 @@ function decodeStudioUserLlmSettings(
           status: readString(option, "status", `${resolvedOptionLabel}.status`),
           allowed: readBoolean(option, "allowed", `${resolvedOptionLabel}.allowed`),
           ready: readBoolean(option, "ready", `${resolvedOptionLabel}.ready`),
-          serviceId: readNullableString(option, "serviceId", `${resolvedOptionLabel}.serviceId`),
+          userServiceId: readNullableString(
+            option,
+            "userServiceId",
+            `${resolvedOptionLabel}.userServiceId`
+          ),
           serviceSlug: readNullableString(option, "serviceSlug", `${resolvedOptionLabel}.serviceSlug`),
+          defaultModel: readNullableString(option, "defaultModel", `${resolvedOptionLabel}.defaultModel`),
           description: readNullableString(option, "description", `${resolvedOptionLabel}.description`),
         };
       }
@@ -3326,27 +3356,31 @@ export const studioApi = {
     );
   },
 
-  getUserLlmSettings(): Promise<StudioUserLlmSettings> {
+  getUserLlmSettings(signal?: AbortSignal): Promise<StudioUserLlmSettings> {
     return requestDecodedJson(
       "/api/user-config/llm",
-      decodeStudioUserLlmSettings
+      decodeStudioUserLlmSettings,
+      signal ? { signal } : undefined,
     );
   },
 
   saveUserLlmSettings(input: {
-    routeValue: string;
+    userServiceId?: string | null;
+    routeValue?: string | null;
     model?: string | null;
   }): Promise<StudioUserConfigSaveReceipt> {
+    const userServiceId = trimOptional(input.userServiceId);
+    const routeValue = input.routeValue?.trim() ?? null;
+    const model = input.model?.trim() ?? "";
     return requestDecodedJson(
       "/api/user-config/llm",
       decodeStudioUserConfigSaveReceipt,
       {
         method: "PUT",
         headers: JSON_HEADERS,
-        body: JSON.stringify({
-          routeValue: input.routeValue.trim(),
-          model: input.model?.trim() ?? "",
-        }),
+        body: JSON.stringify(userServiceId
+          ? { userServiceId, model }
+          : { routeValue, model }),
       }
     );
   },

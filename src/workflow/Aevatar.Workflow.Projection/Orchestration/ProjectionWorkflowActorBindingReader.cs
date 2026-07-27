@@ -201,6 +201,8 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.StateVersion,
             document.LastEventId ?? string.Empty,
             document.CreatedAt,
-            document.UpdatedAt);
+            document.UpdatedAt,
+            document.SourceKind ?? string.Empty,
+            document.CapabilityAdmissionPlan?.Clone());
     }
 }

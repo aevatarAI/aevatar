@@ -148,6 +148,7 @@ message ChatTurnHistoryDeliveryState {
   string error_summary = 19;
   ChatTurnAppendRejectionReason append_rejection_reason = 20;
   bool create_conversation_if_missing = 21;
+  string request_fingerprint = 22;
 }
 
 message ChatTurnHistoryDeliveryReserveRequested {
@@ -160,6 +161,7 @@ message ChatTurnHistoryDeliveryReserveRequested {
   string workflow_command_id = 7;
   string workflow_correlation_id = 8;
   bool create_conversation_if_missing = 9;
+  string request_fingerprint = 10;
 }
 
 message ChatTurnHistoryDeliveryReservedEvent {
@@ -173,6 +175,7 @@ message ChatTurnHistoryDeliveryReservedEvent {
   string workflow_correlation_id = 8;
   int64 reserved_at_unix_ms = 9;
   bool create_conversation_if_missing = 10;
+  string request_fingerprint = 11;
 }
 
 message ChatTurnHistoryDeliveryAcceptedBound {

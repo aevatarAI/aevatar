@@ -1,6 +1,9 @@
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
+using Aevatar.AI.ToolProviders.Skills;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -10,13 +13,11 @@ namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 public sealed class ServiceCollectionExtensionsTests
 {
     [Fact]
-    public void AddSystemSkillOverlay_WhenEnabledWithSetName_OrnnProviderWinsOverDefaultRegisteredFirst()
+    public void AddSystemSkillOverlay_WhenEnabled_RegistersGlobalProviderWithoutReplacingFloor()
     {
-        // Mirror NyxidChat: the built-in default is registered first via TryAddSingleton, then the
-        // Ornn overlay via AddSingleton — the Ornn provider must win (issue #2498).
         var services = new ServiceCollection();
-        services.TryAddSingleton<ISystemSkillOverlayProvider>(new StubOverlayProvider());
-        services.TryAddSingleton<ISystemSkillOverlayFallback>(new StubOverlayProvider());
+        var floor = new StubFloorProvider();
+        services.AddSingleton<IBuiltInPromptFloorProvider>(floor);
 
         services.AddSystemSkillOverlay(o =>
         {
@@ -27,24 +28,25 @@ public sealed class ServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ISystemSkillOverlayProvider>()
             .Should().BeOfType<OrnnSystemSkillOverlayProvider>();
+        provider.GetRequiredService<IBuiltInPromptFloorProvider>().Should().BeSameAs(floor);
     }
 
     [Fact]
-    public void AddSystemSkillOverlay_WhenRegisteredBeforeDefault_StillWins()
+    public void AddSystemSkillOverlay_WhenFloorRegisteredLater_KeepsIndependentRegistrations()
     {
-        // Reverse order: Ornn first (AddSingleton), then the default TryAddSingleton is skipped — the
-        // Ornn provider must still win, so registration order does not matter.
         var services = new ServiceCollection();
         services.AddSystemSkillOverlay(o =>
         {
             o.Enabled = true;
             o.SetName = "aevatar-system";
         });
-        services.TryAddSingleton<ISystemSkillOverlayProvider>(new StubOverlayProvider());
+        services.AddSingleton<IBuiltInPromptFloorProvider, StubFloorProvider>();
 
         using var provider = services.BuildServiceProvider();
         provider.GetRequiredService<ISystemSkillOverlayProvider>()
             .Should().BeOfType<OrnnSystemSkillOverlayProvider>();
+        provider.GetRequiredService<IBuiltInPromptFloorProvider>()
+            .Should().BeOfType<StubFloorProvider>();
     }
 
     [Theory]
@@ -117,11 +119,30 @@ public sealed class ServiceCollectionExtensionsTests
             .Which.Should().BeSameAs(provider.GetRequiredService<OrnnAgentToolSource>());
     }
 
-    private sealed class StubOverlayProvider : ISystemSkillOverlayProvider, ISystemSkillOverlayFallback
+    [Fact]
+    public void AddOrnnSkills_ShouldRegisterOneExactFetcherWithoutReplacingOrdinaryFetcher()
     {
-        public Aevatar.AI.Abstractions.SystemSkillOverlay? GetCurrent(SystemSkillOverlayRequest request) => null;
+        var services = new ServiceCollection();
+        services.AddSingleton(new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example" },
+            new HttpClient(new NotFoundHttpMessageHandler())));
 
-        public Aevatar.AI.Abstractions.SystemSkillOverlay? GetFallback() => null;
+        services.AddOrnnSkills();
+        services.AddOrnnSkills();
+
+        using var provider = services.BuildServiceProvider();
+        var exactFetchers = provider.GetServices<IExactRemoteSkillFetcher>().ToArray();
+
+        exactFetchers.Should().ContainSingle()
+            .Which.Should().BeSameAs(provider.GetRequiredService<OrnnExactRemoteSkillFetcher>());
+        provider.GetRequiredService<IRemoteSkillFetcher>()
+            .Should().BeOfType<OrnnRemoteSkillFetcher>();
+    }
+
+    private sealed class StubFloorProvider : IBuiltInPromptFloorProvider
+    {
+        public BuiltInPromptFloorLayer GetFloor() =>
+            new("floor", new BuiltInPromptFloorProvenance("test-floor"));
     }
 
     private sealed class NotFoundHttpMessageHandler : HttpMessageHandler

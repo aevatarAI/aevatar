@@ -71,7 +71,7 @@ public sealed class SlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task Init_OffersServiceReview_ForBoundSender()
+    public async Task Init_OffersServiceAuthorizationRenewal_ForBoundSender()
     {
         var broker = new InMemoryCapabilityBroker();
         broker.SeedBinding(Subject(), new BindingId { Value = "bnd_existing" });
@@ -82,8 +82,9 @@ public sealed class SlashCommandHandlerTests
         reply.Should().NotBeNull();
         reply!.Actions.Should().ContainSingle(action =>
             action.Kind == ActionElementKind.Link &&
-            action.Label == "查看服务授权");
-        reply.Text.Should().Contain("查看或更新");
+            action.Label == "更新服务授权");
+        reply.Text.Should().Contain("重新确认并更新");
+        reply.Text.Should().NotContain("查看当前已授权服务");
         reply.Text.Should().NotContain("/unbind");
     }
 

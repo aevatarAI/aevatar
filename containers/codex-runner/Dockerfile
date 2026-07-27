@@ -4,11 +4,11 @@ ARG NODE_IMAGE=docker.io/library/node:22-bookworm-slim@sha256:6c74791e557ce11fc9
 FROM ${NODE_IMAGE}
 
 ARG CODEX_VERSION=0.144.5
-ARG RUNNER_VERSION=0.144.5-r2
+ARG RUNNER_VERSION=0.144.5-gvisor
 ARG REVISION=unknown
 
 LABEL org.opencontainers.image.title="Aevatar Codex runner" \
-      org.opencontainers.image.description="One-shot non-root Codex CLI runner for managed codex_exec" \
+      org.opencontainers.image.description="One-shot non-root Codex CLI runner for managed codex_exec on a gVisor runtime" \
       org.opencontainers.image.source="https://github.com/aevatarAI/aevatar" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.version="${RUNNER_VERSION}" \
@@ -21,7 +21,6 @@ ENV NPM_CONFIG_UPDATE_NOTIFIER=false \
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
         bash \
-        bubblewrap \
         ca-certificates \
         git \
         tini \
@@ -32,13 +31,17 @@ RUN apt-get update \
     && useradd --uid 10001 --gid codex --create-home --shell /bin/bash codex \
     && install --directory --owner codex --group codex --mode 0700 /home/codex/.codex \
     && install --directory --owner codex --group codex --mode 0750 \
-        /opt/aevatar-sandbox-probe \
         /workspace \
         /workspace/.aevatar
 
+# gVisor variant: Codex runs no inner sandbox (gVisor is the isolation
+# boundary), so bubblewrap is not installed and use_legacy_landlock is not
+# used. There is no Credential-Proxy MITM under gVisor, so SSL_CERT_FILE is not
+# set — the runner reaches the NyxID gateway directly with the system CA
+# bundle. /opt/aevatar-sandbox-probe existed only for the Landlock preflight
+# and is dropped.
 ENV HOME=/home/codex \
-    CODEX_HOME=/home/codex/.codex \
-    SSL_CERT_FILE=/opt/opensandbox/mitmproxy-ca-cert.pem
+    CODEX_HOME=/home/codex/.codex
 
 WORKDIR /workspace
 USER codex:codex

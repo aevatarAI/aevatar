@@ -36,6 +36,8 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             chatRequest.ExternalIngress = ToProto(command.ExternalIngress);
         if (command.CompletionNotificationTarget != null)
             chatRequest.CompletionNotificationTarget = ToProto(command.CompletionNotificationTarget);
+        if (command.ConversationContext != null)
+            chatRequest.ConversationContext = ToProto(command.ConversationContext);
 
         var envelope = new EventEnvelope
         {
@@ -167,6 +169,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 Tenant = Normalize(authority.Tenant),
                 ExternalUserId = externalUserId,
                 Scope = scope,
+                BindingId = Normalize(authority.BindingId),
             };
         }
 
@@ -222,6 +225,37 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             AuthScheme = Normalize(source.AuthScheme),
             PrincipalSubject = Normalize(source.PrincipalSubject),
         };
+    }
+
+    private static Aevatar.Workflow.Abstractions.WorkflowConversationContext ToProto(
+        WorkflowConversationExecutionContext source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var payload = new Aevatar.Workflow.Abstractions.WorkflowConversationContext
+        {
+            ScopeId = Normalize(source.ScopeId),
+            ConversationId = Normalize(source.ConversationId),
+            StateVersion = Math.Max(0, source.StateVersion),
+            Truncated = source.Truncated,
+            MaxMessageCount = Math.Max(0, source.MaxMessageCount),
+        };
+        payload.Messages.Add(source.Messages
+            .Where(static message => !string.IsNullOrWhiteSpace(message.Content))
+            .Select(static message => new Aevatar.Workflow.Abstractions.WorkflowConversationMessage
+            {
+                Sequence = Math.Max(0, message.Sequence),
+                TurnId = Normalize(message.TurnId),
+                Role = message.Role switch
+                {
+                    WorkflowConversationExecutionRole.User => Aevatar.Workflow.Abstractions.WorkflowConversationRole.User,
+                    WorkflowConversationExecutionRole.Assistant => Aevatar.Workflow.Abstractions.WorkflowConversationRole.Assistant,
+                    WorkflowConversationExecutionRole.Tool => Aevatar.Workflow.Abstractions.WorkflowConversationRole.Tool,
+                    _ => Aevatar.Workflow.Abstractions.WorkflowConversationRole.Unspecified,
+                },
+                Content = message.Content.Trim(),
+            }));
+        return payload;
     }
 
     private static void AppendMetadata(

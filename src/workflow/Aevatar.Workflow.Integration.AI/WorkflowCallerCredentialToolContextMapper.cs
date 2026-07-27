@@ -27,6 +27,12 @@ internal static class WorkflowCallerCredentialToolContextMapper
                     Normalize(credential.NyxIdAuthority.Platform),
                     Normalize(credential.NyxIdAuthority.Tenant),
                     Normalize(credential.NyxIdAuthority.ExternalUserId)),
+            SenderBinding = credential?.NyxIdAuthority == null
+                ? AgentToolSenderBindingContext.Empty
+                : new AgentToolSenderBindingContext(
+                    Normalize(credential.NyxIdAuthority.BindingId),
+                    Normalize(credential.NyxIdAuthority.ExternalUserId),
+                    Normalize(credential.NyxIdAuthority.Tenant)),
         };
 
         if (token.IsMissing)
@@ -38,6 +44,7 @@ internal static class WorkflowCallerCredentialToolContextMapper
             {
                 NyxIdAccessToken = token.NormalizedBearerToken,
                 NyxIdOrgToken = token.NormalizedBearerToken,
+                SenderNyxIdAccessToken = token.NormalizedBearerToken,
             },
         };
     }

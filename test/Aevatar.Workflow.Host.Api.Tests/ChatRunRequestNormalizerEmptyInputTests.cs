@@ -53,6 +53,35 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
     }
 
     [Fact]
+    public void NormalizeHttp_ShouldAllowEmptyResolvedMemberInputAndPreserveCallerCommandId()
+    {
+        var result = ChatRunRequestNormalizer.Normalize(
+            BuildEmptyResolvedMemberHttpInput(),
+            allowEmptyInputForResolvedMemberWorkflow: true);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Prompt.Should().BeEmpty();
+        result.Request.CommandIdSeed.Should().Be("caller-command-1");
+        result.Request.Source.DefinitionActorSource.Should()
+            .Be(new WorkflowChatDefinitionActorSource("actor-bound-member", "status-report"));
+    }
+
+    [Fact]
+    public async Task NormalizeHttpAsync_ShouldAllowEmptyResolvedMemberInputAndPreserveCallerCommandId()
+    {
+        var result = await ChatRunRequestNormalizer.NormalizeAsync(
+            BuildEmptyResolvedMemberHttpInput(),
+            fileIngressPort: null,
+            allowEmptyInputForResolvedMemberWorkflow: true);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Prompt.Should().BeEmpty();
+        result.Request.CommandIdSeed.Should().Be("caller-command-1");
+        result.Request.Source.DefinitionActorSource.Should()
+            .Be(new WorkflowChatDefinitionActorSource("actor-bound-member", "status-report"));
+    }
+
+    [Fact]
     public void Normalize_ShouldRejectEmptyInputForTypedCatalogWorkflowSource()
     {
         var result = ChatRunRequestNormalizer.Normalize(new ChatInput
@@ -71,4 +100,20 @@ public sealed class ChatRunRequestNormalizerEmptyInputTests
         result.Succeeded.Should().BeFalse();
         result.Error.Should().Be(WorkflowChatRunStartError.PromptRequired);
     }
+
+    private static HttpChatInput BuildEmptyResolvedMemberHttpInput() =>
+        new()
+        {
+            Prompt = "   ",
+            CommandId = " caller-command-1 ",
+            Source = new WorkflowChatSourceInput
+            {
+                Kind = "definition_actor",
+                DefinitionActor = new WorkflowChatDefinitionActorSourceInput
+                {
+                    ActorId = " actor-bound-member ",
+                    WorkflowName = " status-report ",
+                },
+            },
+        };
 }

@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Infrastructure.Activation;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 
@@ -44,6 +45,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         var runtime = new RecordingActorRuntime();
         runtime.MarkExisting("workflow-definition-1:deployment-actor:r1");
         var workflowPort = new RecordingWorkflowRunActorPort();
+        var identity = GAgentServiceTestKit.CreateIdentity();
         var activator = new DefaultServiceRuntimeActivator(
             runtime,
             new RecordingScriptDefinitionSnapshotPort(),
@@ -67,7 +69,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
 
         var result = await activator.ActivateAsync(
             new ServiceRuntimeActivationRequest(
-                GAgentServiceTestKit.CreateIdentity(),
+                identity,
                 artifact,
                 "r1",
                 "deployment-actor"));
@@ -76,6 +78,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
         workflowPort.BindCalls.Should().ContainSingle();
         workflowPort.ExplicitBindCalls.Should().BeEmpty();
         workflowPort.CreateDefinitionCalls.Should().ContainSingle("workflow-definition-1:deployment-actor:r1");
+        workflowPort.DefinitionBindings.Should().ContainSingle()
+            .Which.ScopeId.Should().Be(identity.TenantId);
     }
 
     [Fact]
@@ -219,6 +223,12 @@ public sealed class DefaultServiceRuntimeActivatorTests
             new RecordingScriptDefinitionSnapshotPort(),
             new RecordingScriptRuntimeProvisioningPort(),
             workflowPort);
+        var capabilityAdmissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: workflow",
+            new Dictionary<string, string> { ["child"] = "name: child" },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
         var artifact = new PreparedServiceRevisionArtifact
         {
             Identity = GAgentServiceTestKit.CreateIdentity(),
@@ -235,6 +245,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
                     {
                         ["child"] = "name: child",
                     },
+                    CapabilityAdmissionPlan = capabilityAdmissionPlan,
                 },
             },
         };
@@ -249,6 +260,9 @@ public sealed class DefaultServiceRuntimeActivatorTests
         workflowPort.BindCalls.Should().ContainSingle();
         workflowPort.BindCalls[0].inlineWorkflowYamls.Should().ContainKey("child");
         workflowPort.BindCalls[0].inlineWorkflowYamls["child"].Should().Be("name: child");
+        workflowPort.DefinitionBindings.Should().ContainSingle();
+        workflowPort.DefinitionBindings[0].CapabilityAdmissionPlan!.AdmissionDigest.Should()
+            .Be(capabilityAdmissionPlan.AdmissionDigest);
         workflowPort.ExplicitBindCalls.Should().BeEmpty();
     }
 
@@ -468,12 +482,14 @@ public sealed class DefaultServiceRuntimeActivatorTests
         public List<string?> CreateDefinitionCalls { get; } = [];
         public List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> BindCalls { get; } = [];
         public List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> ExplicitBindCalls { get; } = [];
+        public List<WorkflowDefinitionBinding> DefinitionBindings { get; } = [];
 
         public Task<WorkflowDefinitionProvisioningReceipt> EnsureDefinitionAsync(
             WorkflowDefinitionBinding definition,
             string? preferredActorId = null,
             CancellationToken ct = default)
         {
+            DefinitionBindings.Add(definition);
             CreateDefinitionCalls.Add(preferredActorId);
             RecordBind(
                 preferredActorId ?? definition.DefinitionActorId,
@@ -500,6 +516,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
             string? scopeId = null,
+            string? sourceKind = null,
+            WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
             CancellationToken ct = default)
         {
             RecordBind(actorId, workflowYaml, workflowName, inlineWorkflowYamls, ExplicitBindCalls);

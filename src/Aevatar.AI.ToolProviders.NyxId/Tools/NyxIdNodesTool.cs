@@ -5,7 +5,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to manage NyxID on-premise node agents.</summary>
-public sealed class NyxIdNodesTool : IAgentTool, IAgentToolCapabilityDescriptor
+public sealed class NyxIdNodesTool : INyxIdBuiltInTool, IAgentToolCapabilityDescriptor
 {
     public IReadOnlyCollection<string> Capabilities => NyxIdToolSurfaces.HumanSessionOnly;
 

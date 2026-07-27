@@ -30,6 +30,15 @@ public sealed class NyxIdCodexExecToolTests
         tool.ParametersSchema.Should().Contain("\"empty_git\"");
         tool.ParametersSchema.Should().Contain("\"prompt\"");
         tool.ParametersSchema.Should().NotContain("\"model\"");
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("properties")
+            .EnumerateObject()
+            .Select(static property => property.Name)
+            .Should()
+            .Equal("target", "workspace", "prompt", "timeout_secs");
+        tool.ParametersSchema.Should()
+            .NotContain("\"credential\"")
+            .And.NotContain("\"provision\"");
     }
 
     [Fact]

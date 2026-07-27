@@ -515,7 +515,8 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
                 eventStore,
                 new ToolCallWorkflowIntentLlmProvider(),
-                "workflow-role-agent-tools");
+                "workflow-role-agent-tools",
+                [new SuccessfulWorkflowTool("lookup")]);
 
             await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
             {
@@ -623,7 +624,8 @@ public sealed class WorkflowRoleGAgentInteractionTests : WorkflowGAgentTestBase
             var (agent, _) = await CreateActivatedWorkflowRoleAgentAsync(
                 eventStore,
                 new ContentPartAndAnonymousToolWorkflowIntentLlmProvider(),
-                "workflow-role-agent-parts");
+                "workflow-role-agent-parts",
+                [new SuccessfulWorkflowTool("search")]);
 
             await agent.HandleWorkflowLlmExecutionIntent(new WorkflowLlmExecutionIntent
             {

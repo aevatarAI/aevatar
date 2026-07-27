@@ -26,7 +26,10 @@ public partial class NyxIdChatEndpointsCoverageTests
             firstContext,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("first prompt", SessionId: "legacy-conversation-session"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+                "first prompt",
+                SessionId: "legacy-conversation-session",
+                Type: "text"),
             new StubGAgentActorStore(),
             interactionService,
             NullLoggerFactory.Instance,
@@ -36,7 +39,10 @@ public partial class NyxIdChatEndpointsCoverageTests
             secondContext,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("second prompt", SessionId: "legacy-conversation-session"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest(
+                "second prompt",
+                SessionId: "legacy-conversation-session",
+                Type: "text"),
             new StubGAgentActorStore(),
             interactionService,
             NullLoggerFactory.Instance,
@@ -75,7 +81,8 @@ public partial class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdChatStreamRequest(
                 "same prompt",
                 SessionId: "ignored-legacy-a",
-                ClientRequestId: "client-request-1"),
+                ClientRequestId: "client-request-1",
+                Type: "text"),
             new StubGAgentActorStore(),
             interactionService,
             NullLoggerFactory.Instance,
@@ -88,7 +95,8 @@ public partial class NyxIdChatEndpointsCoverageTests
             new NyxIdChatEndpoints.NyxIdChatStreamRequest(
                 "same prompt",
                 SessionId: "ignored-legacy-b",
-                ClientRequestId: "client-request-1"),
+                ClientRequestId: "client-request-1",
+                Type: "text"),
             new StubGAgentActorStore(),
             interactionService,
             NullLoggerFactory.Instance,
@@ -98,6 +106,10 @@ public partial class NyxIdChatEndpointsCoverageTests
         commands.Should().HaveCount(2);
         commands[0].TurnId.Should().Be(commands[1].TurnId);
         commands[0].TurnId.Should().StartWith("turn-");
+        var firstBody = await ReadResponseBodyAsync(firstContext);
+        var secondBody = await ReadResponseBodyAsync(secondContext);
+        firstBody.Should().Contain("RUN_FINISHED").And.Contain(commands[0].TurnId);
+        secondBody.Should().Contain("RUN_FINISHED").And.Contain(commands[1].TurnId);
     }
 
     [Fact]
@@ -122,7 +134,7 @@ public partial class NyxIdChatEndpointsCoverageTests
                 context,
                 "scope-a",
                 "actor-1",
-                new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+                new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
                 new StubGAgentActorStore(),
                 interactionService,
                 NullLoggerFactory.Instance,
@@ -132,10 +144,15 @@ public partial class NyxIdChatEndpointsCoverageTests
             var command = interactionService.Commands.Should().ContainSingle().Which;
             var body = bodyStream.GetText();
             var frames = ParseSseFrames(body);
-            frames.Select(frame => frame.GetProperty("type").GetString()).Should().Equal(
-                "RUN_STARTED",
-                "CUSTOM",
-                "RUN_ERROR");
+            var frameTypes = frames.Select(frame => frame.GetProperty("type").GetString()).ToArray();
+            frameTypes[0].Should().Be("RUN_STARTED");
+            frameTypes[^1].Should().Be("RUN_ERROR");
+            frameTypes.Skip(1).SkipLast(1).Should().OnlyContain(type => type == "CUSTOM");
+            frames.Skip(1).SkipLast(1)
+                .Select(frame => frame.GetProperty("custom").GetProperty("name").GetString())
+                .Should()
+                .NotBeEmpty()
+                .And.OnlyContain(name => name == "aevatar.nyxid_chat.keepalive");
             var terminal = frames[^1];
             terminal.GetProperty("turnId").GetString().Should().Be(command.TurnId);
             terminal.GetProperty("runError").GetProperty("runId").GetString().Should().Be(command.TurnId);
@@ -167,7 +184,7 @@ public partial class NyxIdChatEndpointsCoverageTests
             context,
             "scope-a",
             "actor-1",
-            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
             new StubGAgentActorStore(),
             interactionService,
             NullLoggerFactory.Instance,
@@ -204,7 +221,7 @@ public partial class NyxIdChatEndpointsCoverageTests
                     context,
                     "scope-a",
                     "actor-1",
-                    new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+                    new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello", Type: "text"),
                     new StubGAgentActorStore(),
                     interactionService,
                     NullLoggerFactory.Instance,

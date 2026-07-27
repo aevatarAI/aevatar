@@ -7,13 +7,15 @@ public sealed record WorkflowChatHistoryTerminalDeliveryReservationRequest(
     string UserText,
     string WorkflowActorId,
     string WorkflowCommandId,
-    string WorkflowCorrelationId);
+    string WorkflowCorrelationId,
+    string RequestFingerprint = "");
 
 public sealed record WorkflowChatHistoryTerminalDeliveryReservation(
     string DeliveryActorId,
     string DeliveryId,
     string WorkflowActorId,
-    string WorkflowCommandId);
+    string WorkflowCommandId,
+    bool ExistingReservation = false);
 
 public enum WorkflowChatHistoryTerminalDeliveryReservationFailure
 {
@@ -25,6 +27,7 @@ public enum WorkflowChatHistoryTerminalDeliveryReservationFailure
 public sealed record WorkflowChatHistoryTerminalDeliveryReservationResult(
     WorkflowChatHistoryTerminalDeliveryReservation? Reservation,
     WorkflowChatContext? ChatContext,
+    WorkflowConversationExecutionContext? ConversationContext,
     WorkflowChatHistoryTerminalDeliveryReservationFailure Failure)
 {
     public bool Succeeded =>
@@ -34,14 +37,15 @@ public sealed record WorkflowChatHistoryTerminalDeliveryReservationResult(
 
     public static WorkflowChatHistoryTerminalDeliveryReservationResult Success(
         WorkflowChatHistoryTerminalDeliveryReservation reservation,
-        WorkflowChatContext chatContext) =>
-        new(reservation, chatContext, WorkflowChatHistoryTerminalDeliveryReservationFailure.None);
+        WorkflowChatContext chatContext,
+        WorkflowConversationExecutionContext? conversationContext = null) =>
+        new(reservation, chatContext, conversationContext, WorkflowChatHistoryTerminalDeliveryReservationFailure.None);
 
     public static WorkflowChatHistoryTerminalDeliveryReservationResult NotFound() =>
-        new(null, null, WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
+        new(null, null, null, WorkflowChatHistoryTerminalDeliveryReservationFailure.ConversationNotFound);
 
     public static WorkflowChatHistoryTerminalDeliveryReservationResult Unavailable() =>
-        new(null, null, WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
+        new(null, null, null, WorkflowChatHistoryTerminalDeliveryReservationFailure.Unavailable);
 }
 
 public interface IWorkflowChatHistoryTerminalDeliveryPort

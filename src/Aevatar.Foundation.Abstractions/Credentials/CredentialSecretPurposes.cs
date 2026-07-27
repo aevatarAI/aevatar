@@ -12,4 +12,5 @@ public static class CredentialSecretPurposes
     public const string DeviceHmacSigningKey = "device.hmac-signing-key";
     public const string OAuthStateTokenHmacKey = "identity.oauth-state-token-hmac-key";
     public const string ChannelWorkflowResultDeliveryAgentKey = "channel.workflow-result-delivery-agent-key";
+    public const string ManagedCodexInvocationAgentKey = "managed.codex-invocation-agent-key";
 }
