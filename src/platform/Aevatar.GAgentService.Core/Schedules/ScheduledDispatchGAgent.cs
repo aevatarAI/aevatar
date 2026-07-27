@@ -50,6 +50,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        if (State.Deleted)
+        {
+            await PurgeDurableCallbacksAsync(ct);
+            return;
+        }
+
         await RecoverTeamCredentialExpiryAsync(ct);
         if (CanScheduleAutomaticFire())
         {
@@ -378,12 +384,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 command.AuthenticatedCredentialOwner,
                 State.TeamCredentialEffectLocator?.CredentialOwner);
             var healingPartialDelete = !State.Deleted;
-            var partialDeletePreviousLease =
-                ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
-                    State.NextFireLease);
-            var partialDeletePreviousCredentialExpiryLease =
-                ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(
-                    State.TeamCredentialExpiryLease);
             if (healingPartialDelete)
             {
                 await PersistDomainEventAsync(new ScheduledDispatchDeletedEvent
@@ -392,21 +392,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                     DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
                 });
             }
+            await PurgeDurableCallbacksAsync(CancellationToken.None);
             await PersistTeamAutomationObservationAsync(
                 TeamAutomationOperationObservationStages.Delete,
                 State.PendingRevocationTeamCredential != null &&
                 CanClaimTeamAutomationEffectAttempt(_timeProvider.GetUtcNow()),
                 CancellationToken.None,
                 observationRequestId: command.ObservationRequestId);
-            if (healingPartialDelete)
-            {
-                await CancelNextFireLeaseAsync(
-                    partialDeletePreviousLease,
-                    CancellationToken.None);
-                await CancelTeamCredentialExpiryLeaseAsync(
-                    partialDeletePreviousCredentialExpiryLease,
-                    CancellationToken.None);
-            }
             return;
         }
 
@@ -425,9 +417,6 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
         EnsureConfiguredForWrite("delete");
         EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "delete");
-        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
-        var previousCredentialExpiryLease =
-            ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.TeamCredentialExpiryLease);
         var deletionEvents = new List<IMessage>();
         var deletedAt = DateTimeOffset.UtcNow;
         if (HasTeamCredentialLifecycle())
@@ -455,15 +444,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             DeletedAt = Timestamp.FromDateTimeOffset(deletedAt),
         });
         await PersistDomainEventsAsync(deletionEvents);
+        await PurgeDurableCallbacksAsync(CancellationToken.None);
         await PersistTeamAutomationObservationAsync(
             TeamAutomationOperationObservationStages.Delete,
             State.PendingRevocationTeamCredential != null,
             CancellationToken.None,
             observationRequestId: command.ObservationRequestId);
-        await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
-        await CancelTeamCredentialExpiryLeaseAsync(
-            previousCredentialExpiryLease,
-            CancellationToken.None);
     }
 
     [EventHandler]
