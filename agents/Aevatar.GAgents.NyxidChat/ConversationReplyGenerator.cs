@@ -15,6 +15,7 @@ using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using UglyToad.PdfPig;
 using LlmChatFileRef = Aevatar.AI.Abstractions.LLMProviders.ChatFileRef;
 using LlmChatFileSourceKind = Aevatar.AI.Abstractions.LLMProviders.ChatFileSourceKind;
 using FileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
@@ -36,6 +37,8 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private const int MaxWorkingSetMessages = 200;
     private const int MaxAttachmentMaterializationBytes = 10 * 1024 * 1024;
     private const int MaxInlineImageBytes = 10 * 1024 * 1024;
+    private const int MaxInlineDocumentBytes = 10 * 1024 * 1024;
+    private const int MaxInlineDocumentTextChars = 20_000;
 
     // Appended to the system prompt when the unbound-sender gate detaches the tool
     // surface for a channel turn. The kernel prompt documents the deployment's tools
@@ -573,16 +576,6 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         if (attachments.Length == 0)
             return new UserInputParts(text, parts);
 
-        if (!provider.Capabilities.SupportsInput(ContentPartKind.Image))
-        {
-            return new UserInputParts(
-                text,
-                parts,
-                BuildAttachmentVisibilityInstruction(
-                    CountAttachments(attachments),
-                    "the selected LLM route does not support image input"));
-        }
-
         if (_larkClient is null && _larkOutboundClientFactory is null)
         {
             return new UserInputParts(
@@ -606,6 +599,7 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         }
 
         var unseenCount = 0;
+        var imageInputUnsupportedCount = 0;
         foreach (var source in attachments)
         {
             if (!IsLarkActivity(source.Activity))
@@ -634,16 +628,48 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
             foreach (var attachment in source.Attachments)
             {
+                if (IsLarkPdfInputAttachment(attachment))
+                {
+                    if (await TryAddLarkPdfTextPartAsync(
+                            parts,
+                            larkClient,
+                            token,
+                            providerSlug,
+                            messageId,
+                            attachment,
+                            ct).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
+                    unseenCount++;
+                    continue;
+                }
+
                 if (!IsLarkImageInputAttachment(attachment))
                 {
                     _logger.LogDebug(
-                        "Skipping non-image Lark attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
+                        "Skipping unsupported Lark attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
                         providerSlug,
                         messageId,
                         attachment.Kind,
                         attachment.ContentType,
                         attachment.Name);
                     unseenCount++;
+                    continue;
+                }
+
+                if (!provider.Capabilities.SupportsInput(ContentPartKind.Image))
+                {
+                    _logger.LogDebug(
+                        "Skipping Lark image attachment because selected LLM route does not support image input: provider={ProviderSlug} messageId={MessageId} attachmentKind={AttachmentKind} contentType={ContentType} name={Name}",
+                        providerSlug,
+                        messageId,
+                        attachment.Kind,
+                        attachment.ContentType,
+                        attachment.Name);
+                    unseenCount++;
+                    imageInputUnsupportedCount++;
                     continue;
                 }
 
@@ -796,10 +822,11 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             }
         }
 
+        var unseenReason = unseenCount > 0 && unseenCount == imageInputUnsupportedCount
+            ? "selected LLM route does not support image input"
+            : "one or more attachments could not be converted to LLM input";
         var instruction = unseenCount > 0
-            ? BuildAttachmentVisibilityInstruction(
-                unseenCount,
-                "one or more attachments could not be converted to LLM image input")
+            ? BuildAttachmentVisibilityInstruction(unseenCount, unseenReason)
             : null;
 
         return new UserInputParts(text, parts, instruction);
@@ -813,6 +840,126 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         var materialized = await MaterializeFileRefPartsAsync(input.Parts, _fileArtifactReadPort, ct)
             .ConfigureAwait(false);
         return input with { Parts = materialized };
+    }
+
+    private async Task<bool> TryAddLarkPdfTextPartAsync(
+        List<ContentPart> parts,
+        ILarkNyxClient larkClient,
+        string token,
+        string? providerSlug,
+        string messageId,
+        AttachmentRef attachment,
+        CancellationToken ct)
+    {
+        if (attachment.SizeBytes > MaxInlineDocumentBytes)
+        {
+            _logger.LogWarning(
+                "Skipping oversized Lark PDF attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name} sizeBytes={SizeBytes} maxBytes={MaxBytes}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name,
+                attachment.SizeBytes,
+                MaxInlineDocumentBytes);
+            return false;
+        }
+
+        var resourceKey = NormalizeOptional(attachment.AttachmentId);
+        if (resourceKey is null)
+        {
+            _logger.LogWarning(
+                "Skipping Lark PDF attachment without resource key for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name);
+            return false;
+        }
+
+        LarkMessageResourceDownloadResult downloaded;
+        try
+        {
+            downloaded = await larkClient.DownloadMessageResourceAsync(
+                    token,
+                    new LarkMessageResourceDownloadRequest(
+                        messageId,
+                        resourceKey,
+                        LarkMessageResourceKind.File),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to download Lark PDF attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} contentType={ContentType} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                attachment.ContentType,
+                attachment.Name);
+            return false;
+        }
+
+        var mediaType = ResolveDownloadedPdfMediaType(
+            downloaded.ContentType,
+            attachment.ContentType,
+            downloaded.FileName,
+            attachment.Name);
+        if (!downloaded.Succeeded ||
+            downloaded.Content.Length == 0 ||
+            downloaded.Content.Length > MaxInlineDocumentBytes ||
+            mediaType is null)
+        {
+            _logger.LogWarning(
+                "Lark PDF attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} contentType={ContentType} downloadedContentType={DownloadedContentType} name={Name} downloadedName={DownloadedName} status={Status} detail={Detail}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                attachment.ContentType,
+                downloaded.ContentType,
+                attachment.Name,
+                downloaded.FileName,
+                downloaded.HttpStatus,
+                downloaded.Detail);
+            return false;
+        }
+
+        string extractedText;
+        try
+        {
+            extractedText = ExtractPdfText(downloaded.Content, MaxInlineDocumentTextChars);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to extract Lark PDF attachment text for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name));
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(extractedText))
+        {
+            _logger.LogWarning(
+                "Lark PDF attachment produced no extractable text for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name));
+            return false;
+        }
+
+        var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name) ?? "attachment.pdf";
+        parts.Add(ContentPart.TextPart($"PDF attachment '{fileName}' extracted text:\n{extractedText}"));
+        return true;
     }
 
     internal static async Task<IReadOnlyList<ContentPart>> MaterializeFileRefPartsAsync(
@@ -1027,6 +1174,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         attachment.Kind == AttachmentKind.Image ||
         attachment.Kind == AttachmentKind.File && ResolveImageMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
 
+    private static bool IsLarkPdfInputAttachment(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.File && ResolvePdfMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
+
     private static LarkMessageResourceKind ToLarkMessageResourceKind(AttachmentRef attachment) =>
         attachment.Kind == AttachmentKind.Image
             ? LarkMessageResourceKind.Image
@@ -1037,6 +1187,19 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private static string NormalizeImageMediaType(string? mediaType) =>
         ResolveImageMediaType(mediaType) ?? "image/png";
+
+    private static string? ResolveDownloadedPdfMediaType(
+        string? mediaType,
+        string? fallbackMediaType,
+        string? fileName,
+        string? fallbackFileName)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        if (normalized is not null && normalized is not "application/octet-stream" and not "binary/octet-stream")
+            return ResolvePdfMediaType(normalized);
+
+        return ResolvePdfMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
+    }
 
     private static string? ResolveDownloadedImageMediaType(
         string? mediaType,
@@ -1049,6 +1212,27 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
             return ResolveImageMediaType(normalized);
 
         return ResolveImageMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
+    }
+
+    private static string? ResolvePdfMediaType(
+        string? mediaType,
+        string? fallbackMediaType = null,
+        string? fileName = null,
+        string? fallbackFileName = null)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        var resolved = normalized == "application/pdf" ? normalized : null;
+        if (resolved is not null)
+            return resolved;
+
+        if (fallbackMediaType is not null)
+            resolved = ResolvePdfMediaType(fallbackMediaType);
+        if (resolved is not null)
+            return resolved;
+
+        return HasFileExtension(fileName, ".pdf") || HasFileExtension(fallbackFileName, ".pdf")
+            ? "application/pdf"
+            : null;
     }
 
     private static string? ResolveImageMediaType(
@@ -1078,21 +1262,48 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
 
     private static string? ResolveImageMediaTypeFromFileName(string? fileName)
     {
-        var normalized = NormalizeOptional(fileName)?.ToLowerInvariant();
-        if (normalized is null)
-            return null;
-
-        if (normalized.EndsWith(".jpg", StringComparison.Ordinal) ||
-            normalized.EndsWith(".jpeg", StringComparison.Ordinal))
+        if (HasFileExtension(fileName, ".jpg") ||
+            HasFileExtension(fileName, ".jpeg"))
             return "image/jpeg";
-        if (normalized.EndsWith(".png", StringComparison.Ordinal))
+        if (HasFileExtension(fileName, ".png"))
             return "image/png";
-        if (normalized.EndsWith(".webp", StringComparison.Ordinal))
+        if (HasFileExtension(fileName, ".webp"))
             return "image/webp";
-        if (normalized.EndsWith(".gif", StringComparison.Ordinal))
+        if (HasFileExtension(fileName, ".gif"))
             return "image/gif";
 
         return null;
+    }
+
+    private static bool HasFileExtension(string? fileName, string extension)
+    {
+        var normalized = NormalizeOptional(fileName)?.ToLowerInvariant();
+        return normalized?.EndsWith(extension, StringComparison.Ordinal) == true;
+    }
+
+    private static string ExtractPdfText(byte[] content, int maxChars)
+    {
+        using var document = PdfDocument.Open(content);
+        var builder = new StringBuilder(Math.Min(maxChars, 4096));
+        foreach (var page in document.GetPages())
+        {
+            AppendCapped(builder, page.Text, maxChars);
+            if (builder.Length >= maxChars)
+                break;
+
+            AppendCapped(builder, "\n", maxChars);
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private static void AppendCapped(StringBuilder builder, string? value, int maxChars)
+    {
+        if (string.IsNullOrEmpty(value) || builder.Length >= maxChars)
+            return;
+
+        var remaining = maxChars - builder.Length;
+        builder.Append(value.Length <= remaining ? value : value[..remaining]);
     }
 
     private static string? NormalizeOptional(string? value) =>
