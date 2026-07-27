@@ -433,7 +433,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 owner,
                 operationId,
                 idempotencyKey,
-                "studio_team_automation_delete",
+                NormalizeOptional(command.Reason) ??
+                    "studio_team_automation_delete",
                 ToAuthorizationOwner(authenticatedOwner),
                 ct);
             await ExecutePendingRevocationAsync(

@@ -101,6 +101,8 @@ public sealed record StudioMemberAutomationActionCommand(
     string OperationId,
     string IdempotencyKey)
 {
+    public string? Reason { get; init; }
+
     public string? ProvisioningBearerToken { get; init; }
 
     public AuthenticatedAuthorizationOwnerContext? AuthenticatedOwner { get; init; }
