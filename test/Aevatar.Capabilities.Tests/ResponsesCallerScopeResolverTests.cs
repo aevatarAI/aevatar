@@ -3,7 +3,9 @@ using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Scheduled;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Application.Responses;
@@ -101,6 +103,11 @@ public sealed class ResponsesCallerScopeResolverTests
         scope.ScopeId.Should().Be("alice-1");
         scope.OwnerSubject.Should().Be("alice-1");
         scope.OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
+        scope.NyxIdAuthority.Should().BeEquivalentTo(
+            new AgentToolNyxIdAuthorityContext(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                "alice-1"));
     }
 
     [Fact]
@@ -118,6 +125,11 @@ public sealed class ResponsesCallerScopeResolverTests
         scope.ScopeId.Should().Be("identity-user");
         scope.OwnerSubject.Should().Be("identity-user");
         scope.OriginKind.Should().Be(LlmSessionOriginKind.ApiKey);
+        scope.NyxIdAuthority.Should().BeEquivalentTo(
+            new AgentToolNyxIdAuthorityContext(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                "identity-user"));
         currentUserResolver.CallCount.Should().Be(0);
     }
 
@@ -417,6 +429,11 @@ public sealed class ResponsesCallerScopeResolverTests
         var scope = await resolver.ResolveAsync(CreateContext("bearer-token", delegationToken: "delegation-token"));
 
         scope.ScopeId.Should().Be("fallback-user");
+        scope.NyxIdAuthority.Should().BeEquivalentTo(
+            new AgentToolNyxIdAuthorityContext(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                "fallback-user"));
         currentUserResolver.LastAccessToken.Should().Be("bearer-token");
         currentUserResolver.CallCount.Should().Be(1);
     }

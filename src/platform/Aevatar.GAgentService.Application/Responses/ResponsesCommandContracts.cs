@@ -11,7 +11,11 @@ namespace Aevatar.GAgentService.Application.Responses;
 public sealed record ResponsesCallerScope(
     string ScopeId,
     string OwnerSubject,
-    LlmSessionOriginKind OriginKind);
+    LlmSessionOriginKind OriginKind)
+{
+    public AgentToolNyxIdAuthorityContext NyxIdAuthority { get; init; } =
+        AgentToolNyxIdAuthorityContext.Empty;
+}
 
 public sealed record ResponsesCallerScopeResolutionContext(
     string InboundBearerToken,

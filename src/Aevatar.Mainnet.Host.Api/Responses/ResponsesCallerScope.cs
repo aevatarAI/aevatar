@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Application.Responses;
 using Aevatar.GAgents.Scheduled;
@@ -53,11 +55,7 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
                 "Could not resolve current NyxID user id from the bearer token.");
         }
 
-        var normalizedUserId = userId.Trim();
-        return new ResponsesCallerScope(
-            ScopeId: normalizedUserId,
-            OwnerSubject: normalizedUserId,
-            OriginKind: LlmSessionOriginKind.ApiKey);
+        return ScopeForSubject(userId);
     }
 
     private bool TryGetRequestValidatedSubject(out string subject)
@@ -82,6 +80,12 @@ internal sealed class NyxIdResponsesCallerScopeResolver : IResponsesCallerScopeR
         return new ResponsesCallerScope(
             ScopeId: normalizedSubject,
             OwnerSubject: normalizedSubject,
-            OriginKind: LlmSessionOriginKind.ApiKey);
+            OriginKind: LlmSessionOriginKind.ApiKey)
+        {
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                OwnerScope.NyxIdPlatform,
+                string.Empty,
+                normalizedSubject),
+        };
     }
 }
