@@ -1,4 +1,4 @@
-import { Alert, Spin } from "antd";
+import { Alert, Button, Spin } from "antd";
 import React from "react";
 import { t } from "@/shared/i18n/messages";
 import WorkflowStudioCanvas from "./components/WorkflowStudioCanvas";
@@ -294,6 +294,22 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           type="error"
         />
       ) : null}
+      {studio.templateUndoAvailable ? (
+        <Alert
+          action={
+            <Button onClick={studio.undoAppliedTemplate} size="small">
+              {t("teamMemberWorkflowStudio.templates.undo", "Undo")}
+            </Button>
+          }
+          banner
+          message={t(
+            "teamMemberWorkflowStudio.templates.applied",
+            "Template applied. Review and save when ready.",
+          )}
+          role="status"
+          type="success"
+        />
+      ) : null}
       <section
         ref={editorRegionRef}
         style={{
@@ -319,6 +335,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
           <WorkflowStudioCanvas
             edges={studio.graph.edges}
             emptyDescription={studio.emptyDescription}
+            fitRequest={studio.canvasFitRequest}
             nodes={studio.graph.nodes}
             onAddFirstStep={studio.openNodeLibrary}
             onCanvasSelect={studio.selectCanvas}

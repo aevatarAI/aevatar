@@ -8,6 +8,7 @@ import type {
 import WorkflowStudioEmptyState from "./WorkflowStudioEmptyState";
 
 type WorkflowStudioCanvasProps = {
+  readonly fitRequest?: number;
   readonly edges: readonly Edge<StudioGraphEdgeData>[];
   readonly emptyDescription?: string;
   readonly nodes: readonly Node<StudioGraphNodeData>[];
@@ -26,6 +27,7 @@ type WorkflowStudioCanvasProps = {
 const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
   edges,
   emptyDescription,
+  fitRequest = 0,
   nodes,
   onAddFirstStep,
   onCanvasSelect,
@@ -51,6 +53,7 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
     <GraphCanvas
       autoFitKey={JSON.stringify({
         edges: edges.map((edge) => edge.id),
+        fitRequest,
         nodes: nodes.map((node) => node.id),
       })}
       bottomInset={12}

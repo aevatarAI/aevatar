@@ -64,10 +64,21 @@ import type {
   StudioWorkflowFile,
   StudioWorkflowSaveResult,
 } from "@/shared/studio/models";
+import {
+  prepareWorkflowTemplateApplication,
+  restoreWorkflowTemplateSnapshot,
+  type WorkflowTemplateEditorSnapshot,
+} from "../workflowTemplateApplication";
 
 type TeamMemberWorkflowStudioMode = "new" | "existing";
 type WorkflowPublishTone = "default" | "processing" | "success" | "warning" | "error";
 type WorkflowExecutionStatus = "idle" | "running" | "succeeded" | "failed";
+
+export type WorkflowTemplateApplicationDetail = {
+  readonly revision: number;
+  readonly templateId: string;
+  readonly workflowYaml: string;
+};
 
 type SaveWorkflowDraftVariables = {
   readonly document: StudioWorkflowDocument;
@@ -196,10 +207,15 @@ type TeamMemberWorkflowStudioState = {
   readonly teamHref: string;
   readonly teamsHref: string;
   readonly canOpenDraftRunPanel: boolean;
+  readonly canApplyWorkflowTemplate: boolean;
   readonly canRunCurrentDraft: boolean;
   readonly canSave: boolean;
   readonly canEditYaml: boolean;
   readonly applyYamlEdit: () => Promise<void>;
+  readonly applyWorkflowTemplate: (
+    detail: WorkflowTemplateApplicationDetail,
+  ) => Promise<boolean>;
+  readonly canvasFitRequest: number;
   readonly closeNodeLibrary: () => void;
   readonly closeYamlPanel: () => void;
   readonly connectNodes: (sourceNodeId: string, targetNodeId: string) => void;
@@ -237,6 +253,9 @@ type TeamMemberWorkflowStudioState = {
   readonly save: () => void;
   readonly savePending: boolean;
   readonly savePlaceholderReason: string;
+  readonly templateApplicationActionLabel: string;
+  readonly templateApplicationPending: boolean;
+  readonly templateUndoAvailable: boolean;
   readonly draftRunPanelOpen: boolean;
   readonly selectedEdgeId: string;
   readonly selectedNodeId: string;
@@ -244,6 +263,7 @@ type TeamMemberWorkflowStudioState = {
   readonly selectedStepConfigurationError: string;
   readonly setSelectedStepConfigurationError: (error: string) => void;
   readonly updateSelectedStepConfiguration: (parametersText: string) => void;
+  readonly undoAppliedTemplate: () => void;
   readonly selectCanvas: () => void;
   readonly selectEdge: (edgeId: string) => void;
   readonly selectExecutionLog: (index: number | null) => void;
@@ -889,6 +909,19 @@ function confirmDiscardYamlEdits(): boolean {
   );
 }
 
+function confirmReplaceWithWorkflowTemplate(memberPublished: boolean): boolean {
+  if (typeof window === "undefined") {
+    return true;
+  }
+
+  const publishedNotice = memberPublished
+    ? " Existing active runs are not affected. A later explicit Save will continue through the current revision and binding path."
+    : "";
+  return window.confirm(
+    `Replace the current unsaved steps and YAML with this template? This will not save or publish the workflow.${publishedNotice}`,
+  );
+}
+
 function normalizeFindingLevel(
   level: StudioValidationFinding["level"],
 ): "error" | "warning" | "info" {
@@ -1091,6 +1124,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [editableDocument, setEditableDocument] =
     React.useState<StudioWorkflowDocument | null>(null);
   const [editableLayout, setEditableLayout] = React.useState<unknown>(null);
+  const [canvasFitRequest, setCanvasFitRequest] = React.useState(0);
+  const [templateApplicationPending, setTemplateApplicationPending] =
+    React.useState(false);
+  const [templateUndoSnapshot, setTemplateUndoSnapshot] =
+    React.useState<WorkflowTemplateEditorSnapshot | null>(null);
   const [executionDetail, setExecutionDetail] =
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
@@ -1120,6 +1158,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [yamlEditPending, setYamlEditPending] = React.useState(false);
   const [yamlEditApplying, setYamlEditApplying] = React.useState(false);
   const yamlEditApplyingRef = React.useRef(false);
+  const templateApplicationPendingRef = React.useRef(false);
   const [yamlEditParsedDocument, setYamlEditParsedDocument] =
     React.useState<StudioWorkflowDocument | null>(null);
   const [yamlEditValidatedBuffer, setYamlEditValidatedBuffer] =
@@ -1137,6 +1176,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const appliedSourceKeyRef = React.useRef("");
   const yamlEditRequestIdRef = React.useRef(0);
   const yamlEditValidationRequestIdRef = React.useRef(0);
+  const templateApplicationRequestIdRef = React.useRef(0);
   const suppressedSourceSignatureRef =
     React.useRef<WorkflowSourceSignature | null>(null);
   const latestSourceKeyRef = React.useRef("");
@@ -1147,16 +1187,21 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setDraftRevision(nextRevision);
     return nextRevision;
   }, []);
+  const invalidateTemplateUndo = React.useCallback(() => {
+    setTemplateUndoSnapshot(null);
+  }, []);
   const markDraftDirty = React.useCallback(() => {
     const nextRevision = advanceDraftRevision();
+    invalidateTemplateUndo();
     setDirty(true);
     return nextRevision;
-  }, [advanceDraftRevision]);
+  }, [advanceDraftRevision, invalidateTemplateUndo]);
   const markDraftClean = React.useCallback(() => {
     const nextRevision = advanceDraftRevision();
+    invalidateTemplateUndo();
     setDirty(false);
     return nextRevision;
-  }, [advanceDraftRevision]);
+  }, [advanceDraftRevision, invalidateTemplateUndo]);
   const yamlEditHasUnappliedChanges = Boolean(
     yamlPanelOpen && yamlEditBuffer !== yamlEditSnapshot,
   );
@@ -3058,6 +3103,121 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     },
     [editableDocument, markDraftDirty, selectedStepDraft],
   );
+  const applyWorkflowTemplate = React.useCallback(
+    async (detail: WorkflowTemplateApplicationDetail): Promise<boolean> => {
+      if (
+        !editableDocument ||
+        workflowDraftEditingBlocked ||
+        templateApplicationPendingRef.current
+      ) {
+        return false;
+      }
+
+      if (!closeYamlPanelWithConfirmation()) {
+        return false;
+      }
+
+      if (workflowHasSteps && !confirmReplaceWithWorkflowTemplate(memberPublished)) {
+        return false;
+      }
+
+      invalidateTemplateUndo();
+      const requestId = templateApplicationRequestIdRef.current + 1;
+      templateApplicationRequestIdRef.current = requestId;
+      const baseRevision = draftRevisionRef.current;
+      const snapshot: WorkflowTemplateEditorSnapshot = {
+        dirty,
+        document: editableDocument,
+        layout: editableLayout,
+        selectedEdgeId,
+        selectedNodeId,
+        title: workflowTitle,
+      };
+      templateApplicationPendingRef.current = true;
+      setTemplateApplicationPending(true);
+
+      try {
+        const prepared = await prepareWorkflowTemplateApplication({
+          parseYaml: studioApi.parseYaml.bind(studioApi),
+          snapshot,
+          templateId: detail.templateId,
+          templateRevision: detail.revision,
+          yaml: detail.workflowYaml,
+        });
+        if (
+          templateApplicationRequestIdRef.current !== requestId ||
+          draftRevisionRef.current !== baseRevision
+        ) {
+          throw new Error(
+            "The draft changed while the template was being checked. Review the current draft and try again.",
+          );
+        }
+
+        advanceDraftRevision();
+        setDirty(true);
+        setEditableDocument(prepared.document);
+        setEditableLayout(prepared.layout);
+        setWorkflowTitleState(prepared.snapshot.title);
+        setSelectedEdgeId(prepared.selectedEdgeId);
+        setSelectedNodeId(prepared.selectedNodeId);
+        setSelectedStepConfigurationError("");
+        setNodeLibraryOpen(false);
+        closeDraftRunPanel();
+        setTemplateUndoSnapshot(prepared.snapshot);
+        setCanvasFitRequest((current) => current + 1);
+        void message.success("Template applied. Review and save when ready.");
+        return true;
+      } catch (error) {
+        const reason =
+          error instanceof Error
+            ? error.message
+            : "The workflow template could not be applied.";
+        void message.error(`Template was not applied. ${reason}`);
+        return false;
+      } finally {
+        if (templateApplicationRequestIdRef.current === requestId) {
+          templateApplicationPendingRef.current = false;
+          setTemplateApplicationPending(false);
+        }
+      }
+    },
+    [
+      advanceDraftRevision,
+      closeDraftRunPanel,
+      closeYamlPanelWithConfirmation,
+      dirty,
+      editableDocument,
+      editableLayout,
+      invalidateTemplateUndo,
+      memberPublished,
+      selectedEdgeId,
+      selectedNodeId,
+      workflowDraftEditingBlocked,
+      workflowHasSteps,
+      workflowTitle,
+    ],
+  );
+  const undoAppliedTemplate = React.useCallback(() => {
+    if (!templateUndoSnapshot) {
+      return;
+    }
+
+    const restored = restoreWorkflowTemplateSnapshot(templateUndoSnapshot);
+    templateApplicationRequestIdRef.current += 1;
+    templateApplicationPendingRef.current = false;
+    setTemplateApplicationPending(false);
+    advanceDraftRevision();
+    setEditableDocument(restored.document);
+    setEditableLayout(restored.layout);
+    setWorkflowTitleState(restored.title);
+    setDirty(restored.dirty);
+    setSelectedEdgeId(restored.selectedEdgeId);
+    setSelectedNodeId(restored.selectedNodeId);
+    setSelectedStepConfigurationError("");
+    setTemplateUndoSnapshot(null);
+    setCanvasFitRequest((current) => current + 1);
+    void message.info("Template application undone.");
+  }, [advanceDraftRevision, templateUndoSnapshot]);
   const selectExecutionLog = React.useCallback(
     (index: number | null) => {
       if (index === null) {
@@ -3085,6 +3245,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     publishedRunsHref,
     publishedRunsPlaceholderReason,
     publishMember: () => {
+      invalidateTemplateUndo();
       if (
         workflowQuery.data &&
         editableDocument &&
@@ -3116,6 +3277,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
         (!dirty || confirmDiscardUnsavedChanges())
       ) {
+        invalidateTemplateUndo();
         history.push(teamHref);
       }
     },
@@ -3124,6 +3286,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
         (!dirty || confirmDiscardUnsavedChanges())
       ) {
+        invalidateTemplateUndo();
         history.push(teamsHref);
       }
     },
@@ -3133,6 +3296,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
         (!dirty || confirmDiscardUnsavedChanges())
       ) {
+        invalidateTemplateUndo();
         history.push(invokeHref);
       }
     },
@@ -3142,6 +3306,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
         (!dirty || confirmDiscardUnsavedChanges())
       ) {
+        invalidateTemplateUndo();
         history.push(publishedRunsHref);
       }
     },
@@ -3151,13 +3316,19 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
         (!dirty || confirmDiscardUnsavedChanges())
       ) {
+        invalidateTemplateUndo();
         history.push(automationsHref);
       }
     },
     teamHref,
     teamsHref,
     applyYamlEdit,
+    applyWorkflowTemplate,
+    canvasFitRequest,
     canOpenDraftRunPanel,
+    canApplyWorkflowTemplate: Boolean(
+      editableDocument && !workflowLoading && !workflowDraftEditingBlocked,
+    ),
     canRunCurrentDraft,
     canSave,
     canEditYaml: Boolean(
@@ -3253,6 +3424,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
         (!yamlEditHasUnappliedChanges || confirmDiscardYamlEdits()) &&
         (!dirty || confirmDiscardUnsavedChanges())
       ) {
+        invalidateTemplateUndo();
         history.push(backHref);
       }
     },
@@ -3284,6 +3456,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       void openYamlEditor();
     },
     save: () => {
+      invalidateTemplateUndo();
       if (route.mode === "new" && editableDocument) {
         createWorkflowMemberMutation.mutate({
           document: editableDocument,
@@ -3332,6 +3505,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       createWorkflowMemberMutation.isPending ||
       createUnlinkedMemberDraftMutation.isPending,
     savePlaceholderReason,
+    templateApplicationActionLabel: workflowHasSteps
+      ? "Replace with template..."
+      : "Use template",
+    templateApplicationPending,
+    templateUndoAvailable: Boolean(templateUndoSnapshot),
     draftRunPanelOpen,
     selectedEdgeId,
     selectedNodeId,
@@ -3381,6 +3559,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setWorkflowTitle,
     teamName,
     updateSelectedStepConfiguration,
+    undoAppliedTemplate,
     workflowTitle,
     setYamlEditBuffer: (yaml: string) => {
       if (yamlEditApplyingRef.current) {
