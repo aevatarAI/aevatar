@@ -3855,6 +3855,56 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task TeamAutomationDelete_PaddedOwnerReplayAfterCanonicalDelete_ShouldRemainExact()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-canonical-owner",
+        };
+        await agent.HandleDeleteAsync(delete);
+
+        var replay = delete.Clone();
+        replay.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = " scope-alpha ",
+            MemberId = " member-alpha ",
+            TeamId = " ",
+        };
+        replay.ObservationRequestId = "delete-padded-owner-replay";
+        await agent.HandleDeleteAsync(replay);
+
+        var observation = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-padded-owner-replay");
+        observation.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.Committed);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task TeamAutomationDelete_ReasonDriftWhileRevocationPending_ShouldRejectConflict()
     {
         var eventStore = new TestEventStore();

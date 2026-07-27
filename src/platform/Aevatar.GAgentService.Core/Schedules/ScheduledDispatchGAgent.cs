@@ -347,8 +347,21 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             State.TeamAutomationOperationKind ==
                 TeamAutomationOperationKindState.Delete)
         {
+            TeamMemberAutomationOwnerState normalizedTeamAutomationOwner;
+            try
+            {
+                normalizedTeamAutomationOwner =
+                    NormalizeTeamAutomationOwner(command.TeamAutomationOwner);
+            }
+            catch (InvalidOperationException)
+            {
+                throw TeamAutomationCommandRejectedException.Conflict(
+                    "team_automation_operation_conflict");
+            }
+
             if (!IsSameCompletedDeleteOperation(
                     command,
+                    normalizedTeamAutomationOwner,
                     normalizedReason))
             {
                 throw TeamAutomationCommandRejectedException.Conflict(
@@ -2135,10 +2148,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private bool IsSameCompletedDeleteOperation(
         ScheduledDispatchDeleteCommand command,
+        TeamMemberAutomationOwnerState normalizedTeamAutomationOwner,
         string normalizedReason) =>
         State.TeamAutomationOwner != null &&
-        command.TeamAutomationOwner != null &&
-        TeamAutomationOwnerEquals(State.TeamAutomationOwner, command.TeamAutomationOwner) &&
+        TeamAutomationOwnerEquals(
+            State.TeamAutomationOwner,
+            normalizedTeamAutomationOwner) &&
         string.Equals(State.TeamAutomationOperationId, command.OperationId?.Trim(), StringComparison.Ordinal) &&
         string.Equals(State.TeamAutomationIdempotencyKey, command.IdempotencyKey?.Trim(), StringComparison.Ordinal) &&
         State.HasTeamAutomationDeleteReason &&
