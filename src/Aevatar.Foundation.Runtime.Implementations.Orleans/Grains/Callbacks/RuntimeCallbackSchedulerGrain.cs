@@ -18,17 +18,13 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
     private static readonly TimeSpan OneShotReminderRetryPeriod = TimeSpan.FromMinutes(1);
 
     private readonly IPersistentState<RuntimeCallbackSchedulerState> _state;
-    private readonly IRuntimeCallbackReminderRegistry _reminderRegistry;
     private Aevatar.Foundation.Abstractions.IStreamProvider _streams = null!;
 
     public RuntimeCallbackSchedulerGrain(
         [PersistentState(SchedulerStateName, OrleansRuntimeConstants.RuntimeCallbackSchedulerStorageName)]
-        IPersistentState<RuntimeCallbackSchedulerState> state,
-        IRuntimeCallbackReminderRegistry reminderRegistry)
+        IPersistentState<RuntimeCallbackSchedulerState> state)
     {
         _state = state;
-        _reminderRegistry = reminderRegistry ??
-            throw new ArgumentNullException(nameof(reminderRegistry));
     }
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
@@ -115,9 +111,9 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         if (StagePendingReminderUnregistrations(persistedIds))
             await _state.WriteStateAsync();
 
-        var registeredIds = (await _reminderRegistry.ListReminderNamesAsync(this.GetGrainId()))
-            .Select(static reminderName =>
-                TryParseReminderName(reminderName, out var callbackId)
+        var registeredIds = (await this.GetReminders())
+            .Select(static reminder =>
+                TryParseReminderName(reminder.ReminderName, out var callbackId)
                     ? callbackId
                     : null)
             .Where(static callbackId => callbackId != null)
@@ -341,11 +337,7 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
             : OneShotReminderRetryPeriod;
         try
         {
-            await _reminderRegistry.RegisterOrUpdateAsync(
-                this.GetGrainId(),
-                reminderName,
-                dueTime,
-                period);
+            await this.RegisterOrUpdateReminder(reminderName, dueTime, period);
         }
         catch
         {
@@ -376,12 +368,16 @@ public sealed class RuntimeCallbackSchedulerGrain : Grain, IRuntimeCallbackSched
         await _streams.GetStream(this.GetPrimaryKeyString()).ProduceAsync(envelope, ct);
     }
 
+    // Orleans resolves the reminder registry from the ambient grain execution context, which is
+    // thread-static and only survives awaits that resume on the activation's task scheduler.
+    // The lookup/unregister pair therefore belongs to the grain itself: hosting it in a singleton
+    // adapter lets any caller orchestrate two context-bound calls across an await from a thread the
+    // activation does not own, which fails at the second call with "non-grain context".
     private async Task TryUnregisterReminderAsync(string callbackId)
     {
-        var reminderName = BuildReminderName(callbackId);
-        await _reminderRegistry.UnregisterIfExistsAsync(
-            this.GetGrainId(),
-            reminderName);
+        var reminder = await this.GetReminder(BuildReminderName(callbackId));
+        if (reminder != null)
+            await this.UnregisterReminder(reminder);
     }
 
     private static string BuildReminderName(string callbackId) =>

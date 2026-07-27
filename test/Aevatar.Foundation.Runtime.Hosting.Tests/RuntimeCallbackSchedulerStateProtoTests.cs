@@ -238,7 +238,7 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
             expectedGeneration: 1,
             expectedSlotEpoch: RuntimeCallbackSlotEpoch.OrleansSchedulerV2);
 
-        await act.Should().ThrowAsync<NullReferenceException>();
+        await act.Should().ThrowAsync<ArgumentNullException>();
         persistentState.State.ReminderCallbacks.Should().BeEmpty();
         ((RuntimeCallbackPersistentStateProxy)(object)persistentState).WriteCount.Should().Be(1);
     }
@@ -435,26 +435,12 @@ public sealed class RuntimeCallbackSchedulerStateProtoTests
         OverduePolicy = RuntimeCallbackOverduePolicy.Deliver,
     };
 
+    // Constructed outside a silo: the grain has no Orleans execution context, so any reminder
+    // interaction fails fast. These tests only cover the state-machine and validation paths that
+    // run before the grain reaches its reminders.
     private static RuntimeCallbackSchedulerGrain CreateGrain(
         IPersistentState<RuntimeCallbackSchedulerState> persistentState) =>
-        new(persistentState, new UnavailableRuntimeCallbackReminderRegistry());
-
-    private sealed class UnavailableRuntimeCallbackReminderRegistry
-        : IRuntimeCallbackReminderRegistry
-    {
-        public Task RegisterOrUpdateAsync(
-            GrainId grainId,
-            string reminderName,
-            TimeSpan dueTime,
-            TimeSpan period) =>
-            throw new ArgumentNullException(nameof(grainId));
-
-        public Task<IReadOnlyList<string>> ListReminderNamesAsync(GrainId grainId) =>
-            throw new ArgumentNullException(nameof(grainId));
-
-        public Task UnregisterIfExistsAsync(GrainId grainId, string reminderName) =>
-            throw new ArgumentNullException(nameof(grainId));
-    }
+        new(persistentState);
 
     private class RuntimeCallbackPersistentStateProxy : DispatchProxy
     {

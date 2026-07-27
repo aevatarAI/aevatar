@@ -73,9 +73,6 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEnvelopePropagationPolicy, DefaultEnvelopePropagationPolicy>();
         services.TryAddSingleton<IAgentKindVerifier, DefaultAgentKindVerifier>();
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
-        services.TryAddSingleton<
-            IRuntimeCallbackReminderRegistry,
-            OrleansRuntimeCallbackReminderRegistry>();
         // Replace (not TryAdd): the shared local runtime extension registers the in-memory
         // callback scheduler first, so a TryAdd here is silently a no-op and production
         // (Provider=Orleans) keeps the in-memory scheduler — durable timeouts/reminders then
