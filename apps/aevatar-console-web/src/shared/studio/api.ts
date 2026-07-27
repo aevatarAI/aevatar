@@ -71,6 +71,13 @@ import type {
   StudioWorkflowFile,
   StudioWorkflowSaveResult,
   StudioWorkflowSummary,
+  StudioWorkflowTemplateCatalogPage,
+  StudioWorkflowTemplateCompatibility,
+  StudioWorkflowTemplateDetail,
+  StudioWorkflowTemplateExpectedIO,
+  StudioWorkflowTemplateLocalizedText,
+  StudioWorkflowTemplateRequirements,
+  StudioWorkflowTemplateSummary,
   StudioWorkspaceSettings,
 } from "./models";
 import {
@@ -89,6 +96,7 @@ import {
   readNullableString,
   readNumber,
   readString,
+  readStringArray,
 } from "@/shared/api/http/decoders";
 import { readResponseErrorDetails } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
@@ -160,6 +168,166 @@ function isJsonContentType(contentType: string | null): boolean {
 function readContentType(response: Response): string | null {
   const headers = (response as Response & { headers?: Headers }).headers;
   return headers?.get?.("content-type") ?? null;
+}
+
+function decodeWorkflowTemplateLocalizedText(
+  value: unknown,
+  label: string,
+): StudioWorkflowTemplateLocalizedText {
+  const record = expectRecord(value, label);
+  return {
+    "en-US": readString(record, "en-US", `${label}.en-US`),
+    "zh-CN": readString(record, "zh-CN", `${label}.zh-CN`),
+  };
+}
+
+function decodeWorkflowTemplateExpectedIO(
+  value: unknown,
+  label: string,
+): StudioWorkflowTemplateExpectedIO {
+  const record = expectRecord(value, label);
+  return {
+    input: decodeWorkflowTemplateLocalizedText(record.input, `${label}.input`),
+    output: decodeWorkflowTemplateLocalizedText(record.output, `${label}.output`),
+  };
+}
+
+function decodeWorkflowTemplateRequirements(
+  value: unknown,
+  label: string,
+): StudioWorkflowTemplateRequirements {
+  const record = expectRecord(value, label);
+  return {
+    requiredPrimitives: readStringArray(
+      record,
+      "requiredPrimitives",
+      `${label}.requiredPrimitives`,
+    ),
+    workflowSchemaVersion: readString(
+      record,
+      "workflowSchemaVersion",
+      `${label}.workflowSchemaVersion`,
+    ),
+    requiresDefaultLLMRoute: readBoolean(
+      record,
+      "requiresDefaultLLMRoute",
+      `${label}.requiresDefaultLLMRoute`,
+    ),
+    requiresHumanInteraction: readBoolean(
+      record,
+      "requiresHumanInteraction",
+      `${label}.requiresHumanInteraction`,
+    ),
+  };
+}
+
+function decodeWorkflowTemplateCompatibility(
+  value: unknown,
+  label: string,
+): StudioWorkflowTemplateCompatibility {
+  const record = expectRecord(value, label);
+  const status = readString(record, "status", `${label}.status`);
+  const reason = readString(record, "reason", `${label}.reason`);
+  if (status !== "Compatible" && status !== "Incompatible") {
+    throw new Error(`${label}.status is not supported.`);
+  }
+  if (
+    reason !== "None" &&
+    reason !== "WorkflowSchemaUnsupported" &&
+    reason !== "RequiredPrimitiveUnavailable"
+  ) {
+    throw new Error(`${label}.reason is not supported.`);
+  }
+
+  return { status, reason };
+}
+
+function decodeWorkflowTemplateSummary(
+  value: unknown,
+  label = "WorkflowTemplateSummary",
+): StudioWorkflowTemplateSummary {
+  const record = expectRecord(value, label);
+  return {
+    templateId: readString(record, "templateId", `${label}.templateId`),
+    revision: readString(record, "revision", `${label}.revision`),
+    title: decodeWorkflowTemplateLocalizedText(record.title, `${label}.title`),
+    summary: decodeWorkflowTemplateLocalizedText(record.summary, `${label}.summary`),
+    description: decodeWorkflowTemplateLocalizedText(
+      record.description,
+      `${label}.description`,
+    ),
+    category: readString(record, "category", `${label}.category`),
+    tags: readStringArray(record, "tags", `${label}.tags`),
+    expectedIO: decodeWorkflowTemplateExpectedIO(
+      record.expectedIO,
+      `${label}.expectedIO`,
+    ),
+    requirements: decodeWorkflowTemplateRequirements(
+      record.requirements,
+      `${label}.requirements`,
+    ),
+    compatibility: decodeWorkflowTemplateCompatibility(
+      record.compatibility,
+      `${label}.compatibility`,
+    ),
+  };
+}
+
+function decodeWorkflowTemplateDetail(
+  value: unknown,
+  label = "WorkflowTemplateDetail",
+): StudioWorkflowTemplateDetail {
+  const record = expectRecord(value, label);
+  return {
+    ...decodeWorkflowTemplateSummary(record, label),
+    workflowYaml: readString(record, "workflowYaml", `${label}.workflowYaml`),
+  };
+}
+
+function decodeWorkflowTemplateCatalogPage(
+  value: unknown,
+): StudioWorkflowTemplateCatalogPage {
+  const label = "WorkflowTemplateCatalogPage";
+  const record = expectRecord(value, label);
+  return {
+    items: expectArray(
+      record.items,
+      `${label}.items`,
+      decodeWorkflowTemplateSummary,
+    ),
+    nextCursor: readNullableString(
+      record,
+      "nextCursor",
+      `${label}.nextCursor`,
+    ),
+    eTag: readString(record, "eTag", `${label}.eTag`),
+  };
+}
+
+async function requestWorkflowTemplateDetail(
+  templateId: string,
+  revision: string,
+  signal?: AbortSignal,
+): Promise<StudioWorkflowTemplateDetail> {
+  const response = await studioHostFetch(
+    `/api/studio/workflow-templates/${encodeURIComponent(templateId.trim())}/revisions/${encodeURIComponent(revision.trim())}`,
+    { signal },
+  );
+  if (response.status === 409) {
+    const errorRecord = expectRecord(
+      await response.json(),
+      "WorkflowTemplateErrorResponse",
+    );
+    return decodeWorkflowTemplateDetail(
+      errorRecord.detail,
+      "WorkflowTemplateDetail",
+    );
+  }
+  if (!response.ok) {
+    throw await createStudioApiError(response);
+  }
+
+  return decodeWorkflowTemplateDetail(await response.json());
 }
 
 function trimOptional(value: string | null | undefined): string | undefined {
@@ -2267,6 +2435,37 @@ export const studioApi = {
 
   getAuthSession(): Promise<StudioAuthSession> {
     return requestJson("/api/auth/me");
+  },
+
+  listWorkflowTemplates(input?: {
+    readonly category?: string | null;
+    readonly cursor?: string | null;
+    readonly pageSize?: number | null;
+    readonly query?: string | null;
+    readonly signal?: AbortSignal;
+  }): Promise<StudioWorkflowTemplateCatalogPage> {
+    const params = new URLSearchParams();
+    const query = trimOptional(input?.query);
+    const category = trimOptional(input?.category);
+    const cursor = trimOptional(input?.cursor);
+    if (query) params.set("query", query);
+    if (category) params.set("category", category);
+    if (cursor) params.set("cursor", cursor);
+    if (input?.pageSize) params.set("pageSize", String(input.pageSize));
+    const search = params.toString();
+    return requestDecodedJson(
+      `/api/studio/workflow-templates${search ? `?${search}` : ""}`,
+      decodeWorkflowTemplateCatalogPage,
+      { signal: input?.signal },
+    );
+  },
+
+  getWorkflowTemplate(
+    templateId: string,
+    revision: string,
+    signal?: AbortSignal,
+  ): Promise<StudioWorkflowTemplateDetail> {
+    return requestWorkflowTemplateDetail(templateId, revision, signal);
   },
 
   getWorkspaceSettings(scopeId?: string | null): Promise<StudioWorkspaceSettings> {

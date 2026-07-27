@@ -5,6 +5,7 @@ import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { history } from "@/shared/navigation/history";
 import { StudioApiError, studioApi } from "@/shared/studio/api";
+import { isWorkflowTemplatesEnabled } from "@/shared/config/consoleFeatures";
 import {
   cleanupTestQueryClients,
   createTestQueryClient,
@@ -137,7 +138,9 @@ jest.mock("@/shared/studio/api", () => {
       getWorkflow: jest.fn(),
       listWorkflows: jest.fn(),
       listExecutions: jest.fn(),
+      listWorkflowTemplates: jest.fn(),
       parseYaml: jest.fn(),
+      getWorkflowTemplate: jest.fn(),
       getPublishedWorkflow: jest.fn(),
       saveAndBindWorkflow: jest.fn(),
       saveWorkflow: jest.fn(),
@@ -152,6 +155,11 @@ jest.mock("@/shared/studio/api", () => {
     },
   };
 });
+
+jest.mock("@/shared/config/consoleFeatures", () => ({
+  isTeamFirstEnabled: jest.fn(() => true),
+  isWorkflowTemplatesEnabled: jest.fn(() => true),
+}));
 
 jest.mock("@/shared/api/runtimeRunsApi", () => ({
   runtimeRunsApi: {
@@ -439,6 +447,52 @@ function mockParseYaml() {
   );
 }
 
+const mockTemplateSummary = {
+  templateId: "simple-assistant",
+  revision: "1",
+  title: { "en-US": "Simple assistant", "zh-CN": "简易助手" },
+  summary: {
+    "en-US": "Answer a request with one assistant role.",
+    "zh-CN": "由单个助手角色回答请求。",
+  },
+  description: {
+    "en-US": "A compact starting point for an AI-assisted workflow.",
+    "zh-CN": "AI 辅助工作流的精简起点。",
+  },
+  category: "Assistants",
+  tags: ["starter", "llm"],
+  expectedIO: {
+    input: { "en-US": "A user request", "zh-CN": "用户请求" },
+    output: { "en-US": "A helpful answer", "zh-CN": "有帮助的回答" },
+  },
+  requirements: {
+    requiredPrimitives: ["llm_call"],
+    workflowSchemaVersion: "1",
+    requiresDefaultLLMRoute: true,
+    requiresHumanInteraction: false,
+  },
+  compatibility: { status: "Compatible", reason: "None" },
+};
+
+function mockWorkflowTemplates() {
+  (studioApi.listWorkflowTemplates as jest.Mock).mockResolvedValue({
+    items: [mockTemplateSummary],
+    nextCursor: null,
+    eTag: '"templates-v1"',
+  });
+  (studioApi.getWorkflowTemplate as jest.Mock).mockResolvedValue({
+    ...mockTemplateSummary,
+    workflowYaml: `name: simple_assistant
+roles:
+  - id: assistant
+steps:
+  - id: answer
+    type: llm_call
+    target_role: assistant
+`,
+  });
+}
+
 async function flushAsyncWork() {
   for (let index = 0; index < 5; index += 1) {
     await Promise.resolve();
@@ -551,6 +605,8 @@ describe("TeamMemberWorkflowStudioPage", () => {
     mockTeam();
     mockSerializeYaml();
     mockParseYaml();
+    mockWorkflowTemplates();
+    (isWorkflowTemplatesEnabled as jest.Mock).mockReturnValue(true);
     (studioApi.listWorkflows as jest.Mock).mockResolvedValue([]);
     (scopeRuntimeApi.listServices as jest.Mock).mockResolvedValue([]);
     (studioApi.updateMemberDisplayName as jest.Mock).mockResolvedValue({
@@ -579,6 +635,9 @@ describe("TeamMemberWorkflowStudioPage", () => {
 
     expect(await screen.findByDisplayValue("Untitled member")).toBeTruthy();
     expect(screen.getByText("Add first step")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Start from a workflow template" }),
+    ).toBeTruthy();
     expect(screen.getByText("nodes:0")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Invoke" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Invoke" })).toHaveAttribute(
@@ -596,6 +655,194 @@ describe("TeamMemberWorkflowStudioPage", () => {
     expect(studioApi.getMember).not.toHaveBeenCalled();
     expect(studioApi.saveWorkflow).not.toHaveBeenCalled();
     expect(studioApi.startExecution).not.toHaveBeenCalled();
+  });
+
+  it("opens the contextual template browser, preserves route identity, and loads exact revision detail", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow?workflowId=wf-alpha&returnTo=%2Fscopes%2Fscope-1%2Fteams",
+    );
+    (studioApi.getMember as jest.Mock).mockResolvedValue({
+      implementationRef: { implementationKind: "workflow", workflowId: "wf-alpha" },
+      summary: {
+        displayName: "Template member",
+        memberId: "m-alpha",
+        scopeId: "scope-1",
+        teamId: "t-alpha",
+      },
+    });
+    (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
+      document: { name: "Template member", roles: [], steps: [] },
+      workflowId: "wf-alpha",
+      yaml: "name: Template member\nsteps: []\n",
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const launcher = await screen.findByRole("button", {
+      name: "Start from a workflow template",
+    });
+    fireEvent.click(launcher);
+
+    const browser = await screen.findByLabelText("Workflow template browser");
+    expect(window.location.pathname).toBe(
+      "/scopes/scope-1/teams/t-alpha/members/m-alpha/workflow",
+    );
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-alpha",
+    );
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe(
+      "/scopes/scope-1/teams",
+    );
+    expect(new URLSearchParams(window.location.search).get("panel")).toBe(
+      "templates",
+    );
+    expect(within(browser).getByRole("heading", { name: "Workflow templates" })).toHaveFocus();
+    expect(studioApi.listWorkflowTemplates).toHaveBeenCalledWith(
+      expect.objectContaining({ category: "", query: "" }),
+    );
+
+    fireEvent.mouseDown(
+      within(browser).getByRole("combobox", {
+        name: "Filter templates by category",
+      }),
+    );
+    fireEvent.click(await screen.findByText("Assistants", { selector: ".ant-select-item-option-content" }));
+    await waitFor(() => {
+      expect(studioApi.listWorkflowTemplates).toHaveBeenCalledWith(
+        expect.objectContaining({ category: "Assistants" }),
+      );
+    });
+
+    fireEvent.change(within(browser).getByRole("searchbox", { name: "Search workflow templates" }), {
+      target: { value: "assistant" },
+    });
+    await waitFor(() => {
+      expect(studioApi.listWorkflowTemplates).toHaveBeenCalledWith(
+        expect.objectContaining({ query: "assistant" }),
+      );
+    });
+
+    fireEvent.click(
+      await within(browser).findByRole("button", { name: "View Simple assistant" }),
+    );
+    await waitFor(() => {
+      expect(studioApi.getWorkflowTemplate).toHaveBeenCalledWith(
+        "simple-assistant",
+        "1",
+        expect.anything(),
+      );
+    });
+    expect(new URLSearchParams(window.location.search).get("templateId")).toBe(
+      "simple-assistant",
+    );
+    expect(await within(browser).findByText("A user request")).toBeTruthy();
+    expect(within(browser).getByText("A helpful answer")).toBeTruthy();
+    expect(within(browser).getByText("1 role, 1 step, 0 edges")).toBeTruthy();
+    expect(within(browser).getByText(/Step answer uses LLM call/)).toBeTruthy();
+    expect(within(browser).getByRole("button", { name: "Use template" })).toBeDisabled();
+    expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:0");
+
+    fireEvent.click(within(browser).getByRole("button", { name: "Close template browser" }));
+    await waitFor(() => expect(screen.queryByLabelText("Workflow template browser")).toBeNull());
+    expect(new URLSearchParams(window.location.search).get("panel")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("templateId")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe("wf-alpha");
+    expect(launcher).toHaveFocus();
+  });
+
+  it("renders recoverable template catalog empty, failure, and incompatible states without changing the draft", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow?panel=templates",
+    );
+    (studioApi.listWorkflowTemplates as jest.Mock).mockResolvedValueOnce({
+      items: [],
+      nextCursor: null,
+      eTag: '"empty"',
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+    const browser = await screen.findByLabelText("Workflow template browser");
+    expect(await within(browser).findByText("No templates match these filters.")).toBeTruthy();
+
+    (studioApi.listWorkflowTemplates as jest.Mock).mockRejectedValueOnce(
+      new TypeError("Failed to fetch"),
+    );
+    fireEvent.change(
+      within(browser).getByRole("searchbox", { name: "Search workflow templates" }),
+      { target: { value: "unreachable" } },
+    );
+    expect(await within(browser).findByText("The template catalog could not be loaded.")).toBeTruthy();
+
+    (studioApi.listWorkflowTemplates as jest.Mock).mockResolvedValueOnce({
+      items: [
+        {
+          ...mockTemplateSummary,
+          compatibility: {
+            status: "Incompatible",
+            reason: "RequiredPrimitiveUnavailable",
+          },
+        },
+      ],
+      nextCursor: null,
+      eTag: '"incompatible"',
+    });
+    fireEvent.click(within(browser).getByRole("button", { name: "Retry templates" }));
+    expect(
+      await within(browser).findByText("Required primitive unavailable"),
+    ).toBeTruthy();
+    expect(studioApi.getWorkflowTemplate).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:0");
+  });
+
+  it("recovers when a URL-selected template is no longer in the catalog", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow?panel=templates&templateId=removed-template",
+    );
+    (studioApi.listWorkflowTemplates as jest.Mock).mockResolvedValueOnce({
+      items: [],
+      nextCursor: null,
+      eTag: '"empty"',
+    });
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    const browser = await screen.findByLabelText("Workflow template browser");
+    expect(await within(browser).findByText("Template not found")).toBeTruthy();
+    fireEvent.click(within(browser).getByRole("button", { name: "Back to catalog" }));
+    await waitFor(() => {
+      expect(new URLSearchParams(window.location.search).get("templateId")).toBeNull();
+    });
+    expect(studioApi.getWorkflowTemplate).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId("graph-canvas")[0]).toHaveTextContent("nodes:0");
+  });
+
+  it("hides all template UI and strips template panel state when the feature is disabled", async () => {
+    (isWorkflowTemplatesEnabled as jest.Mock).mockReturnValue(false);
+    window.history.replaceState(
+      {},
+      "",
+      "/scopes/scope-1/teams/t-alpha/members/new/workflow?workflowId=wf-alpha&panel=templates&templateId=simple-assistant",
+    );
+
+    renderWithQueryClient(React.createElement(TeamMemberWorkflowStudioPage));
+
+    await screen.findByText("Add first step");
+    expect(
+      screen.queryByRole("button", { name: "Start from a workflow template" }),
+    ).toBeNull();
+    expect(screen.queryByLabelText("Workflow template browser")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("workflowId")).toBe(
+      "wf-alpha",
+    );
+    expect(new URLSearchParams(window.location.search).get("panel")).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("templateId")).toBeNull();
+    expect(studioApi.listWorkflowTemplates).not.toHaveBeenCalled();
   });
 
   it("keeps save disabled for a new workflow member until a step exists", async () => {

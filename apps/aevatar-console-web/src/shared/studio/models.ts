@@ -32,6 +32,61 @@ export type StudioWorkflowDocument = Record<string, unknown> & {
   steps?: StudioWorkflowStepDocument[];
 };
 
+export type StudioWorkflowTemplateLocalizedText = {
+  readonly "en-US": string;
+  readonly "zh-CN": string;
+};
+
+export type StudioWorkflowTemplateExpectedIO = {
+  readonly input: StudioWorkflowTemplateLocalizedText;
+  readonly output: StudioWorkflowTemplateLocalizedText;
+};
+
+export type StudioWorkflowTemplateRequirements = {
+  readonly requiredPrimitives: readonly string[];
+  readonly workflowSchemaVersion: string;
+  readonly requiresDefaultLLMRoute: boolean;
+  readonly requiresHumanInteraction: boolean;
+};
+
+export type StudioWorkflowTemplateCompatibilityStatus =
+  | "Compatible"
+  | "Incompatible";
+
+export type StudioWorkflowTemplateCompatibilityReason =
+  | "None"
+  | "WorkflowSchemaUnsupported"
+  | "RequiredPrimitiveUnavailable";
+
+export type StudioWorkflowTemplateCompatibility = {
+  readonly status: StudioWorkflowTemplateCompatibilityStatus;
+  readonly reason: StudioWorkflowTemplateCompatibilityReason;
+};
+
+export interface StudioWorkflowTemplateSummary {
+  readonly templateId: string;
+  readonly revision: string;
+  readonly title: StudioWorkflowTemplateLocalizedText;
+  readonly summary: StudioWorkflowTemplateLocalizedText;
+  readonly description: StudioWorkflowTemplateLocalizedText;
+  readonly category: string;
+  readonly tags: readonly string[];
+  readonly expectedIO: StudioWorkflowTemplateExpectedIO;
+  readonly requirements: StudioWorkflowTemplateRequirements;
+  readonly compatibility: StudioWorkflowTemplateCompatibility;
+}
+
+export interface StudioWorkflowTemplateDetail
+  extends StudioWorkflowTemplateSummary {
+  readonly workflowYaml: string;
+}
+
+export interface StudioWorkflowTemplateCatalogPage {
+  readonly items: readonly StudioWorkflowTemplateSummary[];
+  readonly nextCursor: string | null;
+  readonly eTag: string;
+}
+
 export interface StudioAppContext {
   readonly mode: 'embedded' | 'proxy';
   readonly scopeId: string | null;

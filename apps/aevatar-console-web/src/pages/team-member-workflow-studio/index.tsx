@@ -7,6 +7,7 @@ import WorkflowStudioExecutionPanel from "./components/WorkflowStudioExecutionPa
 import WorkflowStudioHeader from "./components/WorkflowStudioHeader";
 import WorkflowStudioNodeDetailPanel from "./components/WorkflowStudioNodeDetailPanel";
 import WorkflowStudioNodeLibrary from "./components/WorkflowStudioNodeLibrary";
+import WorkflowStudioTemplateBrowser from "./components/WorkflowStudioTemplateBrowser";
 import WorkflowStudioYamlPanel from "./components/WorkflowStudioYamlPanel";
 import { useTeamMemberWorkflowStudio } from "./hooks/useTeamMemberWorkflowStudio";
 
@@ -50,6 +51,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
   const mainRef = React.useRef<HTMLElement | null>(null);
   const editorRegionRef = React.useRef<HTMLElement | null>(null);
   const resizeCleanupRef = React.useRef<(() => void) | null>(null);
+  const templateLauncherRef = React.useRef<HTMLButtonElement | null>(null);
   const [sidePanelWidth, setSidePanelWidth] = React.useState(
     SIDE_PANEL_DEFAULT_WIDTH,
   );
@@ -338,6 +340,7 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             fitRequest={studio.canvasFitRequest}
             nodes={studio.graph.nodes}
             onAddFirstStep={studio.openNodeLibrary}
+            onStartFromTemplate={studio.openTemplateBrowser}
             onCanvasSelect={studio.selectCanvas}
             onConnectNodes={studio.connectNodes}
             onDeleteEdges={(edgeIds) => {
@@ -355,12 +358,23 @@ const TeamMemberWorkflowStudioPage: React.FC = () => {
             onNodeSelect={studio.selectNode}
             selectedEdgeId={studio.selectedEdgeId}
             selectedNodeId={studio.selectedNodeId}
+            showTemplateLauncher={studio.templatesEnabled}
+            templateLauncherRef={templateLauncherRef}
           />
         )}
         <WorkflowStudioNodeLibrary
           onClose={studio.closeNodeLibrary}
           onInsertNode={studio.insertNode}
           open={studio.nodeLibraryOpen}
+        />
+        <WorkflowStudioTemplateBrowser
+          onClose={() => {
+            studio.closeTemplateBrowser();
+            templateLauncherRef.current?.focus();
+          }}
+          onSelectTemplate={studio.selectTemplate}
+          open={studio.templateBrowserOpen}
+          selectedTemplateId={studio.templateId}
         />
         {sidePanelOpen ? (
           <hr

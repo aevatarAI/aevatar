@@ -8,6 +8,7 @@ import {
 } from "@/shared/agui/runtimeEventSemantics";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { isWorkflowTemplatesEnabled } from "@/shared/config/consoleFeatures";
 import {
   getLocationSnapshot,
   history,
@@ -218,6 +219,7 @@ type TeamMemberWorkflowStudioState = {
   ) => Promise<boolean>;
   readonly canvasFitRequest: number;
   readonly closeNodeLibrary: () => void;
+  readonly closeTemplateBrowser: () => void;
   readonly closeYamlPanel: () => void;
   readonly connectNodes: (sourceNodeId: string, targetNodeId: string) => void;
   readonly deleteSelectedConnection: () => void;
@@ -249,6 +251,7 @@ type TeamMemberWorkflowStudioState = {
   readonly navigateBack: () => void;
   readonly nodeLibraryOpen: boolean;
   readonly openNodeLibrary: () => void;
+  readonly openTemplateBrowser: () => void;
   readonly openDraftRunPanel: () => void;
   readonly openYamlPanel: () => void;
   readonly save: () => void;
@@ -269,9 +272,13 @@ type TeamMemberWorkflowStudioState = {
   readonly selectEdge: (edgeId: string) => void;
   readonly selectExecutionLog: (index: number | null) => void;
   readonly selectNode: (nodeId: string) => void;
+  readonly selectTemplate: (templateId: string) => void;
   readonly setExecutionRunMessage: (message: string) => void;
   readonly setWorkflowTitle: (title: string) => void;
   readonly teamName: string;
+  readonly templateBrowserOpen: boolean;
+  readonly templateId: string;
+  readonly templatesEnabled: boolean;
   readonly workflowTitle: string;
   readonly setYamlEditBuffer: (yaml: string) => void;
   readonly yamlEditApplying: boolean;
@@ -380,6 +387,9 @@ function readPathSegments(): {
   mode: TeamMemberWorkflowStudioMode;
   scopeId: string;
   teamId: string;
+  templateBrowserOpen: boolean;
+  templateId: string;
+  templatesEnabled: boolean;
   workflowId: string;
   workflowSource: "draft" | "published";
 } {
@@ -419,11 +429,17 @@ function readPathSegments(): {
   const isWorkflowEditorRoute = routeSurface === "workflow";
   const mode = routeMemberId === "new" ? "new" : "existing";
   const workflowId = trimOptional(params.get("workflowId"));
+  const templatesEnabled = isWorkflowTemplatesEnabled();
+  const templateBrowserOpen =
+    templatesEnabled && trimOptional(params.get("panel")) === "templates";
+  const templateId = templateBrowserOpen
+    ? trimOptional(params.get("templateId"))
+    : "";
   const workflowSource =
     trimOptional(params.get("workflowSource")) === "published"
       ? "published"
       : "draft";
-  const canonicalHref =
+  const canonicalBaseHref =
     isWorkflowEditorRoute && scopeId && teamId
       ? buildTeamMemberWorkflowStudioHref({
           memberId: mode === "existing" ? routeMemberId : undefined,
@@ -437,6 +453,18 @@ function readPathSegments(): {
               : undefined,
         })
       : currentHref;
+  const canonicalUrl = new URL(
+    canonicalBaseHref || pathname || "/",
+    typeof window === "undefined" ? "http://localhost" : window.location.origin,
+  );
+  const returnTo = trimOptional(params.get("returnTo"));
+  if (workflowId) canonicalUrl.searchParams.set("workflowId", workflowId);
+  if (returnTo) canonicalUrl.searchParams.set("returnTo", returnTo);
+  if (templateBrowserOpen) canonicalUrl.searchParams.set("panel", "templates");
+  if (templateBrowserOpen && templateId) {
+    canonicalUrl.searchParams.set("templateId", templateId);
+  }
+  const canonicalHref = `${canonicalUrl.pathname}${canonicalUrl.search}`;
 
   return {
     canonicalHref,
@@ -444,6 +472,9 @@ function readPathSegments(): {
     mode,
     scopeId,
     teamId,
+    templateBrowserOpen,
+    templateId,
+    templatesEnabled,
     workflowId,
     workflowSource,
   };
@@ -1203,6 +1234,29 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setDirty(false);
     return nextRevision;
   }, [advanceDraftRevision, invalidateTemplateUndo]);
+  const updateTemplateBrowserLocation = React.useCallback(
+    (open: boolean, selectedTemplateId = "") => {
+      const params = new URLSearchParams(window.location.search);
+      if (open && route.templatesEnabled) {
+        params.set("panel", "templates");
+        if (selectedTemplateId.trim()) {
+          params.set("templateId", selectedTemplateId.trim());
+        } else {
+          params.delete("templateId");
+        }
+      } else {
+        params.delete("panel");
+        params.delete("templateId");
+      }
+      const search = params.toString();
+      const nextHref = `${window.location.pathname}${search ? `?${search}` : ""}`;
+      const currentHref = `${window.location.pathname}${window.location.search}`;
+      if (nextHref !== currentHref) {
+        history.push(nextHref);
+      }
+    },
+    [route.templatesEnabled],
+  );
   const yamlEditHasUnappliedChanges = Boolean(
     yamlPanelOpen && yamlEditBuffer !== yamlEditSnapshot,
   );
@@ -3336,6 +3390,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       editableDocument && !workflowLoading && !workflowDraftEditingBlocked,
     ),
     closeNodeLibrary: () => setNodeLibraryOpen(false),
+    closeTemplateBrowser: () => updateTemplateBrowserLocation(false),
     closeYamlPanel: () => {
       closeYamlPanelWithConfirmation();
     },
@@ -3436,7 +3491,18 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
       }
 
       if (closeYamlPanelWithConfirmation()) {
+        updateTemplateBrowserLocation(false);
         setNodeLibraryOpen(true);
+      }
+    },
+    openTemplateBrowser: () => {
+      if (!route.templatesEnabled || workflowDraftEditingBlocked) {
+        return;
+      }
+
+      if (closeYamlPanelWithConfirmation()) {
+        setNodeLibraryOpen(false);
+        updateTemplateBrowserLocation(true);
       }
     },
     openDraftRunPanel: () => {
@@ -3559,6 +3625,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     setSelectedStepConfigurationError,
     setWorkflowTitle,
     teamName,
+    selectTemplate: (templateId: string) =>
+      updateTemplateBrowserLocation(true, templateId),
+    templateBrowserOpen: route.templateBrowserOpen,
+    templateId: route.templateId,
+    templatesEnabled: route.templatesEnabled,
     updateSelectedStepConfiguration,
     undoAppliedTemplate,
     workflowTitle,

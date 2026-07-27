@@ -13,6 +13,7 @@ type WorkflowStudioCanvasProps = {
   readonly emptyDescription?: string;
   readonly nodes: readonly Node<StudioGraphNodeData>[];
   readonly onAddFirstStep?: () => void;
+  readonly onStartFromTemplate?: () => void;
   readonly onCanvasSelect?: () => void;
   readonly onConnectNodes?: (sourceNodeId: string, targetNodeId: string) => void;
   readonly onDeleteEdges?: (edgeIds: string[]) => Promise<void> | void;
@@ -22,6 +23,8 @@ type WorkflowStudioCanvasProps = {
   readonly onNodeSelect?: (nodeId: string) => void;
   readonly selectedEdgeId?: string;
   readonly selectedNodeId?: string;
+  readonly showTemplateLauncher?: boolean;
+  readonly templateLauncherRef?: React.Ref<HTMLButtonElement>;
 };
 
 const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
@@ -30,6 +33,7 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
   fitRequest = 0,
   nodes,
   onAddFirstStep,
+  onStartFromTemplate,
   onCanvasSelect,
   onConnectNodes,
   onDeleteEdges,
@@ -39,6 +43,8 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
   onNodeSelect,
   selectedEdgeId,
   selectedNodeId,
+  showTemplateLauncher,
+  templateLauncherRef,
 }) => (
   <div
     data-testid="workflow-studio-canvas"
@@ -65,6 +71,9 @@ const WorkflowStudioCanvas: React.FC<WorkflowStudioCanvasProps> = ({
           <WorkflowStudioEmptyState
             description={emptyDescription}
             onAddFirstStep={onAddFirstStep}
+            onStartFromTemplate={onStartFromTemplate}
+            showTemplateLauncher={showTemplateLauncher}
+            templateLauncherRef={templateLauncherRef}
           />
         ) : null
       }

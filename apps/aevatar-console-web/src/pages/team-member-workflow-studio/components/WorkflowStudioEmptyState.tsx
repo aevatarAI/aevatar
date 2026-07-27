@@ -1,16 +1,23 @@
 import { PlusOutlined } from "@ant-design/icons";
 import { Button, Typography } from "antd";
 import React from "react";
+import { t } from "@/shared/i18n/messages";
 
 type WorkflowStudioEmptyStateProps = {
   readonly description?: string;
   readonly onAddFirstStep?: () => void;
+  readonly onStartFromTemplate?: () => void;
+  readonly showTemplateLauncher?: boolean;
+  readonly templateLauncherRef?: React.Ref<HTMLButtonElement>;
   readonly title?: string;
 };
 
 const WorkflowStudioEmptyState: React.FC<WorkflowStudioEmptyStateProps> = ({
   description = "Start this workflow by adding the first step.",
   onAddFirstStep,
+  onStartFromTemplate,
+  showTemplateLauncher = false,
+  templateLauncherRef,
   title = "Add first step",
 }) => (
   <div
@@ -47,6 +54,33 @@ const WorkflowStudioEmptyState: React.FC<WorkflowStudioEmptyStateProps> = ({
     >
       {description}
     </Typography.Text>
+    {showTemplateLauncher ? (
+      <button
+        aria-label={t(
+          "teamMemberWorkflowStudio.templates.launcherAria",
+          "Start from a workflow template",
+        )}
+        onClick={onStartFromTemplate}
+        ref={templateLauncherRef}
+        style={{
+          background: "transparent",
+          border: 0,
+          color: "#2563eb",
+          cursor: "pointer",
+          font: "inherit",
+          minHeight: 44,
+          padding: "8px 10px",
+          textDecoration: "underline",
+          textUnderlineOffset: 3,
+        }}
+        type="button"
+      >
+        {t(
+          "teamMemberWorkflowStudio.templates.launcher",
+          "or start from a template",
+        )}
+      </button>
+    ) : null}
   </div>
 );
 
