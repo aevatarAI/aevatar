@@ -1,6 +1,7 @@
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,5 +22,6 @@ public sealed class StudioInfrastructureServiceCollectionExtensionsTests
             .ContainSingle()
             .Which.ImplementationType.Should()
             .Be(typeof(ProjectionChatConversationContinuationAdmissionReader));
+        services.Should().ContainSingle(x => x.ServiceType == typeof(IWorkflowTemplateCatalogQueryPort));
     }
 }

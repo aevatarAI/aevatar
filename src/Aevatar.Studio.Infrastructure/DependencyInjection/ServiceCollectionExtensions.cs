@@ -14,6 +14,7 @@ using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.Middleware;
 using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Infrastructure.Storage;
+using Aevatar.Studio.Infrastructure.WorkflowTemplates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -43,6 +44,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowDocumentNormalizer>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
+        services.AddSingleton<IWorkflowTemplateCatalogQueryPort, EmbeddedWorkflowTemplateCatalogQueryPort>();
         // Refactor (iter16/cluster-meta-studio-actor-substrate):
         //   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts
         //   New principle: workspace facts authoritatively owned by StudioWorkspaceGAgent (per CLAUDE.md "权威状态" + Auric 2026-05-19 "架构级清晰")
