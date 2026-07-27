@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using Aevatar.BackendConsole.Hosting;
 using Aevatar.Mainnet.Host.Api.BackendConsole;
 using Aevatar.Mainnet.Host.Api.Cqrs;
@@ -149,6 +150,45 @@ public sealed class BackendConsoleStaticAssetEndpointTests
         html.Should().Contain("data-obs-pinned=\"true\"");
         html.Should().Contain("不在当前筛选结果中");
         html.Should().NotContain("obsUpsertRunFromDetail(OBS_STATE.selectedId");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryNavigation_ShouldClearDirectLookupIntentForNormalRunSelection()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain(
+            "var targetScope=('scope' in overrides)?(overrides.scope||'mine'):OBS_STATE.scope;");
+        html.Should().Contain(
+            "if(overrides.run&&targetScope!=='all'&&OBS_DIRECT_RUNS[overrides.run])");
+        html.Should().Contain("delete OBS_DIRECT_RUNS[overrides.run]");
+        html.Should().Contain("obsInvalidateDetail(overrides.run)");
+        html.Should().Contain("if(directIntentCleared&&location.hash===next){ render(); return; }");
+        html.Should().Contain("if(row.getAttribute('data-obs-pinned')==='true') return;");
+
+        // Selecting a run while observing every scope keeps the admin-endpoint intent, because a
+        // cross-scope list row proves nothing about the current account's own scope.
+        html.Should().NotContain(
+            "if(overrides.run&&overrides.scope!=='all'&&OBS_DIRECT_RUNS[overrides.run])");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryDetail_ShouldIgnoreResponsesFromAnOlderScopeOrRequest()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("var OBS_DETAIL_REQUESTS={};");
+        html.Should().Contain("var scopeVersion=OBS_DETAIL_SCOPE_VERSION");
+        html.Should().Contain("var requestId=obsNextDetailRequest(runId)");
+        html.Should().Contain("OBS_DETAIL_SCOPE_VERSION++");
+
+        // Both the fulfilled and the rejected detail handler must drop stale responses, otherwise a
+        // late failure from an older scope or request overwrites the current run detail.
+        const string staleGuard =
+            "if(!obsDetailRequestCurrent(runId,requestId,scopeVersion)) return false;";
+        Regex.Matches(html, Regex.Escape(staleGuard)).Count.Should().Be(2);
     }
 
     [Fact]
