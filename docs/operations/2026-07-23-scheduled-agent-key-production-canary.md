@@ -79,9 +79,10 @@ from the projected automation/run state and the independent NyxID key state.
   that exact selection in place after the canary.
 - Do not delete the member, delete the draft, retire the revision, or archive
   the Team while credential revocation is pending.
-- `retry-revocation` must reuse the original delete `operationId` and
-  `idempotencyKey`. A fresh bearer is required; fresh operation identities are
-  forbidden.
+- Every pending or failed-track cleanup attempt must replay the same canonical
+  DELETE with the original normalized owner, reason, `operationId`, and
+  `idempotencyKey`. Derive a fresh bearer before each replay; fresh delete
+  identities are forbidden.
 - Do not use `kubectl exec`, `apply`, `delete`, rollout restart, or any other
   workload mutation in this runbook.
 - Use only the reviewed service ports from the immutable release manifest in
@@ -1623,19 +1624,32 @@ transition is mandatory.
 
 ### 16. Delete And Wait For Both Revocation Tracks
 
-Create the delete body once. This exact file is also the only valid
-`retry-revocation` body.
+Create the canonical delete body once. Every pending or failed-track replay
+uses this same file; only the Host-derived bearer may be fresh.
 
 ```bash
 set_failure_context "delete" "$DELETE_OPERATION_ID"
 jq -n \
   --arg operationId "$DELETE_OPERATION_ID" \
-  --arg idempotencyKey "$DELETE_IDEMPOTENCY_KEY" '
-  {operationId: $operationId, idempotencyKey: $idempotencyKey}
+  --arg idempotencyKey "$DELETE_IDEMPOTENCY_KEY" \
+  --arg scopeId "$SCOPE_ID" \
+  --arg teamId "$TEAM_ID" \
+  --arg memberId "$MEMBER_ID" '
+  {
+    reason: "scheduled_agent_key_canary_cleanup",
+    operationId: $operationId,
+    idempotencyKey: $idempotencyKey,
+    owner: {
+      kind: "studio_member_automation",
+      scopeId: $scopeId,
+      teamId: $teamId,
+      memberId: $memberId
+    }
+  }
 ' > "$CANARY_STATE_DIR/delete.json"
 
 STATUS="$(api_request DELETE \
-  "/api/scopes/$SCOPE_ID/teams/$TEAM_ID/members/$MEMBER_ID/automations/$SCHEDULE_ID" \
+  "/api/schedules/$SCHEDULE_ID" \
   "$CANARY_STATE_DIR/delete-response.json" \
   "$CANARY_STATE_DIR/delete.json")"
 set_failure_context "delete" "$DELETE_OPERATION_ID" "http_$STATUS" "delete_failed"
@@ -1649,6 +1663,10 @@ jq -e \
   and .operationId == $operation
 ' "$CANARY_STATE_DIR/delete-response.json" >/dev/null
 ```
+
+The `202 Accepted` receipt is admission only. Continue reading the canonical
+owner detail until both revocation tracks are terminal and the row becomes not
+found.
 
 Use one bounded observer. While the public row is visible, its two track values
 must be exact implemented values and an empty historical value fails closed.
@@ -1778,9 +1796,9 @@ fi
 
 If the first observer did not reach `404`, refresh the bearer through the normal
 login path, overwrite only the existing `STUDIO_TOKEN_FILE`, and re-run the
-owner gate without printing either subject. Call `retry-revocation` only after
-the last detail read reports `revocation_pending`, `revocationPending == true`,
-and at least one `Pending` or `Failed` track:
+owner gate without printing either subject. Replay the same canonical DELETE
+only after the last detail read reports `revocation_pending`,
+`revocationPending == true`, and at least one `Pending` or `Failed` track:
 
 ```bash
 if test "$REVOCATION_RETRY_REQUIRED" = "true"; then
@@ -1807,11 +1825,11 @@ if test "$REVOCATION_RETRY_REQUIRED" = "true"; then
   test "$(jq -er '.profile.subject' "$CANARY_STATE_DIR/auth-me-retry.json")" = \
     "$(jq -er '.id' "$CANARY_STATE_DIR/nyxid-whoami-retry.json")"
 
-  STATUS="$(api_request POST \
-    "/api/scopes/$SCOPE_ID/teams/$TEAM_ID/members/$MEMBER_ID/automations/$SCHEDULE_ID/retry-revocation" \
-    "$CANARY_STATE_DIR/retry-revocation-response.json" \
+  STATUS="$(api_request DELETE \
+    "/api/schedules/$SCHEDULE_ID" \
+    "$CANARY_STATE_DIR/delete-replay-response.json" \
     "$CANARY_STATE_DIR/delete.json")"
-  expect_status 202 "$STATUS" retry-revocation
+  expect_status 202 "$STATUS" delete-replay
   jq -e \
     --arg schedule "$SCHEDULE_ID" \
     --arg operation "$DELETE_OPERATION_ID" '
@@ -1819,7 +1837,7 @@ if test "$REVOCATION_RETRY_REQUIRED" = "true"; then
     and .status == "pending"
     and .scheduleId == $schedule
     and .operationId == $operation
-  ' "$CANARY_STATE_DIR/retry-revocation-response.json" >/dev/null
+  ' "$CANARY_STATE_DIR/delete-replay-response.json" >/dev/null
 
   wait_for_automation_terminal
 fi
@@ -1828,8 +1846,9 @@ test "$REVOCATION_TERMINAL_OBSERVED" = "true"
 test "$LAST_DELETE_HTTP_STATUS" = "404"
 ```
 
-If another retry is necessary, repeat only that block with a fresh bearer and
-the unchanged `delete.json`. Never replace either delete identity.
+If another replay is necessary, repeat only that block with a fresh bearer and
+the unchanged canonical DELETE path and `delete.json`. Never replace the owner,
+reason, or either delete identity.
 
 The filtered operational audit evidence proves both tracks were terminal before the
 detail `404` was accepted. Independently require the captured NyxID key ID and
@@ -2076,9 +2095,9 @@ timestamps for diagnosis.
 ### Revocation Pending
 
 An automation row must remain visible while either NyxID or Vault revocation is
-unfinished. Refresh the owner bearer, re-prove the owner/scope, and call
-`retry-revocation` with the original delete body. Never delete the member or
-archive the Team to make a pending row disappear.
+unfinished. Refresh the owner bearer, re-prove the owner/scope, and replay the
+same `DELETE /api/schedules/{scheduleId}` with the original `delete.json`.
+Never delete the member or archive the Team to make a pending row disappear.
 
 If the error indicates a blocked missing Vault secret reference, ordinary
 retry cannot repair it. Stop and use the separately governed Host/Admin
