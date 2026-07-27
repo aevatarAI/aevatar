@@ -4,13 +4,13 @@
 
 **Goal:** Publish a public Ornn skill named `verify-codex-exec` that runs one canonical managed `codex_exec` smoke test and reports an account-scoped verdict without false positives or credential disclosure.
 
-**Architecture:** Keep the Ornn package to one `SKILL.md` declaring only the existing `codex_exec` tool. Develop and commit the package in an isolated Ornn worktree, validate it against the live Ornn format endpoint, publish it privately, run one authenticated end-to-end Aevatar check, and only then switch the immutable package version to public and verify anonymous visibility.
+**Architecture:** Keep the Ornn package to one `SKILL.md` declaring only the existing `codex_exec` tool. Develop and commit the package in an isolated Ornn worktree, validate it against the live Ornn format endpoint, publish it privately, deploy the focused direct-ingress NyxID authority propagation fix from `2026-07-27-direct-responses-nyxid-authority.md`, run one authenticated end-to-end Aevatar check, and only then switch the immutable package version to public and verify anonymous visibility.
 
 **Tech Stack:** Ornn skill package format, Markdown/YAML frontmatter, NyxID CLI, Ornn `/api/v1` API, Aevatar `/v1/responses`, shell assertions with `jq`, Git worktrees.
 
 ## Global Constraints
 
-- Do not modify Aevatar runtime code or production configuration.
+- Keep Ornn package work separate from Aevatar runtime work. The only Aevatar prerequisite is the typed authority propagation fix in `docs/superpowers/plans/2026-07-27-direct-responses-nyxid-authority.md`; do not widen its scope or change production configuration.
 - Use the canonical target `managed_sandbox`, workspace `empty_git`, prompt `Reply with exactly CODEX_EXEC_READY`, and `timeout_secs=180`.
 - Invoke `codex_exec` exactly once per verification and never retry automatically.
 - Declare the Ornn category as `tool-based` and the tool list as exactly `codex_exec`.
@@ -326,7 +326,7 @@ Expected: one commit containing only the public skill source.
 
 **Interfaces:**
 
-- Consumes: authenticated NyxID session, validated ZIP, Aevatar model `chrono-llm/gpt-5.5`.
+- Consumes: authenticated NyxID session, validated ZIP, Aevatar model `chrono-llm/gpt-5.5`, and a deployed Aevatar build containing the direct-ingress typed NyxID authority propagation fix.
 - Produces: private Ornn GUID/version/hash and one successful real `codex_exec` result before public exposure.
 
 - [ ] **Step 1: Recheck that the exact name is still unused**
@@ -681,5 +681,5 @@ The final report must include:
 - public Ornn GUID, version, and package hash;
 - live Aevatar verdict and redacted diagnostic ID;
 - exact public invocation syntax;
-- confirmation that Aevatar runtime code/configuration was unchanged;
+- confirmation that the only Aevatar runtime change was typed NyxID authority propagation for direct Responses, Messages, and Chat Completions ingress, with no feature-flag or production-configuration widening;
 - confirmation that no credential or token was written to package files or reported output.
