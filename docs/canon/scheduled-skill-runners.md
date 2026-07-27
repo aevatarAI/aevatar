@@ -60,6 +60,27 @@ ownerMemberId={memberId}
 
 `/api/schedules` is the canonical HTTP surface for listing, reading, creating, updating, enabling, disabling, deleting, and run-now admission. The nested Studio member automation route is not a CRUD/action route.
 
+Deletion and any replay while credential revocation remains pending use the same canonical request:
+
+```http
+DELETE /api/schedules/{scheduleId}
+Content-Type: application/json
+
+{
+  "reason": "scheduled_agent_key_canary_cleanup",
+  "operationId": "delete-operation-...",
+  "idempotencyKey": "delete-idempotency-...",
+  "owner": {
+    "kind": "studio_member_automation",
+    "scopeId": "scope-...",
+    "teamId": "team-...",
+    "memberId": "m-..."
+  }
+}
+```
+
+The exact same normalized owner, `operationId`, `idempotencyKey`, and reason are replayed while revocation is pending. The Host derives a fresh authenticated bearer on each request; bearer authority is never supplied in the body. There is no nested delete or public `retry-revocation` route. A `202 Accepted` receipt is admission only. Callers reread the canonical owner-aware detail until both revocation tracks are terminal and the row becomes not found.
+
 ## Stable Ownership And Generic Isolation
 
 The persisted automation owner is exactly `TeamMemberAutomationOwner(scopeId, memberId, teamId)`. The `scopeId`, `teamId`, and `memberId` tuple is the stable owner identity for Studio member automation schedules. Once a schedule is team-owned, its owner tuple cannot change. A `scheduleId` by itself is never sufficient authority, and a mismatched scope, team, or member is exposed as not found rather than leaking another owner's resource.
@@ -97,13 +118,13 @@ The same view exposes `credentialSourceKind`, `credentialExpiresAtUtc`, `credent
 
 Channel-originated `agent_builder.run_agent` uses the catalog-admitted management path and calls `IScheduledDispatchApplicationService.RunNowAsync` for scheduled workflow agents.
 
-Disable, enable, and delete actions use scheduled dispatch lifecycle contracts and catalog tombstones. Delete tools pass transient bearer authority in the tombstone command; the catalog actor commits the revocation intent and tombstone before invoking the dual-track executor. The bearer is not persisted. Failed tracks remain durable and bearer-bound sessions may retry them independently.
+Disable, enable, and delete actions use scheduled dispatch lifecycle contracts and catalog tombstones. Deletion always uses the canonical owner-aware `DELETE` request above. The Host passes its freshly derived transient bearer authority in the tombstone command; the catalog actor commits the revocation intent and tombstone before invoking the dual-track executor. The bearer is not persisted. Failed tracks remain durable, and an exact delete replay re-enters only unfinished revocation work under the same actor-owned operation identity.
 
 ## Credential Lifecycle
 
 Scheduled workflow creation does not let the request mapper write secrets and does not create a parallel Studio lifecycle. Before any external effect, the schedule actor commits the operation's stable identity, semantic mutation digest, exact credential owner, deterministic NyxID key name, and requested vault reference, then grants one caller a fenced effect attempt. That caller uses the shared materializer to issue/revoke NyxID and vault credentials, then reports completion or a stable failure back to the schedule actor. If initialization fails after materialization, compensation is an effect and the actor-owned locator plus failure/revocation intent remains the durable reconciliation fact.
 
-The semantic mutation digest excludes bearer, raw key, vault payload, and generated credential identifiers. An exact `operationId/idempotencyKey` replay must carry the same normalized schedule definition and target identities; payload drift is a conflict rather than a second schedule or a replacement of the original operation. Once cleanup has been committed, clients retry through the identity-only `retry-revocation` action. They do not reconstruct an earlier reauthorization draft, and the Host supplies a fresh authenticated owner credential only for that retry call.
+The semantic mutation digest excludes bearer, raw key, vault payload, and generated credential identifiers. An exact `operationId/idempotencyKey` replay must carry the same normalized schedule definition and target identities; payload drift is a conflict rather than a second schedule or a replacement of the original operation. Delete replay keeps the original normalized owner, reason, and operation identities, does not reconstruct an earlier reauthorization draft, and relies on the Host to derive fresh authenticated bearer authority for that canonical request.
 
 A vault track in `BLOCKED_MISSING_SECRET_REF` remains visible and cannot be cleared by attempt limits. Exact repair is a Host/Admin maintenance operation and is intentionally absent from ordinary scheduled agent tools, query ports, and the general catalog mutation interface.
 
