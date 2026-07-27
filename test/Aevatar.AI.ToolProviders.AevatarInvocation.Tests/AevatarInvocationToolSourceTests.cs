@@ -26,7 +26,7 @@ namespace Aevatar.AI.ToolProviders.AevatarInvocation.Tests;
 public sealed class AevatarInvocationToolSourceTests
 {
     [Fact]
-    public async Task AddAevatarInvocationTools_ShouldRegisterFiveTaggedToolSources()
+    public async Task AddAevatarInvocationTools_ShouldRegisterSixTaggedToolSources()
     {
         var services = new ServiceCollection();
         var harness = new Harness();
@@ -40,6 +40,7 @@ public sealed class AevatarInvocationToolSourceTests
 
         sources.OfType<InvokeGAgentToolSource>().Should().ContainSingle();
         sources.OfType<InvokeTeamToolSource>().Should().ContainSingle();
+        sources.OfType<InvokeMemberToolSource>().Should().ContainSingle();
         sources.OfType<StartWorkflowToolSource>().Should().ContainSingle();
         sources.OfType<ObserveRunToolSource>().Should().ContainSingle();
         sources.OfType<ReadWorkflowRunArtifactToolSource>().Should().ContainSingle();
@@ -51,6 +52,7 @@ public sealed class AevatarInvocationToolSourceTests
         tools.Select(static tool => tool.Name).Should().BeEquivalentTo(
             "aevatar_invoke_gagent",
             "aevatar_invoke_team",
+            "aevatar_invoke_member",
             "aevatar_start_workflow",
             "aevatar_observe_run",
             "aevatar_read_workflow_run_artifact");
@@ -132,6 +134,7 @@ public sealed class AevatarInvocationToolSourceTests
     [Theory]
     [InlineData("aevatar_invoke_gagent", "{}")]
     [InlineData("aevatar_invoke_team", """{"team_id":"team"}""")]
+    [InlineData("aevatar_invoke_member", """{"member_id":"member"}""")]
     [InlineData("aevatar_start_workflow", """{"workflow_id":"wf"}""")]
     [InlineData("aevatar_observe_run", "{}")]
     [InlineData("aevatar_read_workflow_run_artifact", "{}")]
@@ -713,6 +716,145 @@ public sealed class AevatarInvocationToolSourceTests
         output.RootElement.GetProperty("correlation_id").GetString().Should().Be("corr-team-alpha");
         output.RootElement.GetProperty("service_id").GetString().Should().Be("workflow-service");
         output.RootElement.GetProperty("stream_topic").GetString().Should().Be(result.StreamTopic);
+    }
+
+    [Fact]
+    public async Task InvokeMember_WhenServiceIsWorkflow_ResolvesMemberAndDispatchesPublishedService()
+    {
+        var harness = new Harness();
+        harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
+            "scope-1",
+            "m-alpha",
+            "svc-alpha");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "svc-alpha",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        harness.ServiceInvocationDispatcher.Receipt = new ServiceInvocationAcceptedReceipt
+        {
+            RequestId = "member-workflow-command",
+            ServiceKey = "tenant:aevatar-service:default:svc-alpha",
+            DeploymentId = "deployment-member-workflow",
+            TargetActorId = "workflow-run-actor",
+            EndpointId = "chat",
+            CommandId = "member-workflow-command",
+            CorrelationId = "member-workflow-correlation",
+            RunId = "member-workflow-service-run",
+        };
+        var dispatcher = harness.CreateDispatcher();
+
+        using var _ = PushContext(callId: "call-member-workflow");
+        var request = BuildChatRunRequest(
+            "response-member-workflow",
+            "call-member-workflow-tool",
+            "aevatar_invoke_member",
+            """
+            {
+              "member_id": "m-alpha",
+              "endpoint_id": "chat",
+              "payload": {
+                "prompt": "run member workflow",
+                "headers": { "x-workflow": "yes" }
+              },
+              "wait": "stream"
+            }
+            """);
+
+        var result = await dispatcher.InvokeMemberForChatRunAsync(request, request.ArgumentsJson);
+
+        result.ErrorCode.Should().BeEmpty(result.ToolExecutionResultJson);
+        result.RunId.Should().Be("member-workflow-service-run");
+        result.ScopeId.Should().Be("scope-1");
+        result.ActorId.Should().Be("workflow-run-actor");
+        result.ServiceId.Should().Be("svc-alpha");
+        result.EndpointId.Should().Be("chat");
+        result.StreamTopic.Should().Be("aevatar://scopes/scope-1/services/svc-alpha/runs/member-workflow-service-run");
+
+        harness.MemberResolver.LastScopeId.Should().Be("scope-1");
+        harness.MemberResolver.LastMemberId.Should().Be("m-alpha");
+        harness.ActorRegistry.LastScopeId.Should().BeNull();
+        harness.ActorDispatch.Calls.Should().BeEmpty();
+        harness.TeamResolver.LastTeamId.Should().BeNull();
+        harness.TeamInvocation.Request.Should().BeNull();
+        harness.WorkflowDispatch.Command.Should().BeNull();
+        harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle();
+        var dispatch = harness.ServiceInvocationDispatcher.Calls.Single();
+        dispatch.Request.Identity!.TenantId.Should().Be("scope-1");
+        dispatch.Request.Identity.ServiceId.Should().Be("svc-alpha");
+        dispatch.Request.EndpointId.Should().Be("chat");
+        dispatch.Request.Payload!.Unpack<ChatRequestEvent>().Prompt.Should().Be("run member workflow");
+        harness.AdmissionAuthorizer.Calls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task InvokeMember_ShouldResolveMemberInOwnerScope_WhenLarkChannelCarriesOwnerScope()
+    {
+        var harness = new Harness();
+        harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
+            "owner-scope-1",
+            "m-lark",
+            "svc-lark");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "svc-lark",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_member");
+
+        using var _ = PushContext(
+            callId: "call-member-lark",
+            scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: "lark");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-lark",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "go" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.MemberResolver.LastScopeId.Should().Be("owner-scope-1");
+        harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle();
+        harness.ServiceInvocationDispatcher.Calls.Single().Request.Identity!.TenantId.Should().Be("owner-scope-1");
+    }
+
+    [Fact]
+    public async Task InvokeMember_ShouldKeepCallerScope_WhenApiChatContextCarriesOwnerScope()
+    {
+        var harness = new Harness();
+        harness.MemberResolver.Resolution = new MemberPublishedServiceResolution(
+            "registration-scope-1",
+            "m-api",
+            "svc-api");
+        harness.ConfigureServiceTarget(
+            ServiceImplementationKind.Workflow,
+            serviceId: "svc-api",
+            endpointId: "chat",
+            primaryActorId: "workflow-definition-actor");
+        var tool = await harness.DiscoverToolAsync("aevatar_invoke_member");
+
+        using var _ = PushContext(
+            callId: "call-member-api",
+            scopeId: "registration-scope-1",
+            ownerScopeId: "owner-scope-1",
+            channelPlatform: "api-chat");
+        var output = await tool.ExecuteAsync("""
+            {
+              "member_id": "m-api",
+              "endpoint_id": "chat",
+              "payload": { "prompt": "go" },
+              "wait": "ack"
+            }
+            """);
+
+        ErrorCodeOrNull(output).Should().BeNull(output);
+        harness.MemberResolver.LastScopeId.Should().Be("registration-scope-1");
+        harness.ServiceInvocationDispatcher.Calls.Should().ContainSingle();
+        harness.ServiceInvocationDispatcher.Calls.Single().Request.Identity!.TenantId.Should().Be("registration-scope-1");
     }
 
     [Fact]
@@ -3171,6 +3313,7 @@ public sealed class AevatarInvocationToolSourceTests
         public RecordingActorDispatchPort ActorDispatch { get; } = new();
         public RecordingActorRegistryQueryPort ActorRegistry { get; } = new();
         public RecordingTeamEntryMemberResolver TeamResolver { get; } = new();
+        public RecordingMemberPublishedServiceResolver MemberResolver { get; } = new();
         public RecordingStaticGAgentInvocationPort TeamInvocation { get; } = new();
         public RecordingWorkflowDispatchService WorkflowDispatch { get; } = new();
         public RecordingServiceInvocationDispatcher ServiceInvocationDispatcher { get; } = new();
@@ -3197,6 +3340,7 @@ public sealed class AevatarInvocationToolSourceTests
                 ActorDispatch,
                 ActorRegistry,
                 TeamResolver,
+                MemberResolver,
                 TeamInvocation,
                 WorkflowDispatch,
                 ServiceInvocationResolution,
@@ -3283,6 +3427,7 @@ public sealed class AevatarInvocationToolSourceTests
             services.AddSingleton<IActorDispatchPort>(ActorDispatch);
             services.AddSingleton<IGAgentActorRegistryQueryPort>(ActorRegistry);
             services.AddSingleton<ITeamEntryMemberResolver>(TeamResolver);
+            services.AddSingleton<IMemberPublishedServiceResolver>(MemberResolver);
             services.AddSingleton<IStaticGAgentStreamInvocationPort<AGUIEvent>>(TeamInvocation);
             services.AddSingleton<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>(WorkflowDispatch);
             services.AddSingleton<IServiceInvocationDispatcher>(ServiceInvocationDispatcher);
@@ -3302,6 +3447,7 @@ public sealed class AevatarInvocationToolSourceTests
             {
                 "aevatar_invoke_gagent" => new InvokeGAgentToolSource(CreateDispatcher()),
                 "aevatar_invoke_team" => new InvokeTeamToolSource(CreateDispatcher()),
+                "aevatar_invoke_member" => new InvokeMemberToolSource(CreateDispatcher()),
                 "aevatar_start_workflow" => new StartWorkflowToolSource(CreateDispatcher()),
                 "aevatar_observe_run" => new ObserveRunToolSource(CreateDispatcher()),
                 "aevatar_read_workflow_run_artifact" => new ReadWorkflowRunArtifactToolSource(WorkflowQuery, RunBindingReader),
@@ -3363,6 +3509,26 @@ public sealed class AevatarInvocationToolSourceTests
             LastScopeId = scopeId;
             LastTeamId = teamId;
             LastEndpointId = endpointId;
+            if (Failure != null)
+                throw Failure;
+
+            return Task.FromResult(Resolution);
+        }
+    }
+
+    private sealed class RecordingMemberPublishedServiceResolver : IMemberPublishedServiceResolver
+    {
+        public string? LastScopeId { get; private set; }
+        public string? LastMemberId { get; private set; }
+        public MemberPublishedServiceResolution Resolution { get; set; } = new("scope-1", "member-1", "service-1");
+        public Exception? Failure { get; set; }
+
+        public Task<MemberPublishedServiceResolution> ResolveAsync(
+            MemberPublishedServiceResolveRequest request,
+            CancellationToken ct = default)
+        {
+            LastScopeId = request.ScopeId;
+            LastMemberId = request.MemberId;
             if (Failure != null)
                 throw Failure;
 
