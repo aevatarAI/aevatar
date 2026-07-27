@@ -91,6 +91,52 @@ The expected tool set is:
 The skill contains no executable scripts, embedded credentials, service IDs,
 environment variables, private production URLs, or user-specific fixtures.
 
+`nyxid_proxy` and `code_execute` are broad platform tools. The route and code
+allowlists below constrain agent behavior but are not a hard capability
+sandbox. Publication therefore also requires the existing sandbox isolation,
+the exact connected-service selection, the Ornn format validator, and a green
+Ornn security audit. If a narrower typed tool becomes available, it should
+replace the corresponding broad call in a later version.
+
+## Exact Proxy Route Contract
+
+Resolve one active connected Aevatar `UserService.id` with
+`nyxid_services`; every `nyxid_proxy` call supplies that exact `service_id`,
+`slug: "aevatar"`, and one of these routes only:
+
+| Purpose | Method and path |
+| --- | --- |
+| Owner LLM selection | `GET /api/user-config/llm` |
+| Team observation | `GET /api/scopes/{scopeId}/teams/{teamId}` |
+| Draft observation | `GET /api/workspace/workflow-drafts/{draftWorkflowId}?scopeId={scopeId}` |
+| Canonical automation detail | `GET /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}` |
+| Canonical automation list | `GET /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations` |
+| Scheduled member runs | `GET /api/scopes/{scopeId}/members/{memberId}/runs?take=10&scheduleId={scheduleId}&updatedFrom={utc}` |
+| Fire-origin diagnostic | `GET /api/schedules/{scheduleId}?scopeId={scopeId}&teamId={teamId}&memberId={memberId}` |
+| Delete automation | `DELETE /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}` |
+| Retry revocation | `POST /api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations/{scheduleId}/retry-revocation` |
+| Retire revision | `POST /api/scopes/{scopeId}/members/{memberId}/binding/revisions/{revisionId}:retire` |
+| Delete member | `DELETE /api/scopes/{scopeId}/members/{memberId}` |
+| Delete draft | `DELETE /api/workspace/workflow-drafts/{draftWorkflowId}?scopeId={scopeId}` |
+| Archive Team | `POST /api/scopes/{scopeId}/teams/{teamId}/archive` |
+
+Mutation bodies contain only the fields required by the live contract.
+Automation delete and `retry-revocation` use the same
+`{operationId,idempotencyKey}` body. The skill must not call generic
+`/api/schedules` mutation routes, `run-now`, unrelated Aevatar APIs, or a
+route missing the full owner tuple.
+
+Before production mutation, validation must confirm these paths and response
+fields against the connected Aevatar service. A missing route, changed field,
+or changed status code is a fail-closed prerequisite error, not permission to
+guess a replacement.
+
+The fire-origin route is a current production compatibility read. It is used
+only with the complete Team owner tuple and never for mutation. A follow-up
+Aevatar issue should replace this dependency with a canonical Team-owned
+diagnostic read or typed tool before the generic schedule compatibility branch
+is removed.
+
 ## Preconditions And Confirmation
 
 Before mutating anything, the skill must establish:
@@ -113,6 +159,44 @@ member/draft, and archive the temporary Team.
 
 If the user declines, the skill stops without mutation.
 
+## Execution Phases And Continuation
+
+The canary is intentionally multi-turn. Aevatar `/v1/responses` currently
+allows at most eight local tool rounds per response and observes one response
+for at most five minutes by default. A real cron target plus ordered cleanup
+cannot honestly fit inside one such response.
+
+The skill therefore uses these completed-response checkpoints:
+
+1. prerequisite inspection and one mutation confirmation;
+2. Team/member creation and workflow binding;
+3. schedule arming and pre-fire Agent Key evidence;
+4. post-fire evidence collection and automation deletion;
+5. terminal revocation observation and scaffold cleanup.
+
+Each checkpoint must complete before the eighth tool round and instruct the
+caller to continue with the returned `previous_response_id` plus a
+line-leading `::aevatar-scheduled-agent-key-canary <phase>` command. Repeating
+the trigger makes the skill load again even when a client reconstructs only
+bounded prior context. A checkpoint may include the non-secret resource ledger
+needed for continuation, with each identity labelled by its exact semantic
+type. It must not include credentials, permission digests, complete
+inventories, raw tool responses, or provider payloads.
+
+The schedule-arming phase computes its target only after the member binding is
+read-model visible. The target must be at least eight full minutes after that
+observation. The arming response returns the exact UTC continuation time and
+asks the caller to continue no earlier than 15 seconds after the target minute
+begins. If evidence or revocation is not yet visible, the skill returns another
+completed checkpoint rather than exhausting the tool-round limit, duplicating
+a mutation, or falling back to `run-now`.
+
+Continuation is valid only through the same authenticated caller and response
+session. If the continuation context is missing, the skill may resume only
+from the labelled non-secret checkpoint ledger and owner-correct reads. It must
+never reconstruct one identity from another or rediscover resources by display
+name alone.
+
 ## Identity And Resource Ledger
 
 Generate one random, non-secret canary suffix and derive distinct names for:
@@ -123,12 +207,18 @@ Generate one random, non-secret canary suffix and derive distinct names for:
 - schedule display name;
 - workflow output marker.
 
+Also derive distinct caller-supplied URL-safe IDs for the Team, member, and
+draft workflow. Supplying those exact IDs allows owner-correct recovery if a
+create response is lost; the IDs must have visibly different prefixes such as
+`team-canary-`, `m-canary-`, and `wf-canary-`.
+
 Use `code_execute` only for a fixed Python clock/random calculation with no
 user-supplied code or environment access. The result supplies the UTC target,
 suffix, and marker seed.
 
-The skill keeps an in-memory ledger containing only identities returned by
-successful operations:
+The skill keeps a request-local ledger containing only identities returned by
+successful operations and emits the same allowlisted fields in continuation
+checkpoints:
 
 - `scopeId`;
 - `teamId`;
@@ -144,6 +234,8 @@ successful operations:
 
 These identities remain semantically distinct. The skill must never infer one
 from another, assume equality, or send a draft workflow ID to a member API.
+Checkpoint fields use the explicit names above; a generic `resourceId` or
+ambiguous `workflowId` field is forbidden.
 
 The ledger must not contain a raw Agent Key, bearer token, Vault reference,
 credential ciphertext, refresh token, permission digest in final output, or a
@@ -180,8 +272,8 @@ before scheduling. An accepted bind receipt alone is not sufficient.
 
 ## Schedule Creation
 
-Compute a UTC target at least five full minutes in the future. Use a
-five-field annual cron:
+After binding readiness is visible, compute a UTC target at least eight full
+minutes in the future. Use a five-field annual cron:
 
 ```text
 <minute> <hour> <day-of-month> <month> *
@@ -228,11 +320,14 @@ A pass candidate must reach all of these states before the target minute:
 
 The skill compares NyxID inventory before and after schedule creation and
 selects a candidate only when its ID was absent from the baseline, its
-creation time is after the canary create attempt, its name starts with the
+creation time falls between 30 seconds before the canary create attempt and
+30 seconds after the post-create observation, its name starts with the
 reserved `studio-schedule-` prefix, both wildcard flags are false, and its
 allowed service IDs equal the selected owner LLM UserService singleton. There
-must be exactly one candidate. Zero or multiple candidates fail closed. The
-skill must not select a key merely because its name has a familiar prefix.
+must be exactly one candidate. Zero or multiple candidates fail closed. This
+is an explicitly labelled unique candidate correlation, not a direct
+schedule-to-key reference. The skill must not select a key merely because its
+name has a familiar prefix.
 
 ## Real Cron Evidence
 
@@ -241,9 +336,11 @@ target minute, then uses bounded reads to establish:
 
 - the canonical automation `lastFireAt` advanced from null;
 - its authoritative `stateVersion` advanced;
-- the member run list contains exactly one run for the canary `scheduleId`;
-- the run completed successfully;
-- the run output contains the unique marker;
+- the exact member run list contains exactly one run for the canary
+  `scheduleId`;
+- the run has the live wire value `completionStatus == 1` (`Completed`),
+  `lastSuccess == true`, successful status fields, and an empty `lastError`;
+- the run `lastOutput` contains the unique marker;
 - the same exact Agent Key remains constrained and its `last_used_at`
   changed from null to a timestamp after the target fire time.
 
@@ -268,11 +365,12 @@ No single observation is sufficient:
 
 The canary passes only when all four evidence classes agree.
 
-All observations are bounded. Binding and credential activation each receive
-at most two minutes, the cron observation ends two minutes after the target
-minute, and cleanup receives at most three minutes before returning
-`CLEANUP_INCOMPLETE`. A timeout never causes a second create or a `run-now`
-fallback.
+All observations are bounded across completed-response checkpoints. Binding
+and credential activation each receive at most two minutes, the cron
+observation ends two minutes after the target minute, and cleanup receives at
+most three minutes before returning `CLEANUP_INCOMPLETE`. A single response
+must stop early enough to complete before its tool-round or wall-clock budget.
+A timeout never causes a second create or a `run-now` fallback.
 
 Between reads, `code_execute` may run only the fixed
 `time.sleep(30); print("continue")` Python snippet. It must not receive
@@ -299,8 +397,17 @@ It uses only identities in the canary ledger and proceeds in this order:
 6. Delete the exact draft workflow and observe draft `404`.
 7. Archive the exact Team and observe `lifecycleStage == "archived"`.
 
+Use the canonical Team automation detail for the exact owner LLM selection
+and the NyxID/Vault revocation-track values. The narrower
+`aevatar_get_schedule` result is useful for ordinary schedule fields but is
+not evidence for fields it does not expose. A successful draft delete may
+produce an empty proxy result for HTTP `204`; the subsequent owner-correct
+draft `404` is the completion evidence.
+
 The Team remains as an archived lifecycle record because that is the
-canonical Team cleanup contract.
+canonical Team cleanup contract. An observed
+`lifecycleStage == "archived"` is terminal cleanup, not a residual resource
+that changes the verdict to `CLEANUP_INCOMPLETE`.
 
 The public canary does not require the operator-only
 `6202/StudioMemberAutomationRevocationCompleted` log. Its cleanup verdict is
@@ -321,6 +428,12 @@ The final response starts with exactly one verdict:
 - `CLEANUP_INCOMPLETE`: one or more created resources remain or their terminal
   state cannot be established.
 
+For a pre-mutation prerequisite or harness failure, use `FAIL` with
+`featureConclusion=not_evaluated` and a stable prerequisite error code. This
+does not claim that scheduled Agent Key execution is unavailable. For an
+executed canary failure, use `featureConclusion=failed`. A successful canary
+uses `featureConclusion=passed`.
+
 The report includes only:
 
 - target and observed UTC timestamps;
@@ -331,18 +444,23 @@ The report includes only:
   material;
 - stable error codes and the exact cleanup stage when applicable.
 
-The report must not print raw tool responses or complete inventories. Resource
-IDs may be shown only when cleanup is incomplete and the user needs the exact
-identity to recover.
+The report must not print raw tool responses or complete inventories. Final
+resource IDs may be shown only when cleanup is incomplete and the user needs
+the exact identity to recover. Intermediate continuation checkpoints may carry
+the allowlisted labelled ledger defined above.
 
 ## Failure Handling
 
 - Missing owner LLM selection or connected Aevatar service: stop before
-  mutation and report the prerequisite.
+  mutation and report `FAIL`, `featureConclusion=not_evaluated`, and the
+  prerequisite.
 - Bind or publication not visible: clean only the scaffold that was actually
   created.
 - Schedule create response lost: recover through the original operation and
   exact member schedule list.
+- Team, member, or bind response lost: query only the exact caller-supplied
+  Team/member/draft identity and continue only when one owner-correct resource
+  has the expected typed facts. Never create a replacement with a new ID.
 - Target minute missed before the schedule becomes active: delete the
   automation; do not call `run-now` and do not reinterpret a later annual fire
   as this canary.
@@ -374,6 +492,11 @@ Skill authoring follows a RED-GREEN-REFACTOR validation loop:
 The forward tests may create production canary resources only after the same
 explicit confirmation required by the published skill.
 
+The validation invocation must exercise the completed-response continuation
+contract rather than assuming one `/v1/responses` request can wait through the
+cron and cleanup. Every intermediate response must remain resumable and must
+stop before the eight-tool-round limit.
+
 ## Publication Flow
 
 The source package lives at:
@@ -391,16 +514,26 @@ flow:
    hash;
 4. trigger the Ornn security audit while the skill is private and require
    `status=completed` with `verdict=green`; a yellow verdict requires fixing or
-   explicitly resolving its findings before publication, and red blocks
-   publication;
+   otherwise resolving the findings in a new skill version and re-running the
+   audit until it is green; yellow and red both block publication;
 5. run the authenticated canary once and confirm cleanup;
 6. replace permissions with `isPrivate=false` and empty user/org share lists;
 7. verify public keyword/semantic search;
-8. verify the exact version can be read from the public catalog without
-   owner-only visibility;
+8. verify the exact version can be read through Ornn's authenticated public
+   catalog boundary and is not relying on an owner-only search scope;
 9. reread and report the audit verdict attached to the public version.
 
-If any gate fails, do not describe the skill as public or ready.
+If any post-ACL public read/search/audit gate fails, immediately restore the
+exact GUID to private with empty share lists and report the rollback. If any
+earlier gate fails, leave it private. In either case, do not describe the
+skill as public or ready.
+
+Production currently places all Ornn API access behind the authenticated
+NyxID proxy. Public therefore means visible to every authenticated Ornn user,
+not anonymous internet access. If a second non-owner profile is available,
+use it for the final read; otherwise require the exact ACL response,
+`scope=public` search result, and exact-version public-catalog read while
+recording that cross-account verification was unavailable.
 
 ## Aevatar And NyxID Boundaries
 
@@ -424,12 +557,16 @@ The work is complete when:
 
 - the skill passes baseline and forward behavior tests;
 - the Ornn package passes local and live format validation;
-- it is publicly searchable and publicly readable;
+- it is searchable and readable through Ornn's authenticated public catalog;
 - an authenticated user can run one wall-clock cron canary without
   `run-now`;
 - the run produces the unique marker;
 - the exact constrained Agent Key's `last_used_at` changes;
 - the owner-scoped fire record reports `manual=false`;
 - all temporary resources reach their canonical cleanup states;
-- no raw key, bearer, Vault reference, credential material, or unfiltered
-  inventory appears in package files, logs, or final output.
+- no raw key, bearer, Vault reference, or credential material appears in
+  package files, agent-authored checkpoint/final output, or retained evidence;
+- the skill never copies a complete `nyxid_api_keys` inventory into its own
+  messages or evidence. The existing platform-managed tool result may contain
+  non-secret key metadata and remains governed by the host's tool-trace
+  retention policy.
