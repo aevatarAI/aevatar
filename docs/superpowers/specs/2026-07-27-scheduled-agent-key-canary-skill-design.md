@@ -85,7 +85,8 @@ The expected tool set is:
 - `aevatar_list_schedules`;
 - `nyxid_services`;
 - `nyxid_api_keys`;
-- `nyxid_proxy`.
+- `nyxid_proxy`;
+- `code_execute`.
 
 The skill contains no executable scripts, embedded credentials, service IDs,
 environment variables, private production URLs, or user-specific fixtures.
@@ -96,6 +97,8 @@ Before mutating anything, the skill must establish:
 
 - the user is authenticated to Aevatar and NyxID;
 - the current Aevatar scope is available from the trusted tool context;
+- `code_execute` can run a fixed, non-secret Python clock probe before any
+  production mutation;
 - `GET /api/user-config/llm`, called through the exact connected Aevatar
   UserService, reports an explicit owner LLM selection backed by an active
   exact NyxID UserService;
@@ -119,6 +122,10 @@ Generate one random, non-secret canary suffix and derive distinct names for:
 - workflow draft name;
 - schedule display name;
 - workflow output marker.
+
+Use `code_execute` only for a fixed Python clock/random calculation with no
+user-supplied code or environment access. The result supplies the UTC target,
+suffix, and marker seed.
 
 The skill keeps an in-memory ledger containing only identities returned by
 successful operations:
@@ -266,6 +273,13 @@ at most two minutes, the cron observation ends two minutes after the target
 minute, and cleanup receives at most three minutes before returning
 `CLEANUP_INCOMPLETE`. A timeout never causes a second create or a `run-now`
 fallback.
+
+Between reads, `code_execute` may run only the fixed
+`time.sleep(30); print("continue")` Python snippet. It must not receive
+resource IDs, tool responses, credentials, user text, or dynamically
+generated code. Failure of this pacing probe before mutation is a harness
+prerequisite failure; it is not evidence that Agent Key scheduling is
+unavailable.
 
 ## Cleanup And Compensation
 
