@@ -1,6 +1,6 @@
 ---
 title: "Ornn Aevatar Platform Scheduled Agent Key Skill Evolution"
-status: "Approved in conversation; awaiting written-spec review"
+status: "Approved on 2026-07-27"
 owner: eanzhao
 ---
 
