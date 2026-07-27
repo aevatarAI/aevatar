@@ -146,6 +146,107 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task Create_HttpRoute_ShouldBindTypedOwnerAndReturnOwnerAwareLocation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "sch-alpha",
+            displayName = "Daily",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            enabled = true,
+            owner = new
+            {
+                kind = ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+                scopeId = "tenant",
+                teamId = "team-alpha",
+                memberId = "m-alpha",
+            },
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location!.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=tenant&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        var owner = new TeamMemberAutomationOwner("tenant", "m-alpha", "team-alpha");
+        host.Schedules.Created.Should().ContainSingle().Which.TeamAutomationOwner.Should().Be(owner);
+        host.Schedules.CreateContexts.Should().ContainSingle().Which!.TeamAutomationOwner.Should().Be(owner);
+    }
+
+    [Fact]
+    public async Task List_HttpRoute_ShouldBindTypedOwnerQuery()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync(
+            "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=tenant&ownerTeamId=team-alpha&ownerMemberId=m-alpha&take=17&cursor=next&includeTotalCount=true");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.Schedules.LastListQuery.Should().NotBeNull();
+        host.Schedules.LastListQuery!.TeamAutomationOwner.Should().Be(
+            new TeamMemberAutomationOwner("tenant", "m-alpha", "team-alpha"));
+        host.Schedules.LastListQuery.Take.Should().Be(17);
+        host.Schedules.LastListQuery.Cursor.Should().Be("next");
+        host.Schedules.LastListQuery.IncludeTotalCount.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunNow_HttpRoute_ShouldBindTypedOwnerBodyAndReturnOwnerAwareLocation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules/sch-alpha:run-now", new
+        {
+            owner = new
+            {
+                kind = ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+                scopeId = "tenant",
+                teamId = "team-alpha",
+                memberId = "m-alpha",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location!.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=tenant&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        host.Schedules.TeamRunNow.Should().ContainSingle().Which.Should().Be(
+            ("sch-alpha", new TeamMemberAutomationOwner("tenant", "m-alpha", "team-alpha")));
+    }
+
+    [Fact]
+    public async Task List_HttpRoute_ShouldRejectLegacyOwnerQueryShape()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync(
+            "/api/schedules?scopeId=tenant&teamId=team-alpha&memberId=m-alpha");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.LastListQuery.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Create_ShouldRejectRequestsWithoutExactlyOneTarget()
     {
         var result = await CreateAsync(
