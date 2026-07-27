@@ -153,10 +153,18 @@ If any gate fails, do not describe the skill as public or ready.
 
 ## Aevatar Boundary
 
-This work requires no Aevatar runtime or configuration change. The skill
-consumes the existing generic `codex_exec` tool contract. Eligibility,
-transparent credential readiness, feature flags, execution limits, timeout
-mapping, and sandbox cleanup remain owned by Aevatar and chrono-sandbox.
+The skill consumes the existing generic `codex_exec` tool contract and does not
+introduce a new execution path. Its private live gate exposed one Aevatar
+runtime propagation defect: the direct Responses, Messages, and Chat
+Completions facades dropped the already-authenticated typed NyxID authority
+before local-tool execution.
+
+Public promotion therefore depends on the focused Aevatar fix specified in
+`docs/superpowers/specs/2026-07-27-direct-responses-nyxid-authority-design.md`.
+That fix preserves the Host-verified NyxID subject in
+`AgentToolExecutionContext`; it does not change eligibility, transparent
+credential readiness, feature flags, execution limits, timeout mapping,
+sandbox cleanup, NyxID, or chrono-sandbox.
 
 The public Ornn skill does not widen the managed Codex rollout. A user outside
 the enabled population can discover and invoke the skill, but receives the
