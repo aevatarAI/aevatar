@@ -15,9 +15,21 @@ public enum WorkflowTemplateCompatibilityReason
     RequiredPrimitiveUnavailable = 2,
 }
 
+public sealed record WorkflowTemplateLocalizedText(
+    [property: JsonPropertyName("en-US")]
+    string EnUS,
+    [property: JsonPropertyName("zh-CN")]
+    string ZhCN);
+
+public sealed record WorkflowTemplateExpectedIO(
+    WorkflowTemplateLocalizedText Input,
+    WorkflowTemplateLocalizedText Output);
+
 public sealed record WorkflowTemplateRequirements(
     IReadOnlyList<string> RequiredPrimitives,
-    string WorkflowSchemaVersion);
+    string WorkflowSchemaVersion,
+    bool RequiresDefaultLLMRoute = false,
+    bool RequiresHumanInteraction = false);
 
 public sealed record WorkflowTemplateCompatibility(
     [property: JsonConverter(typeof(JsonStringEnumConverter))]
@@ -32,18 +44,24 @@ public sealed record WorkflowTemplateCompatibility(
 public sealed record WorkflowTemplateSummary(
     string TemplateId,
     string Revision,
-    string Title,
-    string Description,
+    WorkflowTemplateLocalizedText Title,
+    WorkflowTemplateLocalizedText Summary,
+    WorkflowTemplateLocalizedText Description,
     string Category,
+    IReadOnlyList<string> Tags,
+    WorkflowTemplateExpectedIO ExpectedIO,
     WorkflowTemplateRequirements Requirements,
     WorkflowTemplateCompatibility Compatibility);
 
 public sealed record WorkflowTemplateDetail(
     string TemplateId,
     string Revision,
-    string Title,
-    string Description,
+    WorkflowTemplateLocalizedText Title,
+    WorkflowTemplateLocalizedText Summary,
+    WorkflowTemplateLocalizedText Description,
     string Category,
+    IReadOnlyList<string> Tags,
+    WorkflowTemplateExpectedIO ExpectedIO,
     WorkflowTemplateRequirements Requirements,
     WorkflowTemplateCompatibility Compatibility,
     string WorkflowYaml);

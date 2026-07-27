@@ -1,0 +1,29 @@
+name: conditional_routing
+roles: []
+steps:
+  - id: prepare_input
+    type: transform
+    parameters:
+      op: trim
+    next: select_route
+  - id: select_route
+    type: switch
+    branches:
+      urgent: urgent_result
+      _default: standard_result
+  - id: urgent_result
+    type: assign
+    parameters:
+      target: routing_result
+      value: Urgent route selected.
+    next: return_result
+  - id: standard_result
+    type: assign
+    parameters:
+      target: routing_result
+      value: Standard route selected.
+    next: return_result
+  - id: return_result
+    type: transform
+    parameters:
+      op: identity

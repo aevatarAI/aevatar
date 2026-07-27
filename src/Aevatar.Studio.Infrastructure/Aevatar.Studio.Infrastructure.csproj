@@ -31,4 +31,9 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
     <PackageReference Include="YamlDotNet" />
   </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="WorkflowTemplates/Definitions/*.yaml"
+                      LogicalName="Aevatar.Studio.Infrastructure.WorkflowTemplates.Definitions.%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
