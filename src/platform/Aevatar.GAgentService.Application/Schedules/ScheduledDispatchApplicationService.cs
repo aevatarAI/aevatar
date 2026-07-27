@@ -41,7 +41,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
-        RejectTeamAutomationOwnerForGenericMutation(configuration, context);
         var normalized = await NormalizeAndAdmitMutationAsync(configuration, context, requireScheduleId: false, ct);
         await EnsureCreatableAsync(normalized.ScheduleId, ct);
         normalized = AdmitCredentialRequirement(
@@ -63,7 +62,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         ScheduledDispatchMutationContext? context = null,
         CancellationToken ct = default)
     {
-        RejectTeamAutomationOwnerForGenericMutation(configuration, context);
         var normalized = await NormalizeAndAdmitMutationAsync(configuration, context, requireScheduleId: true, ct);
         // A deleted schedule is a permanent tombstone: the actor rejects any
         // reconfigure, and the admission-only dispatch would swallow that
@@ -182,6 +180,21 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        if (query.TeamAutomationOwner != null)
+        {
+            return _queryPort.ListAsync(query with
+            {
+                Take = Math.Clamp(query.Take, 1, 200),
+                TeamAutomationOwner = NormalizeTeamOwner(query.TeamAutomationOwner),
+                TeamAutomationScopeId = null,
+                TeamAutomationTeamId = null,
+                TeamAutomationMemberId = null,
+                ExcludeTeamOwned = false,
+                IncludeDeleted = false,
+                ExcludeCompletedTeamAutomationDeletions = true,
+            }, ct);
+        }
+
         var teamAutomationScopeId = NormalizeNullable(query.TeamAutomationScopeId);
         if (teamAutomationScopeId is not null)
         {
@@ -463,6 +476,29 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             ct);
     }
 
+    public async Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var normalizedOwner = NormalizeTeamOwner(owner);
+        var existing = await GetTeamMutableScheduleAsync(normalizedScheduleId, normalizedOwner, ct);
+        if (HasTeamCredentialLifecycle(existing.Schedule))
+        {
+            throw new InvalidOperationException("team_automation_delete_requires_revocation_context");
+        }
+
+        var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
+        var admission = await _actorPort.DispatchDeleteTeamAutomationAsync(
+            actorId,
+            normalizedOwner,
+            NormalizeOptional(reason),
+            ct);
+        return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
+    }
+
     public async Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
@@ -551,6 +587,17 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     public async Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
         string scheduleId,
         TeamMemberAutomationOwner owner,
+        CancellationToken ct = default)
+    {
+        var normalizedScheduleId = NormalizeScheduleId(scheduleId);
+        var operationId = BuildBackendOperationId(normalizedScheduleId, "run-now");
+        var idempotencyKey = BuildBackendIdempotencyKey(normalizedScheduleId, operationId);
+        return await RunTeamAutomationNowAsync(normalizedScheduleId, owner, operationId, idempotencyKey, ct);
+    }
+
+    public async Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
         CancellationToken ct = default)
@@ -558,8 +605,11 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         var normalizedScheduleId = NormalizeScheduleId(scheduleId);
         var normalizedOwner = NormalizeTeamOwner(owner);
         var detail = await GetTeamMutableScheduleAsync(normalizedScheduleId, normalizedOwner, ct);
-        if (detail.Schedule.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatus.Active)
+        if (HasTeamCredentialLifecycle(detail.Schedule) &&
+            detail.Schedule.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatus.Active)
+        {
             throw new InvalidOperationException("team_automation_credential_not_active");
+        }
 
         AdmitRunNowCredentialRequirement(detail.Schedule);
         var actorId = await ResolveScheduleActorAsync(normalizedScheduleId, ct);
@@ -653,19 +703,6 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             : await _actorPort.DispatchDisableTeamAutomationAsync(
                 actorId, normalizedOwner, NormalizeOptional(reason), ct);
         return CreateMutationReceipt(normalizedScheduleId, actorId, admission);
-    }
-
-    private static void RejectTeamAutomationOwnerForGenericMutation(
-        ScheduledDispatchConfiguration configuration,
-        ScheduledDispatchMutationContext? context)
-    {
-        ArgumentNullException.ThrowIfNull(configuration);
-        if (configuration.TeamAutomationOwner == null && context?.TeamAutomationOwner == null)
-            return;
-
-        throw new ArgumentException(
-            "Team automation ownership is reserved for the dedicated team automation lifecycle.",
-            nameof(configuration));
     }
 
     private async Task<ScheduledDispatchDetail> GetTeamMutableScheduleAsync(
@@ -812,7 +849,7 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
         return new TeamMemberAutomationOwner(
             NormalizeRequired(owner.ScopeId, nameof(owner.ScopeId)),
             NormalizeRequired(owner.MemberId, nameof(owner.MemberId)),
-            NormalizeOptional(owner.TeamId));
+            NormalizeRequired(owner.TeamId, nameof(owner.TeamId)));
     }
 
     private static ScheduledInvocationAuthorizationOwner NormalizeAuthorizationOwner(
@@ -944,10 +981,12 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
     private static bool TeamOwnerEquals(TeamMemberAutomationOwner left, TeamMemberAutomationOwner? right) =>
         right != null &&
         string.Equals(left.ScopeId, right.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(left.TeamId, right.TeamId, StringComparison.Ordinal) &&
         string.Equals(left.MemberId, right.MemberId, StringComparison.Ordinal);
 
     private static bool TeamOwnerEquals(ScheduledDispatchSummary schedule, TeamMemberAutomationOwner owner) =>
         string.Equals(schedule.TeamOwnerScopeId, owner.ScopeId, StringComparison.Ordinal) &&
+        string.Equals(schedule.TeamId, owner.TeamId, StringComparison.Ordinal) &&
         string.Equals(schedule.TeamOwnerMemberId, owner.MemberId, StringComparison.Ordinal);
 
     private static bool TeamScopeEquals(ScheduledDispatchSummary schedule, string scopeId) =>
@@ -1129,6 +1168,39 @@ public sealed class ScheduledDispatchApplicationService : IScheduledDispatchAppl
             admission.CorrelationId,
             admission.AckedAt,
             "accepted");
+
+    private static bool HasTeamCredentialLifecycle(ScheduledDispatchSummary schedule) =>
+        schedule.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatus.Unspecified ||
+        schedule.CredentialGeneration > 0 ||
+        schedule.CredentialExpiresAt != null ||
+        schedule.RevocationPending ||
+        !string.IsNullOrWhiteSpace(schedule.TeamAutomationOperationId) ||
+        !string.IsNullOrWhiteSpace(schedule.TeamAutomationIdempotencyKey) ||
+        !string.IsNullOrWhiteSpace(schedule.CredentialOwnerAuthority) ||
+        !string.IsNullOrWhiteSpace(schedule.CredentialOwnerKind) ||
+        !string.IsNullOrWhiteSpace(schedule.CredentialOwnerSubject);
+
+    private static ScheduledInvocationAuthorizationOwner ResolveActiveCredentialOwner(
+        ScheduledDispatchSummary schedule)
+    {
+        if (string.IsNullOrWhiteSpace(schedule.CredentialOwnerAuthority) ||
+            string.IsNullOrWhiteSpace(schedule.CredentialOwnerKind) ||
+            string.IsNullOrWhiteSpace(schedule.CredentialOwnerSubject))
+        {
+            throw new InvalidOperationException("team_automation_credential_owner_missing");
+        }
+
+        return new ScheduledInvocationAuthorizationOwner(
+            schedule.CredentialOwnerAuthority,
+            schedule.CredentialOwnerKind,
+            schedule.CredentialOwnerSubject);
+    }
+
+    private static string BuildBackendOperationId(string scheduleId, string operation) =>
+        $"schedule-{NormalizeRequired(operation, nameof(operation))}-{NormalizeScheduleId(scheduleId)}-{Guid.NewGuid():N}";
+
+    private static string BuildBackendIdempotencyKey(string scheduleId, string operationId) =>
+        $"schedule:{NormalizeScheduleId(scheduleId)}:{NormalizeRequired(operationId, nameof(operationId))}";
 
     private ScheduledDispatchConfiguration AdmitCredentialRequirement(
         ScheduledDispatchConfiguration configuration,

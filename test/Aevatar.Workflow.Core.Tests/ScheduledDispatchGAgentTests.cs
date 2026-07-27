@@ -331,6 +331,26 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_WithTeamOwnerWithoutCredentialLifecycle_ShouldRegisterNextFireLease()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort(), scheduler);
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(cronExpression: "* * * * *", enabled: true);
+        command.TeamAutomationOwner = CreateTeamOwner();
+
+        await agent.HandleConfigureAsync(command);
+
+        agent.State.TeamAutomationOwner.Should().NotBeNull();
+        agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Unspecified);
+        agent.State.NextFireAt.Should().NotBeNull();
+        agent.State.NextFireLease.Should().NotBeNull();
+        scheduler.TimeoutRequests.Should().ContainSingle()
+            .Which.CallbackId.Should().Be(NextFireCallbackId);
+    }
+
+    [Fact]
     public async Task HandleConfigureAsync_WhenSchedulerFails_ShouldKeepPendingNextFireIntent()
     {
         var eventStore = new TestEventStore();

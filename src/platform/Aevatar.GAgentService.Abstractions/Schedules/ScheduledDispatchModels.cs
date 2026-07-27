@@ -28,6 +28,40 @@ public sealed record TeamMemberAutomationOwner(
     string MemberId,
     string TeamId = "");
 
+public static class ScheduledDispatchOwnerKinds
+{
+    public const string StudioMemberAutomation = "studio_member_automation";
+}
+
+public sealed record ScheduledDispatchOwner(
+    string Kind,
+    string ScopeId,
+    string TeamId,
+    string MemberId)
+{
+    public TeamMemberAutomationOwner ToTeamMemberAutomationOwner()
+    {
+        if (!string.Equals(Kind, ScheduledDispatchOwnerKinds.StudioMemberAutomation, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Unsupported scheduled dispatch owner kind '{Kind}'.",
+                nameof(Kind));
+        }
+
+        if (string.IsNullOrWhiteSpace(ScopeId))
+            throw new ArgumentException("Owner scopeId is required.", nameof(ScopeId));
+        if (string.IsNullOrWhiteSpace(TeamId))
+            throw new ArgumentException("Owner teamId is required.", nameof(TeamId));
+        if (string.IsNullOrWhiteSpace(MemberId))
+            throw new ArgumentException("Owner memberId is required.", nameof(MemberId));
+
+        return new TeamMemberAutomationOwner(
+            ScopeId.Trim(),
+            MemberId.Trim(),
+            TeamId.Trim());
+    }
+}
+
 public sealed record TeamAutomationActivationDecision(
     string ScheduleId,
     string DisplayName,
@@ -569,6 +603,13 @@ public interface IScheduledDispatchActorPort
     Task<DispatchAdmission> DispatchDeleteTeamAutomationAsync(
         string actorId,
         TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<DispatchAdmission> DispatchDeleteTeamAutomationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
         string reason,
@@ -695,6 +736,13 @@ public interface IScheduledDispatchApplicationService
         string reason,
         CancellationToken ct = default);
 
+    Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     Task<ScheduledDispatchDetail?> GetAsync(
         string scheduleId,
         CancellationToken ct = default);
@@ -799,6 +847,12 @@ public interface IScheduledDispatchApplicationService
         bool nyxIdRevoked,
         bool vaultRevoked,
         string errorCode,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+        string scheduleId,
+        TeamMemberAutomationOwner owner,
         CancellationToken ct = default) =>
         throw new NotSupportedException();
 

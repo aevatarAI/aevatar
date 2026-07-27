@@ -87,7 +87,7 @@ public sealed class TeamAutomationObservationCorrelationTests
 
         var result = await service.CompleteTeamAutomationRevocationAsync(
             "schedule-1",
-            new TeamMemberAutomationOwner("scope-1", "member-1"),
+            new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"),
             "operation-1",
             "idempotency-committed",
             "attempt-1",
@@ -104,7 +104,7 @@ public sealed class TeamAutomationObservationCorrelationTests
     private static TeamAutomationCredentialOperation CreateOperation() =>
         new(
             "schedule-1",
-            new TeamMemberAutomationOwner("scope-1", "member-1"),
+            new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"),
             "operation-1",
             "idempotency-1",
             "permission-1",
@@ -125,7 +125,7 @@ public sealed class TeamAutomationObservationCorrelationTests
         return new TeamAutomationActivationDecision(
             "schedule-1",
             "Schedule 1",
-            new TeamMemberAutomationOwner("scope-1", "member-1"),
+            new TeamMemberAutomationOwner("scope-1", "member-1", "team-1"),
             new ServiceIdentity
             {
                 TenantId = "scope-1",

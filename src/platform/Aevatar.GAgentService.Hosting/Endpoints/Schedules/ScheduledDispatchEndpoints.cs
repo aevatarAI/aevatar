@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions;
+using Aevatar.Capabilities;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgentService.Abstractions;
@@ -73,16 +74,25 @@ public static class ScheduledDispatchEndpoints
     {
         ScheduledDispatchConfiguration configuration;
         ScheduledDispatchMutationContext context;
+        TeamMemberAutomationOwner? owner;
         try
         {
             context = ResolveMutationContext(http);
-            configuration = await input.ToConfigurationAsync(
+            owner = input.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            if (owner != null)
+                context = context with { TeamAutomationOwner = owner };
+            configuration = (await input.ToConfigurationAsync(
                 input.ScheduleId,
                 catalogReader,
                 revisionCatalogReader,
                 context.AuthenticatedNyxIdOwnerSubject,
                 defaultMissingWorkflowScheduleAuth: true,
-                ct);
+                ct)) with
+            {
+                TeamAutomationOwner = owner,
+            };
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -92,7 +102,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.CreateAsync(configuration, context, ct);
-            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+            return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -111,16 +121,25 @@ public static class ScheduledDispatchEndpoints
     {
         ScheduledDispatchConfiguration configuration;
         ScheduledDispatchMutationContext context;
+        TeamMemberAutomationOwner? owner;
         try
         {
             context = ResolveMutationContext(http);
-            configuration = await input.ToConfigurationAsync(
+            owner = input.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            if (owner != null)
+                context = context with { TeamAutomationOwner = owner };
+            configuration = (await input.ToConfigurationAsync(
                 scheduleId,
                 catalogReader,
                 revisionCatalogReader,
                 context.AuthenticatedNyxIdOwnerSubject,
                 defaultMissingWorkflowScheduleAuth: true,
-                ct);
+                ct)) with
+            {
+                TeamAutomationOwner = owner,
+            };
         }
         catch (Exception ex) when (TryMapScheduleConfigurationError(ex, out var result))
         {
@@ -130,7 +149,7 @@ public static class ScheduledDispatchEndpoints
         try
         {
             var receipt = await schedules.UpdateAsync(scheduleId, configuration, context, ct);
-            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+            return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -139,6 +158,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> Enable(
+        HttpContext http,
         string scheduleId,
         ScheduledDispatchStateChangeHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
@@ -146,8 +166,13 @@ public static class ScheduledDispatchEndpoints
     {
         try
         {
-            var receipt = await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+            var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            var receipt = owner == null
+                ? await schedules.EnableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
+                : await schedules.EnableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
+            return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -156,6 +181,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> Disable(
+        HttpContext http,
         string scheduleId,
         ScheduledDispatchStateChangeHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
@@ -163,8 +189,13 @@ public static class ScheduledDispatchEndpoints
     {
         try
         {
-            var receipt = await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+            var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            var receipt = owner == null
+                ? await schedules.DisableAsync(scheduleId, input?.Reason ?? string.Empty, ct)
+                : await schedules.DisableTeamAutomationAsync(scheduleId, owner, input?.Reason ?? string.Empty, ct);
+            return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -173,6 +204,7 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> Delete(
+        HttpContext http,
         string scheduleId,
         [FromQuery] string? reason,
         [FromBody] ScheduledDispatchStateChangeHttpRequest? input,
@@ -181,8 +213,14 @@ public static class ScheduledDispatchEndpoints
     {
         try
         {
-            var receipt = await schedules.DeleteAsync(scheduleId, reason ?? input?.Reason ?? string.Empty, ct);
-            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+            var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            var deleteReason = reason ?? input?.Reason ?? string.Empty;
+            var receipt = owner == null
+                ? await schedules.DeleteAsync(scheduleId, deleteReason, ct)
+                : await schedules.DeleteTeamAutomationAsync(scheduleId, owner, deleteReason, ct);
+            return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
@@ -191,7 +229,12 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> List(
+        HttpContext http,
         [FromServices] IScheduledDispatchApplicationService schedules,
+        string? ownerKind = null,
+        string? ownerScopeId = null,
+        string? ownerTeamId = null,
+        string? ownerMemberId = null,
         string? scopeId = null,
         string? teamId = null,
         string? memberId = null,
@@ -200,35 +243,58 @@ public static class ScheduledDispatchEndpoints
         bool includeTotalCount = false,
         CancellationToken ct = default)
     {
-        var query = string.IsNullOrWhiteSpace(scopeId)
-            ? new ScheduledDispatchListQuery(
-                Take: take,
-                Cursor: cursor,
-                IncludeTotalCount: includeTotalCount)
-            : new ScheduledDispatchListQuery(
-                Take: take,
-                Cursor: cursor,
-                IncludeTotalCount: includeTotalCount,
-                TeamAutomationScopeId: scopeId,
-                TeamAutomationTeamId: teamId,
-                TeamAutomationMemberId: memberId);
+        if (HasLegacyOwnerQuery(scopeId, teamId, memberId))
+            return Results.BadRequest(new { error = "Use ownerKind, ownerScopeId, ownerTeamId, and ownerMemberId for schedule owner queries." });
+
+        ScheduledDispatchListQuery query;
+        try
+        {
+            var owner = ResolveOwnerFromQuery(ownerKind, ownerScopeId, ownerTeamId, ownerMemberId);
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            query = owner == null
+                ? new ScheduledDispatchListQuery(
+                    Take: take,
+                    Cursor: cursor,
+                    IncludeTotalCount: includeTotalCount)
+                : new ScheduledDispatchListQuery(
+                    Take: take,
+                    Cursor: cursor,
+                    IncludeTotalCount: includeTotalCount,
+                    TeamAutomationOwner: owner);
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
 
         return Results.Ok(await schedules.ListAsync(query, ct));
     }
 
     internal static async Task<IResult> Get(
+        HttpContext http,
         string scheduleId,
         [FromServices] IScheduledDispatchApplicationService schedules,
+        string? ownerKind = null,
+        string? ownerScopeId = null,
+        string? ownerTeamId = null,
+        string? ownerMemberId = null,
         string? scopeId = null,
         string? teamId = null,
         string? memberId = null,
         CancellationToken ct = default)
     {
+        if (HasLegacyOwnerQuery(scopeId, teamId, memberId))
+            return Results.BadRequest(new { error = "Use ownerKind, ownerScopeId, ownerTeamId, and ownerMemberId for schedule owner queries." });
+
         try
         {
-            var schedule = string.IsNullOrWhiteSpace(scopeId)
+            var owner = ResolveOwnerFromQuery(ownerKind, ownerScopeId, ownerTeamId, ownerMemberId);
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            var schedule = owner == null
                 ? await schedules.GetAsync(scheduleId, ct)
-                : await schedules.GetTeamScheduleAsync(scheduleId, scopeId, teamId, memberId, ct);
+                : await schedules.GetTeamAutomationAsync(scheduleId, owner, ct);
             return schedule == null ? Results.NotFound() : Results.Ok(schedule);
         }
         catch (ArgumentException ex)
@@ -258,19 +324,53 @@ public static class ScheduledDispatchEndpoints
     }
 
     internal static async Task<IResult> RunNow(
+        HttpContext http,
         string scheduleId,
+        ScheduledDispatchRunNowHttpRequest? input,
         [FromServices] IScheduledDispatchApplicationService schedules,
         CancellationToken ct = default)
     {
         try
         {
-            var receipt = await schedules.RunNowAsync(scheduleId, ct);
-            return Results.Accepted($"/api/schedules/{receipt.ScheduleId}", receipt);
+            var owner = input?.Owner?.ToTeamMemberAutomationOwner();
+            if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
+                return denied;
+            var receipt = owner == null
+                ? await schedules.RunNowAsync(scheduleId, ct)
+                : await schedules.RunTeamAutomationNowAsync(scheduleId, owner, ct);
+            return Results.Accepted(BuildScheduleLocation(receipt.ScheduleId, owner), receipt);
         }
         catch (Exception ex) when (TryMapScheduleMutationError(ex, out var result))
         {
             return result;
         }
+    }
+
+    private static bool TryCreateOwnerScopeAccessDeniedResult(
+        HttpContext http,
+        TeamMemberAutomationOwner? owner,
+        out IResult denied)
+    {
+        if (owner == null)
+        {
+            denied = Results.Empty;
+            return false;
+        }
+
+        return AevatarScopeAccessGuard.TryCreateScopeAccessDeniedResult(http, owner.ScopeId, out denied);
+    }
+
+    private static string BuildScheduleLocation(string scheduleId, TeamMemberAutomationOwner? owner)
+    {
+        var encodedScheduleId = Uri.EscapeDataString(scheduleId);
+        if (owner == null)
+            return $"/api/schedules/{encodedScheduleId}";
+
+        return $"/api/schedules/{encodedScheduleId}" +
+               $"?ownerKind={Uri.EscapeDataString(ScheduledDispatchOwnerKinds.StudioMemberAutomation)}" +
+               $"&ownerScopeId={Uri.EscapeDataString(owner.ScopeId)}" +
+               $"&ownerTeamId={Uri.EscapeDataString(owner.TeamId)}" +
+               $"&ownerMemberId={Uri.EscapeDataString(owner.MemberId)}";
     }
 
     private static ScheduledDispatchMutationContext ResolveMutationContext(HttpContext http)
@@ -313,6 +413,33 @@ public static class ScheduledDispatchEndpoints
         }
 
         return null;
+    }
+
+    private static bool HasLegacyOwnerQuery(string? scopeId, string? teamId, string? memberId) =>
+        !string.IsNullOrWhiteSpace(scopeId) ||
+        !string.IsNullOrWhiteSpace(teamId) ||
+        !string.IsNullOrWhiteSpace(memberId);
+
+    private static TeamMemberAutomationOwner? ResolveOwnerFromQuery(
+        string? ownerKind,
+        string? ownerScopeId,
+        string? ownerTeamId,
+        string? ownerMemberId)
+    {
+        if (string.IsNullOrWhiteSpace(ownerKind) &&
+            string.IsNullOrWhiteSpace(ownerScopeId) &&
+            string.IsNullOrWhiteSpace(ownerTeamId) &&
+            string.IsNullOrWhiteSpace(ownerMemberId))
+        {
+            return null;
+        }
+
+        return new ScheduledDispatchOwner(
+                ownerKind ?? string.Empty,
+                ownerScopeId ?? string.Empty,
+                ownerTeamId ?? string.Empty,
+                ownerMemberId ?? string.Empty)
+            .ToTeamMemberAutomationOwner();
     }
 
     internal static bool TryMapScheduleConfigurationError(Exception ex, out IResult result)
@@ -360,11 +487,19 @@ public static class ScheduledDispatchEndpoints
             case ScheduledDispatchConflictException conflict:
                 result = Results.Conflict(new { error = conflict.Message });
                 return true;
+            case InvalidOperationException invalidOperation when IsExpectedScheduleLifecycleError(invalidOperation.Message):
+                result = Results.BadRequest(new { error = invalidOperation.Message });
+                return true;
             default:
                 result = Results.Empty;
                 return false;
         }
     }
+
+    private static bool IsExpectedScheduleLifecycleError(string? message) =>
+        !string.IsNullOrWhiteSpace(message) &&
+        (message.StartsWith("team_automation_", StringComparison.Ordinal) ||
+         message.StartsWith("schedule_", StringComparison.Ordinal));
 
     internal static void RejectExternalCallerDurableCredential(Any? payload)
     {
@@ -394,6 +529,7 @@ public sealed record ScheduledDispatchConfigurationHttpRequest
     public string? Timezone { get; init; }
     public bool Enabled { get; init; } = true;
     public IReadOnlyDictionary<string, string>? Headers { get; init; }
+    public ScheduledDispatchOwnerHttpRequest? Owner { get; init; }
     public ScheduledDispatchEnvelopeTargetHttpRequest? Envelope { get; init; }
     public ScheduledDispatchServiceInvocationTargetHttpRequest? ServiceInvocation { get; init; }
 
@@ -800,7 +936,28 @@ public sealed record ScheduledDispatchPreviewHttpRequest
     public DateTimeOffset? FromUtc { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ScheduledDispatchOwnerHttpRequest
+{
+    public required string Kind { get; init; }
+    public required string ScopeId { get; init; }
+    public required string TeamId { get; init; }
+    public required string MemberId { get; init; }
+
+    public TeamMemberAutomationOwner ToTeamMemberAutomationOwner() =>
+        new ScheduledDispatchOwner(Kind, ScopeId, TeamId, MemberId)
+            .ToTeamMemberAutomationOwner();
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ScheduledDispatchStateChangeHttpRequest
 {
     public string? Reason { get; init; }
+    public ScheduledDispatchOwnerHttpRequest? Owner { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ScheduledDispatchRunNowHttpRequest
+{
+    public ScheduledDispatchOwnerHttpRequest? Owner { get; init; }
 }

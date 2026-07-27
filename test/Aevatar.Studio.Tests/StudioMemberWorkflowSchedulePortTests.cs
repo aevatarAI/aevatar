@@ -2497,6 +2497,21 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScheduledDispatchRunNowReceipt(
+                scheduleId,
+                $"scheduled-dispatch:{scheduleId}",
+                TestNow,
+                "backend-run-now-idempotency",
+                Accepted: true,
+                CommandId: "cmd-run-now",
+                CorrelationId: "corr-run-now",
+                AckedAt: TestNow,
+                AckStage: "accepted"));
+
         public Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
             string scheduleId,
             TeamMemberAutomationOwner owner,
