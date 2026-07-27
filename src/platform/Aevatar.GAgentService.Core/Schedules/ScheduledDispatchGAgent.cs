@@ -1544,7 +1544,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         !State.Completed &&
         !State.Deleted &&
         IsConfigured() &&
-        (State.TeamAutomationOwner == null ||
+        (!HasTeamCredentialLifecycle() ||
          HasUsableActiveTeamCredential(_timeProvider.GetUtcNow()));
 
     private async Task RecoverTeamCredentialExpiryAsync(CancellationToken ct)
