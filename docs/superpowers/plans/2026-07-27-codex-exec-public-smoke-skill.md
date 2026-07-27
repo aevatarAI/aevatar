@@ -108,17 +108,18 @@ jq -e '
 
 Expected: exit `0`. If an exact private/shared/public package appears, stop before creating or overwriting anything and inspect ownership/version instead.
 
-### Task 2: Create the minimal Ornn skill and enforce its contract
+### Task 2: Create, validate, and commit the minimal Ornn skill
 
 **Files:**
 
 - Create: `/Users/eanzhao/Code/.worktrees/ornn-verify-codex-exec/skills/verify-codex-exec/SKILL.md`
 - Delete after scaffolding: `/Users/eanzhao/Code/.worktrees/ornn-verify-codex-exec/skills/verify-codex-exec/agents/openai.yaml`
+- Package: `/tmp/verify-codex-exec-1.0.zip`
 
 **Interfaces:**
 
 - Consumes: Ornn live format rules and the canonical Aevatar `codex_exec` request/result contract.
-- Produces: a one-file Ornn package that makes exactly one managed tool call and applies strict success semantics.
+- Produces: a committed, live-Ornn-validated one-file package that makes exactly one managed tool call and applies strict success semantics.
 
 - [ ] **Step 1: Initialize the skill scaffold**
 
@@ -251,19 +252,7 @@ test "$(rg -c 'Invoke `codex_exec` exactly once' "$skill/SKILL.md")" = "1"
 
 Expected: every assertion exits `0`; only the final negative `rg` prints nothing.
 
-### Task 3: Validate the exact ZIP against Ornn and commit the source package
-
-**Files:**
-
-- Package: `/tmp/verify-codex-exec-1.0.zip`
-- Commit: `/Users/eanzhao/Code/.worktrees/ornn-verify-codex-exec/skills/verify-codex-exec/SKILL.md`
-
-**Interfaces:**
-
-- Consumes: the one-file source package from Task 2.
-- Produces: an Ornn-validated ZIP whose bytes are committed at source and ready for private upload.
-
-- [ ] **Step 1: Build the ZIP with one root folder**
+- [ ] **Step 5: Build the ZIP with one root folder**
 
 Run:
 
@@ -280,7 +269,7 @@ verify-codex-exec/
 verify-codex-exec/SKILL.md
 ```
 
-- [ ] **Step 2: Validate the ZIP through the live Ornn endpoint**
+- [ ] **Step 6: Validate the ZIP through the live Ornn endpoint**
 
 Run:
 
@@ -303,7 +292,7 @@ jq -e '
 
 Expected: exit `0`. On any violation, keep the skill private and return to Task 2.
 
-- [ ] **Step 3: Verify source cleanliness**
+- [ ] **Step 7: Verify source cleanliness**
 
 Run:
 
@@ -314,7 +303,7 @@ git -C /Users/eanzhao/Code/.worktrees/ornn-verify-codex-exec status --short
 
 Expected: only `?? skills/verify-codex-exec/` appears; `diff --check` exits `0`.
 
-- [ ] **Step 4: Commit the validated source**
+- [ ] **Step 8: Commit the validated source**
 
 Run:
 
@@ -328,7 +317,7 @@ git -C /Users/eanzhao/Code/.worktrees/ornn-verify-codex-exec commit \
 
 Expected: one commit containing only the public skill source.
 
-### Task 4: Publish privately, read back exactly, and run the live GREEN check
+### Task 3: Publish privately, read back exactly, and run the live GREEN check
 
 **Files:**
 
@@ -505,7 +494,7 @@ jq '
 
 Expected: output contains no bearer, agent key, request header, or secret reference.
 
-### Task 5: Promote the verified package to public and prove anonymous visibility
+### Task 4: Promote the verified package to public and prove anonymous visibility
 
 **Files:**
 
@@ -514,7 +503,7 @@ Expected: output contains no bearer, agent key, request header, or secret refere
 
 **Interfaces:**
 
-- Consumes: the exact private `verify-codex-exec@1.0` that passed Task 4.
+- Consumes: the exact private `verify-codex-exec@1.0` that passed Task 3.
 - Produces: public Ornn permissions plus anonymous exact search/read proof for the same GUID/version/hash.
 
 - [ ] **Step 1: Resolve the immutable GUID and current hash**
@@ -620,7 +609,7 @@ test -z "$public_hash" || test "$public_hash" = "$hash"
 
 Expected: the public package is anonymously readable. If the JSON surface omits `skillHash`, the exact GUID/version and file checks remain mandatory.
 
-### Task 6: Final verification and handoff
+### Task 5: Final verification and handoff
 
 **Files:**
 
@@ -630,7 +619,7 @@ Expected: the public package is anonymously readable. If the JSON surface omits 
 
 **Interfaces:**
 
-- Consumes: all local and live evidence from Tasks 1–5.
+- Consumes: all local and live evidence from Tasks 1–4.
 - Produces: final public skill identity, user invocation syntax, and a concise verification report.
 
 - [ ] **Step 1: Re-run source validation**
