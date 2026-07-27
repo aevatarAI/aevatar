@@ -168,6 +168,9 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
     'process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED': JSON.stringify(
       process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED,
     ),
+    'process.env.AEVATAR_CONSOLE_WORKFLOW_TEMPLATES_ENABLED': JSON.stringify(
+      process.env.AEVATAR_CONSOLE_WORKFLOW_TEMPLATES_ENABLED,
+    ),
     'process.env.AEVATAR_CONSOLE_PUBLIC_PATH': JSON.stringify(
       process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
     ),
