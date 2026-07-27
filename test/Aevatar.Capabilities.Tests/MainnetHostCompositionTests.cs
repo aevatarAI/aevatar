@@ -84,6 +84,19 @@ namespace Aevatar.Capabilities.Tests;
 [Collection(ProcessEnvSerialCollection.Name)]
 public sealed class MainnetHostCompositionTests
 {
+    private static readonly System.Type[] StudioLocalToolSourceTypes =
+    [
+        typeof(ProvisionWorkflowScheduleToolSource),
+        typeof(CreateStudioTeamToolSource),
+        typeof(StudioTeamQueryToolSource),
+        typeof(CreateStudioMemberToolSource),
+        typeof(StudioMemberQueryToolSource),
+        typeof(StudioWorkflowQueryToolSource),
+        typeof(StudioScheduleQueryToolSource),
+        typeof(BindStudioMemberWorkflowToolSource),
+        typeof(ScheduleStudioMemberWorkflowToolSource),
+    ];
+
     [Fact]
     public void GAgentServiceAndStudioCapabilities_ShouldOwnTheirCompositionDependencies()
     {
@@ -574,25 +587,21 @@ public sealed class MainnetHostCompositionTests
         registry.GetRegisteredNames().Should().Equal(
             ToolSetNames.LarkSelfNotify,
             ToolSetNames.NyxIdConnectedServices,
+            ToolSetNames.StudioLocal,
             ToolSetNames.WorkspaceDefault);
 
         var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
         workspace.IsSuccess.Should().BeTrue(workspace.Error?.Message);
-        workspace.Sources.Should().Contain(source => source is InvokeGAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is InvokeTeamToolSource);
-        workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
-        workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
-        workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
-        workspace.Sources.Should().Contain(source => source is ProvisionWorkflowScheduleToolSource);
-        workspace.Sources.Should().Contain(source => source is CreateStudioTeamToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioTeamQueryToolSource);
-        workspace.Sources.Should().Contain(source => source is CreateStudioMemberToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioMemberQueryToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioScheduleQueryToolSource);
-        workspace.Sources.Should().Contain(source => source is StudioWorkflowQueryToolSource);
-        workspace.Sources.Should().Contain(source => source is WorkflowCatalogAgentToolSource);
-        workspace.Sources.Should().Contain(source => source is BindStudioMemberWorkflowToolSource);
-        workspace.Sources.Should().Contain(source => source is ScheduleStudioMemberWorkflowToolSource);
+        workspace.Sources.ShouldContainSourceTypes(
+            typeof(InvokeGAgentToolSource),
+            typeof(InvokeTeamToolSource),
+            typeof(StartWorkflowToolSource),
+            typeof(ObserveRunToolSource),
+            typeof(ReadWorkflowRunArtifactToolSource),
+            typeof(WorkflowCatalogAgentToolSource),
+            typeof(SkillsAgentToolSource),
+            typeof(OrnnAgentToolSource));
+        workspace.Sources.ShouldNotContainSourceTypes(StudioLocalToolSourceTypes);
         workspace.Sources.Should().Contain(source => source.GetType().Name == "ResponsesAevatarToolProvider");
         workspace.Sources.Should().Contain(source => source is ChannelInteractiveReplyToolSource);
         workspace.Sources.Should().Contain(source => source is ChannelRegistrationToolSource);
@@ -605,6 +614,8 @@ public sealed class MainnetHostCompositionTests
         workspace.Sources.Should().Contain(source => source is WebAgentToolSource);
         workspace.Sources.Should().Contain(source => source is SkillsAgentToolSource);
         workspace.Sources.Should().Contain(source => source is OrnnAgentToolSource);
+        app.Services.GetServices<IAgentToolSource>()
+            .ShouldNotContainSourceTypes(StudioLocalToolSourceTypes);
         app.Services.GetServices<IAgentToolSource>()
             .Select(static source => source.GetType())
             .Should()
@@ -628,6 +639,7 @@ public sealed class MainnetHostCompositionTests
                 source is ChannelNyxIdConnectedServiceInventoryToolSource)
             .Which.Should()
             .BeSameAs(channelInventorySource);
+        channelToolSources.ShouldNotContainSourceTypes(StudioLocalToolSourceTypes);
         var scheduleQueries = app.Services.GetRequiredService<IStudioMemberAutomationQueryPort>();
         var scheduleMutations = app.Services.GetRequiredService<IStudioMemberWorkflowSchedulePort>();
         scheduleQueries.Should().BeSameAs(scheduleMutations);
@@ -648,8 +660,15 @@ public sealed class MainnetHostCompositionTests
         larkSelfNotify.IsSuccess.Should().BeTrue(larkSelfNotify.Error?.Message);
         larkSelfNotify.Sources.Select(static source => source.GetType()).Should()
             .Equal(workspace.Sources.Select(static source => source.GetType()));
+        larkSelfNotify.Sources.ShouldNotContainSourceTypes(StudioLocalToolSourceTypes);
         larkSelfNotify.Sources.Should().Contain(source => source is LarkAgentToolSource);
         larkSelfNotify.Sources.Should().Contain(source => source is NyxIdAgentToolSource);
+
+        var studioLocal = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.StudioLocal });
+        studioLocal.IsSuccess.Should().BeTrue(studioLocal.Error?.Message);
+        studioLocal.Sources.Select(static source => source.GetType())
+            .Should()
+            .Equal(StudioLocalToolSourceTypes);
 
         var nyxIdConnectedServices = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.NyxIdConnectedServices });
         nyxIdConnectedServices.IsSuccess.Should().BeTrue(nyxIdConnectedServices.Error?.Message);
@@ -1428,5 +1447,26 @@ public sealed class MainnetHostCompositionTests
         {
             Environment.SetEnvironmentVariable(_name, _previous);
         }
+    }
+}
+
+internal static class MainnetHostCompositionToolSourceAssertions
+{
+    public static void ShouldContainSourceTypes(
+        this IEnumerable<IAgentToolSource> sources,
+        params System.Type[] expectedSourceTypes)
+    {
+        var actualSourceTypes = sources.Select(static source => source.GetType()).ToArray();
+        foreach (var expectedSourceType in expectedSourceTypes)
+            actualSourceTypes.Should().Contain(expectedSourceType);
+    }
+
+    public static void ShouldNotContainSourceTypes(
+        this IEnumerable<IAgentToolSource> sources,
+        params System.Type[] deniedSourceTypes)
+    {
+        var actualSourceTypes = sources.Select(static source => source.GetType()).ToArray();
+        foreach (var deniedSourceType in deniedSourceTypes)
+            actualSourceTypes.Should().NotContain(deniedSourceType);
     }
 }

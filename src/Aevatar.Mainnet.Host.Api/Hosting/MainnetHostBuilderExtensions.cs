@@ -290,12 +290,6 @@ public static class MainnetHostBuilderExtensions
         builder.Services.AddChannelAdminTools();
         builder.Services.AddAgentCatalogTools();
         builder.Services.AddAevatarInvocationTools();
-        // Studio workflow scheduling tool (aevatar_provision_workflow_schedule): the channel-free,
-        // Observatory-delivered analogue of the Lark scheduled_agent_creator. Registered as an
-        // IAgentToolSource here; the studio workflow's allowed_tools allowlist (W2) scopes it to
-        // studio runs. The narrow IWorkflowScheduleProvisioningPort it depends on is registered by
-        // AddStudioApplication (via AddStudioCapability), composed in the same host container.
-        builder.Services.AddStudioProvisioningTools();
         builder.Services.Configure<DeviceEventOptions>(
             builder.Configuration.GetSection("Aevatar:DeviceEvents"));
         // Fail-fast: device HMAC verification must never be disabled in production.
@@ -373,15 +367,6 @@ public static class MainnetHostBuilderExtensions
                     CreateToolSource<ObserveRunToolSource>,
                     CreateToolSource<ReadWorkflowRunArtifactToolSource>,
                     CreateToolSource<WorkflowCatalogAgentToolSource>,
-                    CreateToolSource<ProvisionWorkflowScheduleToolSource>,
-                    CreateToolSource<CreateStudioTeamToolSource>,
-                    CreateToolSource<StudioTeamQueryToolSource>,
-                    CreateToolSource<CreateStudioMemberToolSource>,
-                    CreateToolSource<StudioMemberQueryToolSource>,
-                    CreateToolSource<StudioScheduleQueryToolSource>,
-                    CreateToolSource<StudioWorkflowQueryToolSource>,
-                    CreateToolSource<BindStudioMemberWorkflowToolSource>,
-                    CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
                     CreateToolSource<ResponsesAevatarToolProvider>,
                     CreateToolSource<ChannelInteractiveReplyToolSource>,
                     CreateToolSource<ChannelRegistrationToolSource>,
@@ -400,6 +385,20 @@ public static class MainnetHostBuilderExtensions
                 [ToolSetNames.WorkspaceDefault],
                 [],
                 "Lark route tool composition with the default workspace tools.");
+            options.AddToolSet(
+                ToolSetNames.StudioLocal,
+                [
+                    CreateToolSource<ProvisionWorkflowScheduleToolSource>,
+                    CreateToolSource<CreateStudioTeamToolSource>,
+                    CreateToolSource<StudioTeamQueryToolSource>,
+                    CreateToolSource<CreateStudioMemberToolSource>,
+                    CreateToolSource<StudioMemberQueryToolSource>,
+                    CreateToolSource<StudioWorkflowQueryToolSource>,
+                    CreateToolSource<StudioScheduleQueryToolSource>,
+                    CreateToolSource<BindStudioMemberWorkflowToolSource>,
+                    CreateToolSource<ScheduleStudioMemberWorkflowToolSource>,
+                ],
+                "Studio-owned local provisioning, member, binding, schedule, and query tools.");
             // Opt-in only: connected-service tools carry per-user NyxID surfaces, so this set
             // is referenced by route policy (not folded into workspace.default) to avoid
             // injecting every caller's connected services by default.

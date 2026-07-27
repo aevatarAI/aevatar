@@ -19,6 +19,7 @@ using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.AI.ToolProviders.Lark;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.ChatRouting.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
@@ -250,7 +251,12 @@ public static class ServiceCollectionExtensions
 
     private static IEnumerable<IAgentToolSource> ResolveChannelToolSources(IServiceProvider serviceProvider)
     {
-        foreach (var source in serviceProvider.GetServices<IAgentToolSource>())
+        var registry = serviceProvider.GetRequiredService<IToolSetRegistry>();
+        var workspace = registry.Resolve(new ChatRouteToolSetRef { Name = ToolSetNames.WorkspaceDefault });
+        var sources = workspace.IsSuccess
+            ? workspace.Sources
+            : serviceProvider.GetServices<IAgentToolSource>();
+        foreach (var source in sources)
             yield return source;
 
         var inventory = serviceProvider.GetService<ChannelNyxIdConnectedServiceInventoryToolSource>();
