@@ -65,11 +65,14 @@ Its Ornn metadata declares:
 - name: `aevatar-scheduled-agent-key-canary`;
 - version: `1.0`;
 - category: `tool-based`;
-- output type: `text`;
 - tags covering Aevatar, NyxID, Agent Key, cron, schedule, canary, and
   diagnostics;
 - a tool list containing only the Aevatar Studio/query and NyxID surfaces
   needed by the canary.
+
+The package omits `metadata.output-type`; it is unnecessary for a tool-based
+skill, and Aevatar's typed Ornn publisher treats it as a runtime-only field.
+This skill returns a text verdict through normal agent output.
 
 The expected tool set is:
 
@@ -93,7 +96,9 @@ Before mutating anything, the skill must establish:
 
 - the user is authenticated to Aevatar and NyxID;
 - the current Aevatar scope is available from the trusted tool context;
-- the owner has an active exact NyxID UserService selected for LLM use;
+- `GET /api/user-config/llm`, called through the exact connected Aevatar
+  UserService, reports an explicit owner LLM selection backed by an active
+  exact NyxID UserService;
 - the `aevatar` NyxID service is active and selectable by exact
   `UserService.id` for the bounded HTTP reads and cleanup calls;
 - no earlier resource with the new canary suffix exists.
@@ -168,7 +173,7 @@ before scheduling. An accepted bind receipt alone is not sufficient.
 
 ## Schedule Creation
 
-Compute a UTC target at least three full minutes in the future. Use a
+Compute a UTC target at least five full minutes in the future. Use a
 five-field annual cron:
 
 ```text
@@ -176,8 +181,8 @@ five-field annual cron:
 ```
 
 The next occurrence must equal the chosen target minute and the following
-occurrence must be approximately one year later. This prevents a second fire
-during the observation and cleanup window.
+occurrence must be at least 300 days later. This prevents a second fire during
+the observation and cleanup window.
 
 Create the automation only through `aevatar_schedule_member_workflow`. That
 tool owns the canonical
@@ -215,8 +220,12 @@ A pass candidate must reach all of these states before the target minute:
 - its `last_used_at` is null.
 
 The skill compares NyxID inventory before and after schedule creation and
-selects only the one new key attributable to the exact canary schedule. It
-must not select a key merely because its name has a familiar prefix.
+selects a candidate only when its ID was absent from the baseline, its
+creation time is after the canary create attempt, its name starts with the
+reserved `studio-schedule-` prefix, both wildcard flags are false, and its
+allowed service IDs equal the selected owner LLM UserService singleton. There
+must be exactly one candidate. Zero or multiple candidates fail closed. The
+skill must not select a key merely because its name has a familiar prefix.
 
 ## Real Cron Evidence
 
@@ -252,6 +261,12 @@ No single observation is sufficient:
 
 The canary passes only when all four evidence classes agree.
 
+All observations are bounded. Binding and credential activation each receive
+at most two minutes, the cron observation ends two minutes after the target
+minute, and cleanup receives at most three minutes before returning
+`CLEANUP_INCOMPLETE`. A timeout never causes a second create or a `run-now`
+fallback.
+
 ## Cleanup And Compensation
 
 Cleanup begins after evidence collection whether the canary passed or failed.
@@ -272,6 +287,11 @@ It uses only identities in the canary ledger and proceeds in this order:
 
 The Team remains as an archived lifecycle record because that is the
 canonical Team cleanup contract.
+
+The public canary does not require the operator-only
+`6202/StudioMemberAutomationRevocationCompleted` log. Its cleanup verdict is
+based on canonical deletion visibility plus exact NyxID key disappearance.
+It must not claim a complete operational-audit trail.
 
 The skill must never delete a resource discovered only by display-name
 similarity. If the ledger lacks an identity, that cleanup step is skipped and
@@ -345,7 +365,7 @@ explicit confirmation required by the published skill.
 The source package lives at:
 
 ```text
-/Users/eanzhao/Code/Ornn/skills/aevatar-scheduled-agent-key-canary/
+~/Code/Ornn/skills/aevatar-scheduled-agent-key-canary/
 ```
 
 Ornn creates new skills as private. Publication therefore uses this ordered
@@ -355,12 +375,16 @@ flow:
 2. upload it as a new private skill;
 3. read it back by exact GUID/version and verify its files, tool list, and
    hash;
-4. run the authenticated canary once and confirm cleanup;
-5. replace permissions with `isPrivate=false` and empty user/org share lists;
-6. verify public keyword/semantic search;
-7. verify the exact version can be read from the public catalog without
+4. trigger the Ornn security audit while the skill is private and require
+   `status=completed` with `verdict=green`; a yellow verdict requires fixing or
+   explicitly resolving its findings before publication, and red blocks
+   publication;
+5. run the authenticated canary once and confirm cleanup;
+6. replace permissions with `isPrivate=false` and empty user/org share lists;
+7. verify public keyword/semantic search;
+8. verify the exact version can be read from the public catalog without
    owner-only visibility;
-8. trigger or inspect the Ornn security audit and report its current verdict.
+9. reread and report the audit verdict attached to the public version.
 
 If any gate fails, do not describe the skill as public or ready.
 
