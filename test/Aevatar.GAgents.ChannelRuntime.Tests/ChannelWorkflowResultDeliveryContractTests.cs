@@ -442,6 +442,7 @@ public sealed class ChannelWorkflowResultDeliveryContractTests
             actorDispatchPort,
             Substitute.For<IGAgentActorRegistryQueryPort>(),
             teamEntryMemberResolver ?? Substitute.For<ITeamEntryMemberResolver>(),
+            Substitute.For<IMemberPublishedServiceResolver>(),
             Substitute.For<IStaticGAgentStreamInvocationPort<AGUIEvent>>(),
             workflowDispatchService,
             serviceInvocationResolutionPort ?? Substitute.For<IServiceInvocationResolutionPort>(),
