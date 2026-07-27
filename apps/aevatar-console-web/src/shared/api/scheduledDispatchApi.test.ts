@@ -9,6 +9,12 @@ import { encodeChatRequestEventBase64 } from "@/shared/runs/protobufPayload";
 
 describe("scheduledDispatchApi", () => {
   const originalFetch = global.fetch;
+  const studioMemberAutomationOwner = {
+    kind: "studio_member_automation",
+    scopeId: "scope-alpha",
+    teamId: "team-alpha",
+    memberId: "member-alpha",
+  } as const;
 
   beforeEach(() => {
     window.localStorage.clear();
@@ -165,7 +171,7 @@ describe("scheduledDispatchApi", () => {
     );
   });
 
-  it("serializes scoped schedule list filters", async () => {
+  it("serializes typed owner schedule list filters without legacy query fields", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -179,15 +185,20 @@ describe("scheduledDispatchApi", () => {
 
     await scheduledDispatchApi.list({
       includeTotalCount: true,
-      memberId: "member+alpha",
-      scopeId: "scope/alpha",
+      owner: {
+        kind: "studio_member_automation",
+        scopeId: "scope/alpha",
+        teamId: "team alpha",
+        memberId: "member+alpha",
+      },
       take: 25,
-      teamId: "team alpha",
     });
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      "/api/schedules?scopeId=scope%2Falpha&teamId=team+alpha&memberId=member%2Balpha&includeTotalCount=true&take=25",
+    const requestUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(requestUrl).toBe(
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope%2Falpha&ownerTeamId=team+alpha&ownerMemberId=member%2Balpha&includeTotalCount=true&take=25",
     );
+    expect(requestUrl).not.toMatch(/[?&](scopeId|teamId|memberId)=/);
   });
 
   it("preserves scoped schedule filters across every requested page", async () => {
@@ -216,10 +227,8 @@ describe("scheduledDispatchApi", () => {
     await expect(
       scheduledDispatchApi.listAll({
         includeTotalCount: true,
-        memberId: "member-alpha",
-        scopeId: "scope-alpha",
+        owner: studioMemberAutomationOwner,
         take: 200,
-        teamId: "team-alpha",
       }),
     ).resolves.toEqual({
       items: [
@@ -231,9 +240,27 @@ describe("scheduledDispatchApi", () => {
     });
 
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
-      "/api/schedules?scopeId=scope-alpha&teamId=team-alpha&memberId=member-alpha&includeTotalCount=true&take=200",
-      "/api/schedules?scopeId=scope-alpha&teamId=team-alpha&memberId=member-alpha&cursor=cursor-2&includeTotalCount=true&take=200",
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=member-alpha&includeTotalCount=true&take=200",
+      "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=member-alpha&cursor=cursor-2&includeTotalCount=true&take=200",
     ]);
+  });
+
+  it("gets owner schedule detail with the typed owner query", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        schedule: createSummary(),
+        recentFires: [],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scheduledDispatchApi.get(" sch/alpha ", studioMemberAutomationOwner);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/schedules/sch%2Falpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=member-alpha",
+    );
   });
 
   it("keeps saved recurring prompts from schedule list responses", async () => {
@@ -297,6 +324,7 @@ describe("scheduledDispatchApi", () => {
         headers: {
           source: "team-automations",
         },
+        owner: studioMemberAutomationOwner,
         workflowChatTarget: {
           identity: {
             tenantId: " scope-1 ",
@@ -327,6 +355,7 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
+      owner: studioMemberAutomationOwner,
       scheduleKind: "workflow",
       serviceInvocation: {
         identity: {
@@ -347,7 +376,6 @@ describe("scheduledDispatchApi", () => {
     });
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payload");
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payloadJson");
-    expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
   });
@@ -588,6 +616,7 @@ describe("scheduledDispatchApi", () => {
         headers: {
           source: "team-automations",
         },
+        owner: studioMemberAutomationOwner,
         workflowChatTarget: {
           identity: {
             tenantId: " scope-1 ",
@@ -616,6 +645,7 @@ describe("scheduledDispatchApi", () => {
       headers: {
         source: "team-automations",
       },
+      owner: studioMemberAutomationOwner,
       scheduleKind: "workflow",
       serviceInvocation: {
         identity: {
@@ -635,7 +665,6 @@ describe("scheduledDispatchApi", () => {
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payload");
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("payloadJson");
     expect(JSON.parse(String(init.body)).serviceInvocation).not.toHaveProperty("revisionId");
-    expect(String(init.body)).not.toContain("memberId");
     expect(String(init.body)).not.toContain("workflowId");
     expect(String(init.body)).not.toContain("workflowChatTarget");
   });
@@ -752,9 +781,17 @@ describe("scheduledDispatchApi", () => {
       } as Response);
     global.fetch = fetchMock as typeof global.fetch;
 
-    await scheduledDispatchApi.runNow(" sch-alpha ");
-    await scheduledDispatchApi.disable("sch-alpha", " pause for review ");
-    await scheduledDispatchApi.enable("sch-alpha", " resume ");
+    await scheduledDispatchApi.runNow(" sch-alpha ", studioMemberAutomationOwner);
+    await scheduledDispatchApi.disable(
+      "sch-alpha",
+      " pause for review ",
+      studioMemberAutomationOwner,
+    );
+    await scheduledDispatchApi.enable(
+      "sch-alpha",
+      " resume ",
+      studioMemberAutomationOwner,
+    );
 
     expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
       "/api/schedules/sch-alpha:run-now",
@@ -762,7 +799,15 @@ describe("scheduledDispatchApi", () => {
       "/api/schedules/sch-alpha:enable",
     ]);
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      owner: studioMemberAutomationOwner,
       reason: " pause for review ",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      owner: studioMemberAutomationOwner,
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+      owner: studioMemberAutomationOwner,
+      reason: " resume ",
     });
   });
 
@@ -775,7 +820,11 @@ describe("scheduledDispatchApi", () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await expect(
-      scheduledDispatchApi.delete(" sch-alpha ", " remove obsolete cadence "),
+      scheduledDispatchApi.delete(
+        " sch-alpha ",
+        " remove obsolete cadence ",
+        studioMemberAutomationOwner,
+      ),
     ).resolves.toEqual(
       expect.objectContaining({
         accepted: true,
@@ -790,6 +839,7 @@ describe("scheduledDispatchApi", () => {
     );
     expect(init.method).toBe("DELETE");
     expect(JSON.parse(String(init.body))).toEqual({
+      owner: studioMemberAutomationOwner,
       reason: "remove obsolete cadence",
     });
   });
