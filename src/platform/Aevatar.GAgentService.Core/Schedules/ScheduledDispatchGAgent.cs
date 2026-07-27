@@ -358,6 +358,11 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 throw TeamAutomationCommandRejectedException.Conflict(
                     "team_automation_operation_conflict");
             }
+            catch (ArgumentException)
+            {
+                throw TeamAutomationCommandRejectedException.Conflict(
+                    "team_automation_operation_conflict");
+            }
 
             if (!IsSameCompletedDeleteOperation(
                     command,
