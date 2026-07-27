@@ -820,6 +820,120 @@ public sealed class ScheduledDispatchApplicationServiceTests
     }
 
     [Fact]
+    public async Task RunTeamAutomationNowAsync_WithoutCredentialLifecycle_ShouldBuildBackendOperationAndDispatchOwnerScopedRunNow()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamId = owner.TeamId,
+                TeamOwnerMemberId = owner.MemberId,
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var receipt = await service.RunTeamAutomationNowAsync(
+            " sch-alpha ",
+            new TeamMemberAutomationOwner(" scope-alpha ", " m-alpha ", " team-alpha "));
+
+        receipt.ScheduleId.Should().Be("sch-alpha");
+        receipt.ScheduleActorId.Should().Be("actor:sch-alpha");
+        receipt.IdempotencyKey.Should().StartWith("schedule:sch-alpha:schedule-run-now-sch-alpha-");
+        var runNow = actorPort.TeamRunNow.Should().ContainSingle().Which;
+        runNow.ActorId.Should().Be("actor:sch-alpha");
+        runNow.Owner.Should().Be(owner);
+        runNow.OperationId.Should().StartWith("schedule-run-now-sch-alpha-");
+        runNow.IdempotencyKey.Should().Be($"schedule:sch-alpha:{runNow.OperationId}");
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunTeamAutomationNowAsync_WithCredentialLifecycleNotActive_ShouldRejectBeforeDispatch()
+    {
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = owner.ScopeId,
+                TeamId = owner.TeamId,
+                TeamOwnerMemberId = owner.MemberId,
+                TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatus.NeedsAuthorization,
+                CredentialGeneration = 1,
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.RunTeamAutomationNowAsync("sch-alpha", owner);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("team_automation_credential_not_active");
+        actorPort.TeamRunNow.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunTeamAutomationNowAsync_WithMismatchedTeamOwner_ShouldReturnNotFoundBeforeDispatch()
+    {
+        var baseDetail = CreateSummaryDetail(
+            "sch-alpha",
+            ScheduledDispatchTargetKind.ServiceInvocation,
+            ScheduledDispatchScheduleKind.Workflow,
+            ScheduledDispatchCredentialRequirementTargetKind.WorkflowService,
+            ScheduledDispatchCredentialSourceKind.ScheduledInvocationAgentKey);
+        var detail = baseDetail with
+        {
+            Schedule = baseDetail.Schedule with
+            {
+                TeamOwned = true,
+                TeamOwnerScopeId = "scope-alpha",
+                TeamId = "team-alpha",
+                TeamOwnerMemberId = "m-alpha",
+            },
+        };
+        var actorPort = new RecordingScheduledDispatchActorPort();
+        var service = new ScheduledDispatchApplicationService(
+            actorPort,
+            new RecordingScheduledDispatchQueryPort { Detail = detail },
+            new ScheduledDispatchTargetPreparationService(),
+            new NoopScheduledDispatchCredentialAdmissionPort());
+
+        var act = () => service.RunTeamAutomationNowAsync(
+            "sch-alpha",
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-beta"));
+
+        await act.Should().ThrowAsync<ScheduledDispatchNotFoundException>();
+        actorPort.TeamRunNow.Should().BeEmpty();
+        actorPort.RunNow.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task UpdateAsync_WhenScheduleMissing_ShouldThrowNotFoundWithoutEnsuringActor()
     {
         var actorPort = new RecordingScheduledDispatchActorPort();
@@ -848,6 +962,38 @@ public sealed class ScheduledDispatchApplicationServiceTests
 
         await act.Should().ThrowAsync<ArgumentException>()
             .WithMessage("*letters, digits, '.', '_', and '-'*");
+    }
+
+    [Fact]
+    public void ScheduledDispatchOwner_ShouldTrimTypedStudioMemberAutomationOwner()
+    {
+        var owner = new ScheduledDispatchOwner(
+            "studio_member_automation",
+            " scope-alpha ",
+            " team-alpha ",
+            " m-alpha ");
+
+        owner.ToTeamMemberAutomationOwner().Should().Be(
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha"));
+    }
+
+    [Theory]
+    [InlineData("other", "scope-alpha", "team-alpha", "m-alpha", "Unsupported scheduled dispatch owner kind 'other'.*")]
+    [InlineData("studio_member_automation", " ", "team-alpha", "m-alpha", "Owner scopeId is required.*")]
+    [InlineData("studio_member_automation", "scope-alpha", " ", "m-alpha", "Owner teamId is required.*")]
+    [InlineData("studio_member_automation", "scope-alpha", "team-alpha", " ", "Owner memberId is required.*")]
+    public void ScheduledDispatchOwner_ShouldRejectUnsupportedKindOrMissingOwnerFields(
+        string kind,
+        string scopeId,
+        string teamId,
+        string memberId,
+        string expectedMessage)
+    {
+        var owner = new ScheduledDispatchOwner(kind, scopeId, teamId, memberId);
+
+        var act = () => owner.ToTeamMemberAutomationOwner();
+
+        act.Should().Throw<ArgumentException>().WithMessage(expectedMessage);
     }
 
     [Theory]
@@ -2763,6 +2909,7 @@ public sealed class ScheduledDispatchApplicationServiceTests
         public List<(string ActorId, string Reason)> Deleted { get; } = [];
         public List<(string ActorId, TeamMemberAutomationOwner Owner, string Reason)> TeamDeleted { get; } = [];
         public List<(string ActorId, DateTimeOffset ScheduledFireAt)> RunNow { get; } = [];
+        public List<(string ActorId, TeamMemberAutomationOwner Owner, DateTimeOffset ScheduledFireAt, string OperationId, string IdempotencyKey)> TeamRunNow { get; } = [];
 
         public Task<string> EnsureScheduleActorAsync(string scheduleId, CancellationToken ct = default)
         {
@@ -2862,6 +3009,19 @@ public sealed class ScheduledDispatchApplicationServiceTests
         {
             ct.ThrowIfCancellationRequested();
             RunNow.Add((actorId, scheduledFireAt));
+            return Task.FromResult(CreateAdmission(actorId));
+        }
+
+        public Task<DispatchAdmission> DispatchRunTeamAutomationNowAsync(
+            string actorId,
+            TeamMemberAutomationOwner owner,
+            DateTimeOffset scheduledFireAt,
+            string operationId,
+            string idempotencyKey,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            TeamRunNow.Add((actorId, owner, scheduledFireAt, operationId, idempotencyKey));
             return Task.FromResult(CreateAdmission(actorId));
         }
 
