@@ -502,39 +502,42 @@ public sealed class ServiceImplementationAdaptersTests
             OwnerLlmRouteRequired = true,
             ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
         };
-        dependencies.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
-        {
-            HostConnector = new HostConnectorCapabilityRef
+        ExternalWorkflowCapabilityRef[] admittedCapabilities =
+        [
+            new()
             {
-                ConnectorCapabilityRef = "connector-calendar-alpha",
-                OperationId = "create_event",
-                ContractDigest = "connector-digest-alpha",
+                HostConnector = new HostConnectorCapabilityRef
+                {
+                    ConnectorCapabilityRef = "connector-calendar-alpha",
+                    OperationId = "create_event",
+                    ContractDigest = "connector-digest-alpha",
+                },
             },
-        });
-        dependencies.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
-        {
-            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            new()
             {
-                UserServiceId = "us-home-alpha",
-                ServiceSlugSnapshot = "home-assistant",
-                OperationId = "read_states",
-                HttpMethod = "GET",
-                PathTemplate = "/api/states",
-                ContractDigest = "nyxid-digest-alpha",
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = "us-home-alpha",
+                    ServiceSlugSnapshot = "home-assistant",
+                    OperationId = "read_states",
+                    HttpMethod = "GET",
+                    PathTemplate = "/api/states",
+                    ContractDigest = "nyxid-digest-alpha",
+                },
             },
-        });
-        dependencies.ExternalCapabilities.Add(new ExternalWorkflowCapabilityRef
-        {
-            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            new()
             {
-                UserServiceId = "us-home-beta",
-                ServiceSlugSnapshot = "home-assistant",
-                OperationId = "read_states",
-                HttpMethod = "GET",
-                PathTemplate = "/api/states",
-                ContractDigest = "nyxid-digest-beta",
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = "us-home-beta",
+                    ServiceSlugSnapshot = "home-assistant",
+                    OperationId = "read_states",
+                    HttpMethod = "GET",
+                    PathTemplate = "/api/states",
+                    ContractDigest = "nyxid-digest-beta",
+                },
             },
-        });
+        ];
         var workflowPort = new RecordingWorkflowRunActorPort
         {
             ParseResult = WorkflowYamlParseResult.Success("inferred-workflow", dependencies),
@@ -543,7 +546,11 @@ public sealed class ServiceImplementationAdaptersTests
             "name: inferred-workflow",
             inlineWorkflowYamls: null,
             ExternalCapabilityExecutionMode.Interactive,
-            dependencies.ExternalCapabilities,
+            admittedCapabilities.Select(static (capability, index) => new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = $"inferred-workflow/step-{index}",
+                Capability = capability,
+            }),
             []);
         var adapter = new WorkflowServiceImplementationAdapter(
             workflowPort,
@@ -571,9 +578,9 @@ public sealed class ServiceImplementationAdaptersTests
         artifact.DeploymentPlan.WorkflowPlan.WorkflowName.Should().Be("inferred-workflow");
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.OwnerLlmRouteRequired.Should().BeTrue();
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ExternalCapabilities.Should()
-            .Equal(dependencies.ExternalCapabilities);
+            .BeEquivalentTo(admittedCapabilities);
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ExternalCapabilities.Should()
-            .OnlyContain(capability => dependencies.ExternalCapabilities.All(source => !ReferenceEquals(source, capability)));
+            .OnlyContain(capability => admittedCapabilities.All(source => !ReferenceEquals(source, capability)));
         artifact.DeploymentPlan.WorkflowPlan.AuthorizationEvidence.ServiceGrantRequirement.Should()
             .Be(Aevatar.GAgentService.Abstractions.Schedules.Authorization.AuthorizationGrantRequirement.Required);
         workflowPort.ParseCalls.Should().ContainSingle("name: inferred-workflow");
@@ -603,7 +610,11 @@ public sealed class ServiceImplementationAdaptersTests
             workflowYaml,
             new Dictionary<string, string> { ["child"] = "name: child" },
             ExternalCapabilityExecutionMode.Durable,
-            [admittedCapability],
+            [new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = "root-workflow/read-states",
+                Capability = admittedCapability,
+            }],
             []);
         var workflowPort = new RecordingWorkflowRunActorPort
         {
@@ -734,12 +745,28 @@ public sealed class ServiceImplementationAdaptersTests
         {
             ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
         };
-        dependencies.ExternalCapabilities.Add(capability);
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = "persisted-workflow/read-states",
+            ToolName = "nyxid_proxy",
+            Selector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = "us-home-alpha",
+                    OperationId = "read_states",
+                },
+            },
+        });
         var persistedPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
             workflowYaml,
             inlineWorkflowYamls: null,
             ExternalCapabilityExecutionMode.Durable,
-            [capability],
+            [new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = "persisted-workflow/read-states",
+                Capability = capability,
+            }],
             [],
             new ExternalCapabilityAuthorizationOwner
             {

@@ -8,6 +8,7 @@ using YamlDotNet.Serialization.NamingConventions;
 using YamlDotNet.RepresentationModel;
 using Aevatar.Foundation.Abstractions.Interactions;
 using Aevatar.Workflow.Abstractions.Workflows;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Agreement;
 using System.Collections;
 using System.Globalization;
@@ -189,6 +190,7 @@ public sealed class WorkflowParser
             Type = canonicalType,
             TargetRole = s.TargetRole ?? s.Role,
             Parameters = WorkflowPrimitiveCatalog.CanonicalizeStepTypeParameters(parameters),
+            Capability = MapCapability(s.Capability),
             TransformOperation = MapTransformOperation(canonicalType, parameters),
             Presentation = presentation,
             AgentToolScope = agentToolScope,
@@ -203,6 +205,21 @@ public sealed class WorkflowParser
             IdempotencyKey = NormalizeText(s.IdempotencyKey),
             OnError = MapOnError(s.OnError),
             TimeoutMs = s.TimeoutMs,
+        };
+    }
+
+    private static ExternalWorkflowCapabilitySelector? MapCapability(RawStepCapability? capability)
+    {
+        if (capability?.NyxIdOperation is null)
+            return null;
+
+        return new ExternalWorkflowCapabilitySelector
+        {
+            NyxIdOperation = new NyxIdOperationSelector
+            {
+                UserServiceId = NormalizeText(capability.NyxIdOperation.UserServiceId) ?? string.Empty,
+                OperationId = NormalizeText(capability.NyxIdOperation.OperationId) ?? string.Empty,
+            },
         };
     }
 
@@ -1399,6 +1416,7 @@ public sealed class WorkflowParser
         public string? Field { get; set; }
         public string? Aggregate { get; set; }
         public object? AllowedTools { get; set; }
+        public RawStepCapability? Capability { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }
         public string? DeliveryTargetId { get; set; }
@@ -1412,6 +1430,18 @@ public sealed class WorkflowParser
         public string? IdempotencyKey { get; set; }
         public RawOnError? OnError { get; set; }
         public int? TimeoutMs { get; set; }
+    }
+
+    private sealed class RawStepCapability
+    {
+        [YamlMember(Alias = "nyxid_operation")]
+        public RawNyxIdOperationSelector? NyxIdOperation { get; set; }
+    }
+
+    private sealed class RawNyxIdOperationSelector
+    {
+        public string? UserServiceId { get; set; }
+        public string? OperationId { get; set; }
     }
     private sealed class RawStepPresentation
     {

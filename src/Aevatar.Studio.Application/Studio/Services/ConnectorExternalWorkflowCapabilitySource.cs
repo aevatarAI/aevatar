@@ -20,8 +20,8 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public ExternalWorkflowCapabilityRef.CapabilityOneofCase CapabilityKind =>
-        ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector;
+    public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
+        ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector;
 
     public async Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
         ExternalWorkflowCapabilityAccessContext access,
@@ -41,20 +41,20 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
 
     public async Task<ExternalCapabilityReadiness> InspectAsync(
         ExternalWorkflowCapabilityAccessContext access,
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(access);
-        ArgumentNullException.ThrowIfNull(capability);
+        ArgumentNullException.ThrowIfNull(selector);
 
         var catalog = await _catalogQueryPort.GetConnectorCatalogAsync(cancellationToken);
         var source = BuildSourceStamp(catalog);
-        if (capability.CapabilityCase !=
-            ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector)
+        if (selector.SelectorCase !=
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ConnectorNotFound,
                 "CONNECTOR_CAPABILITY_REQUIRED",
@@ -62,7 +62,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
                 source);
         }
 
-        var selected = capability.HostConnector;
+        var selected = selector.HostConnector;
         var connector = catalog.Connectors.FirstOrDefault(candidate =>
             string.Equals(
                 candidate.Name,
@@ -71,7 +71,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         if (connector is null)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ConnectorNotFound,
                 "CONNECTOR_NOT_FOUND",
@@ -82,7 +82,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         if (!connector.Enabled)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ConnectorNotFound,
                 "CONNECTOR_DISABLED",
@@ -95,7 +95,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         if (operation is null)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
                 "CONNECTOR_OPERATION_NOT_FOUND",
@@ -107,7 +107,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         if (!string.Equals(currentDigest, selected.ContractDigest, StringComparison.OrdinalIgnoreCase))
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
                 "CONNECTOR_CONTRACT_DRIFT",
@@ -119,7 +119,11 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         {
             ExecutionMode = executionMode,
             Status = ExternalCapabilityReadinessStatus.Ready,
-            SelectedCapability = capability.Clone(),
+            SelectedSelector = selector.Clone(),
+            SelectedCapability = new ExternalWorkflowCapabilityRef
+            {
+                HostConnector = selected.Clone(),
+            },
         };
         result.Sources.Add(source);
         return result;
@@ -151,7 +155,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         var readOnly = IsReadOnly(connector.Type, operation.OperationId);
         return new ExternalWorkflowCapabilityDescriptor
         {
-            Capability = new ExternalWorkflowCapabilityRef
+            Selector = new ExternalWorkflowCapabilitySelector
             {
                 HostConnector = new HostConnectorCapabilityRef
                 {
@@ -168,7 +172,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
     }
 
     private static ExternalCapabilityReadiness Failure(
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         ExternalCapabilityReadinessStatus status,
         string code,
@@ -179,7 +183,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySource : IExternalWorkflo
         {
             ExecutionMode = executionMode,
             Status = status,
-            SelectedCapability = capability.Clone(),
+            SelectedSelector = selector.Clone(),
         };
         result.Blockers.Add(new ExternalCapabilityBlocker
         {

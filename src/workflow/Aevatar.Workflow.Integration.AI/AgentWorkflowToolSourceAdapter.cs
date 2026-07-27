@@ -78,6 +78,8 @@ public sealed class AgentWorkflowToolSourceAdapter(
                     ScopeId = Normalize(request.ScopeId),
                 },
                 Schedule = new AgentToolScheduleContext(Normalize(request.ScheduleId)),
+                OperationAdmission = WorkflowOperationAdmissionToolContextMapper.Map(
+                    request.InvocationAdmission),
             };
             _logger.LogInformation(
                 "Workflow tool credential context prepared. toolName={ToolName} scopeId={ScopeId} rootRunId={RootRunId} parentRunId={ParentRunId} parentStepId={ParentStepId} hasCallerCredentialBearer={HasCallerCredentialBearer} hasNyxIdAccessToken={HasNyxIdAccessToken} hasNyxIdOrgToken={HasNyxIdOrgToken}",

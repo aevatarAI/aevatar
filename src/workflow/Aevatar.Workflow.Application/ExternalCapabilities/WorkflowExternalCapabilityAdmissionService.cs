@@ -36,25 +36,35 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             request.WorkflowYamls,
             cancellationToken);
 
+        var admissions = new List<WorkflowCapabilityInvocationAdmission>();
         var sources = new List<ExternalCapabilitySourceStamp>();
-        foreach (var capability in definition.Capabilities)
+        foreach (var invocation in definition.Invocations)
         {
             var readiness = await _readinessPort.InspectAsync(
                 new InspectExternalWorkflowCapabilityReadinessRequest(
                     request.Access,
-                    capability,
+                    invocation.Selector,
                     request.ExecutionMode),
                 cancellationToken);
             if (readiness.Status != ExternalCapabilityReadinessStatus.Ready)
                 throw new WorkflowExternalCapabilityAdmissionException(readiness);
             var proofFailure = ValidateReadinessProof(
                 request.Access,
-                capability,
+                invocation.Selector,
                 request.ExecutionMode,
                 readiness);
             if (proofFailure is not null)
                 throw new WorkflowExternalCapabilityAdmissionException(proofFailure);
-            EnsureSourcesAreFresh(readiness.Sources, request.ExecutionMode, capability);
+            EnsureSourcesAreFresh(
+                readiness.Sources,
+                request.ExecutionMode,
+                invocation.Selector,
+                readiness.SelectedCapability);
+            admissions.Add(new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = invocation.CallSiteId,
+                Capability = readiness.SelectedCapability.Clone(),
+            });
             sources.AddRange(readiness.Sources.Select(static source => source.Clone()));
         }
 
@@ -62,12 +72,12 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             definition.WorkflowYaml,
             definition.InlineWorkflowYamls,
             request.ExecutionMode,
-            definition.Capabilities,
+            admissions,
             sources,
             BuildDurableAuthorizationOwner(
                 request.Access,
                 request.ExecutionMode,
-                definition.Capabilities));
+                admissions.Select(static admission => admission.Capability)));
     }
 
     public async Task<WorkflowCapabilityAdmissionPlan> RevalidatePersistedAsync(
@@ -85,7 +95,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             definition.WorkflowYaml,
             definition.InlineWorkflowYamls,
             request.ExpectedExecutionMode,
-            definition.Capabilities);
+            definition.Invocations);
         EnsureDurableCatalogMatchesPlanOwner(request.Plan);
         EnsureSourcesAreFresh(request.Plan);
         return request.Plan.Clone();
@@ -93,32 +103,40 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
 
     private static ExternalCapabilityReadiness? ValidateReadinessProof(
         ExternalWorkflowCapabilityAccessContext access,
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         ExternalCapabilityReadiness readiness)
     {
         if (readiness.ExecutionMode != executionMode)
         {
             return ReadinessProofFailure(
-                capability,
+                selector,
+                readiness.SelectedCapability,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
                 "READINESS_EXECUTION_MODE_MISMATCH",
                 "External capability readiness was evaluated for a different execution mode.");
         }
 
-        if (!string.Equals(
-                WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(readiness.SelectedCapability),
-                WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(capability),
-                StringComparison.Ordinal))
+        if (readiness.SelectedSelector is null ||
+            !string.Equals(
+                WorkflowCapabilityAdmissionPlanIntegrity.SelectorKey(readiness.SelectedSelector),
+                WorkflowCapabilityAdmissionPlanIntegrity.SelectorKey(selector),
+                StringComparison.Ordinal) ||
+            !WorkflowCapabilityAdmissionPlanIntegrity.SelectorMatchesCapability(
+                selector,
+                readiness.SelectedCapability))
         {
             return ReadinessProofFailure(
-                capability,
+                selector,
+                readiness.SelectedCapability,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
-                "READINESS_CAPABILITY_MISMATCH",
-                "External capability readiness was evaluated for a different capability.");
+                "READINESS_SELECTOR_PROOF_MISMATCH",
+                "External capability readiness proof does not match the selected operation.");
         }
+
+        var capability = readiness.SelectedCapability;
 
         if (WorkflowCapabilityAdmissionPlanIntegrity.RequiresDurableAuthorizationCatalog(
                 executionMode,
@@ -126,6 +144,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             !WorkflowCapabilityAdmissionPlanIntegrity.HasDurableAuthorizationCatalogSource(readiness.Sources))
         {
             return ReadinessProofFailure(
+                selector,
                 capability,
                 executionMode,
                 ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
@@ -141,6 +160,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 ExpectedDurableCatalogSourceId(access)))
         {
             return ReadinessProofFailure(
+                selector,
                 capability,
                 executionMode,
                 ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
@@ -154,6 +174,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                 readiness.Sources))
         {
             return ReadinessProofFailure(
+                selector,
                 capability,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ContractDrift,
@@ -165,7 +186,8 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
     }
 
     private static ExternalCapabilityReadiness ReadinessProofFailure(
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
+        ExternalWorkflowCapabilityRef? capability,
         ExternalCapabilityExecutionMode executionMode,
         ExternalCapabilityReadinessStatus status,
         string code,
@@ -175,7 +197,8 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         {
             ExecutionMode = executionMode,
             Status = status,
-            SelectedCapability = capability.Clone(),
+            SelectedSelector = selector.Clone(),
+            SelectedCapability = capability?.Clone(),
         };
         failure.Blockers.Add(new ExternalCapabilityBlocker
         {
@@ -208,7 +231,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             .OrderBy(static item => item.Key, StringComparer.Ordinal)
             .Select(static item => (item.Key, item.Value)));
 
-        var capabilities = new Dictionary<string, ExternalWorkflowCapabilityRef>(StringComparer.Ordinal);
+        var invocations = new List<ExternalToolInvocationSpec>();
         foreach (var (key, yaml) in definitions)
         {
             var parse = await _parser.ParseWorkflowYamlAsync(yaml, cancellationToken);
@@ -218,13 +241,13 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
                     $"Workflow definition '{key}' is invalid: {parse.Error}");
             }
 
-            AddCapabilities(capabilities, parse);
+            AddInvocations(invocations, parse);
         }
 
         return new ParsedAdmissionDefinition(
             workflowYaml,
             inlineWorkflowYamls,
-            SortCapabilities(capabilities));
+            SortInvocations(invocations));
     }
 
     private async Task<ParsedAdmissionDefinition> ParseWorkflowBundleAsync(
@@ -234,7 +257,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         string? rootYaml = null;
         var inlineWorkflowYamls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var workflowNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var capabilities = new Dictionary<string, ExternalWorkflowCapabilityRef>(StringComparer.Ordinal);
+        var invocations = new List<ExternalToolInvocationSpec>();
 
         for (var index = 0; index < workflowYamls.Count; index++)
         {
@@ -260,39 +283,47 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
             else
                 inlineWorkflowYamls.Add(workflowName, yaml);
 
-            AddCapabilities(capabilities, parse);
+            AddInvocations(invocations, parse);
         }
 
         return new ParsedAdmissionDefinition(
             rootYaml ?? throw new InvalidOperationException("Workflow YAML bundle has no root definition."),
             inlineWorkflowYamls,
-            SortCapabilities(capabilities));
+            SortInvocations(invocations));
     }
 
-    private static void AddCapabilities(
-        IDictionary<string, ExternalWorkflowCapabilityRef> capabilities,
+    private static void AddInvocations(
+        ICollection<ExternalToolInvocationSpec> invocations,
         WorkflowYamlParseResult parse)
     {
-        foreach (var capability in parse.AuthorizationDependencies?.ExternalCapabilities ?? [])
-        {
-            capabilities.TryAdd(
-                WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey(capability),
-                capability.Clone());
-        }
+        foreach (var invocation in parse.AuthorizationDependencies?.ExternalInvocations ?? [])
+            invocations.Add(invocation.Clone());
     }
 
-    private static IReadOnlyList<ExternalWorkflowCapabilityRef> SortCapabilities(
-        IReadOnlyDictionary<string, ExternalWorkflowCapabilityRef> capabilities) =>
-        capabilities.Values
-            .OrderBy(WorkflowCapabilityAdmissionPlanIntegrity.CapabilityKey, StringComparer.Ordinal)
+    private static IReadOnlyList<ExternalToolInvocationSpec> SortInvocations(
+        IEnumerable<ExternalToolInvocationSpec> invocations)
+    {
+        var sorted = invocations
+            .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
+        var duplicate = sorted
+            .GroupBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (duplicate is not null)
+        {
+            throw new InvalidOperationException(
+                $"Workflow external capability call site '{duplicate.Key}' is duplicated.");
+        }
+
+        return sorted;
+    }
 
     private static void EnsureDurableCatalogMatchesPlanOwner(
         WorkflowCapabilityAdmissionPlan plan)
     {
         if (!WorkflowCapabilityAdmissionPlanIntegrity.RequiresDurableAuthorizationCatalog(
                 plan.ExecutionMode,
-                plan.ExternalCapabilities))
+                WorkflowCapabilityAdmissionPlanIntegrity.DistinctCapabilities(plan)))
         {
             return;
         }
@@ -362,6 +393,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
     private void EnsureSourcesAreFresh(
         IEnumerable<ExternalCapabilitySourceStamp> sources,
         ExternalCapabilityExecutionMode executionMode,
+        ExternalWorkflowCapabilitySelector? selectedSelector = null,
         ExternalWorkflowCapabilityRef? selectedCapability = null)
     {
         var now = _timeProvider.GetUtcNow();
@@ -373,6 +405,7 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
         {
             ExecutionMode = executionMode,
             Status = ExternalCapabilityReadinessStatus.SourceStale,
+            SelectedSelector = selectedSelector?.Clone(),
             SelectedCapability = selectedCapability?.Clone(),
         };
         readiness.Blockers.Add(new ExternalCapabilityBlocker
@@ -408,5 +441,5 @@ public sealed class WorkflowExternalCapabilityAdmissionService :
     private sealed record ParsedAdmissionDefinition(
         string WorkflowYaml,
         IReadOnlyDictionary<string, string> InlineWorkflowYamls,
-        IReadOnlyList<ExternalWorkflowCapabilityRef> Capabilities);
+        IReadOnlyList<ExternalToolInvocationSpec> Invocations);
 }

@@ -7,6 +7,7 @@ using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using static Aevatar.AI.ToolProviders.NyxId.NyxIdUserServiceListJson;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
@@ -38,8 +39,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         _logger = logger ?? NullLogger<NyxIdExternalWorkflowCapabilitySource>.Instance;
     }
 
-    public ExternalWorkflowCapabilityRef.CapabilityOneofCase CapabilityKind =>
-        ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService;
+    public ExternalWorkflowCapabilitySelector.SelectorOneofCase SelectorKind =>
+        ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation;
 
     public async Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
         ExternalWorkflowCapabilityAccessContext access,
@@ -58,7 +59,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             if (!openApi.Available)
                 continue;
 
-            foreach (var operation in openApi.Spec.Operations
+            foreach (var operation in openApi.Spec.AdmittedOperations()
                          .OrderBy(static item => item.OperationId, StringComparer.Ordinal)
                          .ThenBy(static item => item.Method, StringComparer.Ordinal)
                          .ThenBy(static item => item.PathTemplate, StringComparer.Ordinal))
@@ -72,78 +73,48 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
 
     public async Task<ExternalCapabilityReadiness> InspectAsync(
         ExternalWorkflowCapabilityAccessContext access,
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(access);
-        ArgumentNullException.ThrowIfNull(capability);
+        ArgumentNullException.ThrowIfNull(selector);
 
-        if (capability.CapabilityCase !=
-            ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+        if (selector.SelectorCase !=
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.SelectionRequired,
-                "NYXID_CAPABILITY_REQUIRED",
+                "NYXID_OPERATION_SELECTION_REQUIRED",
                 "Select an exact NyxID UserService operation.",
-                ExternalCapabilityRemediationActionKind.SelectCapability,
-                "Select capability");
+                ExternalCapabilityRemediationActionKind.SelectOperation,
+                "Select operation");
         }
 
         var snapshot = await ReadServicesAsync(access, cancellationToken);
-        var selected = capability.NyxIdUserService;
+        var selected = selector.NyxIdOperation;
         _logger.LogInformation(
-            "NyxID workflow capability readiness inspection started. executionMode={ExecutionMode}, callerIdPresent={CallerIdPresent}, selectedUserServiceIdPresent={SelectedUserServiceIdPresent}, selectedServiceSlug={SelectedServiceSlug}, selectedOperationId={SelectedOperationId}, selectedHttpMethod={SelectedHttpMethod}, serviceCount={ServiceCount}, accessDenied={AccessDenied}, sourceUnavailable={SourceUnavailable}",
+            "NyxID workflow capability readiness inspection started. executionMode={ExecutionMode}, callerIdPresent={CallerIdPresent}, selectedUserServiceIdPresent={SelectedUserServiceIdPresent}, selectedOperationId={SelectedOperationId}, serviceCount={ServiceCount}, accessDenied={AccessDenied}, sourceUnavailable={SourceUnavailable}",
             executionMode,
             !string.IsNullOrWhiteSpace(access.CallerId),
             !string.IsNullOrWhiteSpace(selected.UserServiceId),
-            selected.ServiceSlugSnapshot,
             selected.OperationId,
-            selected.HttpMethod,
             snapshot.Services.Count,
             snapshot.AccessDenied,
             snapshot.SourceUnavailable);
-        if (string.IsNullOrWhiteSpace(selected.UserServiceId))
+        if (string.IsNullOrWhiteSpace(selected.UserServiceId) ||
+            string.IsNullOrWhiteSpace(selected.OperationId))
         {
-            var matches = snapshot.Services.Count(service =>
-                string.Equals(
-                    service.ServiceSlug,
-                    selected.ServiceSlugSnapshot,
-                    StringComparison.OrdinalIgnoreCase));
-            _logger.LogInformation(
-                "NyxID workflow capability exact service selection required. executionMode={ExecutionMode}, selectedServiceSlug={SelectedServiceSlug}, selectedOperationId={SelectedOperationId}, matchingServiceCount={MatchingServiceCount}, visibleServiceCount={VisibleServiceCount}",
-                executionMode,
-                selected.ServiceSlugSnapshot,
-                selected.OperationId,
-                matches,
-                snapshot.Services.Count);
-            if (matches == 0)
-            {
-                var sourceFailure = BuildSnapshotFailure(capability, executionMode, snapshot);
-                if (sourceFailure is not null)
-                    return sourceFailure;
-
-                return Failure(
-                    capability,
-                    executionMode,
-                    ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
-                    "USER_SERVICE_NOT_VISIBLE",
-                    "No caller-visible NyxID UserService matches the selected capability.",
-                    ExternalCapabilityRemediationActionKind.RegisterService,
-                    "Register service",
-                    snapshot.Sources);
-            }
-
             return Failure(
-                capability,
+                selector,
                 executionMode,
-                ExternalCapabilityReadinessStatus.SelectionRequired,
-                "EXACT_USER_SERVICE_SELECTION_REQUIRED",
-                "Select one exact NyxID UserService instance.",
-                ExternalCapabilityRemediationActionKind.SelectCapability,
-                "Select service instance",
+                ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+                "NYXID_OPERATION_SELECTION_REQUIRED",
+                "Select one exact connected service and operation.",
+                ExternalCapabilityRemediationActionKind.SelectOperation,
+                "Select operation",
                 snapshot.Sources);
         }
 
@@ -151,12 +122,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             string.Equals(item.UserServiceId, selected.UserServiceId, StringComparison.Ordinal));
         if (service is null)
         {
-            var sourceFailure = BuildSnapshotFailure(capability, executionMode, snapshot);
+            var sourceFailure = BuildSnapshotFailure(selector, executionMode, snapshot);
             if (sourceFailure is not null)
                 return sourceFailure;
 
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
                 "USER_SERVICE_NOT_VISIBLE",
@@ -166,23 +137,10 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 snapshot.Sources);
         }
 
-        if (!string.Equals(service.ServiceSlug, selected.ServiceSlugSnapshot, StringComparison.Ordinal))
-        {
-            return Failure(
-                capability,
-                executionMode,
-                ExternalCapabilityReadinessStatus.ContractDrift,
-                "SERVICE_ROUTE_SNAPSHOT_DRIFT",
-                "The selected NyxID service routing snapshot has changed.",
-                ExternalCapabilityRemediationActionKind.SelectCapability,
-                "Select current service instance",
-                [service.Source]);
-        }
-
         if (IsStale(service.Source))
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.SourceStale,
                 "NYXID_SOURCE_STALE",
@@ -192,7 +150,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source]);
         }
 
-        var serviceFailure = EvaluateServiceReadiness(capability, executionMode, service);
+        var serviceFailure = EvaluateServiceReadiness(selector, executionMode, service);
         if (serviceFailure is not null)
             return serviceFailure;
 
@@ -200,7 +158,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (!openApi.Available)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.EndpointContractRequired,
                 "OPENAPI_CONTRACT_REQUIRED",
@@ -210,46 +168,70 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source, openApi.Source]);
         }
 
-        var admitted = openApi.Spec.Operations.FirstOrDefault(operation =>
+        if (openApi.Spec.HasFatalIdentityAmbiguity)
+        {
+            return Failure(
+                selector,
+                executionMode,
+                ExternalCapabilityReadinessStatus.EndpointContractRequired,
+                "OPENAPI_OPERATION_ID_DUPLICATE",
+                "The published endpoint contract contains duplicate operationId values.",
+                ExternalCapabilityRemediationActionKind.PublishEndpointContract,
+                "Repair endpoint contract",
+                [service.Source, openApi.Source]);
+        }
+
+        var admitted = openApi.Spec.AdmittedOperations().SingleOrDefault(operation =>
             string.Equals(operation.OperationId, selected.OperationId, StringComparison.Ordinal));
         if (admitted is null)
         {
+            var policyIssue = openApi.Spec.FindIssue(
+                selected.OperationId,
+                ConnectedServiceSpecIssueKind.RequiredHeaderNotAllowed,
+                ConnectedServiceSpecIssueKind.RequiredRequestBodyUnsupported);
+            var missingOperationIds = openApi.Spec.Issues.Any(static issue =>
+                issue.Kind == ConnectedServiceSpecIssueKind.MissingOperationId);
+            var declared = openApi.Spec.HasDeclaredOperation(selected.OperationId);
+            var code = policyIssue?.Kind switch
+            {
+                ConnectedServiceSpecIssueKind.RequiredHeaderNotAllowed => "OPERATION_REQUIRED_HEADER_REJECTED",
+                ConnectedServiceSpecIssueKind.RequiredRequestBodyUnsupported => "OPERATION_REQUIRED_BODY_UNSUPPORTED",
+                _ when declared => "OPERATION_NOT_ALLOWLISTED",
+                _ when missingOperationIds => "OPENAPI_OPERATION_ID_REQUIRED",
+                _ => "OPERATION_NOT_FOUND",
+            };
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.OperationSelectionRequired,
-                "OPERATION_NOT_FOUND",
-                "Select an operation published by the NyxID endpoint contract.",
+                code,
+                policyIssue is null
+                    ? "Select an operation published through the x-aevatar-tool allowlist."
+                    : "The selected operation is incompatible with the workflow proxy safety policy.",
                 ExternalCapabilityRemediationActionKind.SelectOperation,
                 "Select operation",
                 [service.Source, openApi.Source]);
         }
 
-        if (!string.Equals(admitted.Method, selected.HttpMethod, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(admitted.PathTemplate, selected.PathTemplate, StringComparison.Ordinal))
+        ExternalWorkflowCapabilityRef capability;
+        try
         {
-            return Failure(
-                capability,
-                executionMode,
-                ExternalCapabilityReadinessStatus.ContractDrift,
-                "NYXID_OPERATION_ROUTE_DRIFT",
-                "The selected NyxID operation route has changed.",
-                ExternalCapabilityRemediationActionKind.SelectOperation,
-                "Select current operation",
-                [service.Source, openApi.Source]);
+            capability = NyxIdOperationAdmissionProofBuilder.Build(
+                service.UserServiceId,
+                service.ServiceSlug,
+                admitted,
+                BuildOperationContractDigest(admitted));
         }
-
-        var currentDigest = BuildOperationContractDigest(admitted);
-        if (!string.Equals(currentDigest, selected.ContractDigest, StringComparison.OrdinalIgnoreCase))
+        catch (NyxIdOperationSchemaUnsupportedException)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
-                ExternalCapabilityReadinessStatus.ContractDrift,
-                "NYXID_OPERATION_CONTRACT_DRIFT",
-                "The selected NyxID operation contract has changed.",
-                ExternalCapabilityRemediationActionKind.SelectOperation,
-                "Select current operation",
+                ExternalCapabilityReadinessStatus.EndpointContractRequired,
+                "OPERATION_SCHEMA_UNSUPPORTED",
+                "The selected operation schema is outside the supported workflow contract subset.",
+                ExternalCapabilityRemediationActionKind.PublishEndpointContract,
+                "Publish a supported endpoint contract",
                 [service.Source, openApi.Source]);
         }
 
@@ -258,6 +240,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         {
             durableReadiness = await InspectDurableAuthorizationAsync(
                 access,
+                selector,
                 capability,
                 cancellationToken);
             if (durableReadiness.Status != ExternalCapabilityReadinessStatus.Ready)
@@ -278,6 +261,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         {
             ExecutionMode = executionMode,
             Status = ExternalCapabilityReadinessStatus.Ready,
+            SelectedSelector = selector.Clone(),
             SelectedCapability = capability.Clone(),
         };
         ready.Sources.Add(service.Source);
@@ -295,11 +279,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
 
     private async Task<ExternalCapabilityReadiness> InspectDurableAuthorizationAsync(
         ExternalWorkflowCapabilityAccessContext access,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalWorkflowCapabilityRef capability,
         CancellationToken cancellationToken)
     {
         if (_catalogQueryPort is null || string.IsNullOrWhiteSpace(access.CallerId))
-            return DurableAuthorizationUnavailable(capability);
+            return DurableAuthorizationUnavailable(selector, capability);
 
         var owner = new AuthorizationOwnerIdentity
         {
@@ -318,11 +303,11 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         }
         catch
         {
-            return DurableAuthorizationUnavailable(capability);
+            return DurableAuthorizationUnavailable(selector, capability);
         }
 
         if (!IsUsableDurableCatalog(snapshot, owner))
-            return DurableAuthorizationUnavailable(capability);
+            return DurableAuthorizationUnavailable(selector, capability);
 
         var serviceId = capability.NyxIdUserService.UserServiceId;
         var matches = snapshot!.Services
@@ -332,13 +317,14 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (matches.Length != 1 ||
             !IsUsableDurableGrant(matches[0], capability.NyxIdUserService))
         {
-            return DurableAuthorizationUnavailable(capability);
+            return DurableAuthorizationUnavailable(selector, capability);
         }
 
         var ready = new ExternalCapabilityReadiness
         {
             ExecutionMode = ExternalCapabilityExecutionMode.Durable,
             Status = ExternalCapabilityReadinessStatus.Ready,
+            SelectedSelector = selector.Clone(),
             SelectedCapability = capability.Clone(),
         };
         ready.Sources.Add(new ExternalCapabilitySourceStamp
@@ -432,25 +418,27 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         string.Equals(left.OwnerSubject, right.OwnerSubject, StringComparison.Ordinal);
 
     private ExternalCapabilityReadiness DurableAuthorizationUnavailable(
+        ExternalWorkflowCapabilitySelector selector,
         ExternalWorkflowCapabilityRef capability) =>
         Failure(
-            capability,
+            selector,
             ExternalCapabilityExecutionMode.Durable,
             ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
             "DURABLE_AUTHORIZATION_UNAVAILABLE",
             "The current NyxID authorization catalog does not prove the complete durable grant.",
             ExternalCapabilityRemediationActionKind.UseInteractiveExecution,
-            "Use interactive execution");
+            "Use interactive execution",
+            capability: capability);
 
     private ExternalCapabilityReadiness? BuildSnapshotFailure(
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         NyxIdServicesSnapshot snapshot)
     {
         if (snapshot.AccessDenied)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ServiceAccessDenied,
                 "NYXID_CALLER_ACCESS_REQUIRED",
@@ -462,7 +450,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
 
         return snapshot.SourceUnavailable
             ? Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.SourceStale,
                 "NYXID_SOURCE_UNAVAILABLE",
@@ -474,14 +462,14 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     }
 
     private ExternalCapabilityReadiness? EvaluateServiceReadiness(
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         NyxIdUserServiceSnapshot service)
     {
         if (service.Allowed == false)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.ServiceAccessDenied,
                 "USER_SERVICE_ACCESS_DENIED",
@@ -494,7 +482,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (!HasCompletePublishedReadinessFacts(service))
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.SourceStale,
                 "NYXID_SERVICE_FACTS_INCOMPLETE",
@@ -507,7 +495,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (!IsKnownServiceStatus(service.Status))
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.SourceStale,
                 "NYXID_SERVICE_STATUS_UNKNOWN",
@@ -520,7 +508,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (service.IsActive != true || !IsActiveServiceStatus(service.Status))
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
                 "USER_SERVICE_NOT_ACTIVE",
@@ -533,7 +521,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (service.Connected == false && service.RequiresConnection == false)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.SourceStale,
                 "NYXID_SERVICE_FACTS_INCONSISTENT",
@@ -546,7 +534,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (service.RequiresConnection == true && service.Connected != true)
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.CredentialConnectionRequired,
                 "CREDENTIAL_CONNECTION_REQUIRED",
@@ -560,7 +548,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             (service.HasNodeBinding != true || string.IsNullOrWhiteSpace(service.NodeId)))
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.NodeBindingRequired,
                 "NODE_BINDING_REQUIRED",
@@ -573,7 +561,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         if (!string.IsNullOrWhiteSpace(service.NodeId) && !IsOnlineNodeStatus(service.NodeStatus))
         {
             return Failure(
-                capability,
+                selector,
                 executionMode,
                 ExternalCapabilityReadinessStatus.NodeUnavailable,
                 "NODE_UNAVAILABLE",
@@ -721,7 +709,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         }
 
         var spec = OpenApiToolSpecParser.Parse(response);
-        var available = spec.Operations.Count > 0 || spec.ServiceMarker is not null;
+        var available = !spec.Issues.Any(static issue =>
+                            issue.Kind == ConnectedServiceSpecIssueKind.InvalidDocument) &&
+                        (spec.Operations.Count > 0 ||
+                         spec.ServiceMarker is not null ||
+                         spec.Issues.Count > 0 ||
+                         spec.DeclaredOperationIds.Count > 0);
         return new NyxIdOpenApiSnapshot(available, spec, source);
     }
 
@@ -784,16 +777,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             : operation.Marker?.Destructive ?? true;
         return new ExternalWorkflowCapabilityDescriptor
         {
-            Capability = new ExternalWorkflowCapabilityRef
+            Selector = new ExternalWorkflowCapabilitySelector
             {
-                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                NyxIdOperation = new NyxIdOperationSelector
                 {
                     UserServiceId = service.UserServiceId,
-                    ServiceSlugSnapshot = service.ServiceSlug,
                     OperationId = operation.OperationId,
-                    HttpMethod = operation.Method,
-                    PathTemplate = operation.PathTemplate,
-                    ContractDigest = BuildOperationContractDigest(operation),
                 },
             },
             DisplayName = $"{service.DisplayName} / {operation.OperationId}",
@@ -804,20 +793,22 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
     }
 
     private ExternalCapabilityReadiness Failure(
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         ExternalCapabilityExecutionMode executionMode,
         ExternalCapabilityReadinessStatus status,
         string code,
         string safeMessage,
         ExternalCapabilityRemediationActionKind actionKind,
         string actionLabel,
-        IEnumerable<ExternalCapabilitySourceStamp>? sources = null)
+        IEnumerable<ExternalCapabilitySourceStamp>? sources = null,
+        ExternalWorkflowCapabilityRef? capability = null)
     {
         var result = new ExternalCapabilityReadiness
         {
             ExecutionMode = executionMode,
             Status = status,
-            SelectedCapability = capability.Clone(),
+            SelectedSelector = selector.Clone(),
+            SelectedCapability = capability?.Clone(),
         };
         result.Blockers.Add(new ExternalCapabilityBlocker
         {
@@ -833,16 +824,15 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         });
         if (sources is not null)
             result.Sources.Add(sources.Select(static source => source.Clone()));
-        var selected = capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService
-            ? capability.NyxIdUserService
+        var selected = selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation
+            ? selector.NyxIdOperation
             : null;
         _logger.LogInformation(
-            "NyxID workflow capability readiness inspection blocked. executionMode={ExecutionMode}, status={Status}, code={Code}, selectedUserServiceId={SelectedUserServiceId}, selectedServiceSlug={SelectedServiceSlug}, selectedOperationId={SelectedOperationId}, remediation={Remediation}",
+            "NyxID workflow capability readiness inspection blocked. executionMode={ExecutionMode}, status={Status}, code={Code}, selectedUserServiceId={SelectedUserServiceId}, selectedOperationId={SelectedOperationId}, remediation={Remediation}",
             executionMode,
             status,
             code,
             selected?.UserServiceId ?? string.Empty,
-            selected?.ServiceSlugSnapshot ?? string.Empty,
             selected?.OperationId ?? string.Empty,
             actionKind);
         return result;
@@ -887,8 +877,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 operation.Marker?.ReadOnly?.ToString(CultureInfo.InvariantCulture),
                 operation.Marker?.Destructive?.ToString(CultureInfo.InvariantCulture),
                 operation.RequestBodyRequired.ToString(CultureInfo.InvariantCulture),
+                operation.RequestBodyMediaType,
                 operation.RequestBodySchema?.ToJsonString(),
-            }.Concat(parameterContracts));
+            }.Concat(parameterContracts).Concat(operation.ResponseMediaTypes));
     }
 
     private static bool IsSafeMethod(string method) =>
@@ -926,53 +917,6 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         return !hasNodeId || !string.IsNullOrWhiteSpace(service.NodeStatus);
     }
 
-    private static bool IsErrorEnvelope(JsonElement root, out int status)
-    {
-        status = 0;
-        if (root.ValueKind != JsonValueKind.Object ||
-            !root.TryGetProperty("error", out var error) ||
-            error.ValueKind is not (JsonValueKind.True or JsonValueKind.String))
-        {
-            return false;
-        }
-
-        if (root.TryGetProperty("status", out var statusElement) && statusElement.TryGetInt32(out var parsed))
-            status = parsed;
-        return true;
-    }
-
-    private static IEnumerable<JsonElement> EnumerateServiceEntries(JsonElement root)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in root.EnumerateArray())
-                yield return item;
-            yield break;
-        }
-
-        if (root.ValueKind != JsonValueKind.Object)
-            yield break;
-
-        foreach (var name in new[] { "keys", "services", "items", "data" })
-        {
-            if (!root.TryGetProperty(name, out var array) || array.ValueKind != JsonValueKind.Array)
-                continue;
-            foreach (var item in array.EnumerateArray())
-                yield return item;
-        }
-    }
-
-    private static bool HasServiceCollection(JsonElement root)
-    {
-        if (root.ValueKind == JsonValueKind.Array)
-            return true;
-        if (root.ValueKind != JsonValueKind.Object)
-            return false;
-
-        return new[] { "keys", "services", "items", "data" }
-            .Any(name => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array);
-    }
-
     private static JsonElement ReadObject(JsonElement owner, params string[] names)
     {
         foreach (var name in names)
@@ -986,25 +930,6 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         }
 
         return default;
-    }
-
-    private static string? ReadString(JsonElement owner, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            if (owner.ValueKind != JsonValueKind.Object ||
-                !owner.TryGetProperty(name, out var value) ||
-                value.ValueKind != JsonValueKind.String)
-            {
-                continue;
-            }
-
-            var text = value.GetString()?.Trim();
-            if (!string.IsNullOrWhiteSpace(text))
-                return text;
-        }
-
-        return null;
     }
 
     private static bool? ReadBool(JsonElement owner, params string[] names)
