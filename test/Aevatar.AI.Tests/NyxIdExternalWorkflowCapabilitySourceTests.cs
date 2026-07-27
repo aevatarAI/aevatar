@@ -28,6 +28,22 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         }
         """;
 
+    private const string UnmarkedSpec = """
+        {
+          "openapi": "3.1.0",
+          "paths": {
+            "/states/{entity_id}": {
+              "get": {
+                "operationId": "get-state",
+                "parameters": [
+                  { "name": "entity_id", "in": "path", "required": true, "schema": { "type": "string" } }
+                ]
+              }
+            }
+          }
+        }
+        """;
+
     [Fact]
     public void AddNyxIdTools_ShouldRegisterNyxIdCapabilitySource()
     {
@@ -71,6 +87,33 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             item.Capability.NyxIdUserService.OperationId == "get-state");
         descriptors.Select(static item => item.ToString()).Should()
             .OnlyContain(text => !text.Contains("runtime-caller-credential", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldExposePublishedOpenApiOperationsWithoutAevatarToolMarker()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = UnmarkedSpec },
+        };
+        var source = CreateSource(handler);
+
+        var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
+
+        descriptor.Capability.NyxIdUserService.OperationId.Should().Be("get-state");
+        descriptor.Capability.NyxIdUserService.HttpMethod.Should().Be("GET");
+        descriptor.Capability.NyxIdUserService.PathTemplate.Should().Be("/states/{entity_id}");
+        descriptor.ReadOnly.Should().BeTrue();
+        descriptor.Destructive.Should().BeFalse();
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            descriptor.Capability,
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+        readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        readiness.Blockers.Should().BeEmpty();
     }
 
     [Fact]
@@ -575,9 +618,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             },
             {
                 ReadyKeys,
-                """{ "openapi": "3.1.0", "paths": { "/states/{entity_id}": { "get": { "operationId": "get-state" } } } }""",
+                """{ "openapi": "3.1.0", "paths": { "/states/{entity_id}": { "get": { "operationId": "other-state" } } } }""",
                 ExternalCapabilityReadinessStatus.OperationSelectionRequired,
-                "OPERATION_NOT_ALLOWLISTED"
+                "OPERATION_NOT_FOUND"
             },
             {
                 """{ "fresh_until": "2026-07-21T09:59:00Z", "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "is_active": true, "connected": true, "requires_connection": false, "has_node_binding": false, "credential_source": { "type": "personal" } }] }""",

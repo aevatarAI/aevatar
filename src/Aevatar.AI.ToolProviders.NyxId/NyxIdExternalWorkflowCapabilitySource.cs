@@ -58,7 +58,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
             if (!openApi.Available)
                 continue;
 
-            foreach (var operation in openApi.Spec.AdmittedOperations()
+            foreach (var operation in openApi.Spec.Operations
                          .OrderBy(static item => item.OperationId, StringComparer.Ordinal)
                          .ThenBy(static item => item.Method, StringComparer.Ordinal)
                          .ThenBy(static item => item.PathTemplate, StringComparer.Ordinal))
@@ -210,18 +210,16 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
                 [service.Source, openApi.Source]);
         }
 
-        var admitted = openApi.Spec.AdmittedOperations().FirstOrDefault(operation =>
+        var admitted = openApi.Spec.Operations.FirstOrDefault(operation =>
             string.Equals(operation.OperationId, selected.OperationId, StringComparison.Ordinal));
         if (admitted is null)
         {
-            var declared = openApi.Spec.Operations.Any(operation =>
-                string.Equals(operation.OperationId, selected.OperationId, StringComparison.Ordinal));
             return Failure(
                 capability,
                 executionMode,
                 ExternalCapabilityReadinessStatus.OperationSelectionRequired,
-                declared ? "OPERATION_NOT_ALLOWLISTED" : "OPERATION_NOT_FOUND",
-                "Select an operation published through the x-aevatar-tool allowlist.",
+                "OPERATION_NOT_FOUND",
+                "Select an operation published by the NyxID endpoint contract.",
                 ExternalCapabilityRemediationActionKind.SelectOperation,
                 "Select operation",
                 [service.Source, openApi.Source]);
