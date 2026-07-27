@@ -356,6 +356,7 @@ public sealed class ConversationReplyGeneratorTests
         };
         IAgentRunStepConversationReplyGenerator generator = new NyxIdConversationReplyGenerator(
             providerFactory,
+            BuiltInPromptFloorProvider,
             larkClient: lark,
             fileIngressPort: fileArtifacts,
             fileArtifactReadPort: fileArtifacts);
