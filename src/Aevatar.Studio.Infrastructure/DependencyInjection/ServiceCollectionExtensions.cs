@@ -44,6 +44,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WorkflowDocumentNormalizer>();
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IWorkflowYamlDocumentService, YamlWorkflowDocumentService>();
+        foreach (var registration in BuiltInWorkflowTemplateRegistry.CreateRegistrations())
+            services.AddSingleton(registration);
         services.AddSingleton<IWorkflowTemplateCatalogQueryPort, EmbeddedWorkflowTemplateCatalogQueryPort>();
         // Refactor (iter16/cluster-meta-studio-actor-substrate):
         //   Old: FileStudioWorkspaceStore was a shadow store reading/writing JSON files in workspace dir, with no clear actor ownership of workspace facts

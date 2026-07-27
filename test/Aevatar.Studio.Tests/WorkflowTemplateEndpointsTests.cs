@@ -103,9 +103,12 @@ public sealed class WorkflowTemplateEndpointsTests
         new(
             "alpha",
             "rev-1",
-            "Alpha",
-            "Description",
+            Text("Alpha"),
+            Text("Summary"),
+            Text("Description"),
             "Reports",
+            ["report"],
+            new WorkflowTemplateExpectedIO(Text("input"), Text("output")),
             new WorkflowTemplateRequirements(["transform"], "1.0"),
             status == WorkflowTemplateCompatibilityStatus.Compatible
                 ? WorkflowTemplateCompatibility.Compatible
@@ -113,6 +116,9 @@ public sealed class WorkflowTemplateEndpointsTests
                     status,
                     WorkflowTemplateCompatibilityReason.RequiredPrimitiveUnavailable),
             "name: alpha\nsteps:\n  - id: start\n    type: transform\n");
+
+    private static WorkflowTemplateLocalizedText Text(string value) =>
+        new(value, value);
 
     private sealed class StubCatalogQueryPort : IWorkflowTemplateCatalogQueryPort
     {

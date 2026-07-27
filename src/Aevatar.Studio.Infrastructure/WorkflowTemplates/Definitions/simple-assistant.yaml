@@ -1,0 +1,9 @@
+name: simple_assistant
+roles:
+  - id: assistant
+    name: Assistant
+    system_prompt: Answer the user's request clearly and directly.
+steps:
+  - id: answer_request
+    type: llm_call
+    target_role: assistant

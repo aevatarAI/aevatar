@@ -3,6 +3,9 @@ using System.Security.Cryptography;
 using System.Text;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Models;
+using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.Studio.Infrastructure.WorkflowTemplates;
@@ -10,9 +13,13 @@ namespace Aevatar.Studio.Infrastructure.WorkflowTemplates;
 internal sealed record EmbeddedWorkflowTemplateRegistration(
     string TemplateId,
     string Revision,
-    string Title,
-    string Description,
+    int ProductOrder,
+    WorkflowTemplateLocalizedText Title,
+    WorkflowTemplateLocalizedText Summary,
+    WorkflowTemplateLocalizedText Description,
     string Category,
+    IReadOnlyList<string> Tags,
+    WorkflowTemplateExpectedIO ExpectedIO,
     string WorkflowYaml,
     WorkflowTemplateRequirements Requirements,
     WorkflowTemplateCompatibility Compatibility,
@@ -27,14 +34,26 @@ internal sealed class EmbeddedWorkflowTemplateCatalogQueryPort : IWorkflowTempla
     private const string CursorPrefix = "workflow-templates:v1:";
 
     private readonly IWorkflowDefinitionParser _workflowDefinitionParser;
+    private readonly IWorkflowYamlDocumentService _workflowYamlDocumentService;
+    private readonly WorkflowValidator _studioWorkflowValidator;
+    private readonly WorkflowGraphMapper _workflowGraphMapper;
     private readonly EmbeddedWorkflowTemplateRegistration[] _registrations;
 
     public EmbeddedWorkflowTemplateCatalogQueryPort(
         IWorkflowDefinitionParser workflowDefinitionParser,
+        IWorkflowYamlDocumentService workflowYamlDocumentService,
+        WorkflowValidator studioWorkflowValidator,
+        WorkflowGraphMapper workflowGraphMapper,
         IEnumerable<EmbeddedWorkflowTemplateRegistration> registrations)
     {
         _workflowDefinitionParser = workflowDefinitionParser ??
                                     throw new ArgumentNullException(nameof(workflowDefinitionParser));
+        _workflowYamlDocumentService = workflowYamlDocumentService ??
+                                       throw new ArgumentNullException(nameof(workflowYamlDocumentService));
+        _studioWorkflowValidator = studioWorkflowValidator ??
+                                   throw new ArgumentNullException(nameof(studioWorkflowValidator));
+        _workflowGraphMapper = workflowGraphMapper ??
+                               throw new ArgumentNullException(nameof(workflowGraphMapper));
         _registrations = registrations?.Select(Snapshot).ToArray() ??
                          throw new ArgumentNullException(nameof(registrations));
         ValidateRegistrationIdentities(_registrations);
@@ -54,7 +73,8 @@ internal sealed class EmbeddedWorkflowTemplateCatalogQueryPort : IWorkflowTempla
         var matching = _registrations
             .Where(static registration => registration.IsEnabled)
             .Where(registration => Matches(registration, normalizedQuery, normalizedCategory))
-            .OrderBy(static registration => registration.TemplateId, StringComparer.Ordinal)
+            .OrderBy(static registration => registration.ProductOrder)
+            .ThenBy(static registration => registration.TemplateId, StringComparer.Ordinal)
             .ThenBy(static registration => registration.Revision, StringComparer.Ordinal)
             .ToArray();
         if (offset > matching.Length)
@@ -115,7 +135,32 @@ internal sealed class EmbeddedWorkflowTemplateCatalogQueryPort : IWorkflowTempla
             throw new InvalidOperationException(
                 $"Embedded workflow template '{registration.TemplateId}' revision '{registration.Revision}' failed canonical workflow validation.");
         }
+
+        var studioParse = _workflowYamlDocumentService.Parse(registration.WorkflowYaml);
+        if (studioParse.Document == null || HasErrors(studioParse.Findings))
+            throw InvalidStudioWorkflow(registration);
+
+        var studioFindings = _studioWorkflowValidator.Validate(studioParse.Document);
+        if (HasErrors(studioFindings))
+            throw InvalidStudioWorkflow(registration);
+
+        var graph = _workflowGraphMapper.Map(studioParse.Document);
+        var nodeIds = graph.Nodes.Select(static node => node.Id).ToHashSet(StringComparer.Ordinal);
+        if (nodeIds.Count != graph.Nodes.Count ||
+            graph.Nodes.Count != studioParse.Document.Steps.Count ||
+            graph.Edges.Any(edge => !nodeIds.Contains(edge.Source) || !nodeIds.Contains(edge.Target)))
+        {
+            throw InvalidStudioWorkflow(registration);
+        }
     }
+
+    private static bool HasErrors(IEnumerable<ValidationFinding> findings) =>
+        findings.Any(static finding => finding.Level == ValidationLevel.Error);
+
+    private static InvalidOperationException InvalidStudioWorkflow(
+        EmbeddedWorkflowTemplateRegistration registration) =>
+        new(
+            $"Embedded workflow template '{registration.TemplateId}' revision '{registration.Revision}' failed Studio authoring or graph validation.");
 
     private static bool Matches(
         EmbeddedWorkflowTemplateRegistration registration,
@@ -128,18 +173,27 @@ internal sealed class EmbeddedWorkflowTemplateCatalogQueryPort : IWorkflowTempla
             return true;
 
         return registration.TemplateId.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               registration.Title.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               registration.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-               registration.Category.Contains(query, StringComparison.OrdinalIgnoreCase);
+               Contains(registration.Title, query) ||
+               Contains(registration.Summary, query) ||
+               Contains(registration.Description, query) ||
+               registration.Category.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+               registration.Tags.Any(tag => tag.Contains(query, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static bool Contains(WorkflowTemplateLocalizedText text, string query) =>
+        text.EnUS.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+        text.ZhCN.Contains(query, StringComparison.OrdinalIgnoreCase);
 
     private static WorkflowTemplateSummary ToSummary(EmbeddedWorkflowTemplateRegistration registration) =>
         new(
             registration.TemplateId,
             registration.Revision,
             registration.Title,
+            registration.Summary,
             registration.Description,
             registration.Category,
+            registration.Tags,
+            registration.ExpectedIO,
             registration.Requirements,
             registration.Compatibility);
 
@@ -148,8 +202,11 @@ internal sealed class EmbeddedWorkflowTemplateCatalogQueryPort : IWorkflowTempla
             registration.TemplateId,
             registration.Revision,
             registration.Title,
+            registration.Summary,
             registration.Description,
             registration.Category,
+            registration.Tags,
+            registration.ExpectedIO,
             registration.Requirements,
             registration.Compatibility,
             registration.WorkflowYaml);
@@ -162,6 +219,9 @@ internal sealed class EmbeddedWorkflowTemplateCatalogQueryPort : IWorkflowTempla
         ArgumentNullException.ThrowIfNull(registration.Compatibility);
         return registration with
         {
+            Tags = Array.AsReadOnly(
+                registration.Tags?.ToArray() ??
+                throw new ArgumentNullException(nameof(registration.Tags))),
             Requirements = registration.Requirements with
             {
                 RequiredPrimitives = Array.AsReadOnly(
@@ -259,13 +319,26 @@ internal sealed class EmbeddedWorkflowTemplateCatalogQueryPort : IWorkflowTempla
         {
             Append(hash, registration.TemplateId);
             Append(hash, registration.Revision);
-            Append(hash, registration.Title);
-            Append(hash, registration.Description);
+            Append(hash, registration.ProductOrder.ToString(CultureInfo.InvariantCulture));
+            Append(hash, registration.Title.EnUS);
+            Append(hash, registration.Title.ZhCN);
+            Append(hash, registration.Summary.EnUS);
+            Append(hash, registration.Summary.ZhCN);
+            Append(hash, registration.Description.EnUS);
+            Append(hash, registration.Description.ZhCN);
             Append(hash, registration.Category);
+            foreach (var tag in registration.Tags)
+                Append(hash, tag);
+            Append(hash, registration.ExpectedIO.Input.EnUS);
+            Append(hash, registration.ExpectedIO.Input.ZhCN);
+            Append(hash, registration.ExpectedIO.Output.EnUS);
+            Append(hash, registration.ExpectedIO.Output.ZhCN);
             Append(hash, registration.WorkflowYaml);
             Append(hash, registration.Requirements.WorkflowSchemaVersion);
             foreach (var requiredPrimitive in registration.Requirements.RequiredPrimitives)
                 Append(hash, requiredPrimitive);
+            Append(hash, registration.Requirements.RequiresDefaultLLMRoute.ToString(CultureInfo.InvariantCulture));
+            Append(hash, registration.Requirements.RequiresHumanInteraction.ToString(CultureInfo.InvariantCulture));
             Append(hash, registration.Compatibility.Status.ToString());
             Append(hash, registration.Compatibility.Reason.ToString());
         }

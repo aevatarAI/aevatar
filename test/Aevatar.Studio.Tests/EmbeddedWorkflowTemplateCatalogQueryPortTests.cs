@@ -1,4 +1,8 @@
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Compatibility;
+using Aevatar.Studio.Domain.Studio.Services;
+using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Infrastructure.WorkflowTemplates;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -146,7 +150,12 @@ public sealed class EmbeddedWorkflowTemplateCatalogQueryPortTests
     private static EmbeddedWorkflowTemplateCatalogQueryPort NewCatalog(
         IWorkflowDefinitionParser parser,
         params EmbeddedWorkflowTemplateRegistration[] registrations) =>
-        new(parser, registrations);
+        new(
+            parser,
+            new YamlWorkflowDocumentService(WorkflowCompatibilityProfile.AevatarV1),
+            new WorkflowValidator(WorkflowCompatibilityProfile.AevatarV1),
+            new WorkflowGraphMapper(WorkflowCompatibilityProfile.AevatarV1),
+            registrations);
 
     private static EmbeddedWorkflowTemplateRegistration Registration(
         string templateId,
@@ -159,13 +168,20 @@ public sealed class EmbeddedWorkflowTemplateCatalogQueryPortTests
         new(
             templateId,
             revision,
-            title,
-            $"{title} description",
+            0,
+            Text(title),
+            Text($"{title} summary"),
+            Text($"{title} description"),
             category,
+            ["test"],
+            new WorkflowTemplateExpectedIO(Text("input"), Text("output")),
             $"name: {workflowName}\nsteps:\n  - id: start\n    type: transform\n",
             new WorkflowTemplateRequirements(["transform"], "1.0"),
             compatibility ?? WorkflowTemplateCompatibility.Compatible,
             isEnabled);
+
+    private static WorkflowTemplateLocalizedText Text(string value) =>
+        new(value, value);
 
     private sealed class RecordingWorkflowDefinitionParser : IWorkflowDefinitionParser
     {
