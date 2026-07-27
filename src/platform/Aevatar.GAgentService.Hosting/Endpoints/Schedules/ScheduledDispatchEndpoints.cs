@@ -52,7 +52,8 @@ public static class ScheduledDispatchEndpoints
             .Produces(StatusCodes.Status403Forbidden)
             .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status409Conflict)
-            .Produces(StatusCodes.Status503ServiceUnavailable);
+            .Produces(StatusCodes.Status503ServiceUnavailable)
+            .Produces(StatusCodes.Status500InternalServerError);
         group.MapGet("/schedules", List)
             .WithTags("Schedules")
             .Produces<ScheduledDispatchListResult>(StatusCodes.Status200OK);
@@ -224,9 +225,10 @@ public static class ScheduledDispatchEndpoints
         {
             owner = input?.Owner?.ToTeamMemberAutomationOwner();
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
-            return InvalidTeamAutomationRequest(ex.Message);
+            return InvalidTeamAutomationRequest(
+                "Team automation owner is invalid.");
         }
 
         if (TryCreateOwnerScopeAccessDeniedResult(http, owner, out var denied))
@@ -616,6 +618,16 @@ public static class ScheduledDispatchEndpoints
             },
             statusCode: StatusCodes.Status404NotFound);
 
+    private static IResult TeamAutomationDeleteFailed() =>
+        Results.Json(
+            new
+            {
+                code = "TEAM_AUTOMATION_DELETE_FAILED",
+                message =
+                    "Team automation delete could not be completed.",
+            },
+            statusCode: StatusCodes.Status500InternalServerError);
+
     private static bool TryMapTeamAutomationDeleteError(
         Exception exception,
         out IResult result)
@@ -642,14 +654,34 @@ public static class ScheduledDispatchEndpoints
                         "The Team automation delete conflicts with its active operation.",
                 },
                 statusCode: StatusCodes.Status409Conflict),
-            InvalidOperationException => InvalidTeamAutomationRequest(
-                "Team automation delete request is invalid."),
+            InvalidOperationException invalidOperation =>
+                MapTeamAutomationDeleteInvalidOperation(
+                    invalidOperation.Message),
             ArgumentException => InvalidTeamAutomationRequest(
                 "Team automation delete request is invalid."),
             _ => null!,
         };
         return result != null;
     }
+
+    private static IResult MapTeamAutomationDeleteInvalidOperation(
+        string? stableCode) =>
+        stableCode switch
+        {
+            "team_member_is_not_workflow" or
+            "team_automation_delete_requires_revocation_context" or
+            "team_automation_owner_required" =>
+                InvalidTeamAutomationRequest(
+                    "Team automation delete request is invalid."),
+            "team_automation_commit_observation_unavailable" or
+            "team_automation_dispatch_rejected" or
+            "team_automation_commit_observation_ended" =>
+                TeamAutomationLifecycleUnavailable(),
+            "team_automation_observation_status_invalid" or
+            "team_automation_revocation_completion_not_committed" =>
+                TeamAutomationDeleteFailed(),
+            _ => TeamAutomationDeleteFailed(),
+        };
 
     private static bool IsExpectedScheduleLifecycleError(string? message) =>
         !string.IsNullOrWhiteSpace(message) &&

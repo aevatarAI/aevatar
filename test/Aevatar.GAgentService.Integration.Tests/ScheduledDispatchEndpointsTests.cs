@@ -942,6 +942,41 @@ public sealed class ScheduledDispatchEndpointsTests
             "fresh-owner-bearer");
     }
 
+    [Fact]
+    public async Task Delete_WithUnsupportedOwnerKind_ShouldReturnSanitizedBadRequest()
+    {
+        const string secretOwnerKind =
+            "raw-owner-secret api-key-alpha vault-ref-alpha";
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest() with
+            {
+                Owner = StudioMemberAutomationOwnerRequest() with
+                {
+                    Kind = secretOwnerKind,
+                },
+            },
+            schedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        json.GetProperty("code").GetString()
+            .Should().Be("INVALID_TEAM_AUTOMATION_REQUEST");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation owner is invalid.");
+        json.GetRawText().Should().NotContain(secretOwnerKind);
+        json.GetRawText().Should().NotContain("Parameter");
+        AssertNoCredentialMaterial(json);
+        schedules.Deleted.Should().BeEmpty();
+        schedules.TeamDeleted.Should().BeEmpty();
+    }
+
     [Theory]
     [InlineData("delete-operation-alpha", null)]
     [InlineData(null, "delete-idempotency-alpha")]
@@ -1183,15 +1218,18 @@ public sealed class ScheduledDispatchEndpointsTests
         AssertNoCredentialMaterial(json);
     }
 
-    [Fact]
-    public async Task Delete_WithInvalidLifecyclePayload_ShouldReturnSanitizedBadRequest()
+    [Theory]
+    [InlineData("team_member_is_not_workflow")]
+    [InlineData("team_automation_delete_requires_revocation_context")]
+    [InlineData("team_automation_owner_required")]
+    public async Task Delete_WithKnownInvalidLifecycleRequest_ShouldReturnSanitizedBadRequest(
+        string stableCode)
     {
         var lifecycleSchedules =
             new RecordingStudioMemberWorkflowSchedulePort
             {
                 DeleteException = new InvalidOperationException(
-                    "backend-delete-secret binding-alpha nyx-owner-alpha " +
-                    "api-key-alpha vault-ref-alpha"),
+                    stableCode),
             };
         var bindingQuery = new FakeExternalIdentityBindingQueryPort();
         bindingQuery.Bindings[
@@ -1213,6 +1251,82 @@ public sealed class ScheduledDispatchEndpointsTests
             .Should().Be("INVALID_TEAM_AUTOMATION_REQUEST");
         json.GetProperty("message").GetString().Should().Be(
             "Team automation delete request is invalid.");
+        AssertNoCredentialMaterial(json);
+    }
+
+    [Theory]
+    [InlineData("team_automation_commit_observation_unavailable")]
+    [InlineData("team_automation_dispatch_rejected")]
+    [InlineData("team_automation_commit_observation_ended")]
+    public async Task Delete_WithLifecycleAvailabilityFailure_ShouldReturnSanitizedUnavailable(
+        string stableCode)
+    {
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort
+            {
+                DeleteException = new InvalidOperationException(
+                    stableCode),
+            };
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(
+                lifecycleSchedules,
+                bindingQuery),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            new RecordingScheduledDispatchApplicationService());
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_LIFECYCLE_UNAVAILABLE");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation lifecycle capability is unavailable.");
+        json.GetRawText().Should().NotContain(stableCode);
+        AssertNoCredentialMaterial(json);
+    }
+
+    [Theory]
+    [InlineData("team_automation_observation_status_invalid")]
+    [InlineData("team_automation_revocation_completion_not_committed")]
+    [InlineData(
+        "team_automation_backend_delete_secret api-key-alpha vault-ref-alpha")]
+    public async Task Delete_WithLifecycleInvariantOrUnknownFailure_ShouldReturnSanitizedInternalError(
+        string backendMessage)
+    {
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort
+            {
+                DeleteException = new InvalidOperationException(
+                    backendMessage),
+            };
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(
+                lifecycleSchedules,
+                bindingQuery),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            new RecordingScheduledDispatchApplicationService());
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(
+            StatusCodes.Status500InternalServerError);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_DELETE_FAILED");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation delete could not be completed.");
+        json.GetRawText().Should().NotContain(backendMessage);
         AssertNoCredentialMaterial(json);
     }
 

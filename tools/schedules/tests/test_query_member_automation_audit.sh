@@ -184,8 +184,143 @@ rg -F '"$AUDIT_QUERY_TOOL" create' "$CANARY_DOC" >/dev/null \
   || fail "runbook does not invoke create audit mode"
 rg -F '"$AUDIT_QUERY_TOOL" revocation' "$CANARY_DOC" >/dev/null \
   || fail "runbook does not invoke revocation audit mode"
+rg -F '"/api/scopes/$SCOPE_ID/teams/$TEAM_ID/members/$MEMBER_ID/automations/preflight"' \
+  "$CANARY_DOC" >/dev/null || fail "runbook lost the retained nested preflight route"
 if rg -q 'APPROVED_(CREATE|REVOCATION)_AUDIT_QUERY' "$CANARY_DOC"; then
   fail "runbook still depends on unspecified audit executables"
+fi
+
+CANONICAL_DELETE_LINES="$(
+  awk '
+    /api_request DELETE/ {
+      in_delete = 1
+      start_line = NR
+      block = $0 "\n"
+      next
+    }
+    in_delete {
+      block = block $0 "\n"
+      if (/\)"$/) {
+        if (block ~ /"\/api\/schedules\/\$SCHEDULE_ID"/ &&
+            block ~ /"\$CANARY_STATE_DIR\/delete\.json"/) {
+          print start_line
+        }
+        in_delete = 0
+        block = ""
+      }
+    }
+  ' "$CANARY_DOC"
+)"
+CANONICAL_DELETE_CALLS="$(
+  printf '%s\n' "$CANONICAL_DELETE_LINES" |
+    awk 'NF {count++} END {print count + 0}'
+)"
+test "$CANONICAL_DELETE_CALLS" -eq 2 \
+  || fail "expected 2 canonical cleanup DELETE calls, found $CANONICAL_DELETE_CALLS"
+
+NESTED_AUTOMATION_DELETE_CALLS="$(
+  awk '
+    /api_request DELETE/ {
+      in_delete = 1
+      block = $0 "\n"
+      next
+    }
+    in_delete {
+      block = block $0 "\n"
+      if (/\)"$/) {
+        if (block ~ /\/automations\/\$SCHEDULE_ID/) {
+          count++
+        }
+        in_delete = 0
+        block = ""
+      }
+    }
+    END {print count + 0}
+  ' "$CANARY_DOC"
+)"
+test "$NESTED_AUTOMATION_DELETE_CALLS" -eq 0 \
+  || fail "runbook still calls a nested automation DELETE route"
+if rg -q 'retry-revocation' "$CANARY_DOC"; then
+  fail "runbook still advertises a public retry-revocation action"
+fi
+
+SECOND_CANONICAL_DELETE_LINE="$(
+  printf '%s\n' "$CANONICAL_DELETE_LINES" | sed -n '2p'
+)"
+RETRY_READ_BEARER_LINE="$(
+  awk '
+    /^if test "\$REVOCATION_RETRY_REQUIRED" = "true"; then$/ {
+      in_retry = 1
+    }
+    in_retry && /^  read_bearer$/ {
+      print NR
+      exit
+    }
+  ' "$CANARY_DOC"
+)"
+test -n "$RETRY_READ_BEARER_LINE" \
+  && test "$RETRY_READ_BEARER_LINE" -lt "$SECOND_CANONICAL_DELETE_LINE" \
+  || fail "canonical DELETE replay does not derive a fresh bearer first"
+
+DELETE_BODY_BUILDER="$TMP_DIR/canonical-delete-body.sh"
+if ! awk '
+  /^set_failure_context "delete" "\$DELETE_OPERATION_ID"$/ {
+    in_delete = 1
+    next
+  }
+  in_delete && /^jq -n \\$/ {
+    copy = 1
+  }
+  copy {
+    print
+  }
+  copy && /^'\'' > "\$CANARY_STATE_DIR\/delete\.json"$/ {
+    found = 1
+    exit
+  }
+  END {
+    if (!found) {
+      exit 1
+    }
+  }
+' "$CANARY_DOC" > "$DELETE_BODY_BUILDER"; then
+  fail "runbook does not define one canonical delete.json body"
+fi
+if ! (
+  set -euo pipefail
+  export CANARY_STATE_DIR="$TMP_DIR/canonical-delete-state"
+  export DELETE_OPERATION_ID="delete-operation-alpha"
+  export DELETE_IDEMPOTENCY_KEY="delete-idempotency-alpha"
+  export SCOPE_ID="scope-alpha"
+  export TEAM_ID="team-alpha"
+  export MEMBER_ID="m-alpha"
+  mkdir -p "$CANARY_STATE_DIR"
+  source "$DELETE_BODY_BUILDER"
+  jq -e '
+    (keys | sort) == ([
+      "idempotencyKey",
+      "operationId",
+      "owner",
+      "reason"
+    ] | sort)
+    and .reason == "scheduled_agent_key_canary_cleanup"
+    and .operationId == "delete-operation-alpha"
+    and .idempotencyKey == "delete-idempotency-alpha"
+    and (.owner | keys | sort) == ([
+      "kind",
+      "memberId",
+      "scopeId",
+      "teamId"
+    ] | sort)
+    and .owner == {
+      kind: "studio_member_automation",
+      scopeId: "scope-alpha",
+      teamId: "team-alpha",
+      memberId: "m-alpha"
+    }
+  ' "$CANARY_STATE_DIR/delete.json" >/dev/null
+); then
+  fail "runbook canonical delete.json contract drifted"
 fi
 
 STATE_HELPERS_FILE="$TMP_DIR/canary-state-helpers.sh"
