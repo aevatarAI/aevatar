@@ -748,6 +748,13 @@ const mockRuntimeRunsApi = runtimeRunsApi as unknown as {
 };
 
 jest.mock("@/shared/studio/api", () => ({
+  isStudioApiErrorCode: (error: unknown, status: number, code: string) =>
+    error instanceof Error &&
+    error.name === "StudioApiError" &&
+    "status" in error &&
+    error.status === status &&
+    "code" in error &&
+    error.code === code,
   isStudioApiStatus: (error: unknown, status: number) =>
     error instanceof Error &&
     error.name === "StudioApiError" &&
@@ -5163,11 +5170,40 @@ describe("StudioPage", () => {
   });
 
   it("deletes a synced Studio member from the inventory rail", async () => {
+    (studioApi.deleteMember as jest.Mock).mockResolvedValue({
+      status: "delete_accepted",
+      scopeId: "scope-1",
+      memberId: "workspace-demo",
+      ackedAt: "2026-07-09T08:12:00Z",
+    });
     renderStudioPage(
       "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
     );
 
-    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+    const deleteButton = await screen.findByLabelText("Delete workspace-demo");
+    const memberReadsBeforeDelete = (studioApi.getMember as jest.Mock).mock.calls.length;
+    let confirmRemoval: (() => void) | undefined;
+    const removalObserved = new Promise<void>((resolve) => {
+      confirmRemoval = resolve;
+    });
+    (studioApi.getMember as jest.Mock)
+      .mockResolvedValueOnce({
+        summary: mockStudioMembers[0],
+        implementationRef: null,
+        lastBinding: null,
+      })
+      .mockImplementationOnce(async () => {
+        await removalObserved;
+        const error = new Error("Member not found") as Error & {
+          code: string;
+          status: number;
+        };
+        error.name = "StudioApiError";
+        error.code = "STUDIO_MEMBER_NOT_FOUND";
+        error.status = 404;
+        throw error;
+      });
+    fireEvent.click(deleteButton);
 
     await waitFor(() => {
       expect(Modal.confirm).toHaveBeenCalledWith(
@@ -5182,8 +5218,9 @@ describe("StudioPage", () => {
 
     const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
     expect(confirmConfig.icon).toBeTruthy();
-    await act(async () => {
-      await confirmConfig.onOk();
+    let deletePromise: Promise<void> | undefined;
+    act(() => {
+      deletePromise = confirmConfig.onOk();
     });
 
     await waitFor(() => {
@@ -5193,6 +5230,18 @@ describe("StudioPage", () => {
       });
     });
     expect(studioApi.deleteWorkflow).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(studioApi.getMember).toHaveBeenCalledTimes(
+        memberReadsBeforeDelete + 2,
+      );
+    });
+    expect(message.info).toHaveBeenCalled();
+    expect(message.success).not.toHaveBeenCalled();
+
+    await act(async () => {
+      confirmRemoval?.();
+      await deletePromise;
+    });
 
     await waitFor(() => {
       expect(message.success).toHaveBeenCalledWith(

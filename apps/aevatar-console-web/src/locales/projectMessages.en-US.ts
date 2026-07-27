@@ -3491,6 +3491,8 @@ const projectMessages = {
   "pages.studio.index.delete.member.confirm.body": "Delete",
   "pages.studio.index.delete.member.confirm.body.suffix": "from the current member inventory?",
   "pages.studio.index.delete.member.label": "Delete {member}",
+  "pages.studio.index.delete.member.not.confirmed": "Deletion was not confirmed. The member was restored; refresh and retry.",
+  "pages.studio.index.delete.member.submitted": "Deletion submitted. Waiting for confirmation.",
   "pages.studio.index.delete.studio.member": "Delete Studio member",
   "pages.studio.index.delete.workflow.member": "Delete workflow member",
   "pages.studio.index.delete.workflow.member.2": "Delete workflow member",

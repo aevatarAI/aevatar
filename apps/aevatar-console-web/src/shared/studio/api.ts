@@ -147,6 +147,18 @@ export function isStudioApiStatus(error: unknown, status: number): boolean {
   return error instanceof StudioApiError && error.status === status;
 }
 
+export function isStudioApiErrorCode(
+  error: unknown,
+  status: number,
+  code: string,
+): boolean {
+  return (
+    error instanceof StudioApiError &&
+    error.status === status &&
+    error.code === code
+  );
+}
+
 async function createStudioApiError(response: Response): Promise<StudioApiError> {
   const details = await readResponseErrorDetails(response);
   return new StudioApiError(details.message, response.status, details.code);
