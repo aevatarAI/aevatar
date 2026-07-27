@@ -21,9 +21,9 @@ public sealed class CodexExecutionFailureAuditTests
 {
     [Theory]
     [InlineData(
-        CodexExecutionFailureKind.ProvisioningFailed,
+        CodexExecutionFailureKind.MalformedOutput,
         "managed_response_invalid",
-        "codex_execution_provisioning_failed",
+        "codex_execution_malformed_output",
         AuditTerminalOutcome.Failed,
         AuditFailureCategory.Execution)]
     [InlineData(
