@@ -678,7 +678,7 @@ git commit -m "Deliver NyxID turns to chat history"
 - Consumes existing `StreamTerminalTimeout` and request cancellation;
   public HTTP routes/DTOs remain unchanged.
 
-- [ ] **Step 1: Replace the cooperative timeout test with a stubborn RED test**
+- [x] **Step 1: Replace the cooperative timeout test with a stubborn RED test**
 
 Create an interaction double that captures `emitAsync`, returns a task that
 never completes, and ignores its cancellation token. Set a short configured
@@ -698,20 +698,21 @@ Expected: FAIL because the endpoint only passes a cancelled token into the
 stubborn inner interaction, continues awaiting it, and reaches the test safety
 timeout without returning a STREAM_TIMEOUT frame.
 
-- [ ] **Step 2: Implement outer timeout race and writer gate**
+- [x] **Step 2: Implement outer timeout race and writer gate**
 
 Normalize non-positive timeout to five minutes. Start the interaction task and
 await it with an outer wall-clock `WaitAsync(timeout, requestToken)` (or an
 equivalent `Task.WhenAny` race that distinguishes request cancellation).
-On server timeout: cancel the inner linked token, stop heartbeat, acquire the
-shared gate, close it, write exactly one safe `STREAM_TIMEOUT`, and return
-without awaiting inner cleanup. Attach a fault-observing continuation to the
-detached task. Every callback and heartbeat acquires the same gate and returns
-without writing when closed. A real terminal closes the gate after its write;
-the timeout/failure paths then emit nothing. Request cancellation closes work
-without attempting a disconnected-client terminal.
+On server timeout: acquire the shared gate, atomically close it and write
+exactly one safe `STREAM_TIMEOUT`, stop heartbeat when timeout wins, then
+cancel the inner linked token and return without awaiting inner cleanup. Attach
+a completion/fault-observing continuation that releases the linked token source
+only when the detached task finishes. Every callback and heartbeat acquires the
+same gate and returns without writing when closed. A real terminal closes the
+gate after its write; the timeout/failure paths then emit nothing. Request
+cancellation closes work without attempting a disconnected-client terminal.
 
-- [ ] **Step 3: Verify existing success/failure/cancellation behavior**
+- [x] **Step 3: Verify existing success/failure/cancellation behavior**
 
 Run:
 
@@ -725,10 +726,10 @@ Expected: PASS; success/failure still have exactly one terminal, stubborn
 interactions return by the configured deadline, late frames are discarded, and
 request cancellation writes no synthetic timeout.
 
-- [ ] **Step 4: Commit the endpoint fix**
+- [x] **Step 4: Commit the endpoint fix**
 
 ```bash
-git add agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs test/Aevatar.AI.Tests/NyxIdChatStreamIdentityAndTerminalTests.cs
+git add agents/Aevatar.GAgents.NyxidChat/NyxIdChatEndpoints.Streaming.cs test/Aevatar.AI.Tests/NyxIdChatStreamIdentityAndTerminalTests.cs docs/superpowers/specs/2026-07-28-nyxid-chat-first-turn-recovery-design.md docs/superpowers/plans/2026-07-28-nyxid-chat-first-turn-recovery.md
 git commit -m "Enforce NyxID stream wall-clock timeout"
 ```
 

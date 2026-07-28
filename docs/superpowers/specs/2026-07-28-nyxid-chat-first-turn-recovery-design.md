@@ -227,13 +227,14 @@ normalized `StreamTerminalTimeout` and request cancellation.
 
 On wall-clock timeout:
 
-1. cancel the interaction token;
-2. stop heartbeat;
-3. acquire the writer lock;
-4. close the writer gate and emit exactly one safe `STREAM_TIMEOUT`
+1. acquire the writer lock and atomically claim terminal ownership;
+2. close the writer gate and emit exactly one safe `STREAM_TIMEOUT`
    `RUN_ERROR`;
+3. stop heartbeat when the timeout owns the terminal;
+4. cancel the interaction token after the gate is closed;
 5. return without awaiting unbounded inner cleanup;
-6. observe the detached interaction task only to consume/log a later failure.
+6. observe the detached interaction task only to consume/log a later failure
+   and release its linked cancellation source when the task completes.
 
 Every frame callback checks the same writer gate while holding the writer
 lock. A late inner terminal or content frame after timeout is discarded. If a
