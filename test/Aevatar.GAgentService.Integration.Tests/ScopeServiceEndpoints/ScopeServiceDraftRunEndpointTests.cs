@@ -296,6 +296,24 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                         SafeMessage = "Select a connected-service operation and rebind.",
                     },
                 },
+                Remediations =
+                {
+                    new ExternalCapabilityRemediation
+                    {
+                        ActionKind = ExternalCapabilityRemediationActionKind.RebindWorkflow,
+                        Label = "Rebind workflow",
+                        TrustedLocator = "nyxid:services",
+                    },
+                },
+                Sources =
+                {
+                    new ExternalCapabilitySourceStamp
+                    {
+                        SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
+                        SourceId = "user-service-1",
+                        SourceVersion = 7,
+                    },
+                },
                 SelectedSelector = new ExternalWorkflowCapabilitySelector
                 {
                     NyxIdOperation = new NyxIdOperationSelector
@@ -322,6 +340,10 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         readiness.GetProperty("status").GetString().Should().Be("admission_rebind_required");
         readiness.GetProperty("blockers")[0].GetProperty("code").GetString().Should().Be("admission_rebind_required");
         readiness.GetProperty("selectedCapability").GetProperty("userServiceId").GetString().Should().Be("user-service-1");
+        readiness.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should().Be("rebind_workflow");
+        readiness.GetProperty("remediations")[0].GetProperty("trustedLocator").GetString().Should().Be("nyxid:services");
+        readiness.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("nyx_id_open_api");
+        readiness.GetProperty("sources")[0].GetProperty("sourceVersion").GetInt64().Should().Be(7);
         host.InteractionService.LastRequest.Should().BeNull();
     }
 
