@@ -388,8 +388,8 @@ public abstract class ScopeServiceEndpointTestKit
             var revisionCatalog = new FakeServiceRevisionCatalogQueryReader();
             var memberPublishedServiceResolver = new FakeMemberPublishedServiceResolver();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
-            var interactionService = new FakeCommandInteractionService();
             var workflowDefinitionParser = new FakeWorkflowDefinitionParser();
+            var interactionService = new FakeCommandInteractionService(workflowDefinitionParser);
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
             var scriptServiceRunInteractionService = new FakeScriptServiceRunInteractionService();
             var staticGAgentStreamInvocationPort = new FakeStaticGAgentStreamInvocationPort(
@@ -1427,14 +1427,19 @@ public abstract class ScopeServiceEndpointTestKit
 
     protected sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort
     {
+        private readonly FakeWorkflowDefinitionParser _workflowDefinitionParser;
+
+        public FakeCommandInteractionService(FakeWorkflowDefinitionParser workflowDefinitionParser)
+        {
+            _workflowDefinitionParser = workflowDefinitionParser;
+            ResultFactory = DefaultResultFactoryAsync;
+        }
+
         public WorkflowChatRunRequest? LastRequest { get; private set; }
 
-        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>>> ResultFactory { get; set; } =
-            (_, _, _, _) => Task.FromResult(
-                CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                    .Failure(WorkflowChatRunStartError.AgentNotFound));
+        public Func<WorkflowChatRunRequest, Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask>, Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>?, CancellationToken, Task<WorkflowChatRunInteractionResult>> ResultFactory { get; set; }
 
-        public Task<CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>> ExecuteAsync(
+        public Task<WorkflowChatRunInteractionResult> ExecuteAsync(
             WorkflowChatRunRequest request,
             Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
             Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync = null,
@@ -1442,6 +1447,32 @@ public abstract class ScopeServiceEndpointTestKit
         {
             LastRequest = request;
             return ResultFactory(request, emitAsync, onAcceptedAsync, ct);
+        }
+
+        private async Task<WorkflowChatRunInteractionResult> DefaultResultFactoryAsync(
+            WorkflowChatRunRequest request,
+            Func<WorkflowRunEventEnvelope, CancellationToken, ValueTask> emitAsync,
+            Func<WorkflowChatInteractionAcceptedReceipt, CancellationToken, ValueTask>? onAcceptedAsync,
+            CancellationToken ct)
+        {
+            _ = emitAsync;
+            _ = onAcceptedAsync;
+            var documents = request.Source.InlineBundle?.YamlDocuments;
+            if (documents is { Count: > 0 })
+            {
+                var parse = await _workflowDefinitionParser.ParseInlineWorkflowBundleAsync(documents, ct);
+                if (!parse.Succeeded)
+                {
+                    return WorkflowChatRunInteractionResult.Failure(
+                        WorkflowChatRunStartError.InvalidWorkflowYaml,
+                        WorkflowChatRunStartFailureDetail.Create(
+                            WorkflowChatRunStartError.InvalidWorkflowYaml,
+                            parse.Error,
+                            parse.ExternalCapabilityReadiness));
+                }
+            }
+
+            return WorkflowChatRunInteractionResult.Failure(WorkflowChatRunStartError.AgentNotFound);
         }
     }
 

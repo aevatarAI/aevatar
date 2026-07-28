@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
@@ -99,5 +101,60 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be(expectedCode);
         mapped.Message.Should().Be(expectedMessage);
+    }
+
+    [Fact]
+    public void ToErrorBody_ShouldMapFailureDetailReadinessShape()
+    {
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                HostConnector = new HostConnectorCapabilityRef
+                {
+                    ConnectorCapabilityRef = "connector/ref",
+                    OperationId = "operation-1",
+                },
+            },
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            Code = "NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED",
+            SafeMessage = "Rebind the workflow operation.",
+        });
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.RebindWorkflow,
+            Label = "Rebind workflow",
+            TrustedLocator = " nyxid:services ",
+        });
+        readiness.Sources.Add(new ExternalCapabilitySourceStamp
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
+            SourceId = "source-1",
+            SourceVersion = 7,
+        });
+        var detail = WorkflowChatRunStartFailureDetail.Create(
+            WorkflowChatRunStartError.InvalidWorkflowYaml,
+            "nyxid_proxy derived field 'contract_digest' cannot be authored.",
+            readiness);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ChatRunStartErrorMapper.ToErrorBody(detail)));
+        var root = json.RootElement;
+        root.GetProperty("code").GetString().Should().Be("INVALID_WORKFLOW_YAML");
+        root.GetProperty("message").GetString().Should().Be("nyxid_proxy derived field 'contract_digest' cannot be authored.");
+        var readinessJson = root.GetProperty("externalCapabilityReadiness");
+        readinessJson.GetProperty("status").GetString().Should().Be("contract_drift");
+        readinessJson.GetProperty("selectedCapability").GetProperty("userServiceId").ValueKind.Should().Be(JsonValueKind.Null);
+        readinessJson.GetProperty("selectedCapability").GetProperty("operationId").GetString().Should().Be("operation-1");
+        readinessJson.GetProperty("selectedCapability").GetProperty("connectorCapabilityRef").GetString().Should().Be("connector/ref");
+        readinessJson.GetProperty("blockers")[0].GetProperty("code").GetString().Should().Be("NYXID_OPERATION_AUTHORING_MIGRATION_REQUIRED");
+        readinessJson.GetProperty("blockers")[0].GetProperty("status").GetString().Should().Be("contract_drift");
+        readinessJson.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should().Be("rebind_workflow");
+        readinessJson.GetProperty("remediations")[0].GetProperty("trustedLocator").GetString().Should().Be("nyxid:services");
+        readinessJson.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("nyx_id_open_api");
+        readinessJson.GetProperty("sources")[0].GetProperty("sourceVersion").GetInt64().Should().Be(7);
     }
 }

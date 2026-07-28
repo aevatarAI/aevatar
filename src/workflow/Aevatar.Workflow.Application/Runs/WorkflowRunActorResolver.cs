@@ -53,7 +53,14 @@ public sealed class WorkflowRunActorResolver : IWorkflowRunActorResolver
         {
             var inlineBundle = await _definitionParser.ParseInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
             if (!inlineBundle.Succeeded)
-                return new WorkflowActorResolutionResult(null, workflowNameForRun, WorkflowChatRunStartError.InvalidWorkflowYaml);
+                return new WorkflowActorResolutionResult(
+                    null,
+                    workflowNameForRun,
+                    WorkflowChatRunStartError.InvalidWorkflowYaml,
+                    WorkflowChatRunStartFailureDetail.Create(
+                        WorkflowChatRunStartError.InvalidWorkflowYaml,
+                        inlineBundle.Error,
+                        inlineBundle.ExternalCapabilityReadiness));
 
             workflowNameForRun = inlineBundle.EntryWorkflowName;
             workflowYamlForRun = inlineBundle.EntryWorkflowYaml;

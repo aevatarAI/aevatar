@@ -68,7 +68,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                     Delta = "hello",
                 },
             }, ct);
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -118,7 +118,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
                 },
             }, ct);
 
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -170,7 +170,7 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
             if (onAcceptedAsync != null)
                 await onAcceptedAsync(receipt, ct);
 
-            return CommandInteractionResult<WorkflowChatInteractionAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+            return WorkflowChatRunInteractionResult
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
@@ -251,11 +251,12 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_WORKFLOW_YAML");
         body["message"].Should().Be(validationMessage);
-        host.InteractionService.LastRequest.Should().BeNull();
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task ScopeDraftRunEndpoint_ShouldValidateInlineWorkflowBundleBeforeDispatch()
+    public async Task ScopeDraftRunEndpoint_ShouldDelegateInlineWorkflowBundleValidationToWorkflowPipeline()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
 
@@ -274,7 +275,8 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_WORKFLOW_YAML");
         body["message"].Should().Be("Duplicate workflow name 'main' in workflowYamls.");
-        host.InteractionService.LastRequest.Should().BeNull();
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().HaveCount(2);
     }
 
     [Fact]
@@ -344,7 +346,8 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         readiness.GetProperty("remediations")[0].GetProperty("trustedLocator").GetString().Should().Be("nyxid:services");
         readiness.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should().Be("nyx_id_open_api");
         readiness.GetProperty("sources")[0].GetProperty("sourceVersion").GetInt64().Should().Be(7);
-        host.InteractionService.LastRequest.Should().BeNull();
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.Source.WorkflowYamls.Should().ContainSingle();
     }
 
     [Fact]

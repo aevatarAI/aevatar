@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Application.Runs;
@@ -336,7 +337,11 @@ public sealed class WorkflowRunActorResolverTests
     public async Task ResolveOrCreateAsync_ShouldReturnInvalidWorkflowYaml_WhenInlineYamlBundleIsInvalid()
     {
         var actorPort = new RecordingWorkflowRunActorPort();
-        actorPort.ParseResults["bad"] = WorkflowYamlParseResult.Invalid("bad yaml");
+        var readiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+        };
+        actorPort.ParseResults["bad"] = WorkflowYamlParseResult.Invalid("bad yaml", readiness);
         var resolver = new WorkflowRunActorResolver(new StaticWorkflowActorBindingReader(null), actorPort, actorPort, new InMemoryWorkflowDefinitionCatalog());
 
         var result = await resolver.ResolveOrCreateAsync(
@@ -344,6 +349,10 @@ public sealed class WorkflowRunActorResolverTests
             CancellationToken.None);
 
         result.Error.Should().Be(WorkflowChatRunStartError.InvalidWorkflowYaml);
+        result.FailureDetail.Should().NotBeNull();
+        result.FailureDetail!.Message.Should().Be("bad yaml");
+        result.FailureDetail.ExternalCapabilityReadiness.Should().NotBeSameAs(readiness);
+        result.FailureDetail.ExternalCapabilityReadiness!.Status.Should().Be(ExternalCapabilityReadinessStatus.AdmissionRebindRequired);
         actorPort.CreateRunBindings.Should().BeEmpty();
     }
 

@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Security.Claims;
-using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
@@ -31,14 +30,6 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
-using WorkflowExternalCapabilityReadiness = Aevatar.Workflow.Abstractions.ExternalCapabilityReadiness;
-using WorkflowExternalCapabilityReadinessStatus = Aevatar.Workflow.Abstractions.ExternalCapabilityReadinessStatus;
-using WorkflowExternalCapabilityRef = Aevatar.Workflow.Abstractions.ExternalWorkflowCapabilityRef;
-using WorkflowExternalCapabilityRemediationActionKind = Aevatar.Workflow.Abstractions.ExternalCapabilityRemediationActionKind;
-using WorkflowExternalCapabilitySelector = Aevatar.Workflow.Abstractions.ExternalWorkflowCapabilitySelector;
-using WorkflowExternalCapabilitySourceKind = Aevatar.Workflow.Abstractions.ExternalCapabilitySourceKind;
-using WorkflowHostConnectorCapabilityRef = Aevatar.Workflow.Abstractions.HostConnectorCapabilityRef;
-using WorkflowNyxIdUserServiceCapabilityRef = Aevatar.Workflow.Abstractions.NyxIdUserServiceCapabilityRef;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
@@ -97,125 +88,6 @@ public sealed class ScopeServiceEndpointPrivateHelperTests : ScopeServiceEndpoin
                 "ParseBindingKind",
                 "unsupported"))
             .Should().Throw<TargetInvocationException>().WithInnerException<InvalidOperationException>();
-    }
-
-    [Fact]
-    public void ScopeServiceEndpointHelpers_ShouldMapExternalCapabilityReadinessEnums()
-    {
-        var statusExpectations = new Dictionary<WorkflowExternalCapabilityReadinessStatus, string>
-        {
-            [WorkflowExternalCapabilityReadinessStatus.SelectionRequired] = "selection_required",
-            [WorkflowExternalCapabilityReadinessStatus.ConnectorNotFound] = "connector_not_found",
-            [WorkflowExternalCapabilityReadinessStatus.ServiceRegistrationRequired] = "service_registration_required",
-            [WorkflowExternalCapabilityReadinessStatus.CredentialConnectionRequired] = "credential_connection_required",
-            [WorkflowExternalCapabilityReadinessStatus.ServiceAccessDenied] = "service_access_denied",
-            [WorkflowExternalCapabilityReadinessStatus.NodeBindingRequired] = "node_binding_required",
-            [WorkflowExternalCapabilityReadinessStatus.NodeUnavailable] = "node_unavailable",
-            [WorkflowExternalCapabilityReadinessStatus.EndpointContractRequired] = "endpoint_contract_required",
-            [WorkflowExternalCapabilityReadinessStatus.OperationSelectionRequired] = "operation_selection_required",
-            [WorkflowExternalCapabilityReadinessStatus.SourceStale] = "source_stale",
-            [WorkflowExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable] = "durable_authorization_unavailable",
-            [WorkflowExternalCapabilityReadinessStatus.ContractDrift] = "contract_drift",
-            [WorkflowExternalCapabilityReadinessStatus.Ready] = "ready",
-            [WorkflowExternalCapabilityReadinessStatus.AdmissionRebindRequired] = "admission_rebind_required",
-            [WorkflowExternalCapabilityReadinessStatus.Unspecified] = "unspecified",
-        };
-        foreach (var (status, expectedValue) in statusExpectations)
-        {
-            InvokePrivateStatic<string>("ReadinessStatus", status).Should().Be(expectedValue);
-        }
-
-        var remediationExpectations = new Dictionary<WorkflowExternalCapabilityRemediationActionKind, string>
-        {
-            [WorkflowExternalCapabilityRemediationActionKind.SelectCapability] = "select_capability",
-            [WorkflowExternalCapabilityRemediationActionKind.ConfigureConnector] = "configure_connector",
-            [WorkflowExternalCapabilityRemediationActionKind.RegisterService] = "register_service",
-            [WorkflowExternalCapabilityRemediationActionKind.ConnectCredential] = "connect_credential",
-            [WorkflowExternalCapabilityRemediationActionKind.RequestAccess] = "request_access",
-            [WorkflowExternalCapabilityRemediationActionKind.BindNode] = "bind_node",
-            [WorkflowExternalCapabilityRemediationActionKind.RestoreNode] = "restore_node",
-            [WorkflowExternalCapabilityRemediationActionKind.PublishEndpointContract] = "publish_endpoint_contract",
-            [WorkflowExternalCapabilityRemediationActionKind.SelectOperation] = "select_operation",
-            [WorkflowExternalCapabilityRemediationActionKind.RefreshSource] = "refresh_source",
-            [WorkflowExternalCapabilityRemediationActionKind.UseInteractiveExecution] = "use_interactive_execution",
-            [WorkflowExternalCapabilityRemediationActionKind.RebindWorkflow] = "rebind_workflow",
-            [WorkflowExternalCapabilityRemediationActionKind.Unspecified] = "unspecified",
-        };
-        foreach (var (actionKind, expectedValue) in remediationExpectations)
-        {
-            InvokePrivateStatic<string>("RemediationKind", actionKind).Should().Be(expectedValue);
-        }
-
-        var sourceExpectations = new Dictionary<WorkflowExternalCapabilitySourceKind, string>
-        {
-            [WorkflowExternalCapabilitySourceKind.ConnectorCatalog] = "connector_catalog",
-            [WorkflowExternalCapabilitySourceKind.NyxIdUserServices] = "nyx_id_user_services",
-            [WorkflowExternalCapabilitySourceKind.NyxIdOpenApi] = "nyx_id_open_api",
-            [WorkflowExternalCapabilitySourceKind.DurableAuthorizationCatalog] = "durable_authorization_catalog",
-            [WorkflowExternalCapabilitySourceKind.Unspecified] = "unspecified",
-        };
-        foreach (var (sourceKind, expectedValue) in sourceExpectations)
-        {
-            InvokePrivateStatic<string>("SourceKind", sourceKind).Should().Be(expectedValue);
-        }
-    }
-
-    [Fact]
-    public void ScopeServiceEndpointHelpers_ShouldMapExternalCapabilitySelectionShapes()
-    {
-        var selectorReadiness = new WorkflowExternalCapabilityReadiness
-        {
-            SelectedSelector = new WorkflowExternalCapabilitySelector
-            {
-                HostConnector = new WorkflowHostConnectorCapabilityRef
-                {
-                    ConnectorCapabilityRef = "connector/ref",
-                    OperationId = "operation-1",
-                },
-            },
-        };
-        using var selectorJson = JsonDocument.Parse(JsonSerializer.Serialize(
-            InvokePrivateStatic<object?>("MapSelectedCapability", selectorReadiness)));
-        selectorJson.RootElement.GetProperty("userServiceId").ValueKind.Should().Be(JsonValueKind.Null);
-        selectorJson.RootElement.GetProperty("operationId").GetString().Should().Be("operation-1");
-        selectorJson.RootElement.GetProperty("connectorCapabilityRef").GetString().Should().Be("connector/ref");
-
-        var nyxIdCapabilityReadiness = new WorkflowExternalCapabilityReadiness
-        {
-            SelectedCapability = new WorkflowExternalCapabilityRef
-            {
-                NyxIdUserService = new WorkflowNyxIdUserServiceCapabilityRef
-                {
-                    UserServiceId = "user-service-1",
-                    OperationId = "operation-2",
-                },
-            },
-        };
-        using var nyxIdCapabilityJson = JsonDocument.Parse(JsonSerializer.Serialize(
-            InvokePrivateStatic<object?>("MapSelectedCapability", nyxIdCapabilityReadiness)));
-        nyxIdCapabilityJson.RootElement.GetProperty("userServiceId").GetString().Should().Be("user-service-1");
-        nyxIdCapabilityJson.RootElement.GetProperty("operationId").GetString().Should().Be("operation-2");
-        nyxIdCapabilityJson.RootElement.GetProperty("connectorCapabilityRef").ValueKind.Should().Be(JsonValueKind.Null);
-
-        var hostCapabilityReadiness = new WorkflowExternalCapabilityReadiness
-        {
-            SelectedCapability = new WorkflowExternalCapabilityRef
-            {
-                HostConnector = new WorkflowHostConnectorCapabilityRef
-                {
-                    ConnectorCapabilityRef = "connector/ref-2",
-                    OperationId = "operation-3",
-                },
-            },
-        };
-        using var hostCapabilityJson = JsonDocument.Parse(JsonSerializer.Serialize(
-            InvokePrivateStatic<object?>("MapSelectedCapability", hostCapabilityReadiness)));
-        hostCapabilityJson.RootElement.GetProperty("userServiceId").ValueKind.Should().Be(JsonValueKind.Null);
-        hostCapabilityJson.RootElement.GetProperty("operationId").GetString().Should().Be("operation-3");
-        hostCapabilityJson.RootElement.GetProperty("connectorCapabilityRef").GetString().Should().Be("connector/ref-2");
-
-        InvokePrivateStatic<object?>("MapSelectedCapability", new WorkflowExternalCapabilityReadiness())
-            .Should().BeNull();
     }
 
     [Fact]
