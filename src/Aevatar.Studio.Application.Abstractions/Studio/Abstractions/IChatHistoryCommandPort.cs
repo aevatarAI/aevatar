@@ -9,6 +9,14 @@ public interface IChatHistoryCommandPort
         ChatHistoryConversationInitialization request,
         CancellationToken ct = default);
 
+    Task ReserveTurnDeliveryAsync(
+        ChatHistoryTurnDeliveryReservation request,
+        CancellationToken ct = default);
+
+    Task NotifyTurnTerminalAsync(
+        ChatHistoryTurnTerminalNotification notification,
+        CancellationToken ct = default);
+
     Task SaveMessagesAsync(
         string scopeId,
         string conversationId,
@@ -30,6 +38,36 @@ public sealed record ChatHistoryConversationInitialization(
     string ServiceKind,
     DateTimeOffset CreatedAt,
     string? InitialTitle = null);
+
+public sealed record ChatHistoryTurnDeliveryReservation(
+    string DeliveryId,
+    string ScopeId,
+    string ConversationId,
+    string TurnId,
+    string UserText,
+    string SourceActorId,
+    string SourceCommandId,
+    string SourceCorrelationId,
+    string RequestFingerprint,
+    bool CreateConversationIfMissing,
+    bool ExposeCreateRecovery = false);
+
+public enum ChatHistoryTurnTerminalStatus
+{
+    Completed = 1,
+    Failed = 2,
+    Stopped = 3,
+    Blocked = 4,
+}
+
+public sealed record ChatHistoryTurnTerminalNotification(
+    string DeliveryId,
+    string SourceActorId,
+    string SourceCommandId,
+    ChatHistoryTurnTerminalStatus Status,
+    string Text,
+    string ErrorCode,
+    DateTimeOffset ObservedAt);
 
 public enum ChatHistoryDeleteResultStatus
 {

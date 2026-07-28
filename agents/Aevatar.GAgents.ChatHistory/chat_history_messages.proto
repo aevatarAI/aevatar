@@ -163,9 +163,9 @@ message ChatTurnHistoryDeliveryState {
   string conversation_id = 3;
   string turn_id = 4;
   string user_text = 5;
-  string workflow_actor_id = 6;
-  string workflow_command_id = 7;
-  string workflow_correlation_id = 8;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
   ChatTurnHistoryDeliveryStatus status = 9;
   int64 reserved_at_unix_ms = 10;
   int64 bound_at_unix_ms = 11;
@@ -180,6 +180,7 @@ message ChatTurnHistoryDeliveryState {
   ChatTurnAppendRejectionReason append_rejection_reason = 20;
   bool create_conversation_if_missing = 21;
   string request_fingerprint = 22;
+  bool expose_create_recovery = 23;
 }
 
 message ChatTurnHistoryDeliveryReserveRequested {
@@ -188,11 +189,12 @@ message ChatTurnHistoryDeliveryReserveRequested {
   string conversation_id = 3;
   string turn_id = 4;
   string user_text = 5;
-  string workflow_actor_id = 6;
-  string workflow_command_id = 7;
-  string workflow_correlation_id = 8;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
   bool create_conversation_if_missing = 9;
   string request_fingerprint = 10;
+  bool expose_create_recovery = 11;
 }
 
 message ChatTurnHistoryDeliveryReservedEvent {
@@ -201,33 +203,34 @@ message ChatTurnHistoryDeliveryReservedEvent {
   string conversation_id = 3;
   string turn_id = 4;
   string user_text = 5;
-  string workflow_actor_id = 6;
-  string workflow_command_id = 7;
-  string workflow_correlation_id = 8;
+  string source_actor_id = 6;
+  string source_command_id = 7;
+  string source_correlation_id = 8;
   int64 reserved_at_unix_ms = 9;
   bool create_conversation_if_missing = 10;
   string request_fingerprint = 11;
+  bool expose_create_recovery = 12;
 }
 
 message ChatTurnHistoryDeliveryAcceptedBound {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
-  string workflow_correlation_id = 4;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  string source_correlation_id = 4;
 }
 
 message ChatTurnHistoryDeliveryBoundEvent {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
-  string workflow_correlation_id = 4;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  string source_correlation_id = 4;
   int64 bound_at_unix_ms = 5;
 }
 
 message ChatTurnHistoryDeliveryTerminalFrameObserved {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
+  string source_actor_id = 2;
+  string source_command_id = 3;
   ChatTurnTerminalStatus status = 4;
   string text = 5;
   string error_code = 6;
@@ -236,8 +239,8 @@ message ChatTurnHistoryDeliveryTerminalFrameObserved {
 
 message ChatTurnHistoryDeliveryAppendDispatchedEvent {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
+  string source_actor_id = 2;
+  string source_command_id = 3;
   int32 append_attempt = 4;
   ChatTurnTerminalStatus terminal_status = 5;
   string terminal_text = 6;
@@ -272,9 +275,19 @@ message ChatTurnHistoryDeliveryAbandonedEvent {
 
 message ChatTurnHistoryDeliveryFailedEvent {
   string delivery_id = 1;
-  string workflow_actor_id = 2;
-  string workflow_command_id = 3;
+  string source_actor_id = 2;
+  string source_command_id = 3;
   string error_code = 4;
   string error_summary = 5;
   int64 failed_at_unix_ms = 6;
+}
+
+message ChatTurnHistorySourceTerminalNotified {
+  string delivery_id = 1;
+  string source_actor_id = 2;
+  string source_command_id = 3;
+  ChatTurnTerminalStatus status = 4;
+  string text = 5;
+  string error_code = 6;
+  int64 observed_at_unix_ms = 7;
 }

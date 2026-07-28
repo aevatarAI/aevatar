@@ -159,6 +159,14 @@ public sealed class ChatHistoryEndpointsTests
             return Task.CompletedTask;
         }
 
+        public Task ReserveTurnDeliveryAsync(
+            ChatHistoryTurnDeliveryReservation request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task NotifyTurnTerminalAsync(
+            ChatHistoryTurnTerminalNotification notification,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task<ChatHistoryIndexPage> GetIndexAsync(
             ChatHistoryIndexPageRequest request,
             CancellationToken ct = default)

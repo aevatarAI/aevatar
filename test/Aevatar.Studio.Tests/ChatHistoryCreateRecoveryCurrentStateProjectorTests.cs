@@ -17,6 +17,43 @@ public sealed class ChatHistoryCreateRecoveryCurrentStateProjectorTests
     private const string RootActorId = "chat-history-delivery:actor";
 
     [Fact]
+    public async Task ProjectAsync_ShouldIgnoreSourceReservationThatDoesNotExposeWorkflowRecovery()
+    {
+        var dispatcher = new RecordingWriteDispatcher();
+        var projector = new ChatHistoryCreateRecoveryCurrentStateProjector(
+            dispatcher,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-07-21T02:00:00Z")));
+        var state = new ChatTurnHistoryDeliveryState
+        {
+            DeliveryId = "nyxid-delivery-a",
+            ScopeId = "scope-a",
+            ConversationId = "conversation-a",
+            TurnId = "turn-a",
+            SourceActorId = "nyxid-conversation-a",
+            SourceCommandId = "command-a",
+            CreateConversationIfMissing = true,
+            ExposeCreateRecovery = false,
+            Status = ChatTurnHistoryDeliveryStatus.Reserved,
+        };
+
+        await projector.ProjectAsync(
+            NewContext(),
+            WrapCommitted(
+                new ChatTurnHistoryDeliveryReservedEvent
+                {
+                    DeliveryId = "nyxid-delivery-a",
+                    SourceActorId = "nyxid-conversation-a",
+                    SourceCommandId = "command-a",
+                },
+                state,
+                version: 1,
+                eventId: "evt-nyxid-delivery-1",
+                stateEventTimestamp: DateTimeOffset.Parse("2026-07-21T01:30:00Z")));
+
+        dispatcher.Upserts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectAsync_ShouldMaterializeCreateRecoveryFromDeliveryState()
     {
         var dispatcher = new RecordingWriteDispatcher();
@@ -30,14 +67,15 @@ public sealed class ChatHistoryCreateRecoveryCurrentStateProjectorTests
             ConversationId = "conversation-stable",
             TurnId = "turn-stable",
             UserText = "hello",
-            WorkflowActorId = "run-stable",
-            WorkflowCommandId = "create-command-1",
-            WorkflowCorrelationId = "corr-1",
+            SourceActorId = "run-stable",
+            SourceCommandId = "create-command-1",
+            SourceCorrelationId = "corr-1",
             RequestFingerprint = "fingerprint-1",
             Status = ChatTurnHistoryDeliveryStatus.AppendCommitted,
             ReservedAtUnixMs = 1784600000000,
             CompletedAtUnixMs = 1784600005000,
             CreateConversationIfMissing = true,
+            ExposeCreateRecovery = true,
         };
         var stateEventTimestamp = DateTimeOffset.Parse("2026-07-21T01:30:00Z");
 

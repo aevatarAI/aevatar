@@ -152,6 +152,51 @@ internal sealed class ActorBackedChatHistoryStore :
         await _commandDispatch.DispatchAsync(conversationActor, command, PublisherId, ct);
     }
 
+    public async Task ReserveTurnDeliveryAsync(
+        ChatHistoryTurnDeliveryReservation request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var deliveryId = NormalizeRequired(request.DeliveryId, nameof(request.DeliveryId));
+        var deliveryActor = await EnsureDeliveryActorAsync(deliveryId, ct);
+        var command = new ChatTurnHistoryDeliveryReserveRequested
+        {
+            DeliveryId = deliveryId,
+            ScopeId = NormalizeRequired(request.ScopeId, nameof(request.ScopeId)),
+            ConversationId = NormalizeRequired(request.ConversationId, nameof(request.ConversationId)),
+            TurnId = NormalizeRequired(request.TurnId, nameof(request.TurnId)),
+            UserText = NormalizeRequired(request.UserText, nameof(request.UserText)),
+            SourceActorId = NormalizeRequired(request.SourceActorId, nameof(request.SourceActorId)),
+            SourceCommandId = NormalizeRequired(request.SourceCommandId, nameof(request.SourceCommandId)),
+            SourceCorrelationId = NormalizeOptional(request.SourceCorrelationId) ?? string.Empty,
+            RequestFingerprint = NormalizeOptional(request.RequestFingerprint) ?? string.Empty,
+            CreateConversationIfMissing = request.CreateConversationIfMissing,
+            ExposeCreateRecovery = request.ExposeCreateRecovery,
+        };
+        await _commandDispatch.DispatchAsync(deliveryActor, command, PublisherId, ct);
+    }
+
+    public async Task NotifyTurnTerminalAsync(
+        ChatHistoryTurnTerminalNotification notification,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(notification);
+        var deliveryId = NormalizeRequired(notification.DeliveryId, nameof(notification.DeliveryId));
+        var sourceActorId = NormalizeRequired(notification.SourceActorId, nameof(notification.SourceActorId));
+        var deliveryActor = await EnsureDeliveryActorAsync(deliveryId, ct);
+        var command = new ChatTurnHistorySourceTerminalNotified
+        {
+            DeliveryId = deliveryId,
+            SourceActorId = sourceActorId,
+            SourceCommandId = NormalizeRequired(notification.SourceCommandId, nameof(notification.SourceCommandId)),
+            Status = ToTerminalStatus(notification.Status),
+            Text = NormalizeOptional(notification.Text) ?? string.Empty,
+            ErrorCode = NormalizeOptional(notification.ErrorCode) ?? string.Empty,
+            ObservedAtUnixMs = notification.ObservedAt.ToUnixTimeMilliseconds(),
+        };
+        await _commandDispatch.DispatchAsync(deliveryActor, command, sourceActorId, ct);
+    }
+
     public async Task<ChatHistoryDeleteResult> DeleteConversationAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
@@ -232,6 +277,12 @@ internal sealed class ActorBackedChatHistoryStore :
     {
         return await _bootstrap.EnsureAsync<ChatConversationGAgent>(
             ChatHistoryActorIds.Conversation(scopeId, conversationId), ct);
+    }
+
+    private async Task<IActor> EnsureDeliveryActorAsync(string deliveryId, CancellationToken ct)
+    {
+        return await _bootstrap.EnsureAsync<ChatTurnHistoryDeliveryGAgent>(
+            ChatTurnHistoryDeliveryActorIds.FromDeliveryId(deliveryId), ct);
     }
 
     private async Task<IActor> EnsureConversationActorAsync(
@@ -374,6 +425,16 @@ internal sealed class ActorBackedChatHistoryStore :
 
     private static string NormalizeRequired(string? value, string parameterName) =>
         NormalizeOptional(value) ?? throw new ArgumentException("Value is required.", parameterName);
+
+    private static ChatTurnTerminalStatus ToTerminalStatus(ChatHistoryTurnTerminalStatus status) =>
+        status switch
+        {
+            ChatHistoryTurnTerminalStatus.Completed => ChatTurnTerminalStatus.Completed,
+            ChatHistoryTurnTerminalStatus.Failed => ChatTurnTerminalStatus.Failed,
+            ChatHistoryTurnTerminalStatus.Stopped => ChatTurnTerminalStatus.Stopped,
+            ChatHistoryTurnTerminalStatus.Blocked => ChatTurnTerminalStatus.Blocked,
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Terminal status must be closed."),
+        };
 
     private static string? EmptyToNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

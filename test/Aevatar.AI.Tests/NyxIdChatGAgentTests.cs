@@ -2051,6 +2051,14 @@ public class NyxIdChatGAgentTests
             ChatHistoryConversationInitialization request,
             CancellationToken ct = default) => Task.CompletedTask;
 
+        public Task ReserveTurnDeliveryAsync(
+            ChatHistoryTurnDeliveryReservation request,
+            CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task NotifyTurnTerminalAsync(
+            ChatHistoryTurnTerminalNotification notification,
+            CancellationToken ct = default) => Task.CompletedTask;
+
         public Task SaveMessagesAsync(
             string scopeId,
             string conversationId,
