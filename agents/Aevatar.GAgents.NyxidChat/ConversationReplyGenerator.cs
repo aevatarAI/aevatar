@@ -646,6 +646,24 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
                     continue;
                 }
 
+                if (IsLarkTextInputAttachment(attachment))
+                {
+                    if (await TryAddLarkTextFilePartAsync(
+                            parts,
+                            larkClient,
+                            token,
+                            providerSlug,
+                            messageId,
+                            attachment,
+                            ct).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+
+                    unseenCount++;
+                    continue;
+                }
+
                 if (!IsLarkImageInputAttachment(attachment))
                 {
                     _logger.LogDebug(
@@ -966,6 +984,113 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return true;
     }
 
+    private async Task<bool> TryAddLarkTextFilePartAsync(
+        List<ContentPart> parts,
+        ILarkNyxClient larkClient,
+        string token,
+        string? providerSlug,
+        string messageId,
+        AttachmentRef attachment,
+        CancellationToken ct)
+    {
+        if (attachment.SizeBytes > MaxInlineDocumentBytes)
+        {
+            _logger.LogWarning(
+                "Skipping oversized Lark text attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name} sizeBytes={SizeBytes} maxBytes={MaxBytes}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name,
+                attachment.SizeBytes,
+                MaxInlineDocumentBytes);
+            return false;
+        }
+
+        var resourceKey = NormalizeOptional(attachment.AttachmentId);
+        if (resourceKey is null)
+        {
+            _logger.LogWarning(
+                "Skipping Lark text attachment without resource key for chat LLM input: provider={ProviderSlug} messageId={MessageId} contentType={ContentType} name={Name}",
+                providerSlug,
+                messageId,
+                attachment.ContentType,
+                attachment.Name);
+            return false;
+        }
+
+        LarkMessageResourceDownloadResult downloaded;
+        try
+        {
+            downloaded = await larkClient.DownloadMessageResourceAsync(
+                    token,
+                    new LarkMessageResourceDownloadRequest(
+                        messageId,
+                        resourceKey,
+                        LarkMessageResourceKind.File),
+                    ct)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to download Lark text attachment for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} contentType={ContentType} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                attachment.ContentType,
+                attachment.Name);
+            return false;
+        }
+
+        var mediaType = ResolveDownloadedTextMediaType(
+            downloaded.ContentType,
+            attachment.ContentType,
+            downloaded.FileName,
+            attachment.Name);
+        if (!downloaded.Succeeded ||
+            downloaded.Content.Length == 0 ||
+            downloaded.Content.Length > MaxInlineDocumentBytes ||
+            mediaType is null)
+        {
+            _logger.LogWarning(
+                "Lark text attachment download was not usable for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} contentType={ContentType} downloadedContentType={DownloadedContentType} name={Name} downloadedName={DownloadedName} status={Status} detail={Detail}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                attachment.ContentType,
+                downloaded.ContentType,
+                attachment.Name,
+                downloaded.FileName,
+                downloaded.HttpStatus,
+                downloaded.Detail);
+            return false;
+        }
+
+        var (fileText, truncated) = ExtractUtf8Text(downloaded.Content, MaxInlineDocumentTextChars);
+        if (string.IsNullOrWhiteSpace(fileText))
+        {
+            _logger.LogWarning(
+                "Lark text attachment produced no usable text for chat LLM input: provider={ProviderSlug} messageId={MessageId} resourceKey={ResourceKey} name={Name}",
+                providerSlug,
+                messageId,
+                resourceKey,
+                NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name));
+            return false;
+        }
+
+        var fileName = NormalizeOptional(downloaded.FileName) ?? NormalizeOptional(attachment.Name) ?? "attachment.txt";
+        var contentHeader = truncated
+            ? $"Text attachment '{fileName}' content (truncated to first {MaxInlineDocumentTextChars} characters):"
+            : $"Text attachment '{fileName}' content:";
+        parts.Add(ContentPart.TextPart($"{contentHeader}\n{fileText}"));
+        return true;
+    }
+
     internal static async Task<IReadOnlyList<ContentPart>> MaterializeFileRefPartsAsync(
         IReadOnlyList<ContentPart> parts,
         IFileArtifactReadPort? fileArtifactReadPort,
@@ -1181,6 +1306,9 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     private static bool IsLarkPdfInputAttachment(AttachmentRef attachment) =>
         attachment.Kind == AttachmentKind.File && ResolvePdfMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
 
+    private static bool IsLarkTextInputAttachment(AttachmentRef attachment) =>
+        attachment.Kind == AttachmentKind.File && ResolveTextMediaType(attachment.ContentType, fileName: attachment.Name) is not null;
+
     private static LarkMessageResourceKind ToLarkMessageResourceKind(AttachmentRef attachment) =>
         attachment.Kind == AttachmentKind.Image
             ? LarkMessageResourceKind.Image
@@ -1218,6 +1346,19 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return ResolveImageMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
     }
 
+    private static string? ResolveDownloadedTextMediaType(
+        string? mediaType,
+        string? fallbackMediaType,
+        string? fileName,
+        string? fallbackFileName)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        if (normalized is not null && normalized is not "application/octet-stream" and not "binary/octet-stream")
+            return ResolveTextMediaType(normalized);
+
+        return ResolveTextMediaType(fallbackMediaType, fileName: fileName, fallbackFileName: fallbackFileName);
+    }
+
     private static string? ResolvePdfMediaType(
         string? mediaType,
         string? fallbackMediaType = null,
@@ -1237,6 +1378,30 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return HasFileExtension(fileName, ".pdf") || HasFileExtension(fallbackFileName, ".pdf")
             ? "application/pdf"
             : null;
+    }
+
+    private static string? ResolveTextMediaType(
+        string? mediaType,
+        string? fallbackMediaType = null,
+        string? fileName = null,
+        string? fallbackFileName = null)
+    {
+        var normalized = NormalizeOptional(mediaType)?.ToLowerInvariant();
+        var resolved = normalized switch
+        {
+            not null when normalized.StartsWith("text/", StringComparison.Ordinal) => normalized,
+            "application/json" or "application/yaml" or "application/x-yaml" => normalized,
+            _ => null,
+        };
+        if (resolved is not null)
+            return resolved;
+
+        if (fallbackMediaType is not null)
+            resolved = ResolveTextMediaType(fallbackMediaType);
+        if (resolved is not null)
+            return resolved;
+
+        return ResolveTextMediaTypeFromFileName(fileName) ?? ResolveTextMediaTypeFromFileName(fallbackFileName);
     }
 
     private static string? ResolveImageMediaType(
@@ -1264,6 +1429,26 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
         return ResolveImageMediaTypeFromFileName(fileName) ?? ResolveImageMediaTypeFromFileName(fallbackFileName);
     }
 
+    private static string? ResolveTextMediaTypeFromFileName(string? fileName)
+    {
+        if (HasFileExtension(fileName, ".txt") ||
+            HasFileExtension(fileName, ".text") ||
+            HasFileExtension(fileName, ".md") ||
+            HasFileExtension(fileName, ".markdown") ||
+            HasFileExtension(fileName, ".log"))
+            return "text/plain";
+        if (HasFileExtension(fileName, ".json") ||
+            HasFileExtension(fileName, ".jsonl"))
+            return "application/json";
+        if (HasFileExtension(fileName, ".yaml") ||
+            HasFileExtension(fileName, ".yml"))
+            return "application/yaml";
+        if (HasFileExtension(fileName, ".csv"))
+            return "text/csv";
+
+        return null;
+    }
+
     private static string? ResolveImageMediaTypeFromFileName(string? fileName)
     {
         if (HasFileExtension(fileName, ".jpg") ||
@@ -1283,6 +1468,13 @@ public sealed class NyxIdConversationReplyGenerator : IAgentRunStepConversationR
     {
         var normalized = NormalizeOptional(fileName)?.ToLowerInvariant();
         return normalized?.EndsWith(extension, StringComparison.Ordinal) == true;
+    }
+
+    private static (string Text, bool Truncated) ExtractUtf8Text(byte[] content, int maxChars)
+    {
+        var text = Encoding.UTF8.GetString(content);
+        var truncated = text.Length > maxChars;
+        return (truncated ? text[..maxChars].Trim() : text.Trim(), truncated);
     }
 
     private static (string Text, bool Truncated) ExtractPdfText(byte[] content, int maxChars)

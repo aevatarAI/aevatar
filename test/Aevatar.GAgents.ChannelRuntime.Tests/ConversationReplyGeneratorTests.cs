@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Prompting;
@@ -1063,6 +1064,63 @@ public sealed class ConversationReplyGeneratorTests
             part.Text.Contains("truncated to first 20000 characters", StringComparison.Ordinal));
         providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
             .NotContain("Attachment visibility warning");
+    }
+
+    [Theory]
+    [InlineData("text/plain", "notes.txt", "hello from notes")]
+    [InlineData("application/json", "config.json", "{\"enabled\":true}")]
+    [InlineData("application/octet-stream", "config.yaml", "enabled: true")]
+    public async Task GenerateReplyAsync_WithLarkTextFileAttachment_AddsTextContentPart(
+        string contentType,
+        string fileName,
+        string fileContent)
+    {
+        var fileBytes = Encoding.UTF8.GetBytes(fileContent);
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, fileBytes, contentType, fileName));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var activity = CreateLarkActivity(
+            $"msg-file-{fileName}",
+            "read this",
+            $"om_file_{fileName}",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = contentType,
+            Name = fileName,
+            SizeBytes = fileBytes.Length,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "read this");
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains($"Text attachment '{fileName}' content", StringComparison.Ordinal) &&
+            part.Text.Contains(fileContent, StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            $"om_file_{fileName}",
+            "file_key",
+            LarkMessageResourceKind.File));
     }
 
     [Fact]
