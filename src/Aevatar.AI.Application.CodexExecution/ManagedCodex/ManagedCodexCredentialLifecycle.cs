@@ -1819,52 +1819,10 @@ public sealed class ManagedCodexCredentialLifecycle(
     private static bool IsReady(
         ManagedCodexCredentialDescriptor? credential,
         ExternalSubjectRef owner,
-        DateTimeOffset now)
-    {
-        if (credential?.Owner is null ||
-            credential.SecretReference is null ||
-            string.IsNullOrWhiteSpace(credential.ApiKeyId) ||
-            string.IsNullOrWhiteSpace(credential.SecretReference.Ref) ||
-            credential.Status != ManagedCodexCredentialStatus.Active ||
-            credential.ExpiresAt is null ||
-            string.IsNullOrWhiteSpace(credential.ChronoSandboxUserServiceId) ||
-            string.IsNullOrWhiteSpace(credential.ChronoLlmUserServiceId) ||
-            string.Equals(
-                credential.ChronoSandboxUserServiceId,
-                credential.ChronoLlmUserServiceId,
-                StringComparison.Ordinal) ||
-            !string.Equals(
-                credential.ChronoSandboxServiceSlug,
-                ManagedCodexOptions.ChronoSandboxServiceSlug,
-                StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        try
-        {
-            var ownerScopeKey = ManagedCodexCredentialActorIdentity.From(owner);
-            var expiresAt = credential.ExpiresAt.ToDateTimeOffset();
-            return string.Equals(
-                       ManagedCodexCredentialActorIdentity.From(credential.Owner),
-                       ownerScopeKey,
-                       StringComparison.Ordinal) &&
-                   expiresAt > now &&
-                   ReferenceMatches(
-                       credential.SecretReference,
-                       credential.SecretReference.Ref,
-                       ownerScopeKey,
-                       expiresAt);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
+        DateTimeOffset now) =>
+        ManagedCodexCredentialReadiness
+            .AssessCredential(owner, credential, now)
+            .ExecutionReady;
 
     private async Task<ManagedCodexCredentialSnapshot> WaitForReadyAsync(
         IManagedCodexCredentialReadinessObservationLease observation,
