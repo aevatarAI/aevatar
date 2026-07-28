@@ -1,5 +1,6 @@
 using Aevatar.GAgents.Scheduled;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Prompting;
@@ -22,6 +23,10 @@ using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.NyxidChat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using UglyToad.PdfPig.Core;
+using UglyToad.PdfPig.Fonts.Standard14Fonts;
+using UglyToad.PdfPig.Content;
+using UglyToad.PdfPig.Writer;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 using ApplicationFileArtifactRef = Aevatar.Workflow.Application.Abstractions.Runs.FileArtifactRef;
@@ -121,6 +126,15 @@ public sealed class ConversationReplyGeneratorTests
                 NyxUserAccessToken = token ?? string.Empty,
             },
         };
+
+    private static byte[] BuildSimplePdf(string text)
+    {
+        var builder = new PdfDocumentBuilder();
+        var page = builder.AddPage(PageSize.A4);
+        var font = builder.AddStandard14Font(Standard14Font.Helvetica);
+        page.AddText(text, 12, new PdfPoint(50, 750), font);
+        return builder.Build();
+    }
 
     [Fact]
     public async Task GenerateReplyAsync_WithPriorConversationHistory_BuildsSecondTurnRequestWithPreviousUserAndAssistant()
@@ -493,7 +507,7 @@ public sealed class ConversationReplyGeneratorTests
         var request = providerFactory.Requests[0];
         request.Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
         request.Messages.Single(message => message.Role == "user").ContentParts.Should()
             .ContainSingle(part => part.Kind == ContentPartKind.Text && part.Text == "describe it");
         lark.Downloads.Should().BeEmpty();
@@ -530,7 +544,7 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
         lark.Downloads.Should().ContainSingle();
     }
 
@@ -566,7 +580,7 @@ public sealed class ConversationReplyGeneratorTests
         providerFactory.Requests.Should().ContainSingle();
         providerFactory.Requests[0].Messages.Single(message => message.Role == "system").Content.Should()
             .Contain("Attachment visibility warning")
-            .And.Contain("one or more attachments could not be converted to LLM image input");
+            .And.Contain("one or more attachments could not be converted to LLM input");
         lark.Downloads.Should().ContainSingle();
     }
 
@@ -958,19 +972,20 @@ public sealed class ConversationReplyGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateReplyAsync_WithNonImageAttachment_AddsHonestVisibilityWarning()
+    public async Task GenerateReplyAsync_WithLarkPdfFileAttachment_AddsExtractedTextPart()
     {
+        var pdfBytes = BuildSimplePdf("Invoice total 42.00 USD");
         var lark = new RecordingLarkNyxClient(
-            new LarkMessageResourceDownloadResult(true, [1], "image/png", "photo.png"));
+            new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "report.pdf"));
         var providerFactory = new RecordingProviderFactory
         {
-            Capabilities = MultimodalCapabilities,
+            Capabilities = LLMProviderCapabilities.TextOnly,
         };
         var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
         var activity = CreateLarkActivity(
-            "msg-file",
+            "msg-file-pdf",
             "read this",
-            "om_file",
+            "om_file_pdf",
             token: "user-token");
         activity.Content.Attachments.Add(new AttachmentRef
         {
@@ -978,7 +993,7 @@ public sealed class ConversationReplyGeneratorTests
             Kind = AttachmentKind.File,
             ContentType = "application/pdf",
             Name = "report.pdf",
-            SizeBytes = 512,
+            SizeBytes = pdfBytes.Length,
         });
 
         await generator.GenerateReplyAsync(
@@ -991,12 +1006,162 @@ public sealed class ConversationReplyGeneratorTests
             .Messages.Last(message => message.Role == "user");
         userMessage.ContentParts.Should().NotBeNull();
         userMessage.ContentParts!.Should().NotContain(part => part.Kind == ContentPartKind.Image);
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "read this");
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains("PDF attachment 'report.pdf' extracted text", StringComparison.Ordinal) &&
+            part.Text.Contains("Invoice total 42.00 USD", StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            "om_file_pdf",
+            "file_key",
+            LarkMessageResourceKind.File));
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithLongLarkPdfFileAttachment_MarksExtractedTextAsTruncated()
+    {
+        var pdfBytes = BuildSimplePdf(new string('A', 21_000));
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "long-report.pdf"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var activity = CreateLarkActivity(
+            "msg-file-long-pdf",
+            "read this",
+            "om_file_long_pdf",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = "application/pdf",
+            Name = "long-report.pdf",
+            SizeBytes = pdfBytes.Length,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains("PDF attachment 'long-report.pdf' extracted text", StringComparison.Ordinal) &&
+            part.Text.Contains("truncated to first 20000 characters", StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+    }
+
+    [Theory]
+    [InlineData("text/plain", "notes.txt", "hello from notes")]
+    [InlineData("application/json", "config.json", "{\"enabled\":true}")]
+    [InlineData("application/octet-stream", "config.yaml", "enabled: true")]
+    public async Task GenerateReplyAsync_WithLarkTextFileAttachment_AddsTextContentPart(
+        string contentType,
+        string fileName,
+        string fileContent)
+    {
+        var fileBytes = Encoding.UTF8.GetBytes(fileContent);
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, fileBytes, contentType, fileName));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = LLMProviderCapabilities.TextOnly,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var activity = CreateLarkActivity(
+            $"msg-file-{fileName}",
+            "read this",
+            $"om_file_{fileName}",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = contentType,
+            Name = fileName,
+            SizeBytes = fileBytes.Length,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text == "read this");
+        userMessage.ContentParts!.Should().Contain(part =>
+            part.Kind == ContentPartKind.Text &&
+            part.Text != null &&
+            part.Text.Contains($"Text attachment '{fileName}' content", StringComparison.Ordinal) &&
+            part.Text.Contains(fileContent, StringComparison.Ordinal));
+        providerFactory.Requests[0].Messages.First(message => message.Role == "system").Content.Should()
+            .NotContain("Attachment visibility warning");
+        lark.Downloads.Should().ContainSingle().Which.Should().Be((
+            "user-token",
+            $"om_file_{fileName}",
+            "file_key",
+            LarkMessageResourceKind.File));
+    }
+
+    [Fact]
+    public async Task GenerateReplyAsync_WithUnsupportedFileAttachment_AddsHonestVisibilityWarning()
+    {
+        var lark = new RecordingLarkNyxClient(
+            new LarkMessageResourceDownloadResult(true, [1], "application/zip", "archive.zip"));
+        var providerFactory = new RecordingProviderFactory
+        {
+            Capabilities = MultimodalCapabilities,
+        };
+        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var activity = CreateLarkActivity(
+            "msg-file-zip",
+            "read this",
+            "om_file_zip",
+            token: "user-token");
+        activity.Content.Attachments.Add(new AttachmentRef
+        {
+            AttachmentId = "file_key",
+            Kind = AttachmentKind.File,
+            ContentType = "application/zip",
+            Name = "archive.zip",
+            SizeBytes = 512,
+        });
+
+        await generator.GenerateReplyAsync(
+            activity,
+            new Dictionary<string, string>(),
+            streamingSink: null,
+            CancellationToken.None);
+
+        var userMessage = providerFactory.Requests.Should().ContainSingle().Subject
+            .Messages.Last(message => message.Role == "user");
+        userMessage.ContentParts.Should().NotBeNull();
         userMessage.ContentParts!.Should().ContainSingle(part =>
             part.Kind == ContentPartKind.Text &&
             part.Text == "read this");
         var systemMessage = providerFactory.Requests[0].Messages.First(message => message.Role == "system");
         systemMessage.Content.Should().Contain("Attachment visibility warning");
-        systemMessage.Content.Should().Contain("could not be converted to LLM image input");
+        systemMessage.Content.Should().Contain("one or more attachments could not be converted to LLM input");
         lark.Downloads.Should().BeEmpty();
     }
 
@@ -1031,7 +1196,7 @@ public sealed class ConversationReplyGeneratorTests
             part.Text == "describe it");
         var systemMessage = providerFactory.Requests[0].Messages.First(message => message.Role == "system");
         systemMessage.Content.Should().Contain("Attachment visibility warning");
-        systemMessage.Content.Should().Contain("could not be converted to LLM image input");
+        systemMessage.Content.Should().Contain("could not be converted to LLM input");
         lark.Downloads.Should().ContainSingle();
     }
 
