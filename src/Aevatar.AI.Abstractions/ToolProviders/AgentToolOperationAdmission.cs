@@ -15,7 +15,8 @@ public sealed record AgentToolOperationAdmission(
     string ContractDigest,
     IReadOnlyList<AgentToolOperationParameter> Parameters,
     AgentToolOperationRequestBody? RequestBody,
-    AgentToolOperationResponsePolicy ResponsePolicy)
+    AgentToolOperationResponsePolicy ResponsePolicy,
+    AgentToolOperationExecutionPolicy ExecutionPolicy)
 {
     public IEnumerable<AgentToolOperationParameter> PathParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Path);
@@ -25,6 +26,48 @@ public sealed record AgentToolOperationAdmission(
 
     public IEnumerable<AgentToolOperationParameter> HeaderParameters =>
         Parameters.Where(static parameter => parameter.Location == AgentToolOperationParameterLocation.Header);
+}
+
+public enum AgentToolOperationRisk
+{
+    Unspecified = 0,
+    ReadOnly = 1,
+    Write = 2,
+    Destructive = 3,
+}
+
+public enum AgentToolOperationApproval
+{
+    Unspecified = 0,
+    None = 1,
+    Required = 2,
+}
+
+public enum AgentToolOperationEnforcementOwner
+{
+    Unspecified = 0,
+    Aevatar = 1,
+    NyxId = 2,
+}
+
+public enum AgentToolOperationExecutionMode
+{
+    Unspecified = 0,
+    Interactive = 1,
+    Durable = 2,
+}
+
+public sealed record AgentToolOperationExecutionPolicy(
+    AgentToolOperationRisk Risk,
+    AgentToolOperationApproval Approval,
+    AgentToolOperationEnforcementOwner EnforcementOwner,
+    IReadOnlyList<AgentToolOperationExecutionMode> AllowedExecutionModes)
+{
+    public static AgentToolOperationExecutionPolicy Unspecified { get; } = new(
+        AgentToolOperationRisk.Unspecified,
+        AgentToolOperationApproval.Unspecified,
+        AgentToolOperationEnforcementOwner.Unspecified,
+        []);
 }
 
 public enum AgentToolOperationParameterLocation

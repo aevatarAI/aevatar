@@ -135,6 +135,50 @@ public sealed class AgentWorkflowToolSourceAdapterTests
     }
 
     [Fact]
+    public async Task WorkflowTool_ShouldYieldProofBoundWriteUntilMatchingApprovalGrant()
+    {
+        var agentTool = new ProofPolicyAgentTool();
+        var approvalHandler = new ScriptedApprovalHandler(ToolApprovalResult.Yielded("approval-write"));
+        var adapter = new AgentWorkflowToolSourceAdapter(
+            [new SingleAgentToolSource(agentTool)],
+            approvalHandler: approvalHandler);
+        var tool = (await adapter.GetToolsAsync(CancellationToken.None)).Single();
+        var admission = WriteInvocationAdmission();
+        var request = new WorkflowToolExecutionRequest(
+            ArgumentsJson: "{}",
+            RunId: "run-alpha",
+            StepId: "write-alpha",
+            ExecutionId: "exec-alpha",
+            CallId: "call-alpha",
+            ScopeId: "scope-alpha",
+            CallerCredential: new WorkflowCallerCredential(),
+            RuntimeContext: new WorkflowToolRuntimeContext(
+                "workflow-run-actor-alpha",
+                "run-alpha",
+                "write-alpha",
+                "run-alpha",
+                1),
+            InvocationAdmission: admission);
+
+        var pending = await tool.ExecuteAsync(request, CancellationToken.None);
+
+        pending.PendingApproval.Should().NotBeNull();
+        agentTool.ExecuteCount.Should().Be(0);
+        approvalHandler.Requests.Should().ContainSingle().Which.IsDestructive.Should().BeFalse();
+
+        var resumed = await tool.ExecuteAsync(request with
+        {
+            ApprovalGrant = new Aevatar.Workflow.Core.Modules.ToolApprovalGrant(
+                pending.PendingApproval!.ApprovalRequestId,
+                agentTool.Name,
+                "call-alpha"),
+        }, CancellationToken.None);
+
+        resumed.ResultJson.Should().Be("""{"executed":true}""");
+        agentTool.ExecuteCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task WorkflowTool_ShouldUseSingleCanonicalApprovalMiddlewareWhenHostRegistersDuplicate()
     {
         var agentTool = new CapturingAgentTool(ToolApprovalMode.AlwaysRequire);
@@ -413,6 +457,55 @@ public sealed class AgentWorkflowToolSourceAdapterTests
                 ?? AgentWorkflowRuntimeContext.Empty;
         }
     }
+
+    private sealed class ProofPolicyAgentTool : IAgentTool
+    {
+        public string Name => "nyxid_proxy";
+
+        public string Description => "Proof policy fixture";
+
+        public string ParametersSchema => "{}";
+
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+        public int ExecuteCount { get; private set; }
+
+        public AgentToolCallSafety GetCallSafety(string argumentsJson)
+        {
+            var policy = AgentToolRequestContext.Current?.OperationAdmission?.ExecutionPolicy;
+            return new AgentToolCallSafety(
+                policy?.Approval == AgentToolOperationApproval.Required,
+                policy?.Risk == AgentToolOperationRisk.ReadOnly,
+                policy?.Risk == AgentToolOperationRisk.Destructive);
+        }
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ExecuteCount++;
+            return Task.FromResult("""{"executed":true}""");
+        }
+    }
+
+    private static ExternalWorkflowCapabilityRef WriteInvocationAdmission() =>
+        new()
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = "us-write-alpha",
+                ServiceSlugSnapshot = "calendar-alpha",
+                OperationId = "create-event",
+                HttpMethod = "POST",
+                PathTemplate = "/events",
+                ContractDigest = "digest-write-alpha",
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.Write,
+                    Approval = NyxIdOperationApproval.Required,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                    AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+                },
+            },
+        };
 
     private sealed class ResultReceiptAgentTool(
         string resultJson,

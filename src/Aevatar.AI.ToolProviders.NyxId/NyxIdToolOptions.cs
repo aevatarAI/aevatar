@@ -1,5 +1,11 @@
 namespace Aevatar.AI.ToolProviders.NyxId;
 
+public enum NyxIdManagedWorkflowAdmissionMode
+{
+    Shadow = 0,
+    Enforce = 1,
+}
+
 /// <summary>NyxID tool provider configuration.</summary>
 public sealed class NyxIdToolOptions
 {
@@ -56,6 +62,9 @@ public sealed class NyxIdToolOptions
     /// identity policy already define the trust boundary.
     /// </summary>
     public bool BypassSshExecApproval { get; set; }
+
+    public NyxIdManagedWorkflowAdmissionMode ManagedWorkflowAdmissionMode { get; set; } =
+        NyxIdManagedWorkflowAdmissionMode.Shadow;
 
     /// <summary>
     /// Maximum bytes accepted by nyxid_proxy response_mode=file_artifact.

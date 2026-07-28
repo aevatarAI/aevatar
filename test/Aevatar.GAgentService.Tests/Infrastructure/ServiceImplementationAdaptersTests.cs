@@ -17,6 +17,8 @@ namespace Aevatar.GAgentService.Tests.Infrastructure;
 
 public sealed class ServiceImplementationAdaptersTests
 {
+    private const string LegacyWorkflowYaml = "name: rebound-workflow\nsteps: []\n";
+
     [Fact]
     public async Task ScriptingAdapter_ShouldValidateConstructorAndRequest()
     {
@@ -523,6 +525,7 @@ public sealed class ServiceImplementationAdaptersTests
                     HttpMethod = "GET",
                     PathTemplate = "/api/states",
                     ContractDigest = "nyxid-digest-alpha",
+                    ExecutionPolicy = ReadOnlyNyxIdPolicy(ExternalCapabilityExecutionMode.Interactive),
                 },
             },
             new()
@@ -535,6 +538,7 @@ public sealed class ServiceImplementationAdaptersTests
                     HttpMethod = "GET",
                     PathTemplate = "/api/states",
                     ContractDigest = "nyxid-digest-beta",
+                    ExecutionPolicy = ReadOnlyNyxIdPolicy(ExternalCapabilityExecutionMode.Interactive),
                 },
             },
         ];
@@ -604,6 +608,9 @@ public sealed class ServiceImplementationAdaptersTests
                 HttpMethod = "GET",
                 PathTemplate = "/api/states",
                 ContractDigest = "nyxid-digest-alpha",
+                ExecutionPolicy = ReadOnlyNyxIdPolicy(
+                    ExternalCapabilityExecutionMode.Interactive,
+                    ExternalCapabilityExecutionMode.Durable),
             },
         };
         var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
@@ -739,6 +746,9 @@ public sealed class ServiceImplementationAdaptersTests
                 HttpMethod = "GET",
                 PathTemplate = "/api/states",
                 ContractDigest = "nyxid-digest-alpha",
+                ExecutionPolicy = ReadOnlyNyxIdPolicy(
+                    ExternalCapabilityExecutionMode.Interactive,
+                    ExternalCapabilityExecutionMode.Durable),
             },
         };
         var dependencies = new WorkflowAuthorizationDependencies
@@ -889,7 +899,7 @@ public sealed class ServiceImplementationAdaptersTests
                 ImplementationKind = ServiceImplementationKind.Workflow,
                 WorkflowSpec = new WorkflowServiceRevisionSpec
                 {
-                    WorkflowYaml = "name: legacy\nsteps: []\n",
+                    WorkflowYaml = LegacyWorkflowYaml,
                     CapabilityAdmissionPlan = new WorkflowCapabilityAdmissionPlan
                     {
                         SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
@@ -905,6 +915,52 @@ public sealed class ServiceImplementationAdaptersTests
             .Be(WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
         admission.PersistedRequest.Should().NotBeNull();
         workflowPort.ParseCalls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowAdapter_WithoutLegacyPlan_ShouldReadmitSameYamlAsV3Artifact()
+    {
+        var v3Plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            LegacyWorkflowYaml,
+            inlineWorkflowYamls: null,
+            ExternalCapabilityExecutionMode.Interactive,
+            invocationAdmissions: [],
+            sourceStamps: []);
+        var workflowPort = new RecordingWorkflowRunActorPort
+        {
+            ParseResult = CreateSuccessfulWorkflowParse("rebound-workflow"),
+        };
+        var admission = new RecordingWorkflowCapabilityAdmissionService
+        {
+            Result = v3Plan,
+        };
+        var adapter = new WorkflowServiceImplementationAdapter(workflowPort, admission);
+
+        var reboundArtifact = await adapter.PrepareRevisionAsync(new PrepareServiceRevisionRequest
+        {
+            Spec = new ServiceRevisionSpec
+            {
+                Identity = GAgentServiceTestKit.CreateIdentity(),
+                RevisionId = "revision-v3",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                WorkflowSpec = new WorkflowServiceRevisionSpec
+                {
+                    WorkflowYaml = LegacyWorkflowYaml,
+                    ExpectedExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+                },
+            },
+        });
+
+        admission.PersistedRequest.Should().BeNull();
+        admission.LiveRequest.Should().NotBeNull();
+        admission.LiveRequest!.WorkflowYaml.Should().Be(LegacyWorkflowYaml);
+        reboundArtifact.RevisionId.Should().Be("revision-v3");
+        reboundArtifact.DeploymentPlan.WorkflowPlan.WorkflowYaml.Should().Be(LegacyWorkflowYaml);
+        reboundArtifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.SchemaVersion.Should()
+            .Be(WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
+        reboundArtifact.DeploymentPlan.WorkflowPlan.CapabilityAdmissionPlan.AdmissionDigest.Should()
+            .Be(v3Plan.AdmissionDigest);
+        workflowPort.ParseCalls.Should().ContainSingle().Which.Should().Be(LegacyWorkflowYaml);
     }
 
     [Fact]
@@ -1084,6 +1140,19 @@ public sealed class ServiceImplementationAdaptersTests
             {
                 ServiceGrantPolicy = WorkflowServiceGrantPolicy.NotRequiredNoExternalService,
             });
+
+    private static NyxIdOperationExecutionPolicy ReadOnlyNyxIdPolicy(
+        params ExternalCapabilityExecutionMode[] executionModes)
+    {
+        var policy = new NyxIdOperationExecutionPolicy
+        {
+            Risk = NyxIdOperationRisk.ReadOnly,
+            Approval = NyxIdOperationApproval.None,
+            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+        };
+        policy.AllowedExecutionModes.Add(executionModes);
+        return policy;
+    }
 
     private sealed class RecordingWorkflowRunActorPort : IWorkflowDefinitionProvisioningPort, IWorkflowRunProvisioningPort, IWorkflowDefinitionParser
     {

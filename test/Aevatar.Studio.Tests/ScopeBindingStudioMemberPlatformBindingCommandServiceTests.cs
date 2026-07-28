@@ -656,9 +656,20 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 UserServiceId = "us-gamma",
                 ServiceSlugSnapshot = "service-gamma",
                 OperationId = "invoke-gamma",
-                HttpMethod = "POST",
+                HttpMethod = "GET",
                 PathTemplate = "/invoke",
                 ContractDigest = "operation-gamma-digest",
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.ReadOnly,
+                    Approval = NyxIdOperationApproval.None,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                    AllowedExecutionModes =
+                    {
+                        ExternalCapabilityExecutionMode.Interactive,
+                        ExternalCapabilityExecutionMode.Durable,
+                    },
+                },
             },
         };
         var owner = new ExternalCapabilityAuthorizationOwner

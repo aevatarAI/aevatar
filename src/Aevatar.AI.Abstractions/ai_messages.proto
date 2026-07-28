@@ -147,6 +147,14 @@ message AgentToolExecutionContextPayload {
   AgentToolCredentialSourcePayload credential_source = 12;
   AgentToolScheduleContextPayload schedule = 13;
   AgentToolNyxIdAuthorityContextPayload nyx_id_authority = 14;
+  AgentToolInvocationSurfacePayload invocation_surface = 15;
+}
+
+enum AgentToolInvocationSurfacePayload {
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_UNSPECIFIED = 0;
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_HUMAN_SESSION = 1;
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_WORKFLOW_TOOL_CALL = 2;
+  AGENT_TOOL_INVOCATION_SURFACE_PAYLOAD_WORKFLOW_LLM_TOOL_LOOP = 3;
 }
 
 enum AgentToolCredentialSourcePayload {

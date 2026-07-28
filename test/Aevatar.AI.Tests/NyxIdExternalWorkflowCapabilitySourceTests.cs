@@ -44,6 +44,33 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         }
         """;
 
+    private const string ExecutionPolicySpec = """
+        {
+          "openapi": "3.1.0",
+          "paths": {
+            "/items": {
+              "get": {
+                "operationId": "list-items",
+                "x-aevatar-tool": true
+              },
+              "post": {
+                "operationId": "create-item",
+                "x-aevatar-tool": { "enabled": true, "readOnly": true, "approval": "never" }
+              }
+            },
+            "/items/{item_id}": {
+              "delete": {
+                "operationId": "delete-item",
+                "x-aevatar-tool": { "enabled": true, "readOnly": true, "destructive": false, "approval": "never" },
+                "parameters": [
+                  { "name": "item_id", "in": "path", "required": true, "schema": { "type": "string" } }
+                ]
+              }
+            }
+          }
+        }
+        """;
+
     [Fact]
     public void AddNyxIdTools_ShouldRegisterNyxIdCapabilitySource()
     {
@@ -188,6 +215,117 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             parameter.Location == NyxIdOperationParameterLocation.Path &&
             parameter.Required);
         result.SelectedSelector.NyxIdOperation.OperationId.Should().Be("get-state");
+    }
+
+    [Theory]
+    [InlineData("list-items", NyxIdOperationRisk.ReadOnly, NyxIdOperationApproval.None, true)]
+    [InlineData("create-item", NyxIdOperationRisk.Write, NyxIdOperationApproval.Required, false)]
+    [InlineData("delete-item", NyxIdOperationRisk.Destructive, NyxIdOperationApproval.Required, false)]
+    public async Task InspectAsync_ShouldDeriveConservativeTypedExecutionPolicy(
+        string operationId,
+        NyxIdOperationRisk expectedRisk,
+        NyxIdOperationApproval expectedApproval,
+        bool durableAllowed)
+    {
+        var source = CreateSource(new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = ExecutionPolicySpec },
+        });
+
+        var result = await source.InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", operationId),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        var policy = result.SelectedCapability.NyxIdUserService.ExecutionPolicy;
+        policy.Risk.Should().Be(expectedRisk);
+        policy.Approval.Should().Be(expectedApproval);
+        policy.EnforcementOwner.Should().Be(NyxIdOperationEnforcementOwner.Aevatar);
+        policy.AllowedExecutionModes.Should().Contain(ExternalCapabilityExecutionMode.Interactive);
+        policy.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable)
+            .Should().Be(durableAllowed);
+        policy.EnforcementOwner.Should().NotBe(NyxIdOperationEnforcementOwner.NyxId,
+            "local OpenAPI markers cannot claim trusted NyxID enforcement");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldChangeContractDigestWhenExecutionPolicyChanges()
+    {
+        const string readOnlySpec = """
+            {
+              "openapi": "3.1.0",
+              "paths": {
+                "/items": {
+                  "get": { "operationId": "list-items", "x-aevatar-tool": true }
+                }
+              }
+            }
+            """;
+        const string writeSpec = """
+            {
+              "openapi": "3.1.0",
+              "paths": {
+                "/items": {
+                  "get": {
+                    "operationId": "list-items",
+                    "x-aevatar-tool": { "enabled": true, "readOnly": false }
+                  }
+                }
+              }
+            }
+            """;
+
+        var readOnly = await CreateSource(new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = readOnlySpec },
+        }).InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", "list-items"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+        var write = await CreateSource(new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = writeSpec },
+        }).InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", "list-items"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        readOnly.SelectedCapability.NyxIdUserService.ExecutionPolicy.Risk.Should()
+            .Be(NyxIdOperationRisk.ReadOnly);
+        write.SelectedCapability.NyxIdUserService.ExecutionPolicy.Risk.Should()
+            .Be(NyxIdOperationRisk.Write);
+        write.SelectedCapability.NyxIdUserService.ContractDigest.Should().NotBe(
+            readOnly.SelectedCapability.NyxIdUserService.ContractDigest);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldRejectDurableWriteBeforeAuthorizationCatalogRead()
+    {
+        var source = CreateSource(new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = ExecutionPolicySpec },
+        });
+
+        var result = await source.InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", "create-item"),
+            ExternalCapabilityExecutionMode.Durable,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable);
+        result.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_OPERATION_DURABLE_EXECUTION_NOT_ALLOWED");
+        result.Remediations.Should().ContainSingle().Which.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.UseInteractiveExecution);
+        result.SelectedCapability.NyxIdUserService.ExecutionPolicy.Risk.Should()
+            .Be(NyxIdOperationRisk.Write);
     }
 
     [Fact]

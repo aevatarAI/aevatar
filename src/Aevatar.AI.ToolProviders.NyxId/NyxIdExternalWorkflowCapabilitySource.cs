@@ -238,6 +238,21 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         ExternalCapabilityReadiness? durableReadiness = null;
         if (executionMode == ExternalCapabilityExecutionMode.Durable)
         {
+            if (!capability.NyxIdUserService.ExecutionPolicy.AllowedExecutionModes.Contains(
+                    ExternalCapabilityExecutionMode.Durable))
+            {
+                return Failure(
+                    selector,
+                    executionMode,
+                    ExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable,
+                    "NYXID_OPERATION_DURABLE_EXECUTION_NOT_ALLOWED",
+                    "The selected operation requires interactive execution.",
+                    ExternalCapabilityRemediationActionKind.UseInteractiveExecution,
+                    "Use interactive execution",
+                    [service.Source, openApi.Source],
+                    capability);
+            }
+
             durableReadiness = await InspectDurableAuthorizationAsync(
                 access,
                 selector,
@@ -855,32 +870,8 @@ public sealed class NyxIdExternalWorkflowCapabilitySource : IExternalWorkflowCap
         source.FreshUntil is null || source.FreshUntil.ToDateTimeOffset() < _timeProvider.GetUtcNow();
 
     private static string BuildOperationContractDigest(ConnectedServiceToolOperation operation)
-    {
-        var parameterContracts = operation.Parameters
-            .OrderBy(static parameter => parameter.In)
-            .ThenBy(static parameter => parameter.Name, StringComparer.Ordinal)
-            .Select(parameter => string.Join(
-                "\n",
-                parameter.In.ToString(),
-                parameter.Name,
-                parameter.Required.ToString(CultureInfo.InvariantCulture),
-                parameter.Schema?.ToJsonString() ?? string.Empty,
-                parameter.Description ?? string.Empty));
-        return ExternalWorkflowCapabilityContractDigest.Compute(
-            new string?[]
-            {
-                "nyxid-openapi-operation.v1",
-                operation.OperationId,
-                operation.Method.ToUpperInvariant(),
-                operation.PathTemplate,
-                operation.Marker?.Name,
-                operation.Marker?.ReadOnly?.ToString(CultureInfo.InvariantCulture),
-                operation.Marker?.Destructive?.ToString(CultureInfo.InvariantCulture),
-                operation.RequestBodyRequired.ToString(CultureInfo.InvariantCulture),
-                operation.RequestBodyMediaType,
-                operation.RequestBodySchema?.ToJsonString(),
-            }.Concat(parameterContracts).Concat(operation.ResponseMediaTypes));
-    }
+        => ExternalWorkflowCapabilityContractDigest.Compute(
+            ["nyxid-openapi-operation.v1", operation.OperationId, operation.CanonicalContract()]);
 
     private static bool IsSafeMethod(string method) =>
         method.Equals("GET", StringComparison.OrdinalIgnoreCase) ||

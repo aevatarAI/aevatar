@@ -1976,6 +1976,14 @@ Lark webhook / long-connection / gateway 这类 ingress concern 属于 `Channel.
 
 本 RFC **不把这块做进 Phase 1**。Lark 主 transport 是 webhook；long connection 作为未来按需扩展的预留口，记在这里避免未来又被当作"新想法"从零讨论。
 
+#### 10.1.2 Canonical onboarding / recovery surface
+
+`/channels` 是 channel 注册、恢复和状态确认的唯一产品入口；`/admin#/channels` 只通过同源 iframe 嵌入该页面，不维护第二套注册状态机或模拟 Lark 后台操作。Lark 注册要求 App ID、App Secret 和 Verification Token，Encrypt Key 可选；这些 secret 只沿本次 NyxID provisioning 请求流转，不进入 actor state、Protobuf、read model、响应或日志。
+
+注册请求被接受只表示 NyxID/Aevatar provisioning 已完成到可配置阶段，不表示外部 Lark 应用已可用。registration actor 已提交的 `WebhookUrl` 通过查询响应的 `webhook_url` 原样呈现，作为 Lark Event Subscriptions 的 Request URL；`callback_url` 保持独立语义，不能作为其替代或由 bot id 推导。`pending_webhook` 页面必须明确要求用户在 Lark Developer Console 手工完成 Request URL、token/key 对齐、权限导入、`im.message.receive_v1` 订阅、版本发布与审批，并发送测试消息。Aevatar 不声称自动修改了这些外部设置。
+
+只有收到验证通过的入站消息且 registration read model 变为 `active`，产品才可宣称接入完成。替换接入必须先确认并成功删除现有 registration，再创建新 registration；这个操作会改变 `nyx_channel_bot_id` 和 `webhook_url`，因此用户必须把新的 Request URL 重新写入 Lark Developer Console。删除或重新注册失败时，UI 保留当前管理页和错误，不做乐观本地变更。
+
 ### 10.2 Telegram（`agents/platforms/Aevatar.GAgents.Platform.Telegram`）
 
 - **底层传输**：和 Lark 一样走 ADR-0013 统一通道——唯一生产 transport 是 `agents/channels/Aevatar.GAgents.Channel.NyxIdRelay`。Aevatar 不直接持有 bot token、不直接调用 Telegram Bot API、不暴露 Telegram webhook；所有 ingress / outbound 都经过 NyxID 中继。`Aevatar.GAgents.Platform.Telegram` 只提供 composer / native message producer / payload redactor，没有 transport / credential / SDK 包装代码。

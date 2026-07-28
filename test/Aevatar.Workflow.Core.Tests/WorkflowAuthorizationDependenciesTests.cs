@@ -571,6 +571,17 @@ public sealed class WorkflowAuthorizationDependenciesTests
                             HttpMethod = "GET",
                             PathTemplate = "/states/{entity_id}",
                             ContractDigest = "operation-digest",
+                            ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                            {
+                                Risk = NyxIdOperationRisk.ReadOnly,
+                                Approval = NyxIdOperationApproval.None,
+                                EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                                AllowedExecutionModes =
+                                {
+                                    ExternalCapabilityExecutionMode.Interactive,
+                                    ExternalCapabilityExecutionMode.Durable,
+                                },
+                            },
                         },
                     },
                 _ => throw new InvalidOperationException("A selected capability is required."),

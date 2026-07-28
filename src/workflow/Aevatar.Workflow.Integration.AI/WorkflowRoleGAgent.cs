@@ -4,7 +4,9 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
+using Aevatar.AI.Core.AgentProfiles;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.ToolProviders.ToolSetRegistry;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.TypeSystem;
@@ -23,7 +25,8 @@ public class WorkflowRoleGAgent(
     IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
     IEnumerable<IAgentToolSource>? toolSources = null,
     IToolApprovalHandler? approvalHandler = null,
-    IRemoteToolApprovalPort? remoteToolApprovalPort = null)
+    IRemoteToolApprovalPort? remoteToolApprovalPort = null,
+    IToolSetRegistry? toolSetRegistry = null)
     : RoleGAgent(
         llmProviderFactory,
         additionalHooks,
@@ -36,6 +39,7 @@ public class WorkflowRoleGAgent(
 {
     public const string WorkflowAssistantRoleAgentKind = "workflow.assistant-role";
     private const string LegacyConnectorHttpAuthorizationBlockedKey = "connector.http.authorization";
+    private readonly IToolSetRegistry? _toolSetRegistry = toolSetRegistry;
 
     [EventHandler(AllowSelfHandling = true)]
     public Task HandleWorkflowRoleInitialize(WorkflowRoleInitializeEvent evt)
@@ -163,6 +167,10 @@ public class WorkflowRoleGAgent(
         toolContext = ApplyToolVisibility(intent.AgentToolScope, toolContext);
         toolContext = ApplyRunScopeToCaller(intent.ScopeId, toolContext);
         toolContext = ApplySchedule(intent.ScheduleId, toolContext);
+        toolContext = toolContext with
+        {
+            InvocationSurface = AgentToolInvocationSurface.WorkflowLlmToolLoop,
+        };
 
         var request = new ChatRequestEvent
         {
@@ -223,7 +231,7 @@ public class WorkflowRoleGAgent(
         WorkflowAgentToolScope? scope,
         AgentToolExecutionContext toolContext)
     {
-        if (scope == null)
+        if (scope == null || (!scope.RestrictAllowedToolNames && scope.AllowedToolNames.Count == 0))
             return toolContext;
 
         return toolContext with
@@ -294,6 +302,9 @@ public class WorkflowRoleGAgent(
         var inputParts = ResolveWorkflowRequestInputParts(request);
         var llmControl = LLMControlContextMapper.FromPayload(request.LlmControl);
         var toolContext = llmControl.ToToolContext(AgentToolExecutionContextMapper.FromPayload(request.ToolContext));
+        var turnCatalog = await BuildRequestToolCatalogAsync(intent.AgentToolScope, toolContext, streamCt);
+        if (turnCatalog is not null)
+            toolContext = AddRequestToolsToVisibility(toolContext, turnCatalog.RouteOwnedTools.Keys);
         var metadata = request.Metadata.Count > 0
             ? AgentToolExecutionContextMapper.StripOwnedControlKeys(
                 new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal))
@@ -311,7 +322,7 @@ public class WorkflowRoleGAgent(
                            request.SessionId,
                            llmControl,
                            toolContext,
-                           turnCatalog: null,
+                           turnCatalog,
                            metadata,
                            streamCt))
         {
@@ -363,6 +374,109 @@ public class WorkflowRoleGAgent(
             Usage: usage,
             Model: EffectiveConfig.Model ?? string.Empty,
             ContentEmitted: fullContent.Length > 0);
+    }
+
+    private async Task<AgentProfileTurnCatalog?> BuildRequestToolCatalogAsync(
+        WorkflowAgentToolScope? scope,
+        AgentToolExecutionContext toolContext,
+        CancellationToken ct)
+    {
+        if (_toolSetRegistry is null || scope?.ToolSetRefs.Count is not > 0)
+            return null;
+
+        var tools = new List<IAgentTool>();
+        var resolutionFailures = 0;
+        var discoveryFailures = 0;
+        var collisions = 0;
+        using var _ = AgentToolContextScope.Push(toolContext);
+        foreach (var toolSetRef in scope.ToolSetRefs
+                     .Where(static name => !string.IsNullOrWhiteSpace(name))
+                     .Select(static name => name.Trim())
+                     .Distinct(StringComparer.Ordinal))
+        {
+            ToolSetResolveResult resolved;
+            try
+            {
+                resolved = _toolSetRegistry.Resolve(toolSetRef);
+            }
+            catch (Exception)
+            {
+                resolutionFailures++;
+                continue;
+            }
+
+            if (!resolved.IsSuccess)
+            {
+                resolutionFailures++;
+                continue;
+            }
+
+            foreach (var source in resolved.Sources)
+            {
+                try
+                {
+                    tools.AddRange(await source.DiscoverToolsAsync(ct));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    discoveryFailures++;
+                }
+            }
+        }
+
+        var exactTools = new List<IAgentTool>();
+        foreach (var group in tools
+                     .Where(static tool => !string.IsNullOrWhiteSpace(tool.Name))
+                     .GroupBy(static tool => tool.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var exact = group.First();
+            if (group.Any(tool => !ReferenceEquals(tool, exact)))
+            {
+                collisions++;
+                continue;
+            }
+
+            exactTools.Add(exact);
+        }
+        if (resolutionFailures + discoveryFailures + collisions > 0)
+        {
+            Logger.LogWarning(
+                "Workflow request tools degraded. resolution_failures={ResolutionFailures} discovery_failures={DiscoveryFailures} collisions={Collisions}",
+                resolutionFailures,
+                discoveryFailures,
+                collisions);
+        }
+
+        var allowedNames = (scope.RestrictAllowedToolNames || scope.AllowedToolNames.Count > 0
+                ? scope.AllowedToolNames
+                : Tools.GetAll().Select(static tool => tool.Name))
+            .Concat(exactTools.Select(static tool => tool.Name));
+        return new AgentProfileTurnCatalog(
+            allowedNames,
+            profilePromptLayer: null,
+            selectedSkillPromptLayer: null,
+            selectedIntentId: null,
+            candidateIntentId: null,
+            diagnostics: null,
+            exactTools);
+    }
+
+    private static AgentToolExecutionContext AddRequestToolsToVisibility(
+        AgentToolExecutionContext toolContext,
+        IEnumerable<string> toolNames)
+    {
+        if (!toolContext.ToolVisibility.IsRestricted)
+            return toolContext;
+
+        return toolContext with
+        {
+            ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(
+                toolContext.ToolVisibility.AllowedToolNames!.Concat(toolNames)),
+        };
     }
 
     private static IReadOnlyList<ContentPart> ResolveWorkflowRequestInputParts(ChatRequestEvent request)

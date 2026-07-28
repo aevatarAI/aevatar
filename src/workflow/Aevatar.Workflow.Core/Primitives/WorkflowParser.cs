@@ -150,7 +150,7 @@ public sealed class WorkflowParser
             MaxHistoryMessages = role.MaxHistoryMessages,
             EventModules = eventModules,
             EventRoutes = eventRoutes,
-            AgentToolScope = MapAgentToolScope(role.AllowedTools),
+            AgentToolScope = MapAgentToolScope(role.AllowedTools, role.ToolSets),
             Connectors = role.Connectors?.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToList() ?? [],
         };
     }
@@ -176,7 +176,9 @@ public sealed class WorkflowParser
         var rawParameters = s.Parameters is null
             ? null
             : new Dictionary<string, object?>(s.Parameters, StringComparer.Ordinal);
-        var agentToolScope = MapAgentToolScope(ResolveStepAllowedTools(s, rawParameters));
+        var agentToolScope = MapAgentToolScope(
+            ResolveStepScopeSource(s.AllowedTools, rawParameters, "allowed_tools", "allowedTools"),
+            ResolveStepScopeSource(s.ToolSets, rawParameters, "tool_sets", "toolSets"));
         var presentation = MapPresentation(canonicalType, s, rawParameters);
         var parameters = NormalizeParameters(rawParameters);
 
@@ -281,14 +283,15 @@ public sealed class WorkflowParser
         return null;
     }
 
-    private static object? ResolveStepAllowedTools(
-        RawStep step,
-        IDictionary<string, object?>? rawParameters)
+    private static object? ResolveStepScopeSource(
+        object? topLevelSource,
+        IDictionary<string, object?>? rawParameters,
+        params string[] keys)
     {
         object? parameterSource = null;
         if (rawParameters is not null)
         {
-            foreach (var key in new[] { "allowed_tools", "allowedTools" })
+            foreach (var key in keys)
             {
                 if (!rawParameters.TryGetValue(key, out var source))
                     continue;
@@ -298,20 +301,22 @@ public sealed class WorkflowParser
             }
         }
 
-        if (step.AllowedTools is not null)
-            return step.AllowedTools;
-
-        return parameterSource;
+        return topLevelSource ?? parameterSource;
     }
 
-    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(object? source)
+    private static WorkflowAgentToolScopeDefinition? MapAgentToolScope(
+        object? allowedToolsSource,
+        object? toolSetsSource)
     {
-        if (source is null)
+        if (allowedToolsSource is null && toolSetsSource is null)
             return null;
 
         return new WorkflowAgentToolScopeDefinition
         {
-            AllowedToolNames = NormalizeToolNames(source).ToList(),
+            RestrictAllowedToolNames = allowedToolsSource is not null,
+            RestrictToolSets = toolSetsSource is not null,
+            AllowedToolNames = NormalizeToolNames(allowedToolsSource).ToList(),
+            ToolSetRefs = NormalizeToolNames(toolSetsSource).ToList(),
         };
     }
 
@@ -1348,6 +1353,7 @@ public sealed class WorkflowParser
         public string? EventModules { get; set; }
         public string? EventRoutes { get; set; }
         public object? AllowedTools { get; set; }
+        public object? ToolSets { get; set; }
         public RawRoleExtensions? Extensions { get; set; }
         public List<string>? Connectors { get; set; }
     }
@@ -1416,6 +1422,7 @@ public sealed class WorkflowParser
         public string? Field { get; set; }
         public string? Aggregate { get; set; }
         public object? AllowedTools { get; set; }
+        public object? ToolSets { get; set; }
         public RawStepCapability? Capability { get; set; }
         public object? InteractionSpec { get; set; }
         public object? InteractionTemplateSpec { get; set; }

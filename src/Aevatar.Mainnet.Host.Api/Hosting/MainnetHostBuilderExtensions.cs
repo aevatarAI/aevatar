@@ -63,6 +63,7 @@ using Aevatar.Mainnet.Host.Api.Scheduled;
 using Aevatar.Mainnet.Host.Api.Skills;
 using Aevatar.Mainnet.Host.Api.Status;
 using Aevatar.Mainnet.Host.Api.Voice;
+using Aevatar.Mainnet.Host.Api.WorkflowAdmission;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -336,7 +337,12 @@ public static class MainnetHostBuilderExtensions
                 o.MaxRequestDurationSeconds);
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
+            o.ManagedWorkflowAdmissionMode = builder.Configuration.GetValue(
+                "Aevatar:NyxId:ManagedWorkflowAdmissionMode",
+                o.ManagedWorkflowAdmissionMode);
         });
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, NyxIdWorkflowAdmissionEnforcementStartupGuard>());
         builder.Services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPolicyResolver,
             MainnetWorkflowFileMultipartUploadSafetyPolicyResolver>());

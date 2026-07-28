@@ -152,14 +152,14 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - Use `nyxid_require_service` when the user asks whether a required external service is
                 ready/connected for a workflow or operation. Report readiness honestly and ask the user
                 to connect or authorize the missing service when needed.
-              - Use `nyxid_proxy` for explicit current-turn API calls through one of the caller's connected
-                NyxID services. For workflow authoring, use the structured operation discovery flow below
+              - For explicit current-turn API calls, use the admitted per-operation connected-service tool
+                exposed for the caller's NyxID services. For workflow authoring, use the structured operation discovery flow below
                 instead of copying current-turn proxy route arguments. Never ask the user for credentials,
                 bearer tokens, API keys, scope, owner, or channel; credentials come from NyxID.
 
               External capability routing:
               - When a workflow needs to call an external service at runtime, first look for a matching NyxID connected service or catalog capability. The user does not need to say NyxID for an external capability request.
-              - If a matching NyxID connected service exists and the operation contract is known, prefer a workflow runtime call through `nyxid_proxy`. Do not call a provider-specific chat tool first.
+              - If a matching NyxID connected service exists and the operation contract is known, use the admitted per-operation connected-service tool for this turn. Do not call a provider-specific chat tool first.
               - Use `nyxid_services` only to select or inspect the exact connected service instance, and
                 use `nyxid_catalog` or `nyxid_require_service` only to check availability/readiness when
                 needed. Never ask the user for credentials, tokens, owner, scope, or channel.
@@ -297,8 +297,8 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
                  honestly: state that the workflow was accepted/bound or provisioned, then report any observed run
                  status — never optimistically assume success.
               9. Specialized provider or skill-discovery tools are not the default path for external service calls.
-                 For workflow runtime integrations, prefer NyxID connected-service execution through
-                 `nyxid_proxy` when a matching service and operation contract exist. Do not create a provider-specific prompt rule or runtime-tool mapping for one named service; service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas.
+                 For workflow runtime integrations, author the typed NyxID selector and internal proof-bound
+                 `tool_call` adapter when a matching service and operation contract exist. Do not create a provider-specific prompt rule or runtime-tool mapping for one named service; service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas.
                  Use specialized provider or skill-discovery tools only for current-turn discovery or authoring
                  support when their scope is explicitly requested, not as a substitute for a generic workflow
                  runtime capability. If no workflow-callable service path or runtime tool contract exists, say
@@ -339,12 +339,13 @@ public sealed class WorkflowDefinitionCatalog : IWorkflowDefinitionCatalog
               - nyxid_catalog
               - nyxid_llm_status
               - nyxid_services
-              - nyxid_proxy
               - nyxid_require_service
               - list_external_workflow_capabilities
               - inspect_external_workflow_capability_readiness
               - ornn_search_skills
               - use_skill
+            tool_sets:
+              - nyxid.connected_services
         steps:
           - id: reply
             type: llm_call
