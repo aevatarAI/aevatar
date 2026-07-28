@@ -977,11 +977,17 @@ public sealed class ConversationReplyGeneratorTests
         var pdfBytes = BuildSimplePdf("Invoice total 42.00 USD");
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "report.pdf"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
         var providerFactory = new RecordingProviderFactory
         {
             Capabilities = LLMProviderCapabilities.TextOnly,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
         var activity = CreateLarkActivity(
             "msg-file-pdf",
             "read this",
@@ -1021,6 +1027,13 @@ public sealed class ConversationReplyGeneratorTests
             "om_file_pdf",
             "file_key",
             LarkMessageResourceKind.File));
+        var ingress = fileArtifacts.IngressRequests.Should().ContainSingle().Subject;
+        ingress.Content.ToArray().Should().Equal(pdfBytes);
+        ingress.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
+        ingress.SourceMessageId.Should().Be("om_file_pdf");
+        ingress.SourceResourceKey.Should().Be("file_key");
+        ingress.FileName.Should().Be("report.pdf");
+        ingress.MediaType.Should().Be("application/pdf");
     }
 
     [Fact]
@@ -1029,11 +1042,17 @@ public sealed class ConversationReplyGeneratorTests
         var pdfBytes = BuildSimplePdf(new string('A', 21_000));
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, pdfBytes, "application/pdf", "long-report.pdf"));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
         var providerFactory = new RecordingProviderFactory
         {
             Capabilities = LLMProviderCapabilities.TextOnly,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
         var activity = CreateLarkActivity(
             "msg-file-long-pdf",
             "read this",
@@ -1078,11 +1097,17 @@ public sealed class ConversationReplyGeneratorTests
         var fileBytes = Encoding.UTF8.GetBytes(fileContent);
         var lark = new RecordingLarkNyxClient(
             new LarkMessageResourceDownloadResult(true, fileBytes, contentType, fileName));
+        var fileArtifacts = new RecordingWorkflowFileArtifactPort();
         var providerFactory = new RecordingProviderFactory
         {
             Capabilities = LLMProviderCapabilities.TextOnly,
         };
-        var generator = new NyxIdConversationReplyGenerator(providerFactory, BuiltInPromptFloorProvider, larkClient: lark);
+        var generator = new NyxIdConversationReplyGenerator(
+            providerFactory,
+            BuiltInPromptFloorProvider,
+            larkClient: lark,
+            fileIngressPort: fileArtifacts,
+            fileArtifactReadPort: fileArtifacts);
         var activity = CreateLarkActivity(
             $"msg-file-{fileName}",
             "read this",
@@ -1121,6 +1146,15 @@ public sealed class ConversationReplyGeneratorTests
             $"om_file_{fileName}",
             "file_key",
             LarkMessageResourceKind.File));
+        var ingress = fileArtifacts.IngressRequests.Should().ContainSingle().Subject;
+        ingress.Content.ToArray().Should().Equal(fileBytes);
+        ingress.SourceKind.Should().Be(FileArtifactSourceKind.ChatInput);
+        ingress.SourceMessageId.Should().Be($"om_file_{fileName}");
+        ingress.SourceResourceKey.Should().Be("file_key");
+        ingress.FileName.Should().Be(fileName);
+        ingress.MediaType.Should().Be(fileName.EndsWith(".yaml", StringComparison.Ordinal)
+            ? "application/yaml"
+            : contentType);
     }
 
     [Fact]
