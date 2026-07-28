@@ -1378,14 +1378,51 @@ public abstract class ScopeServiceEndpointTestKit
             if (ParseResults.TryGetValue(workflowYaml, out var result))
                 return Task.FromResult(result);
 
-            var workflowName = workflowYaml
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .FirstOrDefault(static line => line.StartsWith("name:", StringComparison.OrdinalIgnoreCase))
-                ?.Split(':', 2)[1]
-                .Trim();
+            var workflowName = ResolveWorkflowName(workflowYaml);
             return Task.FromResult(WorkflowYamlParseResult.Success(
                 string.IsNullOrWhiteSpace(workflowName) ? "main" : workflowName));
         }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var workflowByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            string entryWorkflowName = string.Empty;
+            string entryWorkflowYaml = string.Empty;
+            for (var i = 0; i < inlineWorkflowDocuments.Count; i++)
+            {
+                var document = inlineWorkflowDocuments[i];
+                if (string.IsNullOrWhiteSpace(document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid($"workflowYamls[{i}] is required.");
+
+                var parseResult = await ParseWorkflowYamlAsync(document.Yaml, ct);
+                if (!parseResult.Succeeded)
+                    return WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+
+                var workflowName = parseResult.WorkflowName.Trim();
+                if (!workflowByName.TryAdd(workflowName, document.Yaml))
+                    return WorkflowInlineYamlBundleParseResult.Invalid($"Duplicate workflow name '{workflowName}' in workflowYamls.");
+
+                if (i == 0)
+                {
+                    entryWorkflowName = workflowName;
+                    entryWorkflowYaml = document.Yaml;
+                }
+            }
+
+            return WorkflowInlineYamlBundleParseResult.Success(entryWorkflowName, entryWorkflowYaml, workflowByName);
+        }
+
+        private static string ResolveWorkflowName(string workflowYaml) =>
+            workflowYaml
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(static line => line.StartsWith("name:", StringComparison.OrdinalIgnoreCase))
+                ?.Split(':', 2)[1]
+                .Trim() ?? string.Empty;
     }
 
     protected sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort

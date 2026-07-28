@@ -899,6 +899,11 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
             string workflowYaml,
             CancellationToken ct = default) => Task.FromResult(result);
+
+        public Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default) =>
+            Task.FromResult(ToBundleResult(result, inlineWorkflowDocuments.FirstOrDefault()?.Yaml ?? string.Empty));
     }
 
     private sealed class MappingParser(
@@ -915,7 +920,32 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 ? result
                 : throw new InvalidOperationException($"Unexpected workflow YAML: {workflowYaml}"));
         }
+
+        public async Task<WorkflowInlineYamlBundleParseResult> ParseInlineWorkflowBundleAsync(
+            IReadOnlyList<WorkflowChatInlineYamlDocument> inlineWorkflowDocuments,
+            CancellationToken ct = default)
+        {
+            if (inlineWorkflowDocuments.Count == 0)
+                return WorkflowInlineYamlBundleParseResult.Invalid("workflowYamls is required.");
+
+            var document = inlineWorkflowDocuments[0];
+            var parseResult = await ParseWorkflowYamlAsync(document.Yaml, ct);
+            return ToBundleResult(parseResult, document.Yaml);
+        }
     }
+
+    private static WorkflowInlineYamlBundleParseResult ToBundleResult(
+        WorkflowYamlParseResult parseResult,
+        string workflowYaml) =>
+        parseResult.Succeeded
+            ? WorkflowInlineYamlBundleParseResult.Success(
+                parseResult.WorkflowName,
+                workflowYaml,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [parseResult.WorkflowName] = workflowYaml,
+                })
+            : WorkflowInlineYamlBundleParseResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
 
     private sealed class StubReadinessPort(ExternalCapabilityReadiness? result = null)
         : IExternalWorkflowCapabilityReadinessPort

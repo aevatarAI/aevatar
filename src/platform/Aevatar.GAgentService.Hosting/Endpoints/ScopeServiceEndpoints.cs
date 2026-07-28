@@ -22,6 +22,12 @@ using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.Capabilities;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using WorkflowExternalCapabilityReadiness = Aevatar.Workflow.Abstractions.ExternalCapabilityReadiness;
+using WorkflowExternalCapabilityReadinessStatus = Aevatar.Workflow.Abstractions.ExternalCapabilityReadinessStatus;
+using WorkflowExternalCapabilityRef = Aevatar.Workflow.Abstractions.ExternalWorkflowCapabilityRef;
+using WorkflowExternalCapabilityRemediationActionKind = Aevatar.Workflow.Abstractions.ExternalCapabilityRemediationActionKind;
+using WorkflowExternalCapabilitySelector = Aevatar.Workflow.Abstractions.ExternalWorkflowCapabilitySelector;
+using WorkflowExternalCapabilitySourceKind = Aevatar.Workflow.Abstractions.ExternalCapabilitySourceKind;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
 using Aevatar.AGUI.Contracts;
@@ -188,12 +194,7 @@ public static class ScopeServiceEndpoints
                 ct);
             if (!workflowYamlValidation.Succeeded)
             {
-                await WriteJsonErrorResponseAsync(
-                    http,
-                    StatusCodes.Status400BadRequest,
-                    "INVALID_WORKFLOW_YAML",
-                    workflowYamlValidation.Message,
-                    ct);
+                await WriteInvalidWorkflowYamlResponseAsync(http, workflowYamlValidation, ct);
                 return;
             }
 
@@ -273,19 +274,163 @@ public static class ScopeServiceEndpoints
         IWorkflowDefinitionParser workflowDefinitionParser,
         CancellationToken ct)
     {
-        for (var i = 0; i < workflowYamls.Count; i++)
-        {
-            var workflowYaml = workflowYamls[i];
-            if (string.IsNullOrWhiteSpace(workflowYaml))
-                return DraftWorkflowYamlValidationResult.Invalid($"workflowYamls[{i}] is required.");
+        var inlineWorkflowDocuments = workflowYamls
+            .Select(static yaml => new WorkflowChatInlineYamlDocument(string.Empty, yaml))
+            .ToArray();
+        var parseResult = await workflowDefinitionParser.ParseInlineWorkflowBundleAsync(inlineWorkflowDocuments, ct);
+        return parseResult.Succeeded
+            ? DraftWorkflowYamlValidationResult.Success
+            : DraftWorkflowYamlValidationResult.Invalid(parseResult.Error, parseResult.ExternalCapabilityReadiness);
+    }
 
-            var parseResult = await workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
-            if (!parseResult.Succeeded)
-                return DraftWorkflowYamlValidationResult.Invalid(parseResult.Error);
+    private static async Task WriteInvalidWorkflowYamlResponseAsync(
+        HttpContext http,
+        DraftWorkflowYamlValidationResult validation,
+        CancellationToken ct)
+    {
+        var readiness = MapExternalCapabilityReadiness(validation.ExternalCapabilityReadiness);
+        if (readiness == null)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                StatusCodes.Status400BadRequest,
+                "INVALID_WORKFLOW_YAML",
+                validation.Message,
+                ct);
+            return;
         }
 
-        return DraftWorkflowYamlValidationResult.Success;
+        await WriteJsonErrorResponseAsync(
+            http,
+            StatusCodes.Status400BadRequest,
+            new
+            {
+                code = "INVALID_WORKFLOW_YAML",
+                message = validation.Message,
+                externalCapabilityReadiness = readiness,
+            },
+            ct);
     }
+
+    private static object? MapExternalCapabilityReadiness(WorkflowExternalCapabilityReadiness? readiness)
+    {
+        if (readiness == null)
+            return null;
+
+        return new
+        {
+            status = ReadinessStatus(readiness.Status),
+            selectedCapability = MapSelectedCapability(readiness),
+            blockers = readiness.Blockers.Select(static blocker => new
+            {
+                status = ReadinessStatus(blocker.Status),
+                code = blocker.Code,
+                safeMessage = blocker.SafeMessage,
+            }).ToArray(),
+            remediations = readiness.Remediations.Select(static remediation => new
+            {
+                actionKind = RemediationKind(remediation.ActionKind),
+                label = remediation.Label,
+                trustedLocator = NullIfEmpty(remediation.TrustedLocator),
+            }).ToArray(),
+            sources = readiness.Sources.Select(static source => new
+            {
+                sourceKind = SourceKind(source.SourceKind),
+                sourceId = source.SourceId,
+                sourceVersion = source.SourceVersion,
+            }).ToArray(),
+        };
+    }
+
+    private static object? MapSelectedCapability(WorkflowExternalCapabilityReadiness readiness)
+    {
+        if (readiness.SelectedSelector is not null)
+        {
+            switch (readiness.SelectedSelector.SelectorCase)
+            {
+                case WorkflowExternalCapabilitySelector.SelectorOneofCase.NyxIdOperation:
+                    return new
+                    {
+                        userServiceId = readiness.SelectedSelector.NyxIdOperation.UserServiceId,
+                        operationId = readiness.SelectedSelector.NyxIdOperation.OperationId,
+                        connectorCapabilityRef = (string?)null,
+                    };
+                case WorkflowExternalCapabilitySelector.SelectorOneofCase.HostConnector:
+                    return new
+                    {
+                        userServiceId = (string?)null,
+                        operationId = readiness.SelectedSelector.HostConnector.OperationId,
+                        connectorCapabilityRef = readiness.SelectedSelector.HostConnector.ConnectorCapabilityRef,
+                    };
+            }
+        }
+
+        return readiness.SelectedCapability?.CapabilityCase switch
+        {
+            WorkflowExternalCapabilityRef.CapabilityOneofCase.NyxIdUserService => new
+            {
+                userServiceId = readiness.SelectedCapability.NyxIdUserService.UserServiceId,
+                operationId = readiness.SelectedCapability.NyxIdUserService.OperationId,
+                connectorCapabilityRef = (string?)null,
+            },
+            WorkflowExternalCapabilityRef.CapabilityOneofCase.HostConnector => new
+            {
+                userServiceId = (string?)null,
+                operationId = readiness.SelectedCapability.HostConnector.OperationId,
+                connectorCapabilityRef = readiness.SelectedCapability.HostConnector.ConnectorCapabilityRef,
+            },
+            _ => null,
+        };
+    }
+
+    private static string ReadinessStatus(WorkflowExternalCapabilityReadinessStatus status) => status switch
+    {
+        WorkflowExternalCapabilityReadinessStatus.SelectionRequired => "selection_required",
+        WorkflowExternalCapabilityReadinessStatus.ConnectorNotFound => "connector_not_found",
+        WorkflowExternalCapabilityReadinessStatus.ServiceRegistrationRequired => "service_registration_required",
+        WorkflowExternalCapabilityReadinessStatus.CredentialConnectionRequired => "credential_connection_required",
+        WorkflowExternalCapabilityReadinessStatus.ServiceAccessDenied => "service_access_denied",
+        WorkflowExternalCapabilityReadinessStatus.NodeBindingRequired => "node_binding_required",
+        WorkflowExternalCapabilityReadinessStatus.NodeUnavailable => "node_unavailable",
+        WorkflowExternalCapabilityReadinessStatus.EndpointContractRequired => "endpoint_contract_required",
+        WorkflowExternalCapabilityReadinessStatus.OperationSelectionRequired => "operation_selection_required",
+        WorkflowExternalCapabilityReadinessStatus.SourceStale => "source_stale",
+        WorkflowExternalCapabilityReadinessStatus.DurableAuthorizationUnavailable => "durable_authorization_unavailable",
+        WorkflowExternalCapabilityReadinessStatus.ContractDrift => "contract_drift",
+        WorkflowExternalCapabilityReadinessStatus.Ready => "ready",
+        WorkflowExternalCapabilityReadinessStatus.AdmissionRebindRequired => "admission_rebind_required",
+        _ => "unspecified",
+    };
+
+    private static string RemediationKind(WorkflowExternalCapabilityRemediationActionKind actionKind) =>
+        actionKind switch
+        {
+            WorkflowExternalCapabilityRemediationActionKind.SelectCapability => "select_capability",
+            WorkflowExternalCapabilityRemediationActionKind.ConfigureConnector => "configure_connector",
+            WorkflowExternalCapabilityRemediationActionKind.RegisterService => "register_service",
+            WorkflowExternalCapabilityRemediationActionKind.ConnectCredential => "connect_credential",
+            WorkflowExternalCapabilityRemediationActionKind.RequestAccess => "request_access",
+            WorkflowExternalCapabilityRemediationActionKind.BindNode => "bind_node",
+            WorkflowExternalCapabilityRemediationActionKind.RestoreNode => "restore_node",
+            WorkflowExternalCapabilityRemediationActionKind.PublishEndpointContract => "publish_endpoint_contract",
+            WorkflowExternalCapabilityRemediationActionKind.SelectOperation => "select_operation",
+            WorkflowExternalCapabilityRemediationActionKind.RefreshSource => "refresh_source",
+            WorkflowExternalCapabilityRemediationActionKind.UseInteractiveExecution => "use_interactive_execution",
+            WorkflowExternalCapabilityRemediationActionKind.RebindWorkflow => "rebind_workflow",
+            _ => "unspecified",
+        };
+
+    private static string SourceKind(WorkflowExternalCapabilitySourceKind sourceKind) => sourceKind switch
+    {
+        WorkflowExternalCapabilitySourceKind.ConnectorCatalog => "connector_catalog",
+        WorkflowExternalCapabilitySourceKind.NyxIdUserServices => "nyx_id_user_services",
+        WorkflowExternalCapabilitySourceKind.NyxIdOpenApi => "nyx_id_open_api",
+        WorkflowExternalCapabilitySourceKind.DurableAuthorizationCatalog => "durable_authorization_catalog",
+        _ => "unspecified",
+    };
+
+    private static string? NullIfEmpty(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 
     private static async ValueTask<ScopeDraftRunRequestInput> ParseScopeDraftRunRequestAsync(
         HttpContext http,
@@ -4452,12 +4597,18 @@ const response = await fetch("{{invokePath}}", {
 
     private readonly record struct DraftWorkflowYamlValidationResult(
         bool Succeeded,
-        string Message)
+        string Message,
+        WorkflowExternalCapabilityReadiness? ExternalCapabilityReadiness = null)
     {
         public static DraftWorkflowYamlValidationResult Success { get; } = new(true, string.Empty);
 
-        public static DraftWorkflowYamlValidationResult Invalid(string message) =>
-            new(false, string.IsNullOrWhiteSpace(message) ? "Workflow YAML is invalid." : message);
+        public static DraftWorkflowYamlValidationResult Invalid(
+            string message,
+            WorkflowExternalCapabilityReadiness? externalCapabilityReadiness = null) =>
+            new(
+                false,
+                string.IsNullOrWhiteSpace(message) ? "Workflow YAML is invalid." : message,
+                externalCapabilityReadiness?.Clone());
     }
 
     private readonly record struct ScopeDraftRunRequestParseError(

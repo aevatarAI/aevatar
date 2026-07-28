@@ -28,6 +28,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.AGUI.Contracts;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
@@ -250,6 +251,77 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_WORKFLOW_YAML");
         body["message"].Should().Be(validationMessage);
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldValidateInlineWorkflowBundleBeforeDispatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                "name: main\nsteps:\n  - run: echo hello",
+                "name: main\nsteps:\n  - run: echo child",
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_WORKFLOW_YAML");
+        body["message"].Should().Be("Duplicate workflow name 'main' in workflowYamls.");
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldReturnExternalCapabilityReadiness_WhenInlineYamlCapabilityIsInvalid()
+    {
+        const string invalidWorkflowYaml = "name: main\nsteps:\n- id: call\n  type: tool_call";
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.WorkflowDefinitionParser.ParseResults[invalidWorkflowYaml] = WorkflowYamlParseResult.Invalid(
+            "Workflow step 'call' external capability is invalid: select a connected-service operation and rebind.",
+            new ExternalCapabilityReadiness
+            {
+                Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                Blockers =
+                {
+                    new ExternalCapabilityBlocker
+                    {
+                        Status = ExternalCapabilityReadinessStatus.AdmissionRebindRequired,
+                        Code = "admission_rebind_required",
+                        SafeMessage = "Select a connected-service operation and rebind.",
+                    },
+                },
+                SelectedSelector = new ExternalWorkflowCapabilitySelector
+                {
+                    NyxIdOperation = new NyxIdOperationSelector
+                    {
+                        UserServiceId = "user-service-1",
+                        OperationId = "operation-1",
+                    },
+                },
+            });
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                invalidWorkflowYaml,
+            },
+        });
+        using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.RootElement.GetProperty("code").GetString().Should().Be("INVALID_WORKFLOW_YAML");
+        var readiness = body.RootElement.GetProperty("externalCapabilityReadiness");
+        readiness.GetProperty("status").GetString().Should().Be("admission_rebind_required");
+        readiness.GetProperty("blockers")[0].GetProperty("code").GetString().Should().Be("admission_rebind_required");
+        readiness.GetProperty("selectedCapability").GetProperty("userServiceId").GetString().Should().Be("user-service-1");
         host.InteractionService.LastRequest.Should().BeNull();
     }
 
