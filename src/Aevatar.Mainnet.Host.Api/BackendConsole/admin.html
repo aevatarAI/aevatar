@@ -818,12 +818,31 @@ button{font-family:inherit;cursor:pointer;}
 .artifact-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;}
 .art-name{font-size:13px;color:var(--heading);flex:1 1 auto;}
 .art-size{font-size:11.5px;color:var(--faint);}
-.dag{display:flex;flex-direction:column;}
-.dag-node{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border);border-radius:7px;background:var(--surface);}
-.dag-dot{width:8px;height:8px;border-radius:50%;}
-.dag-name{font-size:13px;color:var(--heading);font-weight:550;flex:1 1 auto;}
-.dag-io{font-size:11px;color:var(--faint);}
-.dag-link{width:2px;height:14px;background:var(--border);margin-left:18px;}
+.obs-graph-shell{min-width:0;}
+.obs-graph{position:relative;height:clamp(380px,54vh,660px);overflow:hidden;border:1px solid var(--border);border-radius:8px;background-color:var(--surface-2);background-image:radial-gradient(var(--border) .8px,transparent .8px);background-size:18px 18px;cursor:grab;touch-action:none;}
+.obs-graph.is-panning{cursor:grabbing;}
+.obs-graph-viewport{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;}
+.obs-graph-canvas{position:relative;}
+.obs-graph-canvas svg{position:absolute;inset:0;overflow:visible;pointer-events:none;}
+.obs-graph-edge{fill:none;stroke:var(--faint);stroke-width:1.5;}
+.obs-graph-edge.is-flow{stroke:var(--primary);stroke-width:2;}
+.obs-graph-edge.is-structural{stroke-dasharray:4 5;opacity:.52;}
+.obs-graph-edge-label{fill:var(--primary-strong);font:10px var(--mono);paint-order:stroke;stroke:var(--surface);stroke-width:4px;stroke-linejoin:round;}
+.obs-graph-node{position:absolute;width:220px;height:78px;display:flex;flex-direction:column;gap:5px;padding:10px 12px;border:1px solid var(--border-strong);border-left:4px solid var(--idle);border-radius:8px;background:var(--surface);box-shadow:var(--shadow-card);text-align:left;color:var(--fg);transition:border-color .14s,box-shadow .14s,transform .14s;}
+.obs-graph-node:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px);}
+.obs-graph-node.st-success{border-left-color:var(--success);}.obs-graph-node.st-running{border-left-color:var(--running);}.obs-graph-node.st-failed,.obs-graph-node.st-stuck{border-left-color:var(--failed);}.obs-graph-node.st-waiting{border-left-color:var(--waiting);}
+.obs-graph-node-head{display:flex;align-items:center;gap:7px;min-width:0;}
+.obs-graph-node-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--heading);font-size:12.5px;font-weight:650;}
+.obs-graph-node-type{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font:10.5px var(--mono);}
+.obs-graph-node-meta{display:flex;align-items:center;gap:9px;color:var(--faint);font:10px var(--mono);}
+.obs-graph-controls{position:absolute;right:12px;top:12px;z-index:4;display:flex;align-items:center;gap:4px;padding:4px;border:1px solid var(--border);border-radius:7px;background:rgba(255,255,255,.95);box-shadow:var(--shadow-card);}
+.obs-graph-controls button{height:28px;min-width:28px;padding:0 7px;border:1px solid transparent;border-radius:5px;background:none;color:var(--muted);font-size:12px;}
+.obs-graph-controls button:hover{border-color:var(--border);background:var(--surface-3);color:var(--heading);}
+.obs-graph-zoom{min-width:44px;text-align:center;color:var(--faint);font:10px var(--mono);}
+.obs-graph-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:10px;color:var(--muted);font-size:11px;}
+.obs-graph-legend span{display:inline-flex;align-items:center;gap:5px;}
+.obs-graph-legend i{width:9px;height:9px;border-radius:3px;border:1px solid var(--border);}
+.obs-graph-legend .done{background:var(--success-bg);border-color:var(--success);}.obs-graph-legend .current{background:var(--running-bg);border-color:var(--running);}.obs-graph-legend .failed{background:var(--failed-bg);border-color:var(--failed);}.obs-graph-legend .pending{background:var(--waiting-bg);border-color:var(--waiting);}
 .obs-immersive-bar{display:none;}
 body.obs-immersive .rail{display:none!important;}
 body.obs-immersive .app-header{display:none!important;}
@@ -1585,6 +1604,32 @@ function mapObsRuns(list){
       success:r.success, stateVersion:r.stateVersion, startedAtUtc:r.startedAtUtc, updatedAtUtc:r.updatedAtUtc,
       rawStatus:r.status }; });
 }
+function obsMapGraph(graph,steps,runStatus){
+  graph=graph||{}; steps=steps||[];
+  var stepById={}; steps.forEach(function(step){ if(step.stepId) stepById[step.stepId]=step; });
+  var sourceNodes=(graph.nodes||[]).filter(function(node){return !!(node&&node.nodeId);});
+  if(!sourceNodes.length){
+    sourceNodes=steps.filter(function(step){return !!step.stepId;}).map(function(step){
+      return {nodeId:'step:'+step.stepId,nodeType:'WorkflowStep',stepId:step.stepId,stepType:step.stepType||''};
+    });
+    graph={rootNodeId:sourceNodes[0]&&sourceNodes[0].nodeId,nodes:sourceNodes,edges:steps.filter(function(step){return !!(step.stepId&&step.nextStepId);}).map(function(step){
+      return {edgeId:'next:'+step.stepId+':'+step.nextStepId,fromNodeId:'step:'+step.stepId,toNodeId:'step:'+step.nextStepId,edgeType:'NEXT',branchKey:step.branchKey||''};
+    })};
+  }
+  var nodeIds={}; sourceNodes.forEach(function(node){nodeIds[node.nodeId]=true;});
+  var validEdges=(graph.edges||[]).filter(function(edge){
+    return !!(edge&&nodeIds[edge.fromNodeId]&&nodeIds[edge.toNodeId]&&edge.fromNodeId!==edge.toNodeId);
+  });
+  var topologyStatus=runStatus==='stuck'?'waiting':(runStatus||'waiting');
+  var mappedNodes=sourceNodes.map(function(node){
+    var step=stepById[node.stepId]||null;
+    return Object.assign({},node,{st:step?step.status:(node.stepId?'waiting':topologyStatus),incoming:0,outgoing:0});
+  });
+  var byNodeId={}; mappedNodes.forEach(function(node){byNodeId[node.nodeId]=node;});
+  validEdges.forEach(function(edge){ byNodeId[edge.fromNodeId].outgoing++; byNodeId[edge.toNodeId].incoming++; });
+  var rootNodeId=nodeIds[graph.rootNodeId]?graph.rootNodeId:(mappedNodes[0]&&mappedNodes[0].nodeId)||'';
+  return {rootNodeId:rootNodeId,nodes:mappedNodes,edges:validEdges};
+}
 /* /runs/{id} (+ /graph) -> obsDetail 渲染所需结构（usage/timeline/logs/artifacts/graph） */
 function mapObsDetail(d,graph){
   d=d||{}; var sum=d.summary||{};
@@ -1634,16 +1679,8 @@ function mapObsDetail(d,graph){
   events.forEach(function(e){ if(e.text){ logs.push((e.timestampUtc?obsTime(e.timestampUtc)+' ':'')+(e.stage?'['+e.stage+'] ':'')+e.text); } });
   if(!logs.length){ steps.forEach(function(s){ if(s.error){ logs.push(obsTime(s.requestedAtUtc)+' ERROR '+s.error); } else if(s.outputPreview){ logs.push(obsTime(s.completedAtUtc||s.requestedAtUtc)+' '+(s.stepType||'')+' '+s.outputPreview); } }); }
   if(d.finalError) logs.push('FINAL ERROR '+d.finalError);
-  /* graph：优先真实 DAG nodes/edges；回退到步骤序列 */
-  var gnodes;
-  if(graph && graph.nodes && graph.nodes.length){
-    var byStep={}; steps.forEach(function(s){ byStep[s.stepId]=s; });
-    gnodes=graph.nodes.map(function(n){ var s=byStep[n.stepId]||{};
-      return { name:(n.nodeType||s.stepType||n.nodeId), st:(s.stepId?s.status:'waiting'),
-        io:obsNodeIo(n,graph), stepId:n.stepId||'', nodeId:n.nodeId||'' }; });
-  } else {
-    gnodes=steps.map(function(s){ return { name:(s.stepType||s.targetRole||s.stepId), st:s.status, io:'—', stepId:s.stepId, nodeId:s.stepId }; });
-  }
+  /* graph：保留真实 nodes/edges；缺失时只按显式 nextStepId 回退，不根据数组顺序发明关系。 */
+  var mappedGraph=obsMapGraph(graph,steps,obsMapStatus(sum.status));
   /* artifacts：summary 无文件列表；finalOutput 视为单一产出 */
   var artifacts=[]; if(d.finalOutput){ artifacts.push({ name:'finalOutput', size:obsBytes(d.finalOutput), content:d.finalOutput }); }
   var mapped={ id:sum.runId, name:sum.workflowName||sum.runId, status:obsMapStatus(sum.status),
@@ -1651,7 +1688,7 @@ function mapObsDetail(d,graph){
     scope:sum.scopeId||'—', definition:sum.definitionId||sum.workflowName||'—',
     schedule:sum.scheduleId||'', startedAtUtc:sum.startedAtUtc||'', updatedAtUtc:sum.updatedAtUtc||'',
     input:d.input||'', finalOutput:d.finalOutput||'', finalError:d.finalError||'',
-    usage:usage, steps:steps, timeline:timeline, events:events, diagnostics:diagnostics, logs:logs, graph:gnodes, artifacts:artifacts };
+    usage:usage, steps:steps, timeline:timeline, events:events, diagnostics:diagnostics, logs:logs, graph:mappedGraph, artifacts:artifacts };
   mapped.issue=obsIssuePayload(mapped);
   return mapped;
 }
@@ -1685,10 +1722,6 @@ function obsTimeline_span(steps,sum){
   if(sum.updatedAtUtc) te.push(new Date(sum.updatedAtUtc).getTime());
   ts=ts.filter(function(x){return !isNaN(x);}); te=te.filter(function(x){return !isNaN(x);});
   if(!ts.length||!te.length) return '—'; return obsDurMs(Math.max(0,Math.max.apply(null,te)-Math.min.apply(null,ts)));
-}
-function obsNodeIo(n,graph){
-  var inc=0,out=0; (graph.edges||[]).forEach(function(e){ if(e.toNodeId===n.nodeId) inc++; if(e.fromNodeId===n.nodeId) out++; });
-  return 'in '+inc+' / out '+out;
 }
 function obsBytes(s){ var n=(s==null?'':String(s)).length; if(n<1024) return n+' B'; return (Math.round(n/102.4)/10)+' KB'; }
 function obsValidTimestamp(value){ return !value||!isNaN(new Date(value).getTime()); }
@@ -3093,7 +3126,8 @@ function viewStatus(){
 
 /* ================= ③ 运行观测台 Run Observatory ================= */
 var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,localSearch:'',railCollapsed:false,immersive:false,
-  scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:''};
+  scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:'',graphRunId:null,graphNodeId:null,
+  graphHorizontal:null,graphView:{zoom:1,panX:0,panY:0,fitted:false}};
 var OBS_SESSION_IMMERSIVE='aevatar:admin:observatory:immersive';
 var OBS_SESSION_RAIL='aevatar:admin:observatory:rail-collapsed';
 var OBS_SESSION_READY=false;
@@ -3117,7 +3151,7 @@ function obsSetRailCollapsed(enabled){
 function obsSyncStateFromUrl(){
   obsReadSessionState();
   var q=parseHash().q||{};
-  var previousScope=OBS_STATE.scope;
+  var previousScope=OBS_STATE.scope,previousRun=OBS_STATE.selectedId;
   var scope=q.scope||'mine';
   if(scope==='__all__') scope='all';
   if((scope==='all'||scope!=='mine')&&!(ACCOUNT&&ACCOUNT.admin)) scope='mine';
@@ -3125,6 +3159,7 @@ function obsSyncStateFromUrl(){
     origin:q.origin||'',definition:q.definition||'',schedule:q.schedule||'',from:q.from||'',to:q.to||'',
     selectedId:q.run||null,tab:OBS_TAB_VALUES.indexOf(q.tab)>=0?q.tab:'timeline'});
   if(previousScope!==scope){ OBS_DETAIL_SCOPE_VERSION++; OBS_DETAIL={}; }
+  if(previousRun!==OBS_STATE.selectedId){ OBS_STATE.graphRunId=null; OBS_STATE.graphNodeId=null; OBS_STATE.graphView={zoom:1,panX:0,panY:0,fitted:false}; }
 }
 function obsCanonicalQuery(overrides){
   var values={scope:OBS_STATE.scope,status:OBS_STATE.status,origin:OBS_STATE.origin,definition:OBS_STATE.definition,
@@ -3256,6 +3291,114 @@ function obsIssueView(r){
   return '<div class="issue-box"><div class="issue-actions"><button class="ibtn" data-act="obsCopyIssue" style="height:26px">复制 issue payload</button></div>'+
     '<pre class="issue-pre">'+esc(r.issue||'{}')+'</pre></div>';
 }
+var OBS_GRAPH_ZOOM_MIN=.3,OBS_GRAPH_ZOOM_MAX=2;
+function obsGraphClampZoom(value){ return Math.max(OBS_GRAPH_ZOOM_MIN,Math.min(OBS_GRAPH_ZOOM_MAX,value)); }
+function obsGraphLayout(graph,horizontal){
+  var nodes=graph.nodes||[],edges=graph.edges||[],ids=nodes.map(function(node){return node.nodeId;}),idSet={};
+  ids.forEach(function(id){idSet[id]=true;});
+  var outgoing={},indegree={},depth={}; ids.forEach(function(id){outgoing[id]=[];indegree[id]=0;depth[id]=0;});
+  edges.forEach(function(edge){ if(idSet[edge.fromNodeId]&&idSet[edge.toNodeId]){outgoing[edge.fromNodeId].push(edge.toNodeId);indegree[edge.toNodeId]++;} });
+  var roots=ids.filter(function(id){return indegree[id]===0;});
+  if(graph.rootNodeId&&idSet[graph.rootNodeId]){ roots=roots.filter(function(id){return id!==graph.rootNodeId;}); roots.unshift(graph.rootNodeId); }
+  if(!roots.length&&ids.length) roots=[graph.rootNodeId&&idSet[graph.rootNodeId]?graph.rootNodeId:ids[0]];
+  var pending={}; ids.forEach(function(id){pending[id]=indegree[id];});
+  var queue=roots.slice(),seen={},guard=0,cap=ids.length*ids.length+16;
+  while(queue.length&&guard++<cap){
+    var current=queue.shift(); if(seen[current]) continue; seen[current]=true;
+    (outgoing[current]||[]).forEach(function(next){
+      depth[next]=Math.max(depth[next]||0,(depth[current]||0)+1); pending[next]--; if(pending[next]<=0) queue.push(next);
+    });
+  }
+  var groups={}; nodes.forEach(function(node){ var level=depth[node.nodeId]||0; (groups[level]=groups[level]||[]).push(node); });
+  var nodeWidth=220,nodeHeight=78,gapX=120,gapY=54,pad=34,pos={},maxDepth=0,maxRow=0;
+  Object.keys(groups).forEach(function(key){
+    var level=Number(key); maxDepth=Math.max(maxDepth,level);
+    groups[key].forEach(function(node,row){ maxRow=Math.max(maxRow,row); pos[node.nodeId]=horizontal
+      ?{x:pad+level*(nodeWidth+gapX),y:pad+row*(nodeHeight+gapY)}
+      :{x:pad+row*(nodeWidth+gapX),y:pad+level*(nodeHeight+gapY)}; });
+  });
+  return {horizontal:horizontal,nodeWidth:nodeWidth,nodeHeight:nodeHeight,positions:pos,
+    width:pad*2+(horizontal?maxDepth:maxRow)*(horizontal?nodeWidth+gapX:nodeWidth+gapX)+nodeWidth,
+    height:pad*2+(horizontal?maxRow:maxDepth)*(horizontal?nodeHeight+gapY:nodeHeight+gapY)+nodeHeight};
+}
+function obsGraphView(r){
+  var graph=r.graph||{nodes:[],edges:[]};
+  if(!graph.nodes.length) return emptyBlock('graph');
+  if(OBS_STATE.graphRunId!==r.id){ OBS_STATE.graphRunId=r.id; OBS_STATE.graphNodeId=null; OBS_STATE.graphView={zoom:1,panX:0,panY:0,fitted:false}; }
+  if(OBS_STATE.graphNodeId&&!graph.nodes.some(function(node){return node.nodeId===OBS_STATE.graphNodeId;})){
+    OBS_STATE.graphNodeId=null; if(_drawerCtx&&_drawerCtx.drawerKind==='obsGraphNode') closeDrawer();
+  }
+  var layout=obsGraphLayout(graph,window.innerWidth>720),pos=layout.positions,nextTargets={};
+  OBS_STATE.graphHorizontal=layout.horizontal;
+  graph.edges.forEach(function(edge){if(edge.edgeType==='NEXT')nextTargets[edge.toNodeId]=true;});
+  var edgeHtml=graph.edges.map(function(edge){
+    if(edge.edgeType==='CONTAINS_STEP'&&nextTargets[edge.toNodeId]) return '';
+    var from=pos[edge.fromNodeId],to=pos[edge.toNodeId]; if(!from||!to) return '';
+    var x1,y1,x2,y2,d,labelX,labelY;
+    if(layout.horizontal){ x1=from.x+layout.nodeWidth;y1=from.y+layout.nodeHeight/2;x2=to.x;y2=to.y+layout.nodeHeight/2;var cx=(x1+x2)/2;d='M'+x1+','+y1+' C'+cx+','+y1+' '+cx+','+y2+' '+x2+','+y2;labelX=cx;labelY=(y1+y2)/2-7; }
+    else { x1=from.x+layout.nodeWidth/2;y1=from.y+layout.nodeHeight;x2=to.x+layout.nodeWidth/2;y2=to.y;var cy=(y1+y2)/2;d='M'+x1+','+y1+' C'+x1+','+cy+' '+x2+','+cy+' '+x2+','+y2;labelX=(x1+x2)/2+8;labelY=cy-6; }
+    var flow=edge.edgeType==='NEXT',structural=edge.edgeType==='CONTAINS_STEP'||edge.edgeType==='OWNS'||edge.edgeType==='CHILD_OF';
+    var label=flow?(edge.branchKey||''):(structural?'':edge.edgeType);
+    return '<path class="obs-graph-edge'+(flow?' is-flow':'')+(structural?' is-structural':'')+'" data-edge-type="'+esc(edge.edgeType||'')+'" d="'+d+'" marker-end="url(#obsGraphArrow'+(flow?'Flow':'')+')"></path>'+
+      (label?'<text class="obs-graph-edge-label" x="'+labelX+'" y="'+labelY+'">'+esc(label)+'</text>':'');
+  }).join('');
+  var nodeHtml=graph.nodes.map(function(node){ var p=pos[node.nodeId],label=node.stepId||obsShortRunId(node.nodeId)||node.nodeType;
+    return '<button type="button" class="obs-graph-node st-'+esc(node.st)+'" data-obs-node="'+esc(node.nodeId)+'" style="left:'+p.x+'px;top:'+p.y+'px" aria-label="节点 '+esc(label)+'，'+esc(RUN_CN[node.st]||node.st)+'，点击查看详情">'+
+      '<span class="obs-graph-node-head"><span class="obs-graph-node-title" title="'+esc(node.nodeId)+'">'+esc(label)+'</span>'+statusTag(node.st)+'</span>'+
+      '<span class="obs-graph-node-type">'+esc(node.nodeType||'Node')+'</span><span class="obs-graph-node-meta"><span>in '+node.incoming+'</span><span>out '+node.outgoing+'</span></span></button>';
+  }).join('');
+  return '<div class="obs-graph-shell"><div class="obs-graph" role="application" aria-label="工作流拓扑图：滚轮缩放、拖拽平移、点击节点查看详情">'+
+    '<div class="obs-graph-viewport"><div class="obs-graph-canvas" data-graph-width="'+layout.width+'" data-graph-height="'+layout.height+'" style="width:'+layout.width+'px;height:'+layout.height+'px">'+
+      '<svg width="'+layout.width+'" height="'+layout.height+'" aria-hidden="true"><defs><marker id="obsGraphArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--faint)"></path></marker><marker id="obsGraphArrowFlow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="var(--primary)"></path></marker></defs>'+edgeHtml+'</svg>'+nodeHtml+'</div></div>'+
+    '<div class="obs-graph-controls" role="group" aria-label="拓扑图缩放控制"><button type="button" data-obs-graph-act="zoom-in" aria-label="放大">＋</button><span class="obs-graph-zoom">100%</span><button type="button" data-obs-graph-act="zoom-out" aria-label="缩小">−</button><button type="button" data-obs-graph-act="fit">适应</button><button type="button" data-obs-graph-act="actual">1:1</button></div></div>'+
+    '<div class="obs-graph-legend"><span><i class="done"></i>完成</span><span><i class="current"></i>运行中</span><span><i class="failed"></i>失败</span><span><i class="pending"></i>等待</span><span>实线：步骤流转</span><span>虚线：归属关系</span></div></div>';
+}
+function obsApplyGraphTransform(viewport){
+  var view=OBS_STATE.graphView; viewport.style.transform='translate('+view.panX+'px,'+view.panY+'px) scale('+view.zoom+')';
+  var label=viewport.parentElement.querySelector('.obs-graph-zoom'); if(label) label.textContent=Math.round(view.zoom*100)+'%';
+}
+function obsFitGraph(host,viewport){
+  var canvas=viewport.querySelector('.obs-graph-canvas'),width=Number(canvas.getAttribute('data-graph-width')),height=Number(canvas.getAttribute('data-graph-height'));
+  if(!host.clientWidth||!host.clientHeight||!width||!height) return false;
+  var pad=28,zoom=obsGraphClampZoom(Math.min((host.clientWidth-pad*2)/width,(host.clientHeight-pad*2)/height,1));
+  OBS_STATE.graphView={zoom:zoom,panX:(host.clientWidth-width*zoom)/2,panY:(host.clientHeight-height*zoom)/2,fitted:true}; obsApplyGraphTransform(viewport); return true;
+}
+function obsZoomGraph(viewport,factor,centerX,centerY){
+  var view=OBS_STATE.graphView,next=obsGraphClampZoom(view.zoom*factor),ratio=next/view.zoom;
+  view.panX=centerX-(centerX-view.panX)*ratio; view.panY=centerY-(centerY-view.panY)*ratio; view.zoom=next; view.fitted=true; obsApplyGraphTransform(viewport);
+}
+function obsHandleGraphResize(root,rerender){
+  var horizontal=window.innerWidth>720;
+  if(!root||!root.querySelector('.obs-graph')||OBS_STATE.graphHorizontal===horizontal) return false;
+  OBS_STATE.graphHorizontal=horizontal; OBS_STATE.graphView={zoom:1,panX:0,panY:0,fitted:false};
+  if(rerender) rerender(); return true;
+}
+function obsOpenGraphNode(nodeId){
+  var selected=obsSelected(),detail=selected&&OBS_DETAIL[selected.id]&&OBS_DETAIL[selected.id].detail,node=detail&&detail.graph.nodes.filter(function(item){return item.nodeId===nodeId;})[0];
+  if(!node) return; OBS_STATE.graphNodeId=nodeId;
+  var events=node.stepId?detail.events.filter(function(event){return event.stepId===node.stepId;}):[];
+  var rows=events.length?events.map(function(event){return '<div class="handoff-item"><span class="nm">'+esc(event.kind||event.stage||'Event')+'</span><span class="ar">'+esc(event.text||event.message||'—')+'</span><span class="mt">'+esc(event.t||'—')+'</span></div>';}).join(''):'<div class="empty" style="padding:28px 12px"><div class="et">暂无独立步骤事件</div><div class="es">运行与 Actor 节点的状态来自整体运行事实。</div></div>';
+  var body='<div class="kv"><div class="kv-row"><span class="kk">状态</span><span class="vv sans">'+statusTag(node.st)+'</span></div><div class="kv-row"><span class="kk">类型</span><span class="vv">'+esc(node.nodeType||'—')+'</span></div><div class="kv-row"><span class="kk">节点 ID</span><span class="vv">'+esc(node.nodeId)+'</span></div>'+
+    (node.stepId?'<div class="kv-row"><span class="kk">Step ID</span><span class="vv">'+esc(node.stepId)+'</span></div>':'')+'<div class="kv-row"><span class="kk">入边</span><span class="vv">'+node.incoming+'</span></div><div class="kv-row"><span class="kk">出边</span><span class="vv">'+node.outgoing+'</span></div></div><div class="drawer-section"><h4>已提交事件 · '+events.length+'</h4>'+rows+'</div>';
+  openInspector(body,{title:node.stepId||node.nodeType||'节点详情',sub:node.nodeId,drawerKind:'obsGraphNode'});
+}
+function obsBindGraph(root){
+  var host=root.querySelector('.obs-graph'); if(!host||host.getAttribute('data-bound')==='true') return; host.setAttribute('data-bound','true');
+  var viewport=host.querySelector('.obs-graph-viewport'); obsApplyGraphTransform(viewport);
+  if(!OBS_STATE.graphView.fitted){ var attempts=0; (function fitWhenReady(){if(obsFitGraph(host,viewport)||++attempts>=8)return;setTimeout(fitWhenReady,30);})(); }
+  host.addEventListener('wheel',function(event){event.preventDefault();var rect=host.getBoundingClientRect();obsZoomGraph(viewport,event.deltaY<0?1.1:1/1.1,event.clientX-rect.left,event.clientY-rect.top);},{passive:false});
+  var dragging=false,pointerId=null,startX=0,startY=0,originX=0,originY=0;
+  host.addEventListener('pointerdown',function(event){if(event.button!==0||event.target.closest('.obs-graph-node,.obs-graph-controls'))return;dragging=true;pointerId=event.pointerId;startX=event.clientX;startY=event.clientY;originX=OBS_STATE.graphView.panX;originY=OBS_STATE.graphView.panY;host.classList.add('is-panning');try{host.setPointerCapture(pointerId);}catch(e){}});
+  host.addEventListener('pointermove',function(event){if(!dragging||event.pointerId!==pointerId)return;OBS_STATE.graphView.panX=originX+event.clientX-startX;OBS_STATE.graphView.panY=originY+event.clientY-startY;OBS_STATE.graphView.fitted=true;obsApplyGraphTransform(viewport);});
+  function stopPan(){if(!dragging)return;dragging=false;host.classList.remove('is-panning');try{host.releasePointerCapture(pointerId);}catch(e){}}
+  host.addEventListener('pointerup',stopPan);host.addEventListener('pointercancel',stopPan);
+  host.addEventListener('click',function(event){
+    var node=event.target.closest('[data-obs-node]');if(node){obsOpenGraphNode(node.getAttribute('data-obs-node'));return;}
+    var control=event.target.closest('[data-obs-graph-act]');if(!control)return;var action=control.getAttribute('data-obs-graph-act');
+    if(action==='fit')obsFitGraph(host,viewport);else if(action==='actual'){OBS_STATE.graphView={zoom:1,panX:28,panY:28,fitted:true};obsApplyGraphTransform(viewport);}
+    else obsZoomGraph(viewport,action==='zoom-in'?1.2:1/1.2,host.clientWidth/2,host.clientHeight/2);
+  });
+}
 function obsDetail(r){
   if(!r) return emptyBlock('run');
   /* summary 行只有 id/name/status；usage/timeline/logs/graph/artifacts 来自懒加载缓存 */
@@ -3289,12 +3432,7 @@ function obsDetail(r){
     content=r.artifacts.length?'<div class="artifacts">'+r.artifacts.map(function(a){
       return '<div class="artifact-item"><span class="art-name tnum">'+esc(a.name)+'</span><span class="art-size tnum">'+esc(a.size)+'</span><button class="ibtn" style="height:26px" data-act="artDl" data-name="'+esc(a.name)+'">下载</button></div>';
     }).join('')+'</div>':emptyBlock('run').replace('暂无 Run','暂无产出').replace('该员工还没有执行记录。','本次 Run 尚未生成最终产出。');
-  } else {
-    content='<div class="dag">'+r.graph.map(function(n){
-      var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',waiting:'var(--idle)'}[n.st]||'var(--idle)';
-      return '<div class="dag-node"><span class="dag-dot" style="background:'+sd+'"></span><span class="dag-name">'+esc(n.name)+'</span>'+statusTag(n.st)+'<span class="dag-io tnum">'+esc(n.io)+'</span></div>';
-    }).join('<div class="dag-link"></div>')+'</div>';
-  }
+  } else { content=obsGraphView(r); }
   return head+usage+
     '<div class="obs-tabs">'+tabs+'</div><div class="obs-tab-body">'+content+'</div>';
 }
@@ -3359,6 +3497,7 @@ function viewObservatory(){
 function bindObservatory(root){
   /* root = 本次渲染的 .view（每次渲染都是新元素），事件委托不会跨访问累积 */
   obsSetImmersive(OBS_STATE.immersive);
+  function bindGraph(){ if(typeof obsBindGraph==='function') obsBindGraph(root); }
   function reCounts(){
     var visible=obsRunsFiltered().length,loaded=OBS_RUNS.length;
     var railCount=root.querySelector('.obs-run-rail-head span'); if(railCount) railCount.textContent='显示 '+visible+' / 已加载 '+loaded;
@@ -3366,9 +3505,15 @@ function bindObservatory(root){
   }
   function reList(){ var l=root.querySelector('#obs-list'); if(l) l.innerHTML=obsList(); reCounts(); }
   function reDetail(resetScroll){ var d=root.querySelector('#obs-detail'),inner=d&&d.querySelector('.obs-detail-inner'); if(d&&inner){ var scrollTop=resetScroll?0:d.scrollTop;
-    inner.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; } }
+    inner.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; bindGraph(); } }
   function reBar(){ var b=root.querySelector('.obs-filterbar'); if(b) b.outerHTML=obsFilterBar(); }
   function selectRun(id){ obsNavigate({run:id}); }
+  if(typeof window!=='undefined'){
+    if(bindObservatory.graphResizeHandler) window.removeEventListener('resize',bindObservatory.graphResizeHandler);
+    var resizeTimer=null;
+    bindObservatory.graphResizeHandler=function(){ clearTimeout(resizeTimer); resizeTimer=setTimeout(function(){ if(root.isConnected) obsHandleGraphResize(root,reDetail); },80); };
+    window.addEventListener('resize',bindObservatory.graphResizeHandler);
+  }
   /* 首屏拉取真实运行列表，到达后选中首行并预取其详情 */
   loadObsRuns(function(){ reList(); reDetail(); var sel=obsSelected(); if(sel) loadObsDetail(sel.id,reDetail); });
   if(OBS_POLL_TIMER) clearInterval(OBS_POLL_TIMER);
@@ -3385,6 +3530,7 @@ function bindObservatory(root){
       loadObsDetail(selected.id,function(){ reList(); if(OBS_STATE.selectedId===selected.id) reDetail(); },true);
     });
   },3000);
+  bindGraph();
   root.addEventListener('click',function(ev){
     var row=ev.target.closest('[data-obsrun]'); if(row){
       if(row.getAttribute('data-obs-pinned')==='true') return;
