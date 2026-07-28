@@ -95,13 +95,13 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     public async Task HandleAdvanceCurrentRevisionAsync(AdvanceContentArtifactCurrentRevision command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        EnsureReaderWriter(command.RequestedBy);
+        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         EnsureActiveArtifact(command.ArtifactId);
         var revisionId = ContentArtifactConventions.NormalizeRequired(command.RevisionId, "revisionId");
         if (string.Equals(State.CurrentRevisionId, revisionId, StringComparison.Ordinal))
             return;
 
-        EnsureWriter(command.RequestedBy);
-        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         if (!State.Revisions.TryGetValue(revisionId, out var revision))
             throw new InvalidOperationException($"ContentArtifact revision '{revisionId}' does not exist.");
         if (revision.Availability != ContentArtifactRevisionAvailability.Available)
@@ -118,6 +118,8 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     public async Task HandleRedactRevisionAsync(RedactContentArtifactRevision command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        EnsureReaderWriter(command.RequestedBy);
+        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         EnsureActiveArtifact(command.ArtifactId);
         var revision = GetRevision(command.RevisionId);
         var reason = ContentArtifactConventions.NormalizeRequired(command.Reason, "reason");
@@ -128,8 +130,6 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
             return;
         }
 
-        EnsureWriter(command.RequestedBy);
-        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         await PersistDomainEventAsync(new ContentArtifactRevisionRedactedEvent
         {
             RevisionId = revision.RevisionId,
@@ -142,6 +142,8 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     public async Task HandleExpireRevisionAsync(ExpireContentArtifactRevision command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        EnsureReaderWriter(command.RequestedBy);
+        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         EnsureActiveArtifact(command.ArtifactId);
         var revision = GetRevision(command.RevisionId);
         if (revision.Availability == ContentArtifactRevisionAvailability.RetentionExpired)
@@ -149,8 +151,6 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
         if (revision.Availability == ContentArtifactRevisionAvailability.Redacted)
             throw new InvalidOperationException("A redacted ContentArtifact revision cannot transition to retention-expired.");
 
-        EnsureWriter(command.RequestedBy);
-        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         await PersistDomainEventAsync(new ContentArtifactRevisionExpiredEvent
         {
             RevisionId = revision.RevisionId,
@@ -162,6 +162,8 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     public async Task HandleTombstoneAsync(TombstoneContentArtifact command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        EnsureOwner(command.RequestedBy);
+        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         EnsureArtifactIdentity(command.ArtifactId);
         var reason = ContentArtifactConventions.NormalizeRequired(command.Reason, "reason");
         if (State.LifecycleStatus == ContentArtifactLifecycleStatus.Tombstoned)
@@ -171,8 +173,6 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
             return;
         }
 
-        EnsureOwner(command.RequestedBy);
-        EnsureConcurrencyVersion(command.ExpectedConcurrencyVersion);
         await PersistDomainEventAsync(new ContentArtifactTombstonedEvent
         {
             Reason = reason,
@@ -435,8 +435,21 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
     private void EnsureOwner(ContentArtifactPrincipal? principal)
     {
         ValidatePrincipal(principal, "requested_by");
-        if (!PrincipalEquals(State.AccessPolicy.Owner, principal!))
+        if (State.AccessPolicy == null || !PrincipalEquals(State.AccessPolicy.Owner, principal!))
             throw new InvalidOperationException("Only the ContentArtifact owner can tombstone it.");
+    }
+
+    private void EnsureReaderWriter(ContentArtifactPrincipal? principal)
+    {
+        ValidatePrincipal(principal, "requested_by");
+        if (State.AccessPolicy != null &&
+            (PrincipalEquals(State.AccessPolicy.Owner, principal!) ||
+             State.AccessPolicy.ReaderPrincipalIds.Contains(principal!.PrincipalId) &&
+             State.AccessPolicy.WriterPrincipalIds.Contains(principal.PrincipalId)))
+        {
+            return;
+        }
+        throw new InvalidOperationException("ContentArtifact principal is not authorized to read and write.");
     }
 
     private ContentArtifactRevision GetRevision(string revisionId)
@@ -502,8 +515,7 @@ public sealed class ContentArtifactGAgent : GAgentBase<ContentArtifactState>, IP
 
     private static bool PrincipalEquals(ContentArtifactPrincipal? left, ContentArtifactPrincipal right) =>
         left != null &&
-        string.Equals(left.PrincipalId, right.PrincipalId, StringComparison.Ordinal) &&
-        string.Equals(left.PrincipalKind, right.PrincipalKind, StringComparison.Ordinal);
+        string.Equals(left.PrincipalId, right.PrincipalId, StringComparison.Ordinal);
 
     private static void VerifyLengthAndHash(ContentArtifactRevision revision, ReadOnlySpan<byte> content)
     {

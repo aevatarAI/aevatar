@@ -189,6 +189,91 @@ public sealed class ContentArtifactGAgentTests
         agent.State.ConcurrencyVersion.Should().Be(2);
     }
 
+    [Theory]
+    [InlineData("advance")]
+    [InlineData("redact")]
+    [InlineData("expire")]
+    public async Task ReadRequiringMutation_ShouldRejectWriterOnlyAndAllowReaderWriter(string operation)
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        if (operation == "advance")
+            await AppendSecondRevisionAsync(agent);
+
+        var expectedVersion = agent.State.ConcurrencyVersion;
+        var writerOnly = () => InvokeMutationAsync(agent, operation, "writer-1", expectedVersion);
+
+        await writerOnly.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not authorized*");
+        await InvokeMutationAsync(agent, operation, "editor-1", expectedVersion);
+        agent.State.ConcurrencyVersion.Should().Be(expectedVersion + 1);
+    }
+
+    [Fact]
+    public async Task OwnerAuthorization_ShouldUsePrincipalIdOnly()
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        var ownerWithDifferentKind = Principal("owner-1");
+        ownerWithDifferentKind.PrincipalKind = "service";
+
+        await agent.HandleTombstoneAsync(new TombstoneContentArtifact
+        {
+            ArtifactId = ArtifactId,
+            ExpectedConcurrencyVersion = agent.State.ConcurrencyVersion,
+            RequestedBy = ownerWithDifferentKind,
+            Reason = "retention complete",
+        });
+
+        agent.State.LifecycleStatus.Should().Be(ContentArtifactLifecycleStatus.Tombstoned);
+    }
+
+    [Theory]
+    [InlineData("advance")]
+    [InlineData("redact")]
+    [InlineData("expire")]
+    [InlineData("tombstone")]
+    public async Task ExactMutationRetry_ShouldFailWhenCasIsStale(string operation)
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        if (operation == "advance")
+            await AppendSecondRevisionAsync(agent);
+
+        var expectedVersion = agent.State.ConcurrencyVersion;
+        await InvokeMutationAsync(agent, operation, "owner-1", expectedVersion);
+        var retry = () => InvokeMutationAsync(agent, operation, "owner-1", expectedVersion);
+
+        await retry.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*concurrency version is {expectedVersion + 1}, not {expectedVersion}*");
+    }
+
+    [Theory]
+    [InlineData("advance")]
+    [InlineData("redact")]
+    [InlineData("expire")]
+    [InlineData("tombstone")]
+    public async Task ExactMutationRetry_ShouldAuthorizeBeforeNoOpDecision(string operation)
+    {
+        var agent = await CreateAgentAsync();
+        await agent.HandleCreateAsync(BuildCreate("revision one"));
+        if (operation == "advance")
+            await AppendSecondRevisionAsync(agent);
+
+        await InvokeMutationAsync(agent, operation, "owner-1", agent.State.ConcurrencyVersion);
+        var retry = () => InvokeMutationAsync(
+            agent,
+            operation,
+            "unrelated-1",
+            agent.State.ConcurrencyVersion);
+
+        var assertion = await retry.Should().ThrowAsync<InvalidOperationException>();
+        if (operation == "tombstone")
+            assertion.WithMessage("*owner*");
+        else
+            assertion.WithMessage("*not authorized*");
+    }
+
     [Fact]
     public async Task AppendAndAdvance_ShouldKeepPriorRevisionImmutableAndUseAdvanceCas()
     {
@@ -450,8 +535,8 @@ public sealed class ContentArtifactGAgentTests
             AccessPolicy = new ContentArtifactAccessPolicy
             {
                 Owner = Principal("owner-1"),
-                ReaderPrincipalIds = { "reader-1" },
-                WriterPrincipalIds = { "writer-1" },
+                ReaderPrincipalIds = { "reader-1", "editor-1" },
+                WriterPrincipalIds = { "writer-1", "editor-1" },
             },
             RetentionPolicy = new ContentArtifactRetentionPolicy
             {
@@ -501,6 +586,57 @@ public sealed class ContentArtifactGAgentTests
         {
             PrincipalId = principalId,
             PrincipalKind = "user",
+        };
+
+    private static Task AppendSecondRevisionAsync(ContentArtifactGAgent agent) =>
+        agent.HandleAppendRevisionAsync(new AppendContentArtifactRevision
+        {
+            ArtifactId = ArtifactId,
+            RequestedBy = Principal("owner-1"),
+            Revision = BuildRevision(
+                2,
+                "revision two",
+                "revision-2-dedup",
+                agent.State.CurrentRevisionId),
+        });
+
+    private static Task InvokeMutationAsync(
+        ContentArtifactGAgent agent,
+        string operation,
+        string principalId,
+        long expectedVersion) =>
+        operation switch
+        {
+            "advance" => agent.HandleAdvanceCurrentRevisionAsync(new AdvanceContentArtifactCurrentRevision
+            {
+                ArtifactId = ArtifactId,
+                ExpectedConcurrencyVersion = expectedVersion,
+                RequestedBy = Principal(principalId),
+                RevisionId = ContentArtifactConventions.BuildRevisionId(ArtifactId, 2),
+            }),
+            "redact" => agent.HandleRedactRevisionAsync(new RedactContentArtifactRevision
+            {
+                ArtifactId = ArtifactId,
+                ExpectedConcurrencyVersion = expectedVersion,
+                RequestedBy = Principal(principalId),
+                RevisionId = ContentArtifactConventions.BuildRevisionId(ArtifactId, 1),
+                Reason = "privacy request",
+            }),
+            "expire" => agent.HandleExpireRevisionAsync(new ExpireContentArtifactRevision
+            {
+                ArtifactId = ArtifactId,
+                ExpectedConcurrencyVersion = expectedVersion,
+                RequestedBy = Principal(principalId),
+                RevisionId = ContentArtifactConventions.BuildRevisionId(ArtifactId, 1),
+            }),
+            "tombstone" => agent.HandleTombstoneAsync(new TombstoneContentArtifact
+            {
+                ArtifactId = ArtifactId,
+                ExpectedConcurrencyVersion = expectedVersion,
+                RequestedBy = Principal(principalId),
+                Reason = "retention complete",
+            }),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
         };
 
     private static string ContentHash(string content) =>

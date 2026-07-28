@@ -80,7 +80,7 @@ public sealed class ContentArtifactProjectionTests
     }
 
     [Fact]
-    public async Task QueryPort_ShouldFilterByScopeOwnerAndResolveExactRevision()
+    public async Task QueryPort_ShouldFilterByScopeReadablePrincipalAndResolveExactRevision()
     {
         var document = ContentArtifactCurrentStateProjector.ToDocument(
             ActorId,
@@ -104,10 +104,45 @@ public sealed class ContentArtifactProjectionTests
         current!.Revisions.Select(static revision => revision.RevisionId).Should()
             .Equal("revision-1", "revision-2");
         reader.LastQuery!.Filters.Should().Contain(filter => filter.FieldPath == "scope_id");
-        reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "owner_principal_id");
+        reader.LastQuery.Filters.Should().NotContain(filter => filter.FieldPath == "owner_principal_id");
+        reader.LastQuery.AnyOfFilters.Should().Contain(filter => filter.FieldPath == "owner_principal_id");
+        reader.LastQuery.AnyOfFilters.Should().Contain(filter => filter.FieldPath == "reader_principal_ids");
         reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "team_id");
         reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "kind");
         reader.LastQuery.Filters.Should().Contain(filter => filter.FieldPath == "provenance_run_ids");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldApplyReadableAclBeforeCursorPaging()
+    {
+        var store = new InMemoryProjectionDocumentStore<ContentArtifactCurrentStateDocument, string>(
+            keySelector: document => document.Id);
+        await store.UpsertAsync(BuildListDocument("owner-artifact", "caller-1"));
+        await store.UpsertAsync(BuildListDocument(
+            "reader-artifact",
+            "other-owner",
+            readers: ["caller-1"],
+            lifecycleStatus: ContentArtifactLifecycleStatusNames.Tombstoned));
+        await store.UpsertAsync(BuildListDocument(
+            "writer-artifact",
+            "other-owner",
+            writers: ["caller-1"]));
+        await store.UpsertAsync(BuildListDocument("unrelated-artifact", "other-owner"));
+        var queryPort = new ProjectionContentArtifactQueryPort(store);
+
+        var first = await queryPort.ListAsync(
+            ScopeId,
+            "caller-1",
+            new ContentArtifactQueryRequest(PageSize: 1));
+        var second = await queryPort.ListAsync(
+            ScopeId,
+            "caller-1",
+            new ContentArtifactQueryRequest(PageSize: 1, PageToken: first.NextPageToken));
+
+        first.NextPageToken.Should().NotBeNullOrWhiteSpace();
+        second.NextPageToken.Should().BeNull();
+        first.Artifacts.Concat(second.Artifacts).Select(artifact => artifact.ArtifactId).Should()
+            .BeEquivalentTo(["owner-artifact", "reader-artifact"]);
     }
 
     [Fact]
@@ -191,6 +226,28 @@ public sealed class ContentArtifactProjectionTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*not authorized to read*");
+    }
+
+    [Fact]
+    public async Task GetRevisionContentAsync_ShouldIdentifyOwnerByPrincipalIdOnly()
+    {
+        var document = ContentArtifactCurrentStateProjector.ToDocument(
+            ActorId,
+            new StateEvent { Version = 7, EventId = "event-7" },
+            BuildState(DateTimeOffset.Parse("2026-07-20T09:00:00Z")),
+            DateTimeOffset.Parse("2026-07-20T10:00:00Z"));
+        var queryPort = new ProjectionContentArtifactQueryPort(
+            new RecordingDocumentReader(document),
+            backingContentPort: null);
+        var ownerWithDifferentKind = new ContentArtifactPrincipalContract("owner-1", "service");
+
+        var result = await queryPort.GetRevisionContentAsync(
+            ScopeId,
+            ArtifactId,
+            "revision-1",
+            ownerWithDifferentKind);
+
+        result.Reference.RevisionId.Should().Be("revision-1");
     }
 
     [Fact]
@@ -460,6 +517,38 @@ public sealed class ContentArtifactProjectionTests
             RunId = "run-1",
             WorkOrderId = "work-order-1",
         };
+
+    private static ContentArtifactCurrentStateDocument BuildListDocument(
+        string artifactId,
+        string ownerPrincipalId,
+        IReadOnlyList<string>? readers = null,
+        IReadOnlyList<string>? writers = null,
+        string lifecycleStatus = ContentArtifactLifecycleStatusNames.Active)
+    {
+        var actorId = ContentArtifactConventions.BuildActorId(ScopeId, artifactId);
+        var timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-20T00:00:00Z"));
+        var document = new ContentArtifactCurrentStateDocument
+        {
+            Id = actorId,
+            ActorId = actorId,
+            StateVersion = 1,
+            LastEventId = $"event-{artifactId}",
+            UpdatedAt = timestamp.Clone(),
+            ArtifactId = artifactId,
+            ScopeId = ScopeId,
+            Kind = "markdown",
+            Title = artifactId,
+            Classification = "internal",
+            LifecycleStatus = lifecycleStatus,
+            OwnerPrincipalId = ownerPrincipalId,
+            OwnerPrincipalKind = "user",
+            CreatedAtUtc = timestamp.Clone(),
+            ArtifactUpdatedAtUtc = timestamp.Clone(),
+        };
+        document.ReaderPrincipalIds.Add(readers ?? []);
+        document.WriterPrincipalIds.Add(writers ?? []);
+        return document;
+    }
 
     private static EventEnvelope WrapCommitted(ContentArtifactState state, DateTimeOffset observedAt) =>
         new()

@@ -341,11 +341,19 @@ public sealed class ContentArtifactService : IContentArtifactService
             scopeId,
             artifactId,
             requester,
-            requireWrite: !ownerOnly,
+            requireWrite: false,
             ct);
         var principal = NormalizePrincipal(requester);
-        if (ownerOnly && !PrincipalEquals(current.Owner, principal))
-            throw new InvalidOperationException("Only the ContentArtifact owner can perform this command.");
+        var isOwner = PrincipalEquals(current.Owner, principal);
+        if (ownerOnly)
+        {
+            if (!isOwner)
+                throw new InvalidOperationException("Only the ContentArtifact owner can perform this command.");
+        }
+        else if (!isOwner && !current.WriterPrincipalIds.Contains(principal.PrincipalId, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException("ContentArtifact principal is not authorized to write.");
+        }
         if (!string.Equals(current.LifecycleStatus, ContentArtifactLifecycleStatusNames.Active, StringComparison.Ordinal))
             throw new InvalidOperationException("ContentArtifact is tombstoned.");
         if (current.ConcurrencyVersion != expectedConcurrencyVersion)
@@ -546,8 +554,7 @@ public sealed class ContentArtifactService : IContentArtifactService
     private static bool PrincipalEquals(
         ContentArtifactPrincipalContract left,
         ContentArtifactPrincipalContract right) =>
-        string.Equals(left.PrincipalId, right.PrincipalId, StringComparison.Ordinal) &&
-        string.Equals(left.PrincipalKind, right.PrincipalKind, StringComparison.Ordinal);
+        string.Equals(left.PrincipalId, right.PrincipalId, StringComparison.Ordinal);
 
     private static IReadOnlyList<string> NormalizeIds(IReadOnlyList<string>? values) =>
         (values ?? [])

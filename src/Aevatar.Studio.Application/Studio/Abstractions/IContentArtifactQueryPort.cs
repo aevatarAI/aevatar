@@ -6,7 +6,7 @@ public interface IContentArtifactQueryPort
 {
     Task<ContentArtifactListResponse> ListAsync(
         string scopeId,
-        string ownerPrincipalId,
+        string requesterPrincipalId,
         ContentArtifactQueryRequest query,
         CancellationToken ct = default);
 

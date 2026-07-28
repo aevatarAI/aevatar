@@ -89,6 +89,19 @@ public sealed class ContentArtifactServiceTests
     }
 
     [Fact]
+    public async Task GetAsync_ShouldIdentifyOwnerByPrincipalIdOnly()
+    {
+        var service = CreateService(queryPort: new RecordingQueryPort(BuildCurrentState()));
+
+        var result = await service.GetAsync(
+            "scope-1",
+            "artifact-1",
+            Principal("owner-1", "service"));
+
+        result.ArtifactId.Should().Be("artifact-1");
+    }
+
+    [Fact]
     public async Task AppendRevisionAsync_ShouldAuthorizeWriterWithoutDerivingWriteFacts()
     {
         var queryPort = new RecordingQueryPort(BuildCurrentState());
@@ -126,6 +139,56 @@ public sealed class ContentArtifactServiceTests
         commandPort.AppendArtifactId.Should().Be("artifact-1");
         commandPort.AppendRequest!.Revision.Provenance.ScopeId.Should().Be("scope-1");
         commandPort.AppendRequest.Revision.Provenance.TeamId.Should().Be("caller-supplied-team");
+    }
+
+    [Theory]
+    [InlineData("advance")]
+    [InlineData("redact")]
+    [InlineData("expire")]
+    public async Task ReadRequiringMutation_ShouldRejectWriterOnlyAndAllowReaderWriterAndOwner(string operation)
+    {
+        var current = BuildCurrentState() with
+        {
+            ReaderPrincipalIds = ["reader-1", "editor-1"],
+            WriterPrincipalIds = ["writer-1", "editor-1"],
+        };
+        var commandPort = new RecordingCommandPort();
+        var service = CreateService(commandPort: commandPort, queryPort: new RecordingQueryPort(current));
+
+        var writerOnly = () => InvokeMutationAsync(service, operation, Principal("writer-1"));
+
+        await writerOnly.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*not authorized to read*");
+        await InvokeMutationAsync(service, operation, Principal("editor-1"));
+        await InvokeMutationAsync(service, operation, Principal("owner-1"));
+        commandPort.MutationCallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task TombstoneAsync_ShouldRemainOwnerOnly()
+    {
+        var current = BuildCurrentState() with
+        {
+            ReaderPrincipalIds = ["editor-1"],
+            WriterPrincipalIds = ["editor-1"],
+        };
+        var commandPort = new RecordingCommandPort();
+        var service = CreateService(commandPort: commandPort, queryPort: new RecordingQueryPort(current));
+
+        var editor = () => service.TombstoneAsync(
+            "scope-1",
+            "artifact-1",
+            new TombstoneContentArtifactRequest(1, "retention complete"),
+            Principal("editor-1"));
+
+        await editor.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*owner*");
+        await service.TombstoneAsync(
+            "scope-1",
+            "artifact-1",
+            new TombstoneContentArtifactRequest(1, "retention complete"),
+            Principal("owner-1"));
+        commandPort.MutationCallCount.Should().Be(1);
     }
 
     [Fact]
@@ -293,7 +356,33 @@ public sealed class ContentArtifactServiceTests
             LastOutput: "done",
             LastError: string.Empty);
 
-    private static ContentArtifactPrincipalContract Principal(string id) => new(id, "user");
+    private static ContentArtifactPrincipalContract Principal(string id, string kind = "user") => new(id, kind);
+
+    private static Task<ContentArtifactAcceptedReceipt> InvokeMutationAsync(
+        ContentArtifactService service,
+        string operation,
+        ContentArtifactPrincipalContract principal) =>
+        operation switch
+        {
+            "advance" => service.AdvanceCurrentRevisionAsync(
+                "scope-1",
+                "artifact-1",
+                new AdvanceContentArtifactCurrentRevisionRequest(1, "revision-1"),
+                principal),
+            "redact" => service.RedactRevisionAsync(
+                "scope-1",
+                "artifact-1",
+                "revision-1",
+                new RedactContentArtifactRevisionRequest(1, "privacy request"),
+                principal),
+            "expire" => service.ExpireRevisionAsync(
+                "scope-1",
+                "artifact-1",
+                "revision-1",
+                new ExpireContentArtifactRevisionRequest(1),
+                principal),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+        };
 
     private static string ContentHash(string content) =>
         Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content)));
@@ -328,6 +417,7 @@ public sealed class ContentArtifactServiceTests
         public CreateContentArtifactRequest? CreateRequest { get; private set; }
         public AppendContentArtifactRevisionRequest? AppendRequest { get; private set; }
         public string? AppendArtifactId { get; private set; }
+        public int MutationCallCount { get; private set; }
 
         public Task<ContentArtifactAcceptedReceipt> CreateAsync(string scopeId, CreateContentArtifactRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default)
         {
@@ -344,10 +434,16 @@ public sealed class ContentArtifactServiceTests
             return Receipt();
         }
 
-        public Task<ContentArtifactAcceptedReceipt> AdvanceCurrentRevisionAsync(string scopeId, string artifactId, AdvanceContentArtifactCurrentRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => Receipt();
-        public Task<ContentArtifactAcceptedReceipt> RedactRevisionAsync(string scopeId, string artifactId, string revisionId, RedactContentArtifactRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => Receipt();
-        public Task<ContentArtifactAcceptedReceipt> ExpireRevisionAsync(string scopeId, string artifactId, string revisionId, ExpireContentArtifactRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => Receipt();
-        public Task<ContentArtifactAcceptedReceipt> TombstoneAsync(string scopeId, string artifactId, TombstoneContentArtifactRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => Receipt();
+        public Task<ContentArtifactAcceptedReceipt> AdvanceCurrentRevisionAsync(string scopeId, string artifactId, AdvanceContentArtifactCurrentRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => MutationReceipt();
+        public Task<ContentArtifactAcceptedReceipt> RedactRevisionAsync(string scopeId, string artifactId, string revisionId, RedactContentArtifactRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => MutationReceipt();
+        public Task<ContentArtifactAcceptedReceipt> ExpireRevisionAsync(string scopeId, string artifactId, string revisionId, ExpireContentArtifactRevisionRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => MutationReceipt();
+        public Task<ContentArtifactAcceptedReceipt> TombstoneAsync(string scopeId, string artifactId, TombstoneContentArtifactRequest request, ContentArtifactPrincipalContract requester, CancellationToken ct = default) => MutationReceipt();
+
+        private Task<ContentArtifactAcceptedReceipt> MutationReceipt()
+        {
+            MutationCallCount++;
+            return Receipt();
+        }
 
         private static Task<ContentArtifactAcceptedReceipt> Receipt() =>
             Task.FromResult(new ContentArtifactAcceptedReceipt("artifact-1", "command-1", "correlation-1", ContentArtifactCommandStageNames.DispatchAccepted));

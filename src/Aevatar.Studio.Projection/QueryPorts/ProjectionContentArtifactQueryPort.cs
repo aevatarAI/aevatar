@@ -25,19 +25,18 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
 
     public async Task<ContentArtifactListResponse> ListAsync(
         string scopeId,
-        string ownerPrincipalId,
+        string requesterPrincipalId,
         ContentArtifactQueryRequest query,
         CancellationToken ct = default)
     {
         var normalizedScopeId = ContentArtifactConventions.NormalizeScopeId(scopeId);
-        var normalizedOwnerPrincipalId = ContentArtifactConventions.NormalizeRequired(
-            ownerPrincipalId,
-            nameof(ownerPrincipalId));
+        var normalizedRequesterPrincipalId = ContentArtifactConventions.NormalizeRequired(
+            requesterPrincipalId,
+            nameof(requesterPrincipalId));
         query ??= new ContentArtifactQueryRequest();
         var filters = new List<ProjectionDocumentFilter>
         {
             Equal("scope_id", normalizedScopeId),
-            Equal("owner_principal_id", normalizedOwnerPrincipalId),
         };
         AddOptionalEqual(filters, "team_id", query.TeamId);
         AddOptionalEqual(filters, "kind", query.Kind);
@@ -51,23 +50,19 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
             new ProjectionDocumentQuery
             {
                 Filters = filters,
+                AnyOfFilters =
+                [
+                    Equal("owner_principal_id", normalizedRequesterPrincipalId),
+                    Equal("reader_principal_ids", normalizedRequesterPrincipalId),
+                ],
                 Take = pageSize,
                 Cursor = NormalizeOptional(query.PageToken),
             },
             ct);
 
-        var artifacts = result.Items
-            .Where(document => MatchesQuery(
-                document,
-                normalizedScopeId,
-                normalizedOwnerPrincipalId,
-                query))
-            .Take(pageSize)
-            .Select(ToResponse)
-            .ToArray();
         return new ContentArtifactListResponse(
             normalizedScopeId,
-            artifacts,
+            result.Items.Select(ToResponse).ToArray(),
             NormalizeOptional(result.NextCursor));
     }
 
@@ -251,11 +246,10 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
         var principalId = ContentArtifactConventions.NormalizeRequired(
             requester.PrincipalId,
             "requester.principalId");
-        var principalKind = ContentArtifactConventions.NormalizeRequired(
+        _ = ContentArtifactConventions.NormalizeRequired(
             requester.PrincipalKind,
             "requester.principalKind");
-        var isOwner = string.Equals(document.OwnerPrincipalId, principalId, StringComparison.Ordinal) &&
-                      string.Equals(document.OwnerPrincipalKind, principalKind, StringComparison.Ordinal);
+        var isOwner = string.Equals(document.OwnerPrincipalId, principalId, StringComparison.Ordinal);
         if (!isOwner && !document.ReaderPrincipalIds.Contains(principalId))
             throw new InvalidOperationException("ContentArtifact principal is not authorized to read.");
     }
@@ -315,28 +309,11 @@ public sealed class ProjectionContentArtifactQueryPort : IContentArtifactQueryPo
                     citation.ExternalPublishedAtUtc?.ToDateTimeOffset(),
                     citation.ExternalFetchedAtUtc?.ToDateTimeOffset()));
 
-    private static bool MatchesQuery(
-        ContentArtifactCurrentStateDocument document,
-        string scopeId,
-        string ownerPrincipalId,
-        ContentArtifactQueryRequest query) =>
-        string.Equals(document.ScopeId, scopeId, StringComparison.Ordinal) &&
-        string.Equals(document.OwnerPrincipalId, ownerPrincipalId, StringComparison.Ordinal) &&
-        Matches(document.TeamId, query.TeamId) &&
-        Matches(document.Kind, query.Kind) &&
-        Matches(document.LifecycleStatus, query.LifecycleStatus) &&
-        Matches(document.WorkOrderId, query.WorkOrderId) &&
-        (string.IsNullOrWhiteSpace(query.RunId) || document.ProvenanceRunIds.Contains(query.RunId.Trim()));
-
     private static bool HasLocator(ContentArtifactCitationDocument citation) =>
         !string.IsNullOrWhiteSpace(citation.LocatorSection) ||
         !string.IsNullOrWhiteSpace(citation.LocatorSelector) ||
         citation.LocatorStartOffset != 0 ||
         citation.LocatorEndOffset != 0;
-
-    private static bool Matches(string actual, string? expected) =>
-        string.IsNullOrWhiteSpace(expected) ||
-        string.Equals(actual, expected.Trim(), StringComparison.Ordinal);
 
     private static ProjectionDocumentFilter Equal(string fieldPath, string value) =>
         new()
