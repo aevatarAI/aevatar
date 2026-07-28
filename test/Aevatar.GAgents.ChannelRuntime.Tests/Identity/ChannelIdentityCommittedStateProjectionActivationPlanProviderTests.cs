@@ -62,6 +62,37 @@ public sealed class ChannelIdentityCommittedStateProjectionActivationPlanProvide
     }
 
     [Fact]
+    public void GetPlans_ShouldMapManagedCodexCredentialActor()
+    {
+        var provider = new ChannelIdentityCommittedStateProjectionActivationPlanProvider();
+        IMessage[] stateEvents =
+        [
+            new ManagedCodexCredentialProvisionedEvent(),
+            new ManagedCodexCredentialRotatedEvent(),
+            new ManagedCodexCredentialPolicyReconciledEvent(),
+            new ManagedCodexCredentialReadinessConfirmedEvent(),
+            new ManagedCodexCredentialRevokedEvent(),
+            new ManagedCodexCredentialCleanupQueuedEvent(),
+            new ManagedCodexCredentialCleanupTrackCompletedEvent(),
+        ];
+
+        foreach (var stateEvent in stateEvents)
+        {
+            var plans = provider.GetPlans(BuildCommittedStateContext(
+                typeof(ManagedCodexCredentialGAgent),
+                stateEvent,
+                "managed-codex-credential:nyxid:tenant-a:user-a")).ToArray();
+
+            plans.Should().ContainSingle();
+            AssertDurablePlan(
+                plans[0],
+                typeof(ManagedCodexCredentialMaterializationRuntimeLease),
+                "managed-codex-credential:nyxid:tenant-a:user-a",
+                "managed-codex-credential");
+        }
+    }
+
+    [Fact]
     public void GetPlans_ShouldIgnoreUnrelatedActorOrMissingPayload()
     {
         var provider = new ChannelIdentityCommittedStateProjectionActivationPlanProvider();

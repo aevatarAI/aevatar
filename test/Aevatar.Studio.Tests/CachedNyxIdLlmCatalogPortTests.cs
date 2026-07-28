@@ -298,7 +298,7 @@ public sealed class CachedNyxIdLlmCatalogPortTests
 
     private static NyxIdLlmService MakeService(string slug, string routeValue) =>
         new(
-            UserServiceId: slug,
+            CatalogEntryId: slug,
             ServiceSlug: slug,
             DisplayName: slug,
             RouteValue: routeValue,

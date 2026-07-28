@@ -19,6 +19,8 @@ enum RuntimeCallbackOverduePolicy {
 
 message RuntimeCallbackSchedulerState {
   map<string, RuntimeScheduledCallback> reminder_callbacks = 1;
+  map<string, int64> callback_generations = 2;
+  repeated string pending_reminder_unregistrations = 3;
 }
 
 message RuntimeScheduledCallback {

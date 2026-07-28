@@ -177,7 +177,7 @@ public class MultimodalPipelineTests
         var runtime = CreateRuntime(provider);
 
         var chunks = new List<LLMStreamChunk>();
-        await foreach (var chunk in runtime.ChatStreamAsync("generate an image"))
+        await foreach (var chunk in runtime.ChatStreamAsync("generate an image", turnCatalog: null))
             chunks.Add(chunk);
 
         // The DeltaContentPart should be forwarded through
@@ -198,7 +198,7 @@ public class MultimodalPipelineTests
         var runtime = CreateRuntime(provider);
 
         var chunks = new List<LLMStreamChunk>();
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", turnCatalog: null))
             chunks.Add(chunk);
 
         chunks.Should().NotContain(c => c.DeltaContentPart != null);
@@ -220,7 +220,7 @@ public class MultimodalPipelineTests
                 ToolVisibility = AgentToolVisibilityScope.FromAllowedToolNames(["search"]),
             });
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
         }
 
@@ -243,7 +243,7 @@ public class MultimodalPipelineTests
                 ToolVisibility = AgentToolVisibilityScope.Empty,
             });
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", turnCatalog: null))
         {
         }
 
@@ -262,7 +262,7 @@ public class MultimodalPipelineTests
             history: history,
             toolLoop: toolLoop,
             hooks: null,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("You are a helpful assistant."),
                 Tools = null,
@@ -281,7 +281,7 @@ public class MultimodalPipelineTests
             history: history,
             toolLoop: toolLoop,
             hooks: null,
-            requestBuilder: () => new LLMRequest
+            requestBuilder: _ => new LLMRequest
             {
                 Messages = history.BuildMessages("You are a helpful assistant."),
                 Tools = toolManager.GetAll(),

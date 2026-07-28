@@ -32,7 +32,9 @@ public sealed record WorkflowDefinitionBinding(
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
     string ScopeId = "",
     string RunOrigin = "",
-    string ScheduleId = "");
+    string ScheduleId = "",
+    string SourceKind = "",
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null);
 
 public sealed record WorkflowRunCreationReceipt(
     string ActorId,
@@ -55,7 +57,9 @@ public sealed record WorkflowActorBinding(
     long SourceVersion = 0,
     string SourceEventId = "",
     DateTimeOffset? CreatedAt = null,
-    DateTimeOffset? UpdatedAt = null)
+    DateTimeOffset? UpdatedAt = null,
+    string SourceKind = "",
+    WorkflowCapabilityAdmissionPlan? CapabilityAdmissionPlan = null)
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -208,6 +212,8 @@ public interface IWorkflowDefinitionProvisioningPort
         string workflowName,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
         string? scopeId = null,
+        string? sourceKind = null,
+        WorkflowCapabilityAdmissionPlan? capabilityAdmissionPlan = null,
         CancellationToken ct = default);
 }
 
@@ -218,6 +224,34 @@ public interface IWorkflowRunProvisioningPort
         CancellationToken ct = default);
 
     Task DestroyAsync(string actorId, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Narrow capability for provisioning a workflow Run at a caller-supplied
+/// stable identity. Kept separate from random Run creation so callers cannot
+/// accidentally imply exact-id semantics through the general provisioning port.
+/// </summary>
+public interface IWorkflowRunIdentityProvisioningPort
+{
+    Task<WorkflowRunCreationReceipt> EnsureRunAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Narrow capability for atomically validating an exact Run binding and
+/// executing its first command in the same actor turn.
+/// </summary>
+public interface IWorkflowRunIdentityExecutionPort
+{
+    Task<WorkflowRunCreationReceipt> EnsureRunAndDispatchAsync(
+        WorkflowDefinitionBinding definition,
+        string requestedRunId,
+        WorkflowChatRequestEvent executionRequest,
+        string commandId,
+        string correlationId,
+        CancellationToken ct = default);
 }
 
 public interface IWorkflowDefinitionParser

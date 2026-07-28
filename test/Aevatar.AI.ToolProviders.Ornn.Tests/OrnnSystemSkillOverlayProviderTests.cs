@@ -1,9 +1,9 @@
 using System.Net;
+using Aevatar.AI.Abstractions.Prompting;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Ornn.SystemSkillOverlay;
 using FluentAssertions;
-using OverlayMessage = Aevatar.AI.Abstractions.SystemSkillOverlay;
 
 namespace Aevatar.AI.ToolProviders.Ornn.Tests;
 
@@ -23,63 +23,60 @@ public sealed class OrnnSystemSkillOverlayProviderTests
 
         await provider.RefreshAsync("token");
 
-        var lark = provider.GetCurrent(new SystemSkillOverlayRequest("lark", null))!.OverlayMarkdown;
+        var lark = provider.GetCurrent(new SystemSkillOverlayRequest("lark", null))!.Content;
         lark.Should().Contain(GlobalBody).And.Contain(LarkBody);
 
-        var telegram = provider.GetCurrent(new SystemSkillOverlayRequest("telegram", null))!.OverlayMarkdown;
+        var telegram = provider.GetCurrent(new SystemSkillOverlayRequest("telegram", null))!.Content;
         telegram.Should().Contain(GlobalBody);
         telegram.Should().NotContain(LarkBody);
 
-        var dm = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.OverlayMarkdown;
+        var dm = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.Content;
         dm.Should().Contain(GlobalBody);
         dm.Should().NotContain(LarkBody);
+        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.Provenance.SourceWatermark
+            .Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
-    public async Task GetCurrent_FallsBackToBuiltInDefault_WhenSetUnreachable()
+    public async Task GetCurrent_ReturnsNull_WhenSetUnreachableAndNoLastKnownGoodExists()
     {
         var handler = OrnnTestHttpMessageHandler.ReturningJson("""{ "error": "boom" }""", HttpStatusCode.InternalServerError);
-        var provider = CreateProvider(CreateClient(handler), new StubFallback("BUILT-IN DEFAULT"));
+        var provider = CreateProvider(CreateClient(handler));
 
         await provider.RefreshAsync("token");
 
-        provider.GetCurrent(new SystemSkillOverlayRequest("lark", null))!
-            .OverlayMarkdown.Should().Be("BUILT-IN DEFAULT");
+        provider.GetCurrent(new SystemSkillOverlayRequest("lark", null)).Should().BeNull();
     }
 
     [Fact]
-    public async Task GetCurrent_FallsBackToBuiltInDefault_WhenOnlyOtherPlatformScopedMembersExist()
+    public async Task GetCurrent_ReturnsNullForEmptyVariant_WhenOnlyOtherPlatformScopedMembersExist()
     {
-        // Set has only a lark member: a dm/telegram turn's global-only variant is empty and must fall
-        // back to the built-in default, not serve an empty overlay (per-variant no-regression floor).
+        // The global provider owns only its optional slot; the separate built-in floor remains present.
         var handler = new OrnnTestHttpMessageHandler(
             _ => Json(SetJson("set-guid-1", "m-lark")),
             _ => Json(MemberJson("aevatar-lark-provisioning", "overlay-scope-lark", LarkBody)));
-        var provider = CreateProvider(CreateClient(handler), new StubFallback("BUILT-IN DEFAULT"));
+        var provider = CreateProvider(CreateClient(handler));
 
         await provider.RefreshAsync("token");
 
-        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!
-            .OverlayMarkdown.Should().Be("BUILT-IN DEFAULT");
-        provider.GetCurrent(new SystemSkillOverlayRequest("telegram", null))!
-            .OverlayMarkdown.Should().Be("BUILT-IN DEFAULT");
+        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null)).Should().BeNull();
+        provider.GetCurrent(new SystemSkillOverlayRequest("telegram", null)).Should().BeNull();
         // The lark turn still gets its scoped member.
         provider.GetCurrent(new SystemSkillOverlayRequest("lark", null))!
-            .OverlayMarkdown.Should().Contain(LarkBody);
+            .Content.Should().Contain(LarkBody);
     }
 
     [Fact]
-    public async Task GetCurrent_FallsBackToBuiltInDefault_WhenNoMemberHasOverlayScopeTag()
+    public async Task GetCurrent_ReturnsNull_WhenNoMemberHasOverlayScopeTag()
     {
         var handler = new OrnnTestHttpMessageHandler(
             _ => Json(SetJson("set-guid-1", "m-untagged")),
             _ => Json(MemberJson("some-skill", "not-an-overlay-scope", "SOME BODY")));
-        var provider = CreateProvider(CreateClient(handler), new StubFallback("BUILT-IN DEFAULT"));
+        var provider = CreateProvider(CreateClient(handler));
 
         await provider.RefreshAsync("token");
 
-        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!
-            .OverlayMarkdown.Should().Be("BUILT-IN DEFAULT");
+        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null)).Should().BeNull();
     }
 
     [Fact]
@@ -113,7 +110,7 @@ public sealed class OrnnSystemSkillOverlayProviderTests
 
         await provider.RefreshAsync("token");
 
-        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.OverlayMarkdown.Should().Contain(GlobalBody);
+        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.Content.Should().Contain(GlobalBody);
         handler.Requests
             .Single(request => request.RequestUri!.AbsolutePath.Contains("/skills/", StringComparison.Ordinal))
             .RequestUri!.AbsoluteUri.Should().Contain("/skills/aevatar-skill-loading/json");
@@ -131,7 +128,7 @@ public sealed class OrnnSystemSkillOverlayProviderTests
 
         await provider.RefreshAsync("token");
 
-        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.OverlayMarkdown.Should().Contain(GlobalBody);
+        provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.Content.Should().Contain(GlobalBody);
     }
 
     [Fact]
@@ -146,8 +143,8 @@ public sealed class OrnnSystemSkillOverlayProviderTests
         await provider.RefreshAsync(token);
 
         var overlay = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!;
-        overlay.OverlayMarkdown.Should().NotContain(token);
-        overlay.SourceWatermark.Should().NotContain(token);
+        overlay.Content.Should().NotContain(token);
+        overlay.Provenance.SourceWatermark.Should().NotContain(token);
         // The token is still what authenticated the proxy call — proving it is used, just never stored.
         handler.Requests.Should().Contain(request => request.Authorization!.Parameter == token);
     }
@@ -169,13 +166,33 @@ public sealed class OrnnSystemSkillOverlayProviderTests
         await second.RefreshAsync("token");
         await changed.RefreshAsync("token");
 
-        var firstWatermark = first.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.SourceWatermark;
-        var secondWatermark = second.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.SourceWatermark;
-        var changedWatermark = changed.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.SourceWatermark;
+        var firstWatermark = first.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.Provenance.SourceWatermark;
+        var secondWatermark = second.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.Provenance.SourceWatermark;
+        var changedWatermark = changed.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.Provenance.SourceWatermark;
 
         firstWatermark.Should().NotBeNullOrEmpty();
         secondWatermark.Should().Be(firstWatermark);
         changedWatermark.Should().NotBe(firstWatermark);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_KeepsLastKnownGoodGlobalLayer_WhenLaterRefreshFails()
+    {
+        var handler = new OrnnTestHttpMessageHandler(
+            _ => Json(SetJson("set-guid-1", "m-global")),
+            _ => Json(MemberJson("aevatar-skill-loading", "overlay-scope-global", GlobalBody)),
+            _ => OrnnTestHttpMessageHandler.JsonResponse(
+                """{ "error": "boom" }""",
+                HttpStatusCode.InternalServerError));
+        var provider = CreateProvider(CreateClient(handler));
+
+        await provider.RefreshAsync("token");
+        var beforeFailure = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null));
+        await provider.RefreshAsync("token");
+        var afterFailure = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null));
+
+        afterFailure.Should().BeSameAs(beforeFailure);
+        afterFailure!.Content.Should().Contain(GlobalBody);
     }
 
     [Fact]
@@ -198,21 +215,23 @@ public sealed class OrnnSystemSkillOverlayProviderTests
 
         await provider.RefreshAsync("token");
 
-        var markdown = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!.OverlayMarkdown;
+        var layer = provider.GetCurrent(new SystemSkillOverlayRequest("dm", null))!;
+        var markdown = layer.Content;
         System.Text.Encoding.UTF8.GetByteCount(markdown).Should().BeLessThanOrEqualTo(maxBytes);
+        layer.Bounds.Should().Be(new PromptLayerBounds(maxBytes, (maxBytes + 3) / 4));
         markdown.Should().NotContain(bigBody);
         markdown.Should().Contain("- aevatar-skill-loading:", "the over-budget member must degrade to a catalog line");
     }
 
     [Fact]
-    public void GetCurrent_WithNoTokenAndNoSnapshot_ReturnsFallbackWithoutFetching()
+    public void GetCurrent_WithNoTokenAndNoSnapshot_ReturnsNullWithoutFetching()
     {
         var handler = new OrnnTestHttpMessageHandler();
-        var provider = CreateProvider(CreateClient(handler), new StubFallback("BUILT-IN DEFAULT"));
+        var provider = CreateProvider(CreateClient(handler));
 
         var overlay = provider.GetCurrent(new SystemSkillOverlayRequest("lark", null));
 
-        overlay!.OverlayMarkdown.Should().Be("BUILT-IN DEFAULT");
+        overlay.Should().BeNull();
         handler.Requests.Should().BeEmpty();
     }
 
@@ -239,9 +258,7 @@ public sealed class OrnnSystemSkillOverlayProviderTests
         return new OrnnSkillClient(new OrnnOptions { NyxIdSlug = slug }, nyxClient);
     }
 
-    private static OrnnSystemSkillOverlayProvider CreateProvider(
-        OrnnSkillClient client,
-        ISystemSkillOverlayFallback? fallback = null) =>
+    private static OrnnSystemSkillOverlayProvider CreateProvider(OrnnSkillClient client) =>
         new(
             new SystemSkillOverlayOptions
             {
@@ -250,12 +267,5 @@ public sealed class OrnnSystemSkillOverlayProviderTests
                 MaxSkills = 32,
                 MaxBytes = 32 * 1024,
             },
-            client,
-            fallback);
-
-    private sealed class StubFallback(string markdown) : ISystemSkillOverlayFallback
-    {
-        public OverlayMessage GetFallback() =>
-            new() { OverlayMarkdown = markdown, SourceWatermark = "builtin-default" };
-    }
+            client);
 }

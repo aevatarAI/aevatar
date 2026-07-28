@@ -439,6 +439,7 @@ internal static class WorkflowRunExecutionContextStateAccess
             Tenant = Normalize(source.Tenant),
             ExternalUserId = externalUserId,
             Scope = scope,
+            BindingId = Normalize(source.BindingId),
         };
         return true;
     }

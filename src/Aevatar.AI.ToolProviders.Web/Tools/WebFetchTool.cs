@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.Foundation.Abstractions.Tools;
 
 namespace Aevatar.AI.ToolProviders.Web.Tools;
 
@@ -37,6 +38,9 @@ public sealed class WebFetchTool : IAgentTool
           "required": ["url"]
         }
         """;
+
+    public ToolPresentationDescriptor Presentation =>
+        ToolPresentationDescriptors.BuiltIn(Name, "Web fetch", Description);
 
     public bool IsReadOnly => true;
 

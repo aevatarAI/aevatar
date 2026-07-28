@@ -1,5 +1,6 @@
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Workflows;
 using Aevatar.Workflow.Core;
 using Aevatar.Foundation.Abstractions;
@@ -15,15 +16,19 @@ internal sealed class FileBackedWorkflowCatalogPort
     private const string PublisherActorId = "workflow.definition.startup.materializer";
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
+    private readonly IWorkflowExternalCapabilityAdmissionService _capabilityAdmissionService;
     private readonly ILogger<FileBackedWorkflowCatalogPort> _logger;
 
     public FileBackedWorkflowCatalogPort(
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
+        IWorkflowExternalCapabilityAdmissionService capabilityAdmissionService,
         ILogger<FileBackedWorkflowCatalogPort>? logger = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
+        _capabilityAdmissionService = capabilityAdmissionService ??
+                                      throw new ArgumentNullException(nameof(capabilityAdmissionService));
         _logger = logger ?? NullLogger<FileBackedWorkflowCatalogPort>.Instance;
     }
 
@@ -45,13 +50,24 @@ internal sealed class FileBackedWorkflowCatalogPort
                 continue;
             }
 
+            var capabilityAdmissionPlan = await _capabilityAdmissionService.AdmitAsync(
+                new WorkflowExternalCapabilityAdmissionRequest(
+                    new ExternalWorkflowCapabilityAccessContext(
+                        "system",
+                        PublisherActorId),
+                    definition.WorkflowYaml,
+                    inlineWorkflowYamls: null,
+                    definition.SourceKind,
+                    ExternalCapabilityExecutionMode.Durable),
+                ct);
+
             var actorId = string.IsNullOrWhiteSpace(definition.DefinitionActorId)
                 ? WorkflowDefinitionActorId.Format(definition.WorkflowName)
                 : definition.DefinitionActorId.Trim();
             var actor = await _runtime.CreateAsync<WorkflowGAgent>(actorId, ct);
             await _dispatchPort.DispatchAsync(
                 actor.Id,
-                CreateBindEnvelope(definition),
+                CreateBindEnvelope(definition, capabilityAdmissionPlan),
                 ct);
             _logger.LogInformation(
                 "Materialized startup workflow definition '{WorkflowName}' into WorkflowGAgent '{ActorId}'.",
@@ -60,7 +76,9 @@ internal sealed class FileBackedWorkflowCatalogPort
         }
     }
 
-    private static EventEnvelope CreateBindEnvelope(WorkflowDefinitionRegistration definition) =>
+    private static EventEnvelope CreateBindEnvelope(
+        WorkflowDefinitionRegistration definition,
+        WorkflowCapabilityAdmissionPlan capabilityAdmissionPlan) =>
         new()
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -69,9 +87,11 @@ internal sealed class FileBackedWorkflowCatalogPort
             {
                 WorkflowName = definition.WorkflowName ?? string.Empty,
                 WorkflowYaml = definition.WorkflowYaml ?? string.Empty,
+                ScopeId = string.Empty,
                 SourceKind = string.IsNullOrWhiteSpace(definition.SourceKind)
                     ? "builtin"
                     : definition.SourceKind.Trim(),
+                CapabilityAdmissionPlan = capabilityAdmissionPlan.Clone(),
             }),
             Route = EnvelopeRouteSemantics.CreateTopologyPublication(PublisherActorId, TopologyAudience.Self),
             Propagation = new EnvelopePropagation

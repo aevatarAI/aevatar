@@ -6,6 +6,7 @@ import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 import "Credentials/credential_secret_references.proto";
 import "Interactions/interaction_spec.proto";
+import "workflow_capability_admission.proto";
 import "workflow_external_action.proto";
 
 enum WorkflowChatInputPartKind {
@@ -70,6 +71,15 @@ message WorkflowRunTerminalNotification {
   string output = 7;
   string error = 8;
   google.protobuf.Timestamp terminal_at = 9;
+}
+
+message WorkflowRunStartedNotification {
+  string delivery_id = 1;
+  string workflow_actor_id = 2;
+  string workflow_run_id = 3;
+  string workflow_command_id = 4;
+  string workflow_correlation_id = 5;
+  google.protobuf.Timestamp started_at = 6;
 }
 
 message WorkflowRunCompletionNotificationTargetAdoptedEvent {
@@ -162,6 +172,7 @@ message WorkflowCallerNyxIdAuthority {
   string tenant = 2;
   string external_user_id = 3;
   string scope = 4;
+  string binding_id = 5;
 }
 
 message WorkflowExternalIngressContext {
@@ -200,6 +211,30 @@ message WorkflowChatRequestEvent {
   WorkflowRunForkSeed fork_seed = 11;
   WorkflowExternalIngressContext external_ingress = 12;
   WorkflowCompletionNotificationTarget completion_notification_target = 13;
+  WorkflowConversationContext conversation_context = 14;
+}
+
+enum WorkflowConversationRole {
+  WORKFLOW_CONVERSATION_ROLE_UNSPECIFIED = 0;
+  WORKFLOW_CONVERSATION_ROLE_USER = 1;
+  WORKFLOW_CONVERSATION_ROLE_ASSISTANT = 2;
+  WORKFLOW_CONVERSATION_ROLE_TOOL = 3;
+}
+
+message WorkflowConversationMessage {
+  int32 sequence = 1;
+  string turn_id = 2;
+  WorkflowConversationRole role = 3;
+  string content = 4;
+}
+
+message WorkflowConversationContext {
+  string scope_id = 1;
+  string conversation_id = 2;
+  int64 state_version = 3;
+  repeated WorkflowConversationMessage messages = 4;
+  bool truncated = 5;
+  int32 max_message_count = 6;
 }
 
 message WorkflowRunForkSeed
@@ -253,14 +288,26 @@ message BindWorkflowRunDefinitionEvent
   // non-scheduled runs. Carried from ServiceInvocationRequest.schedule_id via WorkflowDefinitionBinding.
   string schedule_id = 8;
 }
+
+// Idempotent provisioning command for a stable Run actor identity. The first
+// delivery binds an empty Run; subsequent identical deliveries are no-ops;
+// any conflicting binding is rejected without resetting execution state. When
+// execution_request is present, binding validation and first execution happen
+// in the same actor turn.
+message EnsureWorkflowRunDefinitionEvent
+{
+  BindWorkflowRunDefinitionEvent binding = 1;
+  WorkflowChatRequestEvent execution_request = 2;
+}
 message BindWorkflowDefinitionEvent
 {
   string workflow_name = 1;
   string workflow_yaml = 2;
   map<string, string> inline_workflow_yamls = 3;
-  string scope_id = 4;
+  optional string scope_id = 4;
   string source_kind = 5;
   WorkflowAuthorizationDependencies authorization_dependencies = 6;
+  WorkflowCapabilityAdmissionPlan capability_admission_plan = 7;
 }
 
 enum WorkflowServiceGrantPolicy {
@@ -270,11 +317,11 @@ enum WorkflowServiceGrantPolicy {
 }
 
 message WorkflowAuthorizationDependencies {
-  repeated string connector_capability_refs = 1;
+  reserved 1, 3, 4;
+  reserved "connector_capability_refs", "nyx_id_service_ids", "nyx_id_service_slugs";
   bool owner_llm_route_required = 2;
-  repeated string nyx_id_service_ids = 3;
-  repeated string nyx_id_service_slugs = 4;
   WorkflowServiceGrantPolicy service_grant_policy = 5;
+  repeated ExternalWorkflowCapabilityRef external_capabilities = 6;
 }
 message WorkflowRunExecutionStartedEvent
 {

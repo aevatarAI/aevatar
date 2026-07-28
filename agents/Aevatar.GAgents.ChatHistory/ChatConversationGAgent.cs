@@ -13,7 +13,7 @@ namespace Aevatar.GAgents.ChatHistory;
 
 /// <summary>
 /// Per-conversation actor that owns terminal chat history turns for one conversation.
-/// Actor ID: <c>chat-{scopeId}-{conversationId}</c>.
+/// Actor ID is an opaque deterministic encoding of the scope and conversation tuple.
 /// </summary>
 [GAgent("chat.history.conversation")]
 public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>,

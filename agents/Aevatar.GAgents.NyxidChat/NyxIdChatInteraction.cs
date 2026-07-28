@@ -24,7 +24,8 @@ public sealed record NyxIdChatCommand(
     IReadOnlyDictionary<string, string>? Metadata,
     LLMControlContext? LlmControl = null,
     string? CommandId = null,
-    string? CorrelationId = null)
+    string? CorrelationId = null,
+    string? ClientRequestId = null)
     : ICommandContextSeed
 {
     public IReadOnlyDictionary<string, string>? Headers => null;
@@ -36,6 +37,21 @@ public sealed record NyxIdApprovalCommand(
     bool Approved,
     string Reason,
     string TurnId,
+    string? CommandId = null,
+    string? CorrelationId = null)
+    : ICommandContextSeed
+{
+    public IReadOnlyDictionary<string, string>? Headers => null;
+}
+
+public sealed record NyxIdActionContinuationCommand(
+    string ActorId,
+    string ScopeId,
+    string OriginTurnId,
+    string ContinuationTurnId,
+    string OwnerSubject,
+    string ClientRequestId,
+    IReadOnlyList<NyxIdChatActionReport> Actions,
     string? CommandId = null,
     string? CorrelationId = null)
     : ICommandContextSeed
@@ -270,16 +286,21 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(context);
 
-        var chatRequest = new ChatRequestEvent
+        var startTurn = new NyxIdChatStartTurnCommand
         {
             Prompt = command.Prompt,
-            SessionId = command.TurnId,
             ScopeId = command.ScopeId,
+            ConversationActorId = command.ActorId,
+            TurnId = command.TurnId,
+            TaskId = CreateTaskId(command.ActorId, command.TurnId),
+            ClientRequestId = command.ClientRequestId?.Trim() ?? string.Empty,
+            CommandId = context.CommandId,
+            CorrelationId = context.CorrelationId,
         };
         if (command.InputParts is { Count: > 0 })
         {
             foreach (var part in command.InputParts)
-                chatRequest.InputParts.Add(part.ToProto());
+                startTurn.InputParts.Add(part.ToProto());
         }
 
         var control = command.LlmControl ?? LLMControlContext.Empty;
@@ -289,11 +310,11 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
                 ? control.NyxIdAccessToken
                 : command.AccessToken.Trim(),
         };
-        chatRequest.LlmControl = effectiveControl.ToPayload();
-        AppendMetadata(chatRequest.Metadata, command.Metadata);
-        chatRequest.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
+        startTurn.LlmControl = effectiveControl.ToPayload();
+        startTurn.ToolContext = BuildToolContext(command, effectiveControl).ToPayload();
+        AppendExternalContext(startTurn.ToolContext.ExternalMetadata, command.Metadata);
 
-        return CreateDirectEnvelope(context, chatRequest);
+        return CreateDirectEnvelope(context, startTurn);
     }
 
     private static AgentToolExecutionContext BuildToolContext(NyxIdChatCommand command, LLMControlContext effectiveControl)
@@ -312,7 +333,7 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
         return effectiveControl.ToToolContext(toolContext);
     }
 
-    private static void AppendMetadata(
+    private static void AppendExternalContext(
         Google.Protobuf.Collections.MapField<string, string> destination,
         IReadOnlyDictionary<string, string>? source)
     {
@@ -324,6 +345,16 @@ internal sealed class NyxIdChatCommandEnvelopeFactory : ICommandEnvelopeFactory<
             if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
                 destination[key.Trim()] = value.Trim();
         }
+    }
+
+    private static string CreateTaskId(string actorId, string turnId)
+    {
+        var normalizedActorId = actorId?.Trim() ?? string.Empty;
+        var normalizedTurnId = turnId?.Trim() ?? string.Empty;
+        var identity = $"{normalizedActorId.Length}:{normalizedActorId}{normalizedTurnId.Length}:{normalizedTurnId}";
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity));
+        return $"task-{Convert.ToHexStringLower(hash)[..32]}";
     }
 
     private static EventEnvelope CreateDirectEnvelope(CommandContext context, IMessage message) =>
@@ -357,6 +388,46 @@ internal sealed class NyxIdApprovalCommandEnvelopeFactory : ICommandEnvelopeFact
             }),
             Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = context.TargetId } },
             Propagation = new EnvelopePropagation { CorrelationId = context.CorrelationId },
+        };
+    }
+}
+
+internal sealed class NyxIdActionContinuationCommandEnvelopeFactory
+    : ICommandEnvelopeFactory<NyxIdActionContinuationCommand>
+{
+    public EventEnvelope CreateEnvelope(
+        NyxIdActionContinuationCommand command,
+        CommandContext context)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(context);
+
+        var message = new NyxIdChatActionContinueCommand
+        {
+            ScopeId = command.ScopeId,
+            ConversationActorId = command.ActorId,
+            OriginTurnId = command.OriginTurnId,
+            ContinuationTurnId = command.ContinuationTurnId,
+            OwnerSubject = command.OwnerSubject,
+            ClientRequestId = command.ClientRequestId,
+            CommandId = context.CommandId,
+            CorrelationId = context.CorrelationId,
+        };
+        message.Actions.Add(command.Actions.Select(static action => action.Clone()));
+
+        return new EventEnvelope
+        {
+            Id = context.CommandId,
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(message),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = context.TargetId },
+            },
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = context.CorrelationId,
+            },
         };
     }
 }
@@ -459,6 +530,13 @@ internal static class NyxIdChatInteractionFactories
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
             static command => command.ActorId);
 
+    public static ICommandTargetResolver<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatStartError> CreateActionContinuationResolver(
+        IServiceProvider sp) =>
+        new NyxIdChatCommandTargetResolver<NyxIdActionContinuationCommand>(
+            sp.GetRequiredService<IActorRuntime>(),
+            sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
+            static command => command.ActorId);
+
     public static ICommandObservationLifecycle<NyxIdChatCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError> CreateChatObservationLifecycle(
         IServiceProvider sp) =>
         new NyxIdChatObservationLifecycle<NyxIdChatCommand>(
@@ -470,4 +548,10 @@ internal static class NyxIdChatInteractionFactories
         new NyxIdChatObservationLifecycle<NyxIdApprovalCommand>(
             sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
             static command => command.TurnId);
+
+    public static ICommandObservationLifecycle<NyxIdActionContinuationCommand, NyxIdChatCommandTarget, NyxIdChatAcceptedReceipt, NyxIdChatStartError> CreateActionContinuationObservationLifecycle(
+        IServiceProvider sp) =>
+        new NyxIdChatObservationLifecycle<NyxIdActionContinuationCommand>(
+            sp.GetRequiredService<INyxIdChatSessionProjectionPort>(),
+            static command => command.ContinuationTurnId);
 }

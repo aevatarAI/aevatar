@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Audit.Abstractions\Aevatar.Audit.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Audit.Core\Aevatar.Audit.Core.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <InternalsVisibleTo Include="Aevatar.Capabilities.Tests" />
     <InternalsVisibleTo Include="Aevatar.ChatRouting.Voice.Integration.Tests" />
   </ItemGroup>
@@ -54,9 +55,12 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.StudioProvisioning\Aevatar.AI.ToolProviders.StudioProvisioning.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.ToolSetRegistry\Aevatar.AI.ToolProviders.ToolSetRegistry.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
-    <ProjectReference Include="..\Aevatar.AI.Infrastructure.OpenSandbox\Aevatar.AI.Infrastructure.OpenSandbox.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Application.CodexExecution\Aevatar.AI.Application.CodexExecution.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Infrastructure.ChronoSandbox\Aevatar.AI.Infrastructure.ChronoSandbox.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="Profiles\nyxid-chat\*.profile.pb.json" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="BackendConsole\admin.html" />
     <EmbeddedResource Include="BackendConsole\auto-callback.html" />
     <EmbeddedResource Include="Status\status.html" />

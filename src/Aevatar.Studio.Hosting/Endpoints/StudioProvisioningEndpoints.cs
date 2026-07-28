@@ -1,6 +1,7 @@
 using Aevatar.Capabilities;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Workflow.Abstractions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -71,13 +72,25 @@ internal static class StudioProvisioningEndpoints
         if (request == null)
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", "request body is required.");
 
+        if (string.IsNullOrWhiteSpace(request.TeamId))
+            return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", "teamId is required.");
+
         if (!TryResolveCallerCredential(request, out var callerCredential, out var credentialError))
             return BadRequest("INVALID_PROVISION_WORKFLOW_REQUEST", credentialError);
 
         try
         {
+            var executionMode = request.RunImmediately || !string.IsNullOrWhiteSpace(request.Cron)
+                ? ExternalCapabilityExecutionMode.Durable
+                : ExternalCapabilityExecutionMode.Interactive;
+            var admittedRequest = request with
+            {
+                CapabilityAdmission = StudioWorkflowCapabilityAdmissionHttpContext.Create(
+                    http,
+                    executionMode),
+            };
             var response = await provisioningService.ProvisionAsync(
-                scopeId, callerCredential, request, ct);
+                scopeId, callerCredential, admittedRequest, ct);
 
             // The bind and the run are both asynchronous, so provisioning always
             // ACKs with 202 Accepted: the member + bind + schedule were accepted

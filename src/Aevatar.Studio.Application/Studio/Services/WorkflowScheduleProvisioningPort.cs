@@ -56,7 +56,11 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
             RunImmediately: request.RunImmediately,
             Cron: request.ScheduleCron,
             Timezone: request.ScheduleTimezone,
-            Caller: callerCredential);
+            Caller: callerCredential)
+        {
+            TeamId = request.TeamId,
+            CapabilityAdmission = request.CapabilityAdmission,
+        };
 
         var response = await _provisioningService.ProvisionAsync(
             request.ScopeId,
@@ -67,8 +71,10 @@ public sealed class WorkflowScheduleProvisioningPort : IWorkflowScheduleProvisio
         return new WorkflowScheduleProvisioningResult(
             MemberId: response.MemberId,
             ScopeId: response.ScopeId,
+            TeamId: response.TeamId,
             BindingStatus: response.BindingStatus,
-            ObservatoryUrl: response.ObservatoryUrl)
+            ObservatoryUrl: response.ObservatoryUrl,
+            StudioUrl: response.StudioUrl)
         {
             ScheduleId = response.ScheduleId,
             BindingRunId = response.BindingRunId,

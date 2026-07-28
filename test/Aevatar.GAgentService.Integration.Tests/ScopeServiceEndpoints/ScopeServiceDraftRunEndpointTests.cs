@@ -155,7 +155,14 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync(
             userConfigQueryPort: new StubUserConfigStore(
-                new UserConfig(DefaultModel: string.Empty, PreferredLlmRoute: "/preferred-route")));
+                new UserConfig(
+                    DefaultModel: string.Empty,
+                    PreferredLlmRoute: "/api/v1/proxy/s/legacy",
+                    LlmSelection: new UserLlmSelectionValue(
+                        UserLlmSelectionKind.NyxIdUserService,
+                        " /preferred-route ",
+                        "us-preferred",
+                        "preferred"))));
         host.InteractionService.ResultFactory = async (_, _, onAcceptedAsync, ct) =>
         {
             var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");

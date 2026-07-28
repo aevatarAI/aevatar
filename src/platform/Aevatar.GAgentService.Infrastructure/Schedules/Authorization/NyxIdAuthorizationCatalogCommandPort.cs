@@ -7,7 +7,6 @@ namespace Aevatar.GAgentService.Infrastructure.Schedules.Authorization;
 
 public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCatalogCommandPort
 {
-    private const string PublisherId = "gagent-service.nyxid-authorization-catalog";
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
 
@@ -17,14 +16,18 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
     }
 
-    public Task ActivateAsync(
+    public Task BeginRefreshAsync(
         AuthorizationOwnerIdentity owner,
-        DateTimeOffset activatedAtUtc,
+        string refreshId,
+        DateTimeOffset startedAtUtc,
+        long expectedLifecycleFence,
         CancellationToken ct = default) =>
-        DispatchAsync(owner, new ActivateNyxIdAuthorizationCatalogCommand
+        DispatchAsync(owner, new BeginNyxIdAuthorizationCatalogRefreshCommand
         {
             Owner = owner.Clone(),
-            ActivatedAt = Timestamp.FromDateTimeOffset(activatedAtUtc),
+            RefreshId = refreshId ?? string.Empty,
+            StartedAt = Timestamp.FromDateTimeOffset(startedAtUtc),
+            ExpectedLifecycleFence = expectedLifecycleFence,
         }, ct);
 
     public Task ObserveAsync(NyxIdAuthorizationCatalogObservation observation, CancellationToken ct = default)
@@ -33,11 +36,13 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         var command = new ObserveNyxIdAuthorizationCatalogCommand
         {
             Owner = observation.Owner.Clone(),
+            RefreshId = observation.RefreshId,
             ObservedAt = Timestamp.FromDateTimeOffset(observation.ObservedAtUtc),
             FreshUntil = Timestamp.FromDateTimeOffset(observation.FreshUntilUtc),
-            ExternalRevision = observation.ExternalRevision,
+            ContractVersion = observation.ContractVersion,
+            PolicyVersion = observation.PolicyVersion,
+            EvaluatedAt = Timestamp.FromDateTimeOffset(observation.EvaluatedAtUtc),
             ContentDigest = observation.ContentDigest,
-            ExpectedLifecycleFence = observation.ExpectedLifecycleFence,
         };
         command.Services.Add(observation.Services.Select(static service => service.Clone()));
         return DispatchAsync(observation.Owner, command, ct);
@@ -45,12 +50,14 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
 
     public Task RecordRefreshFailureAsync(
         AuthorizationOwnerIdentity owner,
+        string refreshId,
         DateTimeOffset failedAtUtc,
         string failureCode,
         CancellationToken ct = default) =>
         DispatchAsync(owner, new RecordNyxIdAuthorizationCatalogRefreshFailureCommand
         {
             Owner = owner.Clone(),
+            RefreshId = refreshId ?? string.Empty,
             FailedAt = Timestamp.FromDateTimeOffset(failedAtUtc),
             FailureCode = failureCode ?? string.Empty,
         }, ct);
@@ -60,11 +67,43 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
         DateTimeOffset invalidatedAtUtc,
         string reason,
         CancellationToken ct = default) =>
+        InvalidateCoreAsync(
+            owner,
+            string.Empty,
+            invalidatedAtUtc,
+            reason,
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.Unspecified,
+            ct);
+
+    public Task InvalidateRefreshAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset invalidatedAtUtc,
+        string reason,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus outcomeStatus,
+        CancellationToken ct = default) =>
+        InvalidateCoreAsync(
+            owner,
+            refreshId,
+            invalidatedAtUtc,
+            reason,
+            ToOutcomeStatusState(outcomeStatus),
+            ct);
+
+    private Task InvalidateCoreAsync(
+        AuthorizationOwnerIdentity owner,
+        string refreshId,
+        DateTimeOffset invalidatedAtUtc,
+        string reason,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatusState outcomeStatus,
+        CancellationToken ct) =>
         DispatchAsync(owner, new InvalidateNyxIdAuthorizationCatalogCommand
         {
             Owner = owner.Clone(),
+            RefreshId = refreshId ?? string.Empty,
             InvalidatedAt = Timestamp.FromDateTimeOffset(invalidatedAtUtc),
             Reason = reason ?? string.Empty,
+            OutcomeStatus = outcomeStatus,
         }, ct);
 
     public Task CleanupAsync(
@@ -82,12 +121,43 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
     private async Task DispatchAsync(
         AuthorizationOwnerIdentity owner,
         Google.Protobuf.IMessage command,
+        CancellationToken ct) =>
+        await NyxIdAuthorizationCatalogCommandDispatch.DispatchAsync(
+            _runtime,
+            _dispatchPort,
+            owner,
+            command,
+            ct);
+
+    private static NyxIdAuthorizationCatalogRefreshOutcomeStatusState ToOutcomeStatusState(
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus status) => status switch
+    {
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus.AccessDenied =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.AccessDenied,
+        NyxIdAuthorizationCatalogRefreshOutcomeStatus.CatalogUnstable =>
+            NyxIdAuthorizationCatalogRefreshOutcomeStatusState.CatalogUnstable,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(status),
+            status,
+            "Catalog refresh invalidation requires an access-denied or unstable outcome."),
+    };
+}
+
+internal static class NyxIdAuthorizationCatalogCommandDispatch
+{
+    private const string PublisherId = "gagent-service.nyxid-authorization-catalog";
+
+    public static async Task DispatchAsync(
+        IActorRuntime runtime,
+        IActorDispatchPort dispatchPort,
+        AuthorizationOwnerIdentity owner,
+        Google.Protobuf.IMessage command,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(owner);
         var actorId = NyxIdAuthorizationCatalogActorIds.Build(owner);
-        var actor = await _runtime.GetAsync(actorId) ??
-                    await _runtime.CreateAsync<NyxIdAuthorizationCatalogGAgent>(actorId, ct);
+        var actor = await runtime.GetAsync(actorId) ??
+                    await runtime.CreateAsync<NyxIdAuthorizationCatalogGAgent>(actorId, ct);
         var commandId = Guid.NewGuid().ToString("N");
         var envelope = new EventEnvelope
         {
@@ -97,6 +167,6 @@ public sealed class NyxIdAuthorizationCatalogCommandPort : INyxIdAuthorizationCa
             Route = EnvelopeRouteSemantics.CreateDirect(PublisherId, actor.Id),
             Propagation = new EnvelopePropagation { CorrelationId = commandId },
         };
-        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 }

@@ -61,6 +61,7 @@ public sealed class RegistrationQueryPortTests
                 NyxAgentApiKeyId = "key-1",
                 NyxConversationRouteId = "route-1",
                 WorkflowResultDeliveryCredential = TestDeliverySecretReference("bot-1"),
+                WorkflowResultDeliveryRepair = FailedRepair(),
             }));
 
         var queryPort = new ChannelBotRegistrationQueryPort(reader);
@@ -76,6 +77,9 @@ public sealed class RegistrationQueryPortTests
         result.NyxAgentApiKeyId.Should().Be("key-1");
         result.NyxConversationRouteId.Should().Be("route-1");
         result.WorkflowResultDeliveryCredential.Should().Be(TestDeliverySecretReference("bot-1"));
+        result.WorkflowResultDeliveryRepair.Should().Be(FailedRepair());
+        result.WorkflowResultDeliveryRepair.Should().NotBeSameAs(
+            (await reader.GetAsync("bot-1", CancellationToken.None))!.WorkflowResultDeliveryRepair);
     }
 
     [Fact]
@@ -240,4 +244,20 @@ public sealed class RegistrationQueryPortTests
         result.Should().BeNull();
         await reader.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
+
+    private static ChannelWorkflowResultDeliveryRepairState FailedRepair() =>
+        new()
+        {
+            RequestId = "repair-1",
+            Status = ChannelWorkflowResultDeliveryRepairStatus.Failed,
+            ExpectedApiKeyId = "key-1",
+            ExpectedConversationRouteId = "route-1",
+            RotatedApiKeyId = "key-2",
+            PreparedSecretReference = TestDeliverySecretReference("bot-1"),
+            FailurePhase = ChannelWorkflowResultDeliveryRepairPhase.RouteRebinding,
+            FailureReason = ChannelWorkflowResultDeliveryRepairFailureReason.RouteUpdateFailed,
+            RequestedBySubjectId = "user-1",
+            RequestedAtUnixMs = 1784563200000,
+            UpdatedAtUnixMs = 1784563201000,
+        };
 }

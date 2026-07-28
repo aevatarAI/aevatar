@@ -250,10 +250,15 @@ public class StreamingToolExecutorTests
         results.Should().HaveCount(2);
         results[0].CallId.Should().Be("tc-fail");
         results[0].IsError.Should().BeTrue();
-        results[0].Result.Should().Contain("boom");
+        results[0].Result.Should().NotContain("boom");
+        results[0].Result.Should().Contain("The tool request failed.");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         results[1].CallId.Should().Be("tc-skip");
         results[1].IsError.Should().BeTrue();
         results[1].Result.Should().Contain("prior tool error");
+        results[1].Receipt.Should().NotBeNull();
+        results[1].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
     }
 
     [Fact]
@@ -595,7 +600,7 @@ public class StreamingToolExecutorTests
     }
 
     [Fact]
-    public async Task UnknownTool_ShouldReturnNotFoundResult()
+    public async Task UnknownTool_ShouldReturnSafeErrorResult()
     {
         var tools = new ToolManager();
         var executor = new StreamingToolExecutor(tools);
@@ -609,7 +614,10 @@ public class StreamingToolExecutorTests
 
         results.Should().HaveCount(1);
         results[0].CallId.Should().Be("tc-1");
-        results[0].Result.Should().Contain("not found");
+        results[0].IsError.Should().BeTrue();
+        results[0].Result.Should().Contain("The tool request failed.");
+        results[0].Receipt.Should().NotBeNull();
+        results[0].Receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
     }
 
     [Fact]
@@ -790,7 +798,34 @@ public class StreamingToolExecutorTests
         receipt.Should().NotBeNull();
         receipt!.Status.Should().Be(AgentToolReceiptStatus.Error);
         receipt.ErrorCode.Should().Be("tool_execution_error");
-        receipt.ErrorMessage.Should().Contain("boom");
+        receipt.ErrorMessage.Should().Be("The tool request failed.");
+        receipt.ResultJson.Should().NotContain("boom");
+    }
+
+    [Fact]
+    public async Task ProviderFailureReceipt_ShouldReplaceRawToolResultWithSafeResult()
+    {
+        var tools = new ToolManager();
+        tools.Register(new SafeFailureReceiptTool());
+        var executor = new StreamingToolExecutor(tools);
+        using var executionState = executor.CreateExecutionState();
+        executor.AddTool(executionState, new ToolCall
+        {
+            Id = "tc-safe-failure",
+            Name = "safe_failure",
+            ArgumentsJson = "{}",
+        });
+
+        var results = new List<ToolExecutionResult>();
+        await foreach (var result in executor.GetRemainingResultsAsync(executionState, CancellationToken.None))
+            results.Add(result);
+
+        var failure = results.Should().ContainSingle().Which;
+        failure.IsError.Should().BeTrue();
+        failure.Result.Should().Be("""{"error":"SAFE_FAILURE","message":"The tool request failed."}""");
+        failure.ToString().Should().NotContain("bearer-secret").And.NotContain("credential");
+        failure.Receipt.Should().NotBeNull();
+        failure.Receipt!.ResultJson.Should().Be(failure.Result);
     }
 
     // ─── Test helpers ───
@@ -860,6 +895,32 @@ public class StreamingToolExecutorTests
         public string ParametersSchema => "{}";
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult(execute(argumentsJson));
+    }
+
+    private sealed class SafeFailureReceiptTool : IAgentTool
+    {
+        public string Name => "safe_failure";
+        public string Description => "safe failure fixture";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("""{"error":"forbidden","message":"credential bearer-secret rejected"}""");
+
+        public AgentToolReceipt? CreateResultReceipt(
+            string callId,
+            string toolName,
+            string argumentsJson,
+            string resultJson) =>
+            new()
+            {
+                CallId = callId,
+                ToolName = toolName,
+                Status = AgentToolReceiptStatus.Error,
+                ErrorCode = "SAFE_FAILURE",
+                ErrorMessage = "The tool request failed.",
+                ResultJson = """{"error":"SAFE_FAILURE","message":"The tool request failed."}""",
+            };
     }
 
     private sealed class DelegateToolCallMiddleware(

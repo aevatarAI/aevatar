@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgents.Channel.Runtime;
+using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Schedules;
 
 namespace Aevatar.GAgents.Scheduled;
@@ -33,7 +34,8 @@ internal sealed class ScheduledAgentCreateRequestMapper
         "max_tool_rounds",
         "max_history_messages",
         "requires_nyxid_proxy_success",
-        "required_service_slugs",
+        "required_nyx_services",
+        "nyx_user_service_id",
         "nyx_provider_slug",
         "output_format",
         "external_trigger_sources",
@@ -115,10 +117,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
         if (args.HasNonEmptyArray("external_trigger_sources"))
             return ScheduledAgentCreatePlanResult.Failed("external_trigger_sources are not supported for scheduled workflow agents");
 
-        if (!args.TryStringArray("required_service_slugs", out var requiredServiceSlugs, out var requiredServiceSlugsError))
-            return ScheduledAgentCreatePlanResult.Failed(requiredServiceSlugsError);
+        if (!args.TryNyxIdServices("required_nyx_services", out var requiredNyxServices, out var requiredNyxServicesError))
+            return ScheduledAgentCreatePlanResult.Failed(requiredNyxServicesError);
 
         var requestedOutboundSlug = Normalize(args.Str("nyx_provider_slug"));
+        var primaryOutboundUserServiceId = Normalize(args.Str("nyx_user_service_id")) ?? string.Empty;
         if (requestedOutboundSlug is not null && scheduleMode != ScheduledAgentScheduleMode.OneShot)
             return ScheduledAgentCreatePlanResult.Failed("nyx_provider_slug is only supported for one_shot schedules");
 
@@ -168,10 +171,11 @@ internal sealed class ScheduledAgentCreateRequestMapper
                 FailureNotificationSlug: failureSlug,
                 ChannelTarget: target,
                 Caller: caller.Clone()),
-            ServiceSlugs: new ScheduledAgentServiceRequirements(
+            ServiceRequirements: new ScheduledAgentServiceRequirements(
                 primarySlug,
+                primaryOutboundUserServiceId,
                 failureSlug,
-                requiredServiceSlugs,
+                requiredNyxServices,
                 RequiresOrnnService: hasSkillRef),
             ErrorJson: null);
     }
@@ -584,37 +588,51 @@ internal sealed class ScheduledAgentCreateRequestMapper
             return element.ValueKind == JsonValueKind.String && double.TryParse(element.GetString(), out value);
         }
 
-        public bool TryStringArray(
+        public bool TryNyxIdServices(
             string name,
-            out IReadOnlyList<string> values,
+            out IReadOnlyList<NyxIdUserServiceCapabilityRef> values,
             out string error)
         {
             values = [];
             error = string.Empty;
             if (!Properties.TryGetValue(name, out var element))
                 return true;
-
             if (element.ValueKind != JsonValueKind.Array)
             {
-                error = $"{name} must be an array of strings";
+                error = $"{name} must be an array of exact NyxID service objects";
                 return false;
             }
 
-            var normalized = new List<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var normalized = new List<NyxIdUserServiceCapabilityRef>();
+            var seen = new HashSet<(string Id, string Slug)>();
             foreach (var item in element.EnumerateArray())
             {
-                if (item.ValueKind != JsonValueKind.String)
+                if (item.ValueKind != JsonValueKind.Object ||
+                    item.EnumerateObject().Any(property =>
+                        property.Name is not ("user_service_id" or "service_slug_snapshot")) ||
+                    !item.TryGetProperty("user_service_id", out var idElement) ||
+                    idElement.ValueKind != JsonValueKind.String ||
+                    !item.TryGetProperty("service_slug_snapshot", out var slugElement) ||
+                    slugElement.ValueKind != JsonValueKind.String)
                 {
-                    error = $"{name} must contain only strings";
+                    error = $"{name} must contain only user_service_id and service_slug_snapshot strings";
                     return false;
                 }
 
-                var value = item.GetString()?.Trim();
-                if (string.IsNullOrEmpty(value) || !seen.Add(value))
+                var id = idElement.GetString()?.Trim() ?? string.Empty;
+                var slug = slugElement.GetString()?.Trim() ?? string.Empty;
+                if (id.Length == 0 || slug.Length == 0)
+                {
+                    error = $"{name} requires non-empty user_service_id and service_slug_snapshot";
+                    return false;
+                }
+                if (!seen.Add((id, slug)))
                     continue;
-
-                normalized.Add(value);
+                normalized.Add(new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = id,
+                    ServiceSlugSnapshot = slug,
+                });
             }
 
             values = normalized;
@@ -647,7 +665,7 @@ internal sealed record ScheduledAgentCreateMapResult(
 internal sealed record ScheduledAgentCreatePlanResult(
     bool Success,
     ScheduledAgentCreatePlannedRequest? Request,
-    ScheduledAgentServiceRequirements? ServiceSlugs,
+    ScheduledAgentServiceRequirements? ServiceRequirements,
     string? ErrorJson)
 {
     public static ScheduledAgentCreatePlanResult Failed(string error) =>

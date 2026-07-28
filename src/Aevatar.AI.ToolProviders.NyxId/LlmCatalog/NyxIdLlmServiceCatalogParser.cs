@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId.LlmCatalog;
@@ -47,6 +48,21 @@ public static class NyxIdLlmServiceCatalogParser
         return MergeRouteCandidates(result, ParseUserKeyRouteCandidates(userKeysResponse));
     }
 
+    public static NyxIdLlmServicesResult ComposeUserServiceInventory(
+        NyxIdLlmServicesResult diagnostics,
+        NyxIdUserServices inventory)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        ArgumentNullException.ThrowIfNull(inventory);
+
+        var services = inventory.Services
+            .Where(IsEligible)
+            .OrderBy(static service => service.Id, StringComparer.Ordinal)
+            .Select(service => ComposeUserService(diagnostics.Services, service))
+            .ToArray();
+        return diagnostics with { Services = services };
+    }
+
     private static NyxIdLlmServicesResult MergeRouteCandidates(
         NyxIdLlmServicesResult result,
         IReadOnlyList<NyxIdLlmService> candidates)
@@ -72,6 +88,42 @@ public static class NyxIdLlmServiceCatalogParser
         return result with { Services = merged };
     }
 
+    private static NyxIdLlmService ComposeUserService(
+        IReadOnlyList<NyxIdLlmService> diagnostics,
+        NyxIdUserService inventoryService)
+    {
+        var diagnostic = diagnostics.FirstOrDefault(candidate =>
+            string.Equals(candidate.ServiceSlug, inventoryService.Slug, StringComparison.OrdinalIgnoreCase));
+        return new NyxIdLlmService(
+            CatalogEntryId: diagnostic?.CatalogEntryId,
+            ServiceSlug: inventoryService.Slug,
+            DisplayName: FirstNonEmpty(
+                inventoryService.Label,
+                inventoryService.CatalogServiceName,
+                diagnostic?.DisplayName,
+                inventoryService.Slug),
+            RouteValue: $"/api/v1/proxy/s/{inventoryService.Slug}",
+            DefaultModel: diagnostic?.DefaultModel,
+            Models: diagnostic?.Models ?? [],
+            Status: diagnostic?.Status ?? ReadyStatus,
+            Source: NyxIdLlmProviderSource.UserService,
+            Allowed: true,
+            Description: null,
+            Identity: InventoryIdentity(inventoryService));
+    }
+
+    private static bool IsEligible(NyxIdUserService service) =>
+        service.IsActive &&
+        (service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Personal ||
+         service.CredentialSource.Kind == NyxIdUserServiceCredentialSourceKind.Organization &&
+         service.CredentialSource.Allowed);
+
+    private static UserLlmServiceIdentity InventoryIdentity(NyxIdUserService service) =>
+        new(UserLlmIdentityAuthority.NyxIdUserServicesInventory, service.Id);
+
+    private static string FirstNonEmpty(params string?[] candidates) =>
+        candidates.First(candidate => !string.IsNullOrWhiteSpace(candidate))!.Trim();
+
     public static IReadOnlyList<NyxIdLlmService> ParseProxyRouteCandidates(string response)
     {
         using var document = ParseSuccessDocument(response);
@@ -88,10 +140,9 @@ public static class NyxIdLlmServiceCatalogParser
 
     /// <summary>
     /// Parses the NyxID unified key list (<c>GET /api/v1/keys</c>) into LLM route
-    /// candidates. A key is the per-user credential binding for a service, so an
-    /// active key is authoritative evidence the route is usable by this user -
-    /// unlike <c>/api/v1/proxy/services</c>, whose <c>connected</c> flag only
-    /// reflects the legacy connections store.
+    /// diagnostics. Active keys can improve readiness information relative to the
+    /// legacy connection state from <c>/api/v1/proxy/services</c>, but exact identity
+    /// and eligibility come only from the strict user-services inventory.
     /// </summary>
     public static IReadOnlyList<NyxIdLlmService> ParseUserKeyRouteCandidates(string response)
     {
@@ -111,13 +162,10 @@ public static class NyxIdLlmServiceCatalogParser
     {
         using var document = ParseSuccessDocument(response);
         var root = document.RootElement;
-        if (root.ValueKind == JsonValueKind.Object &&
-            TryGetProperty(root, "service") is { } service)
-        {
-            return ParseService(service);
-        }
-
-        return ParseService(root);
+        return root.ValueKind == JsonValueKind.Object &&
+            TryGetProperty(root, "service") is { } service
+            ? ParseService(service)
+            : ParseService(root);
     }
 
     private static IEnumerable<JsonElement> EnumerateProxyServiceEntries(JsonElement root)
@@ -187,7 +235,7 @@ public static class NyxIdLlmServiceCatalogParser
         var allowed = string.Equals(status, ReadyStatus, StringComparison.OrdinalIgnoreCase) &&
                       ReadAllowedOverride(element) != false;
         return new NyxIdLlmService(
-            UserServiceId: ReadOptionalString(element, "id") ?? slug,
+            CatalogEntryId: ReadOptionalString(element, "id") ?? slug,
             ServiceSlug: slug.Trim(),
             DisplayName: displayName.Trim(),
             RouteValue: routeValue,
@@ -280,7 +328,7 @@ public static class NyxIdLlmServiceCatalogParser
         var explicitAllowed = ReadAllowedOverride(element);
         var models = ReadStringArray(element, "models", "available_models", "availableModels");
         return new NyxIdLlmService(
-            UserServiceId: ReadOptionalString(
+            CatalogEntryId: ReadOptionalString(
                     element,
                     "user_service_id",
                     "userServiceId",
@@ -359,7 +407,7 @@ public static class NyxIdLlmServiceCatalogParser
             var routeValue = ResolveLegacyRouteValue(provider, slug);
 
             services.Add(new NyxIdLlmService(
-                UserServiceId: slug,
+                CatalogEntryId: slug,
                 ServiceSlug: slug,
                 DisplayName: ReadOptionalString(provider, "provider_name", "providerName") ?? slug,
                 RouteValue: routeValue,
@@ -406,7 +454,7 @@ public static class NyxIdLlmServiceCatalogParser
         if (element.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException("NyxID LLM service entry must be a JSON object.");
 
-        var userServiceId = ReadRequiredString(element, "user_service_id", "userServiceId", "service_id", "serviceId");
+        var catalogEntryId = ReadRequiredString(element, "user_service_id", "userServiceId", "service_id", "serviceId");
         var serviceSlug = ReadRequiredString(element, "service_slug", "serviceSlug");
         var displayName = ReadOptionalString(element, "display_name", "displayName", "service_name", "serviceName")
             ?? serviceSlug;
@@ -414,7 +462,7 @@ public static class NyxIdLlmServiceCatalogParser
         var models = ReadStringArray(element, "models", "available_models", "availableModels");
 
         return new NyxIdLlmService(
-            UserServiceId: userServiceId,
+            CatalogEntryId: catalogEntryId,
             ServiceSlug: serviceSlug,
             DisplayName: displayName,
             RouteValue: routeValue,
@@ -470,7 +518,7 @@ public static class NyxIdLlmServiceCatalogParser
         return type.Trim().ToLowerInvariant() switch
         {
             "use_existing_service" or "use-existing-service" or "existing" => new UseExistingService(
-                ServiceId: ReadRequiredString(activationElement, "service_id", "serviceId"),
+                UserServiceId: ReadRequiredString(activationElement, "service_id", "serviceId"),
                 RouteValue: ReadRequiredString(activationElement, "route_value", "routeValue"),
                 DefaultModel: ReadOptionalString(activationElement, "default_model", "defaultModel")),
             "provision_then_use" or "provision-then-use" or "provision" => new ProvisionThenUse(
@@ -616,7 +664,7 @@ public static class NyxIdLlmServiceCatalogParser
 
     private static bool ShareServiceKey(NyxIdLlmService left, NyxIdLlmService right) =>
         EqualIfPresent(left.RouteValue, right.RouteValue) ||
-        EqualIfPresent(left.UserServiceId, right.UserServiceId) ||
+        EqualIfPresent(left.CatalogEntryId, right.CatalogEntryId) ||
         EqualIfPresent(left.ServiceSlug, right.ServiceSlug);
 
     private static bool EqualIfPresent(string? left, string? right) =>

@@ -46,4 +46,5 @@ public sealed class StudioTeamProvisioningPort : IStudioTeamProvisioningPort
             EntryMemberId = summary.EntryMemberId,
         };
     }
+
 }
