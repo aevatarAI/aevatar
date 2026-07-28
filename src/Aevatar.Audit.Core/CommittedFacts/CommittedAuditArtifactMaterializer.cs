@@ -4,6 +4,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.Abstractions.Orchestration;
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventSourcing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -47,6 +48,13 @@ public sealed class CommittedAuditArtifactMaterializer<TContext>
         }
 
         var stateEvent = published.StateEvent;
+        // A maintenance republish re-broadcasts an already-committed fact under a
+        // synthetic event id; translating it would fabricate a duplicate governance
+        // record (and repeat republishes at the same version would append-conflict).
+        // The maintenance action itself is audited by the invoking admin endpoint.
+        if (CommittedStateRepublish.IsRepublishEventId(stateEvent.EventId))
+            return;
+
         var eventTypeUrl = stateEvent.EventData.TypeUrl ?? string.Empty;
         if (!_registry.TryGet(eventTypeUrl, out var translator))
             return;

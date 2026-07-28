@@ -72,6 +72,27 @@ public sealed class CommittedAuditArtifactMaterializerTests
     }
 
     [Fact]
+    public async Task ProjectAsync_ShouldSkipMaintenanceRepublishEnvelope()
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var materializer = new CommittedAuditArtifactMaterializer<TestContext>(
+            new AuditCommittedEventTranslatorRegistry([new StringValueAuditTranslator()]),
+            appender,
+            new FixedClock(DateTimeOffset.Parse("2026-07-03T08:00:00+00:00")));
+
+        await materializer.ProjectAsync(
+            new TestContext(),
+            BuildEnvelope(
+                "outer-command-1",
+                Aevatar.Foundation.Abstractions.EventSourcing.CommittedStateRepublish.BuildEventId("actor-1", 42),
+                42,
+                new StringValue { Value = "payload" }));
+
+        appender.Records.Should().BeEmpty(
+            "a maintenance republish re-broadcasts an already-audited fact and must not fabricate a duplicate governance record");
+    }
+
+    [Fact]
     public void Registry_ShouldRejectDuplicateExactTypeUrl()
     {
         Action act = () => _ = new AuditCommittedEventTranslatorRegistry(
