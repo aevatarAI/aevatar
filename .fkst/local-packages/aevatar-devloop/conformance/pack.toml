@@ -43,6 +43,38 @@ pattern = "Assign the issue to the FKST actor before implementation starts"
 message = "Aevatar FKST devloop must claim an issue before implementation starts."
 
 [[rules]]
+id = "require-blocked-fork-shell-admission-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "`blocked-github-content` fork shells"
+message = "Aevatar FKST devloop must document the blocked fork-shell admission gate."
+
+[[rules]]
+id = "require-sanitized-self-owned-statement-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "sanitized self-owned problem statement"
+message = "Aevatar FKST devloop must require sanitized self-owned requirements before developing blocked fork shells."
+
+[[rules]]
+id = "require-blocked-fork-acceptance-checks-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "acceptance checks"
+message = "Aevatar FKST devloop must require acceptance checks before developing blocked fork shells."
+
+[[rules]]
+id = "require-blocked-fork-class-remediation-or-waiver-policy"
+severity = "error"
+kind = "text_require_regex"
+include = ["policy/**/*.md"]
+pattern = "class remediation or explicit waiver"
+message = "Aevatar FKST devloop must require class remediation or an explicit waiver before developing blocked fork shells."
+
+[[rules]]
 id = "require-claude-projection-section"
 severity = "error"
 kind = "text_require_regex"
