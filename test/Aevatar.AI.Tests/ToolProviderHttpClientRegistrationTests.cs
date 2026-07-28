@@ -40,6 +40,43 @@ public sealed class ToolProviderHttpClientRegistrationTests
     }
 
     [Fact]
+    public void AddNyxIdTools_GivesTheNyxIdClientRoomForTheLongestCodexRun()
+    {
+        // The 100s HttpClient default aborts long codex_exec runs before their own deadline
+        // reports the failure. The managed request deadline is 300s, and the ingress layer needs
+        // at least 315s to return its terminal response.
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(options => options.BaseUrl = "https://nyx.test");
+
+        using var provider = services.BuildServiceProvider();
+        var timeout = provider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(nameof(NyxIdApiClient))
+            .Timeout;
+
+        timeout.Should().BeGreaterThan(TimeSpan.FromSeconds(315));
+        timeout.Should().Be(TimeSpan.FromSeconds(NyxIdToolOptions.DefaultMaxRequestDurationSeconds));
+    }
+
+    [Fact]
+    public void AddNyxIdTools_HonoursAConfiguredNyxIdRequestCeiling()
+    {
+        var services = new ServiceCollection();
+
+        services.AddNyxIdTools(options =>
+        {
+            options.BaseUrl = "https://nyx.test";
+            options.MaxRequestDurationSeconds = 420;
+        });
+
+        using var provider = services.BuildServiceProvider();
+        provider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient(nameof(NyxIdApiClient))
+            .Timeout
+            .Should().Be(TimeSpan.FromSeconds(420));
+    }
+
+    [Fact]
     public void AddNyxIdTools_ShouldRegisterFileArtifactIngressOnlyWhenWorkflowIngressExists()
     {
         var withoutWorkflowIngress = new ServiceCollection();
