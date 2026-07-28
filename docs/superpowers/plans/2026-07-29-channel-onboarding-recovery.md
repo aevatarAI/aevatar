@@ -30,8 +30,10 @@
 - Modify: test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelCallbackEndpointsTests.cs
 - Modify: test/Aevatar.GAgents.ChannelRuntime.Tests/NyxLarkProvisioningServiceTests.cs
 - Modify: test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelWorkflowResultDeliveryContractTests.cs
+- Modify: test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelRegistrationToolTests.cs
 - Modify: agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/ChannelCallbackEndpoints.cs
 - Modify: agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/NyxLarkProvisioningService.cs
+- Modify: src/Aevatar.AI.ToolProviders.ChannelAdmin/ChannelRegistrationTool.cs
 
 **Interfaces:**
 - Consumes: POST /api/channels/registrations and ChannelRelayRegistrationFacade.RegisterAsync.
@@ -79,7 +81,7 @@ Extend the existing records with one optional typed field:
         string VerificationToken,
         string EncryptKey = "");
 
-Add EncryptKey as an optional final field in NyxLarkProvisioningRequest, preserving existing callers while keeping the credential typed. Add nullable EncryptKey to the private HTTP RegistrationRequest, trim it in the Host mapping, and pass it to RegisterChannelBotAsync. Reject a blank VerificationToken in NyxLarkProvisioningService before any NyxID call. Add encrypt_key to the NyxID payload only when nonblank:
+Add EncryptKey as an optional final field in NyxLarkProvisioningRequest, preserving existing callers while keeping the credential typed. Map it from both the private HTTP RegistrationRequest and the existing ChannelRegistrationTool credential object, then pass it to RegisterChannelBotAsync. Reject a blank VerificationToken in NyxLarkProvisioningService before any NyxID call. Add encrypt_key to the NyxID payload only when nonblank:
 
     if (!string.IsNullOrWhiteSpace(encryptKey))
         payload["encrypt_key"] = encryptKey.Trim();
@@ -90,7 +92,7 @@ Do not add it to Protobuf, mirror commands, results, responses, logs, or Vault.
 
 Run both Task 1 filters, then:
 
-    git add test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelCallbackEndpointsTests.cs test/Aevatar.GAgents.ChannelRuntime.Tests/NyxLarkProvisioningServiceTests.cs test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelWorkflowResultDeliveryContractTests.cs agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/ChannelCallbackEndpoints.cs agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/NyxLarkProvisioningService.cs
+    git add test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelCallbackEndpointsTests.cs test/Aevatar.GAgents.ChannelRuntime.Tests/NyxLarkProvisioningServiceTests.cs test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelWorkflowResultDeliveryContractTests.cs test/Aevatar.GAgents.ChannelRuntime.Tests/ChannelRegistrationToolTests.cs agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/ChannelCallbackEndpoints.cs agents/channels/Aevatar.GAgents.Channel.NyxIdRelay/NyxLarkProvisioningService.cs src/Aevatar.AI.ToolProviders.ChannelAdmin/ChannelRegistrationTool.cs
     git commit -m "Carry Lark encrypt key during provisioning"
 
 ### Task 2: Expose the Committed Recovery URL
