@@ -2,8 +2,10 @@
 
 ## Status
 
-Approach A approved on July 27, 2026. The written specification is awaiting
-final review before implementation.
+Approach A was approved on July 27, 2026 and completed on July 28, 2026. Five
+immutable skill versions and `aevatar-platform@1.13` are published, independently
+read back, hash-verified, and forward-tested from the published registry surface.
+No Aevatar, NyxID, Ornn, or chrono-sandbox product source was changed.
 
 ## Goal
 
@@ -29,17 +31,23 @@ infrastructure targets. Managed execution flows through the user's exact NyxID
 `chrono-sandbox` UserService into a one-shot gVisor workload. Private SSH flows
 through a user-owned NyxID SSH service and the target host's Codex installation.
 
-The `aevatar-platform@1.11` skillset does not include either canonical
-`codex_exec` skill, so its router cannot discover the capability. Its platform
-map also presents `scope -> team -> member -> service` as a global linear
-lifecycle, which conflicts with the current identity boundary: `memberId`,
+The initial `aevatar-platform@1.11` baseline did not include either canonical
+`codex_exec` skill, so its router could not discover the capability. Its platform
+map also presented `scope -> team -> member -> service` as a global linear
+lifecycle, which conflicted with the current identity boundary: `memberId`,
 `workflowId`, and `publishedServiceId` identify separate resources.
+
+While this upgrade was in progress, unrelated immutable releases advanced the
+registry to `aevatar-platform-map@1.8`, `aevatar-feasibility-advisor@1.2`,
+`aevatar-triage@1.4`, and `aevatar-platform@1.12`. The candidates were rebased on
+those versions rather than overwriting or discarding their Agent Profile,
+scheduling, Agent Key, credential-source, and admission/readback semantics.
 
 ## Verified Sources
 
 The upgrade is grounded in these exact sources:
 
-- Aevatar commit `7985ff355e76542182fb89b148a5e027e3dce6a7`:
+- Aevatar commit `aba74805c6b40f3848a554b85e4192e7c06abfa2`:
   - `NyxIdCodexExecTool` argument admission and target dispatch;
   - `ManagedCodexExecutionCoordinator` transparent credential readiness;
   - `NyxIdManagedCodexChronoTransport` fixed NyxID proxy call and result mapping;
@@ -51,12 +59,18 @@ The upgrade is grounded in these exact sources:
   - fixed runtime profile and Codex command;
   - gVisor workload creation, bounded JSONL parsing, timeout classification,
     strict cleanup, and sanitized diagnostics.
-- Codex CLI `0.144.5`, pinned by the Aevatar runner image, plus the current
-  official Codex non-interactive-mode manual.
-- Ornn API and registry state read on July 27, 2026:
+- Codex CLI `0.144.5`, pinned by the production Aevatar runner image, plus the
+  current official Codex non-interactive-mode manual. Fresh-context skill
+  evaluations used the locally available Codex CLI `0.144.3`; the platform
+  contract was taken from the pinned runner and source, not inferred from that
+  evaluator version.
+- Ornn API and registry state read on July 27-28, 2026:
   - `aevatar-platform@1.11` and its exact 12-member closure;
   - `aevatar-codex-exec-node-setup@3.0`;
   - `aevatar-codex-exec-workflow-sample@2.0`;
+  - concurrent `aevatar-platform-map@1.8`,
+    `aevatar-feasibility-advisor@1.2`, `aevatar-triage@1.4`, and
+    `aevatar-platform@1.12` releases;
   - current immutable-version and system-assigned skillset-revision contracts.
 
 The chrono-sandbox default `main` branch does not yet contain the managed Codex
@@ -166,16 +180,22 @@ shape. Verification therefore checks the SSH response's `exit_code`,
 
 ## Skill Changes
 
-| Skill | Current | Target | Required change |
-|---|---:|---:|---|
-| `aevatar-codex-exec-workflow-sample` | 2.0 | 3.0 | Preserve the valid typed payloads; replace OpenSandbox-era readiness, failure, and isolation claims; document the distinct managed and SSH result contracts. |
-| `aevatar-codex-exec-node-setup` | 3.0 | 4.0 | Replace the obsolete managed architecture and security model; update prerequisites, transparent readiness, operations handoff, failure map, and dependency to sample 3.0; retain and re-verify private SSH hardening. |
-| `aevatar-platform-map` | 1.7 | 1.8 | Route setup/use/verification to the two canonical Codex skills; correct member/workflow/service identity semantics; stop presenting one global lifecycle. |
-| `aevatar-feasibility-advisor` | 1.1 | 1.2 | Add target selection and feasibility boundaries: managed empty ephemeral Git work versus user-owned private SSH workspace. |
-| `aevatar-triage` | 1.3 | 1.4 | Add layered Codex diagnostics across Aevatar, NyxID, chrono-sandbox, OpenSandbox/gVisor, runner, and private SSH using current stable errors and sanitized diagnostics. |
-| `aevatar-platform` skillset | 1.11 | system-assigned next revision | Reference the five upgraded versions, add both Codex skills as members, and update the master router instructions and description. |
+The two canonical Codex skills advanced from their original baselines. The three
+platform skills were first rebased onto immutable versions published concurrently
+during execution, then released as the next versions. The skillset similarly
+advanced from the initial `1.11` baseline through concurrent `1.12` to final
+`1.13`.
 
-No content change is planned for `workflow-authoring`, `team-builder`,
+| Skill | Initial baseline | Rebase baseline | Published | Applied change |
+|---|---:|---:|---:|---|
+| `aevatar-codex-exec-workflow-sample` | 2.0 | 2.0 | 3.0 | Preserved the valid typed payloads; replaced obsolete readiness, failure, and isolation claims; documented the distinct managed and SSH result contracts. |
+| `aevatar-codex-exec-node-setup` | 3.0 | 3.0 | 4.0 | Replaced the obsolete managed architecture and security model; updated prerequisites, transparent readiness, operations handoff, failure map, and dependency to sample 3.0; retained and re-verified private SSH hardening. |
+| `aevatar-platform-map` | 1.7 | 1.8 | 1.9 | Retained concurrent platform semantics; routed setup/use/verification to both canonical Codex skills; corrected member/workflow/service identity semantics; stopped presenting one global lifecycle. |
+| `aevatar-feasibility-advisor` | 1.1 | 1.2 | 1.3 | Retained concurrent surface-detection semantics; added target selection and feasibility boundaries for managed empty ephemeral Git work versus a user-owned private SSH workspace. |
+| `aevatar-triage` | 1.3 | 1.4 | 1.5 | Retained concurrent credential-source diagnostics; added layered Codex diagnostics across Aevatar, NyxID, chrono-sandbox, OpenSandbox/gVisor, the runner, and private SSH using typed errors and sanitized diagnostics. |
+| `aevatar-platform` skillset | 1.11 | 1.12 | 1.13 | Retained 10 unchanged `1.12` member refs, advanced the three platform skills, added both Codex skills as roots, and updated the master router instructions and description. |
+
+No content change was made to `workflow-authoring`, `team-builder`,
 `scheduler`, `service-publisher`, `automation`, `channels-delivery`, either
 NyxID connector skill, or the fallback skill. They neither teach the obsolete
 managed boundary nor own `codex_exec` setup. A workflow that needs Codex must
@@ -184,7 +204,7 @@ duplicating the contract inside workflow-authoring.
 
 ## Product Routing Semantics
 
-The platform router will treat `codex_exec` as an in-session execution
+The published platform router treats `codex_exec` as an in-session execution
 capability, not as a new Studio resource stage:
 
 - “Can Aevatar use Codex for this?” -> `aevatar-feasibility-advisor`.
@@ -209,10 +229,10 @@ ID by string convention.
 
 ## Skill TDD and Verification
 
-Each skill is upgraded and deployed independently. Do not batch author all
-skills and test only at the end.
+Each skill was upgraded and deployed independently rather than authored as one
+untested batch.
 
-For each skill:
+For each skill, execution followed this gate:
 
 1. Save the exact published old version as the current-behavior baseline.
 2. Run realistic retrieval/application scenarios both without the skill and
@@ -244,6 +264,18 @@ Aevatar OpenSandbox ownership, caller-selected model/image/profile, and a
 process-local capacity slot. Historical context may name an obsolete term only
 to say explicitly that it is not the current design.
 
+The integrated RED case used the exact published `aevatar-platform@1.12`
+registry surface. It could not select `private_ssh`, did not route through the
+node-setup or workflow-sample skills, omitted the mandatory
+`CODEX_EXEC_READY` proof, and speculated about a managed workspace bound to an
+existing private repository. The candidate GREEN case corrected those failures.
+After publication, the same fresh-context scenario was repeated using only
+independently downloaded `1.13` registry artifacts; it selected `private_ssh`,
+kept the three Aevatar identities distinct, routed setup -> public sample proof
+-> workflow authoring -> team binding -> service publication, and assigned
+`managed_proxy_timeout` only to the bounded managed transport path. Mechanical
+assertions passed against the 159-line answer and its 2610-line trace.
+
 ## Publication Order and Identity Boundary
 
 Two Ornn owners are involved:
@@ -253,18 +285,18 @@ Two Ornn owners are involved:
 - NyxID user `5d0d7b72-acff-49af-bb1b-9f30bbb7c102` owns the three platform
   skills and `aevatar-platform` skillset.
 
-The safe publication sequence is:
+The completed publication sequence was:
 
 1. Authenticate as the Codex-skill owner.
 2. Publish and read back workflow sample 3.0.
 3. Publish and read back node setup 4.0, pinned to sample 3.0.
 4. Authenticate as the platform owner.
-5. Publish and read back platform map 1.8.
-6. Publish and read back feasibility advisor 1.2.
-7. Publish and read back triage 1.4.
-8. Publish the skillset with all exact member refs and the complete new master
-   instructions; Ornn assigns the next minor revision.
-9. Resolve the exact new skillset closure and verify the five upgraded refs,
+5. Rebase on and publish platform map 1.9 from concurrent 1.8.
+6. Rebase on and publish feasibility advisor 1.3 from concurrent 1.2.
+7. Rebase on and publish triage 1.5 from concurrent 1.4.
+8. Publish the skillset from concurrent 1.12 with all exact member refs and the
+   complete new master instructions; Ornn assigned revision 1.13.
+9. Resolve the exact 1.13 closure and verify the five upgraded refs,
    both Codex skills, the master prompt, member visibility, and hash stability.
 
 Never pass tokens between profiles, print them, copy profile files, or use one
@@ -279,18 +311,51 @@ before publication, discard the candidate and leave the registry unchanged. If
 a published version is wrong, publish a corrected next version; do not delete
 or mutate history as rollback.
 
-Do not update the skillset until every referenced member version has been
-published and read back successfully. This keeps `aevatar-platform@1.11`
-as the latest revision if implementation pauses during the cross-account phase.
-Before the skillset publish, resolve every proposed member ref and validate the
-complete request locally. If the post-publish exact readback still reveals a
-defect, 1.11 remains the prior known-good revision but cannot become latest
-again; publish a corrected next revision after repairing the member or master
-prompt.
+The skillset was not updated until every referenced member version had been
+published and read back successfully. Concurrent `aevatar-platform@1.12`
+therefore remained the latest revision throughout the cross-account member
+publication phase. Before publishing 1.13, every proposed member ref and the
+complete request were resolved and validated locally. Because versions remain
+immutable, a defect found after publication would require a corrected later
+revision; neither 1.12 nor 1.13 can be mutated in place.
+
+## Published Evidence
+
+Ornn published these immutable skill versions on July 28, 2026:
+
+| Skill | Version | SHA-256 / Ornn `skillHash` |
+|---|---:|---|
+| `aevatar-codex-exec-workflow-sample` | 3.0 | `142f8e2734acd2c235d38b5cf9548c6e98fffeec42e61832b45701f926062575` |
+| `aevatar-codex-exec-node-setup` | 4.0 | `8e92a11dd3b05a8c3923ff1d421c52469510c3dcc98611feefbd953017b5f9d5` |
+| `aevatar-platform-map` | 1.9 | `31b77c9f766ada4d423a73dada8624a5a1c0317b7495cdf8cae0fe3b7224c561` |
+| `aevatar-feasibility-advisor` | 1.3 | `e8545cf55045b6098f151a84820e3b93d35bea1890fdda6103e176b0f991cd57` |
+| `aevatar-triage` | 1.5 | `a81a98deeec50dc90b0b65137bed985123c99d104ddab223fd754d73e19f7235` |
+
+For every row, the local candidate ZIP SHA-256, the server closure's
+`skillHash`, the first downloaded ZIP, and a second independent downloaded ZIP
+are identical. Both registry JSON downloads also match exactly and contain the
+same names, versions, metadata, and file maps.
+
+The published skillset is:
+
+- name: `aevatar-platform`;
+- GUID: `248b99d6-36ff-4d41-bb45-baa25c6a9cad`;
+- version: `1.13`;
+- visibility: `all-public`;
+- roots and unique closure members: 15, with no version conflict;
+- publish-request SHA-256:
+  `2acc241c61cac4a78bff63be0d9a7d3973f163fbb61dfef4e28f11931f9a1df1`.
+
+Exact detail readback matches all 15 requested roots and the complete master
+instructions. Version history contains `1.13` with 15 members and preserves
+`1.12` with 13. Closure resolution contains 15 unique skills; node setup's
+dependency on workflow sample 3.0 is correctly deduplicated. The independent
+published-surface GREEN evaluation described above used only these downloaded
+registry artifacts, not candidate files or implementation-source context.
 
 ## Acceptance Criteria
 
-The upgrade is complete when:
+The completed upgrade satisfies the following criteria:
 
 - all five affected skills exist at the target versions and pass Ornn format
   validation plus their forward scenarios;
