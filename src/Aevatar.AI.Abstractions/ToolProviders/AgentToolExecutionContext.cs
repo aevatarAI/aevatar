@@ -83,6 +83,9 @@ public sealed record AgentToolExecutionContext(
     /// </summary>
     public AgentToolOperationAdmission? OperationAdmission { get; init; }
 
+    public AgentToolInvocationSurface InvocationSurface { get; init; } =
+        AgentToolInvocationSurface.Unspecified;
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,
@@ -102,6 +105,14 @@ public sealed record AgentToolExecutionContext(
 
     internal static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}
+
+public enum AgentToolInvocationSurface
+{
+    Unspecified = 0,
+    HumanSession = 1,
+    WorkflowToolCall = 2,
+    WorkflowLlmToolLoop = 3,
 }
 
 public sealed record AgentToolVisibilityScope(IReadOnlySet<string>? AllowedToolNames)

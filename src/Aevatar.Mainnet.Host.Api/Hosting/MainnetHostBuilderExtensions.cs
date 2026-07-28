@@ -336,6 +336,9 @@ public static class MainnetHostBuilderExtensions
                 o.MaxRequestDurationSeconds);
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
+            o.ManagedWorkflowAdmissionMode = builder.Configuration.GetValue(
+                "Aevatar:NyxId:ManagedWorkflowAdmissionMode",
+                o.ManagedWorkflowAdmissionMode);
         });
         builder.Services.Replace(ServiceDescriptor.Singleton<
             IWorkflowFileMultipartUploadPolicyResolver,

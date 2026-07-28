@@ -56,7 +56,12 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdProxyTool(_client, _logger, _fileArtifactIngress, _options.EffectiveProxyFileArtifactMaxBytes),
+            new NyxIdProxyTool(
+                _client,
+                _logger,
+                _fileArtifactIngress,
+                _options.EffectiveProxyFileArtifactMaxBytes,
+                _options.ManagedWorkflowAdmissionMode),
             new NyxIdCodeExecuteTool(_client, _logger, _options.SandboxServiceSlug),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),

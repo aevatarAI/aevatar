@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -18,6 +19,108 @@ namespace Aevatar.AI.Tests;
 /// </summary>
 public sealed class NyxIdProxyToolAdmittedOperationTests
 {
+    [Theory]
+    [InlineData("text")]
+    [InlineData("file_artifact")]
+    public async Task ExecuteAsync_ShouldRejectProoflessManagedWorkflowBeforeDownstreamWork(
+        string responseMode)
+    {
+        var handler = new RecordingHandler(binaryResponse: responseMode == "file_artifact");
+        var ingress = new RecordingFileArtifactIngress();
+        var tool = CreateTool(
+            handler,
+            ingress,
+            NyxIdManagedWorkflowAdmissionMode.Enforce);
+        using var scope = PushProoflessManagedContext();
+        var arguments = JsonSerializer.Serialize(new
+        {
+            service_id = "us-service-alpha",
+            slug = "calendar-alpha",
+            path = "/events/evt-alpha",
+            response_mode = responseMode,
+        });
+
+        var result = await tool.ExecuteAsync(arguments);
+
+        result.Should().Contain("NYXID_OPERATION_ADMISSION_REQUIRED");
+        handler.RequestCount.Should().Be(0);
+        ingress.Requests.Should().BeEmpty();
+        tool.CreateResultReceipt("call-alpha", "nyxid_proxy", arguments, result)!
+            .ErrorCode.Should().Be("NYXID_OPERATION_ADMISSION_REQUIRED");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldKeepProoflessManagedWorkflowOnLegacyPathInShadowMode()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(
+            handler,
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Shadow);
+        using var scope = PushProoflessManagedContext();
+
+        var result = await tool.ExecuteAsync(
+            """{"service_id":"us-service-alpha","slug":"calendar-alpha","path":"/events/evt-alpha"}""");
+
+        result.Should().NotContain("NYXID_OPERATION_ADMISSION_REQUIRED");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldKeepOrdinaryHumanRawProxyPathInEnforceMode()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(
+            handler,
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
+        using var scope = PushHumanContext();
+
+        var result = await tool.ExecuteAsync(
+            """{"service_id":"us-service-alpha","slug":"calendar-alpha","path":"/events/evt-alpha"}""");
+
+        result.Should().NotContain("NYXID_OPERATION_ADMISSION_REQUIRED");
+        handler.ProxyRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRecordOnlyBoundedProoflessManagedDecisionTelemetry()
+    {
+        var measurements = new List<KeyValuePair<string, object?>[]>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == "Aevatar.AI.ToolProviders.NyxId" &&
+                instrument.Name == "aevatar.nyxid.proxy.admission.decisions")
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+            measurements.Add(tags.ToArray()));
+        listener.Start();
+        var handler = new RecordingHandler();
+        var tool = CreateTool(
+            handler,
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
+        using var scope = PushProoflessManagedContext();
+
+        await tool.ExecuteAsync(
+            """{"service_id":"us-secret-alpha","slug":"secret-alpha","path":"/secret/alpha","body":"secret-body"}""");
+
+        var tags = measurements.Should().ContainSingle().Subject.ToDictionary();
+        tags.Should().BeEquivalentTo(new Dictionary<string, object?>
+        {
+            ["aevatar.nyxid.admission.mode"] = "enforce",
+            ["aevatar.nyxid.admission.managed"] = true,
+            ["aevatar.nyxid.admission.proof_present"] = false,
+            ["aevatar.nyxid.admission.invocation_surface"] = "workflow_llm_tool_loop",
+            ["aevatar.nyxid.admission.risk"] = "unspecified",
+            ["aevatar.nyxid.admission.would_approve"] = false,
+            ["aevatar.nyxid.admission.would_block"] = true,
+        });
+        tags.Values.Select(static value => value?.ToString()).Should().NotContain(value =>
+            value != null && value.Contains("secret", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task ExecuteAsync_ShouldBuildTheConcretePathFromTheProofTemplate()
     {
@@ -272,11 +375,14 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
 
     private static NyxIdProxyTool CreateTool(
         RecordingHandler handler,
-        INyxIdProxyFileArtifactIngress? ingress = null) =>
+        INyxIdProxyFileArtifactIngress? ingress = null,
+        NyxIdManagedWorkflowAdmissionMode managedWorkflowAdmissionMode =
+            NyxIdManagedWorkflowAdmissionMode.Shadow) =>
         new(new NyxIdApiClient(
             new NyxIdToolOptions { BaseUrl = "https://nyx.test" },
             new HttpClient(handler)),
-            fileArtifactIngress: ingress);
+            fileArtifactIngress: ingress,
+            managedWorkflowAdmissionMode: managedWorkflowAdmissionMode);
 
     private static AgentToolContextScope PushContext(AgentToolOperationAdmission admission) =>
         AgentToolContextScope.Push(new AgentToolExecutionContext(
@@ -297,6 +403,31 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 "step-alpha",
                 "run-alpha",
                 1),
+            InvocationSurface = AgentToolInvocationSurface.WorkflowToolCall,
+        });
+
+    private static AgentToolContextScope PushProoflessManagedContext() =>
+        AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-alpha", "call-alpha"),
+            Credentials = new AgentToolCredentials("user-token", null, null),
+            Caller = new AgentToolCallerContext("scope-alpha", null, null),
+            WorkflowRuntime = new AgentWorkflowRuntimeContext(
+                "workflow-run-actor-alpha",
+                "run-alpha",
+                "llm-alpha",
+                "run-alpha",
+                1),
+            InvocationSurface = AgentToolInvocationSurface.WorkflowLlmToolLoop,
+        });
+
+    private static AgentToolContextScope PushHumanContext() =>
+        AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Request = new AgentToolRequestIdentity("request-human-alpha", "call-human-alpha"),
+            Credentials = new AgentToolCredentials("user-token", null, null),
+            Caller = new AgentToolCallerContext("scope-human-alpha", null, null),
+            InvocationSurface = AgentToolInvocationSurface.HumanSession,
         });
 
     private sealed record RecordedProxyRequest(string Method, string Path, string Query, string Body);
