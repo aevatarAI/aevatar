@@ -33,7 +33,8 @@ public sealed record ConnectedServiceToolOperation(
     AevatarToolMarker? Marker,
     IReadOnlyList<ConnectedServiceToolParameter> Parameters,
     JsonNode? RequestBodySchema,
-    bool RequestBodyRequired)
+    bool RequestBodyRequired,
+    string? RequestBodyMediaType)
 {
     public bool HasRequestBody => RequestBodySchema is not null;
 
@@ -47,6 +48,42 @@ public sealed record ConnectedServiceToolOperation(
             var taken = Parameters.Any(p => string.Equals(p.Name, "body", StringComparison.Ordinal));
             return taken ? "request_body" : "body";
         }
+    }
+
+    public bool IsSafeMethod => Method is "GET" or "HEAD" or "OPTIONS";
+
+    public bool IsDestructive =>
+        string.Equals(Method, "DELETE", StringComparison.Ordinal) || Marker?.Destructive is true;
+
+    public bool IsReadOnly => IsSafeMethod && !IsDestructive && Marker?.ReadOnly is not false;
+
+    public Aevatar.AI.Abstractions.ToolProviders.ToolApprovalMode ApprovalMode =>
+        !IsSafeMethod || IsDestructive ||
+        Marker?.Approval?.Equals("always", StringComparison.OrdinalIgnoreCase) is true
+            ? Aevatar.AI.Abstractions.ToolProviders.ToolApprovalMode.AlwaysRequire
+            : Aevatar.AI.Abstractions.ToolProviders.ToolApprovalMode.NeverRequire;
+
+    public string CanonicalContract()
+    {
+        var parameters = Parameters.Select(parameter => new
+        {
+            parameter.Name,
+            Location = parameter.In.ToString(),
+            parameter.Required,
+            Schema = parameter.Schema?.ToJsonString(),
+        });
+        return JsonSerializer.Serialize(new
+        {
+            Method,
+            PathTemplate,
+            Parameters = parameters,
+            BodySchema = RequestBodySchema?.ToJsonString(),
+            RequestBodyRequired,
+            RequestBodyMediaType,
+            IsReadOnly,
+            IsDestructive,
+            ApprovalMode,
+        });
     }
 
     /// <summary>Builds the <see cref="Aevatar.AI.Abstractions.ToolProviders.IAgentTool.ParametersSchema"/> JSON.</summary>

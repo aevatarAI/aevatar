@@ -395,12 +395,11 @@ public sealed class StudioScheduledCredentialMaterializerTests
                 OwnerSubject = ownerSubject,
             },
         };
-        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant { UserServiceId = "service-alpha" });
-        plan.NyxIdNodeGrants.Add(new NyxIdNodeGrant
+        plan.NyxIdServiceGrants.Add(new NyxIdServiceGrant
         {
             UserServiceId = "service-alpha",
-            NodeId = "node-alpha",
-            Role = NyxIdNodeRole.Primary,
+            NodeGrantRequirement = AuthorizationGrantRequirement.Required,
+            NodeIds = { "node-alpha" },
         });
         return new ValidatedScheduledInvocationAuthorizationPlan(plan);
     }

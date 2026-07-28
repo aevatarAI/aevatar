@@ -102,6 +102,12 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
             .Should().BeTrue();
         ToolOutcomeReplyConstraintBuilder.IsMutatingTool(new StubTool("approval", isReadOnly: true, requiresApproval: true), "{}")
             .Should().BeTrue();
+        ToolOutcomeReplyConstraintBuilder.IsMutatingTool(
+                new StubTool(
+                    "dynamic-read",
+                    callSafety: new AgentToolCallSafety(false, true, false)),
+                "{}")
+            .Should().BeFalse();
     }
 
     private static ToolOutcomeReplyFact Succeeded(IAgentTool tool) =>
@@ -124,7 +130,8 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
         bool isReadOnly = false,
         bool isDestructive = false,
         string sideEffectKind = "",
-        bool? requiresApproval = null) : IAgentTool
+        bool? requiresApproval = null,
+        AgentToolCallSafety? callSafety = null) : IAgentTool
     {
         public string Name => name;
         public string Description => name;
@@ -133,6 +140,8 @@ public sealed class ToolOutcomeReplyConstraintBuilderTests
         public bool IsDestructive => isDestructive;
         public string SideEffectKind => sideEffectKind;
         public bool? RequiresApproval(string argumentsJson) => requiresApproval;
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+            callSafety ?? new AgentToolCallSafety(requiresApproval, isReadOnly, isDestructive);
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("{}");
     }

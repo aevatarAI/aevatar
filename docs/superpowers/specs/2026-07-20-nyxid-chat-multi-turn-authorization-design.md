@@ -57,6 +57,13 @@ conflict enforcement. No process-local id map is introduced.
 7. SSE writes terminal identity and stops heartbeat before closing.
 
 An identical idempotent retry replays the already committed RoleGAgent session.
+A `terminal_time` protobuf field is assigned once when RoleGAgent commits the
+authoritative completion, persisted in `RoleChatSessionState`, and copied into
+the replayed completion event. NyxIdChat history archival uses that stored time
+instead of sampling a new clock value. The history actor therefore receives an
+identical payload and keeps its strict conflict detection while deduplicating
+the replay without appending a turn or persisting a rejection.
+
 A different prompt or multimodal input under the same derived turn id commits a
 typed conflict event without overwriting the original replay record. The AGUI
 adapter emits `RUN_ERROR` with code `IDEMPOTENCY_CONFLICT` and the turn id.
@@ -88,8 +95,20 @@ endpoint's bounded interaction failure path.
 
 `AgentToolReceipt` can carry that typed blocker. A result-receipt hook on
 `IAgentTool` lets NyxID tools map their structured response before the generic
-receipt factory labels it successful. Classification uses NyxID error key,
-numeric code, and HTTP status, never exception-message substring matching.
+receipt factory labels it successful. Only the published NyxID
+`401/unauthorized/1001` tuple means that the caller credential is invalid or
+expired. The shared `403/forbidden/1002` tuple is a normal typed tool failure:
+NyxID also uses it for approval-policy denial and approval timeout, so it cannot
+prove that reconnecting would help. Classification uses typed status, key, and
+numeric code, never exception-message substring matching.
+
+Missing service connections use positive Aevatar-owned evidence. Dynamic tool
+discovery exposes only connected services, and `nyxid_require_service` emits a
+typed `NYXID_SERVICE_NOT_CONNECTED` blocker when a required service is absent.
+All other proxy failures receive credential-free error receipts and safe tool
+results. Raw proxy error bodies, messages, credentials, and failed-call resource
+query strings do not enter receipts, committed completion state, replayed tool
+frames, or SSE.
 
 `RoleChatSessionCompletedEvent` carries a typed outcome and optional
 authorization blocker. When any tool receipt requires authorization, the actor

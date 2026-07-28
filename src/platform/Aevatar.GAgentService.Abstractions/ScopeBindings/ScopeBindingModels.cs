@@ -59,7 +59,11 @@ public sealed record ScopeBindingUpsertRequest(
     string? ServiceId = null,
     bool? ExposureDesired = null,
     bool AllowExistingRevisionReplay = false,
-    string? ReplayRevisionId = null);
+    string? ReplayRevisionId = null)
+{
+    [JsonIgnore]
+    public WorkflowCapabilityAdmissionContext? CapabilityAdmission { get; init; }
+}
 
 public sealed record ScopeBindingWorkflowResult
 {

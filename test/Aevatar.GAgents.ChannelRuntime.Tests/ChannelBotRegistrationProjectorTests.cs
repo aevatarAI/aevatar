@@ -49,6 +49,7 @@ public sealed class ChannelBotRegistrationProjectorTests
                     WorkflowResultDeliveryCredential = TestDeliverySecretReference("bot-reg-1"),
                     LastInboundAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)),
                     DefaultSkillName = "whatsapp-reply-draft",
+                    WorkflowResultDeliveryRepair = FailedRepair(),
                 },
             },
         };
@@ -71,6 +72,9 @@ public sealed class ChannelBotRegistrationProjectorTests
         doc.ActorId.Should().Be("bot-reg-actor-1");
         doc.LastInboundAtUtc.Should().Be(Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 10, 11, 0, 0, TimeSpan.Zero)));
         doc.DefaultSkillName.Should().Be("whatsapp-reply-draft");
+        doc.WorkflowResultDeliveryRepair.Should().Be(FailedRepair());
+        doc.WorkflowResultDeliveryRepair.Should().NotBeSameAs(
+            state.Registrations[0].WorkflowResultDeliveryRepair);
     }
 
     [Fact]
@@ -140,6 +144,22 @@ public sealed class ChannelBotRegistrationProjectorTests
             }),
         };
     }
+
+    private static ChannelWorkflowResultDeliveryRepairState FailedRepair() =>
+        new()
+        {
+            RequestId = "repair-1",
+            Status = ChannelWorkflowResultDeliveryRepairStatus.Failed,
+            ExpectedApiKeyId = "api-key-1",
+            ExpectedConversationRouteId = "route-1",
+            RotatedApiKeyId = "api-key-2",
+            PreparedSecretReference = TestDeliverySecretReference("bot-reg-1"),
+            FailurePhase = ChannelWorkflowResultDeliveryRepairPhase.RouteRebinding,
+            FailureReason = ChannelWorkflowResultDeliveryRepairFailureReason.RouteUpdateFailed,
+            RequestedBySubjectId = "user-1",
+            RequestedAtUnixMs = 1784563200000,
+            UpdatedAtUnixMs = 1784563201000,
+        };
 
     private sealed class RecordingRegistrationWriteDispatcher : IProjectionWriteDispatcher<ChannelBotRegistrationDocument>
     {

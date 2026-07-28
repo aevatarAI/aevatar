@@ -22,6 +22,7 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.InvalidConversationId, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.ConversationNotFound, StatusCodes.Status404NotFound)]
     [InlineData(WorkflowChatRunStartError.ChatHistoryReservationUnavailable, StatusCodes.Status503ServiceUnavailable)]
+    [InlineData(WorkflowChatRunStartError.IdempotencyConflict, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.None, StatusCodes.Status400BadRequest)]
     public void ToHttpStatusCode_ShouldMapExpectedCode(
         WorkflowChatRunStartError error,
@@ -38,8 +39,10 @@ public class ChatRunStartErrorMapperTests
         mapped.Code.Should().Be("WORKFLOW_NOT_FOUND");
         mapped.Message.Should().Be(WorkflowChatRunStartErrorGuidance.WorkflowNotFound);
         mapped.Message.Should().Contain("current scope catalog");
-        mapped.Message.Should().Contain("nyxid_proxy");
-        mapped.Message.Should().Contain("slug/path");
+        mapped.Message.Should().Contain("list_external_workflow_capabilities");
+        mapped.Message.Should().Contain("exact user_service_id + slug + operation contract");
+        mapped.Message.Should().NotContain("without a slug");
+        mapped.Message.Should().NotContain("discovered slug/path");
         mapped.Message.Should().Contain("use_skill");
         mapped.Message.Should().Contain("workflow_id");
     }

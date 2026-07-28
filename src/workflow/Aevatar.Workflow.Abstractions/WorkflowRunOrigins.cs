@@ -11,6 +11,7 @@ public static class WorkflowRunOrigins
     public const string DefaultInvoke = "default-invoke";
     public const string TeamInvoke = "team-invoke";
     public const string ServiceInvoke = "service-invoke";
+    public const string WorkOrder = "work-order";
     public const string AdHocChat = "ad-hoc-chat";
     public const string Provisioned = "provisioned";
 
@@ -21,6 +22,7 @@ public static class WorkflowRunOrigins
         DefaultInvoke,
         TeamInvoke,
         ServiceInvoke,
+        WorkOrder,
         AdHocChat,
         Provisioned,
     ];

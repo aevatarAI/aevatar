@@ -97,6 +97,31 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
     }
 
     [Fact]
+    public async Task InvokeAsync_WhenBoundToolClassifiesInvocationReadOnly_ShouldNotBlock()
+    {
+        var middleware = new ToolCallCredentialPolicyMiddleware();
+        var context = NewContext(new StubTool(
+            isReadOnly: false,
+            callSafety: new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: true,
+                IsDestructive: false)), "{}");
+        using var _ = AgentToolContextScope.Push(SenderBoundContext(
+            ownerToken: "owner-token",
+            senderToken: null));
+        var nextCalled = false;
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        nextCalled.Should().BeTrue();
+        context.Terminate.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task InvokeAsync_WhenNoChannelAndNoSenderBinding_ShouldLeaveOwnerCredentialsUnchanged()
     {
         // No Channel context at all == a direct/API caller, not a channel-relayed third
@@ -270,7 +295,8 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         bool isReadOnly,
         bool isDestructive = false,
         string sideEffectKind = "",
-        bool? requiresApproval = null) : IAgentTool
+        bool? requiresApproval = null,
+        AgentToolCallSafety? callSafety = null) : IAgentTool
     {
         public string Name => "test_tool";
         public string Description => "test";
@@ -279,6 +305,8 @@ public sealed class ToolCallCredentialPolicyMiddlewareTests
         public bool IsDestructive => isDestructive;
         public string SideEffectKind => sideEffectKind;
         public bool? RequiresApproval(string argumentsJson) => requiresApproval;
+        public AgentToolCallSafety GetCallSafety(string argumentsJson) =>
+            callSafety ?? new AgentToolCallSafety(requiresApproval, isReadOnly, isDestructive);
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
             Task.FromResult("""{"ok":true}""");
     }

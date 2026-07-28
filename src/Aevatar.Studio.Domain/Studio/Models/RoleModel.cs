@@ -20,6 +20,8 @@ public sealed record RoleModel
 
     public int? MaxHistoryMessages { get; init; }
 
+    public List<string>? AllowedTools { get; init; }
+
     public string? EventModules { get; init; }
 
     public string? EventRoutes { get; init; }

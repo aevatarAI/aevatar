@@ -59,11 +59,13 @@ public sealed class AgentToolReceiptContractTests
         RoleChatSessionCompletedEvent.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
-            .Contain((11, "tool_receipts"));
+            .Contain((11, "tool_receipts"))
+            .And.Contain((16, "terminal_time"));
         RoleChatSessionState.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))
             .Should()
-            .Contain((12, "tool_receipts"));
+            .Contain((12, "tool_receipts"))
+            .And.Contain((17, "terminal_time"));
 
         ToolApprovalDecisionEvent.Descriptor.Fields.InFieldNumberOrder()
             .Select(field => (field.FieldNumber, field.Name))

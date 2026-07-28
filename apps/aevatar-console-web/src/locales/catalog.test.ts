@@ -73,6 +73,19 @@ describe('console locale catalogs', () => {
     expect(zhCNMessages['teams.detail.status.buildReady']).toBe('可构建');
   });
 
+  it('keeps Settings model placeholders and sync labels localized', () => {
+    expect(enUSMessages['pages.settings.index.fallback.active']).toBe('Fallback active');
+    expect(zhCNMessages['pages.settings.index.fallback.active']).toBe('回退已启用');
+    expect(enUSMessages['pages.settings.index.in.sync']).toBe('In sync');
+    expect(zhCNMessages['pages.settings.index.in.sync']).toBe('已同步');
+    expect(enUSMessages['pages.settings.index.model.search.for']).toBe('Search models for {route}');
+    expect(zhCNMessages['pages.settings.index.model.search.for']).toBe('搜索 {route} 的模型');
+    expect(enUSMessages['pages.settings.index.model.type.for']).toBe('Type a model ID for {route}');
+    expect(zhCNMessages['pages.settings.index.model.type.for']).toBe('输入 {route} 的模型 ID');
+    expect(enUSMessages['pages.settings.index.model.type']).toBe('Type a model ID');
+    expect(zhCNMessages['pages.settings.index.model.type']).toBe('输入模型 ID');
+  });
+
   it('keeps Chinese engineering and product terms from regressing to literal machine translations', () => {
     const zhCatalogText = Object.values(zhCNMessages).join('\n');
     const bannedMachineTranslations = [

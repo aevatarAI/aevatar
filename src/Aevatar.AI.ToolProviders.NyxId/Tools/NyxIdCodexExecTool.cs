@@ -8,10 +8,10 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>
 /// Routes a strongly typed Codex request to either a user-owned private SSH host or the
-/// operator-owned managed OpenSandbox adapter. Target-specific infrastructure stays behind
+/// operator-managed chrono-sandbox service. Target-specific infrastructure stays behind
 /// <see cref="ICodexExecutionPort"/>.
 /// </summary>
-public sealed class NyxIdCodexExecTool : IAgentTool
+public sealed class NyxIdCodexExecTool : INyxIdBuiltInTool
 {
     private const int MaxPromptUtf8Bytes = 6_000;
     private const int DefaultPrivateSshTimeoutSeconds = 30;

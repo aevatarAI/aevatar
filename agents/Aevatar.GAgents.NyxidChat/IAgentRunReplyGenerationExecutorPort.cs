@@ -1,3 +1,5 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.GAgents.Channel.Runtime;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -6,20 +8,80 @@ public interface IAgentRunReplyGenerationExecutorPort
 {
     Task<AgentRunReplyStepState> BuildInitialStepStateAsync(AgentRunReplyGenerationExecutionRequest request, CancellationToken ct);
 
-    // Refactor (iter110/cluster-110-agent-run-executor-authoritative-step-state):
-    //   Old pattern: AgentRunReplyGenerationExecutor performs LLM/tool IO and constructs the authoritative next AgentRunReplyStepState outside the run actor.
-    //   New principle: Executor returns typed IO facts only; AgentRunGAgent applies deterministic step-state transition and persists state inside actor event handling.
-    Task ExecuteLlmStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct);
-
-    Task ExecuteToolStepAsync(AgentRunReplyStepExecutionRequest request, CancellationToken ct);
-
-    Task<AgentRunNextLlmStepRequestedEvent> BuildLlmStepContinuationAsync(
+    Task<AgentRunLlmStepExecution> BuildLlmStepExecutionAsync(
         AgentRunReplyStepExecutionRequest request,
         CancellationToken ct);
 
     Task<AgentRunNextToolStepRequestedEvent> BuildToolStepContinuationAsync(
         AgentRunReplyStepExecutionRequest request,
+        AgentRunAuthorizedToolStep? authorizedToolStep,
         CancellationToken ct);
+}
+
+public sealed record AgentRunLlmStepExecution(
+    AgentRunNextLlmStepRequestedEvent Continuation,
+    AgentRunAuthorizedToolStep? AuthorizedToolStep,
+    IReadOnlyList<AgentRunAuthorizedToolCallSafety>? AuthorizedToolCallSafeties = null);
+
+/// <summary>
+/// Transient, provider-owned classification for one exact authorized call.
+/// This snapshot stays beside the runtime capability and is never persisted as
+/// actor state; NyxIdChat copies only its closed safe fields into its result.
+/// </summary>
+public sealed record AgentRunAuthorizedToolCallSafety(
+    string CallId,
+    string ToolName,
+    string ArgumentsJson,
+    AgentToolCallSafety CallSafety,
+    string SideEffectKind);
+
+public sealed class AgentRunAuthorizedToolStep
+{
+    private readonly AgentRunToolCall[] _toolCalls;
+    private readonly Func<CancellationToken, Task<AgentRunToolStepResult>> _executeAsync;
+
+    internal AgentRunAuthorizedToolStep(
+        string runId,
+        string correlationId,
+        int attempt,
+        int stepIndex,
+        IReadOnlyList<AgentRunToolCall> toolCalls,
+        Func<CancellationToken, Task<AgentRunToolStepResult>> executeAsync)
+    {
+        RunId = runId;
+        CorrelationId = correlationId;
+        Attempt = attempt;
+        StepIndex = stepIndex;
+        _toolCalls = toolCalls.Select(static call => call.Clone()).ToArray();
+        _executeAsync = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync));
+    }
+
+    internal string RunId { get; }
+
+    internal string CorrelationId { get; }
+
+    internal int Attempt { get; }
+
+    internal int StepIndex { get; }
+
+    internal bool Matches(AgentRunReplyStepExecutionRequest request)
+    {
+        if (!string.Equals(RunId, request.RunId, StringComparison.Ordinal) ||
+            !string.Equals(CorrelationId, request.Request.CorrelationId, StringComparison.Ordinal) ||
+            Attempt != request.Attempt ||
+            StepIndex != request.StepIndex ||
+            _toolCalls.Length != request.StepState.PendingToolCalls.Count)
+        {
+            return false;
+        }
+
+        return _toolCalls.Zip(request.StepState.PendingToolCalls).All(static pair =>
+            string.Equals(pair.First.Id, pair.Second.Id, StringComparison.Ordinal) &&
+            string.Equals(pair.First.Name, pair.Second.Name, StringComparison.Ordinal) &&
+            string.Equals(pair.First.ArgumentsJson, pair.Second.ArgumentsJson, StringComparison.Ordinal));
+    }
+
+    internal Task<AgentRunToolStepResult> ExecuteAsync(CancellationToken ct) => _executeAsync(ct);
 }
 
 public sealed record AgentRunReplyGenerationExecutionRequest(
@@ -34,4 +96,5 @@ public sealed record AgentRunReplyStepExecutionRequest(
     int Attempt,
     int StepIndex,
     NeedsLlmReplyEvent Request,
-    AgentRunReplyStepState StepState);
+    AgentRunReplyStepState StepState,
+    Func<LLMStreamChunk, CancellationToken, Task>? ReportChunkAsync = null);

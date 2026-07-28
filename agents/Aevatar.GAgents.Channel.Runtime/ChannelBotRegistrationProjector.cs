@@ -52,6 +52,7 @@ public sealed class ChannelBotRegistrationProjector
             WorkflowResultDeliveryCredential = entry.WorkflowResultDeliveryCredential?.Clone(),
             LastInboundAtUtc = entry.LastInboundAtUtc,
             DefaultSkillName = entry.DefaultSkillName ?? string.Empty,
+            WorkflowResultDeliveryRepair = entry.WorkflowResultDeliveryRepair?.Clone(),
             StateVersion = stateEvent.Version,
             LastEventId = stateEvent.EventId ?? string.Empty,
             ActorId = context.RootActorId,

@@ -215,6 +215,71 @@ public sealed class WorkflowProjectionMaterializationTests
     }
 
     [Fact]
+    public async Task WorkflowCatalogCurrentStateProjector_ShouldNotMaterializeScopeOwnedDefinition()
+    {
+        var store = new RecordingDocumentStore<WorkflowCatalogCurrentStateDocument>(x => x.Id);
+        var projector = new WorkflowCatalogCurrentStateProjector(
+            store,
+            new FixedClock(DateTimeOffset.Parse("2026-03-17T10:00:00+00:00")));
+        var context = new WorkflowBindingProjectionContext
+        {
+            RootActorId = "scope-workflow:tenant-a:report",
+            ProjectionKind = "workflow-binding",
+        };
+
+        // A scope-owned workflow definition (bound during service invocation/activation) carries a
+        // non-empty ScopeId. The global runnable catalog is a shared template gallery, so a scoped
+        // definition must never materialize into it — otherwise any tenant can read another tenant's
+        // workflow YAML/system prompts, and same-named scoped definitions clobber each other.
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                11,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "tenant_report",
+                    WorkflowYaml = BuildDefinitionYaml("tenant_report"),
+                    SourceKind = "service_revision",
+                    ScopeId = "tenant-a",
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "tenant_report",
+                    WorkflowYaml = BuildDefinitionYaml("tenant_report"),
+                    SourceKind = "service_revision",
+                    ScopeId = "tenant-a",
+                    Compiled = true,
+                }));
+
+        store.UpsertCount.Should().Be(0);
+        store.Stored.Should().NotContainKey("tenant_report");
+
+        // A globally shared definition of the same name (empty ScopeId, e.g. a startup/file import)
+        // is still materialized — the guard keys on scope ownership, not the workflow name.
+        await projector.ProjectAsync(
+            context,
+            BuildDefinitionCommittedEnvelope(
+                12,
+                new BindWorkflowDefinitionEvent
+                {
+                    WorkflowName = "tenant_report",
+                    WorkflowYaml = BuildDefinitionYaml("tenant_report"),
+                    SourceKind = "repo",
+                },
+                new WorkflowState
+                {
+                    WorkflowName = "tenant_report",
+                    WorkflowYaml = BuildDefinitionYaml("tenant_report"),
+                    SourceKind = "repo",
+                    Compiled = true,
+                }));
+
+        store.UpsertCount.Should().Be(1);
+        store.Stored.Should().ContainKey("tenant_report");
+        store.Stored["tenant_report"].Source.Should().Be("repo");
+    }
+
+    [Fact]
     public async Task WorkflowRunInsightReportArtifactProjector_ShouldTrackLifecycleReplyAndCompletionBranches()
     {
         var store = new RecordingDocumentStore<WorkflowRunInsightReportDocument>(x => x.Id);

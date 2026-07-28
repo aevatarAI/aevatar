@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Studio.Application.Provisioning;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.StudioProvisioning;
 
@@ -58,7 +59,7 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
-        var scopeId = Normalize(AgentToolRequestContext.ScopeId);
+        var scopeId = StudioToolScopeResolver.ResolveOwnerScopeOrCallerScope();
         if (scopeId is null)
         {
             return ErrorJson(
@@ -94,6 +95,8 @@ internal sealed class BindStudioMemberWorkflowTool : IAgentTool
         var request = new StudioMemberWorkflowBindingRequest(scopeId, memberId, workflowYaml)
         {
             WorkflowId = Normalize(args.WorkflowId),
+            CapabilityAdmission = StudioWorkflowCapabilityToolContext.Create(
+                ExternalCapabilityExecutionMode.Interactive),
         };
 
         try

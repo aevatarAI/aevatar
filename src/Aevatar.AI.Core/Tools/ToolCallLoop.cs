@@ -39,9 +39,6 @@ public sealed class ToolCallLoop
         _budgetTracker = budgetTracker;
     }
 
-    /// <summary>Exposes the tool manager for streaming tool execution.</summary>
-    internal ToolManager Tools => _tools;
-
     /// <summary>Exposes the tool middlewares for streaming tool execution.</summary>
     internal IReadOnlyList<IToolCallMiddleware> ToolMiddlewares => _toolMiddlewares;
 
@@ -59,7 +56,12 @@ public sealed class ToolCallLoop
         //   New principle: tool control semantics are typed context fields; Metadata is not the internal control plane.
         var toolContext = AgentToolExecutionContextMapper.FromRequest(baseRequest);
         using var _ = AgentToolContextScope.Push(toolContext);
-        return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
+        return await ExecuteCoreAsync(
+            provider,
+            messages,
+            baseRequest,
+            maxRounds,
+            ct);
     }
 
     /// <summary>Max recovery attempts when the LLM response is truncated by output token limit.</summary>
@@ -96,7 +98,7 @@ public sealed class ToolCallLoop
                 ResponseFormat = baseRequest.ResponseFormat,
             };
 
-            var (response, terminated) = await InvokeLlmAsync(provider, request, ct);
+            var (response, terminated, authorizedTools) = await InvokeLlmAsync(provider, request, ct);
 
             // ─── Hook: Post-Sampling（LLM 输出后、Tool 执行前） ───
             if (_hooks != null && response.HasToolCalls && !terminated)
@@ -156,7 +158,7 @@ public sealed class ToolCallLoop
                             parsed.CleanedContent,
                             response.ReasoningContent,
                             parsed.ToolCalls));
-                        await ExecuteToolCallsCoreAsync(parsed.ToolCalls, messages, ct);
+                        await ExecuteToolCallsCoreAsync(authorizedTools, parsed.ToolCalls, messages, ct);
                         accumulatedContent = null;
                         continue;
                     }
@@ -205,7 +207,7 @@ public sealed class ToolCallLoop
                 ReasoningContent = response.ReasoningContent,
                 ToolCalls = response.ToolCalls,
             });
-            await ExecuteToolCallsCoreAsync(response.ToolCalls!, messages, ct);
+            await ExecuteToolCallsCoreAsync(authorizedTools, response.ToolCalls!, messages, ct);
         }
 
         // maxRounds exhausted — tool results from the last round are already in messages.
@@ -226,7 +228,7 @@ public sealed class ToolCallLoop
             MaxTokens = baseRequest.MaxTokens,
             ResponseFormat = baseRequest.ResponseFormat,
         };
-        var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
+        var (finalResponse, _, authorizedFinalTools) = await InvokeLlmAsync(provider, finalRequest, ct);
         var finalContent = finalResponse?.Content;
 
         // ─── Fallback: the final no-tools call may still contain DSML text calls ───
@@ -239,7 +241,11 @@ public sealed class ToolCallLoop
                     finalParsed.CleanedContent,
                     finalResponse?.ReasoningContent,
                     finalParsed.ToolCalls));
-                await ExecuteToolCallsCoreAsync(finalParsed.ToolCalls, messages, ct);
+                await ExecuteToolCallsCoreAsync(
+                    authorizedFinalTools,
+                    finalParsed.ToolCalls,
+                    messages,
+                    ct);
 
                 // One more LLM call to summarize
                 var summaryRequest = new LLMRequest
@@ -257,7 +263,7 @@ public sealed class ToolCallLoop
                     MaxTokens = finalRequest.MaxTokens,
                     ResponseFormat = finalRequest.ResponseFormat,
                 };
-                var (summaryResponse, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
+                var (summaryResponse, _, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
                 var summaryContent = summaryResponse?.Content;
                 if (summaryContent != null)
                     messages.Add(ChatMessage.Assistant(summaryContent, summaryResponse?.ReasoningContent));
@@ -282,10 +288,10 @@ public sealed class ToolCallLoop
         {
             ExternalMetadata = AgentToolExecutionContextMapper.StripOwnedControlKeys(metadata),
         });
-        await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
+        await ExecuteToolCallsCoreAsync(_tools, toolCalls, messages, ct);
     }
 
-    private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
+    private async Task<(LLMResponse Response, bool Terminated, ToolManager AuthorizedTools)> InvokeLlmAsync(
         ILLMProvider provider,
         LLMRequest request,
         CancellationToken ct)
@@ -294,24 +300,36 @@ public sealed class ToolCallLoop
         //   Old pattern: non-streaming ChatAsync directly called provider.ChatAsync.
         //   New principle: ChatStreamAsync is the only authoritative AI executor; offline text aggregation consumes the stream as an explicit adapter.
         // ─── Hook: LLM Request Start ───
-        var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = request };
+        var authorizationFence = ChatRuntimeRequestBuilder.CaptureAuthorizationFence(request);
+        var hasRequestExtensionPoint = _hooks is not null || _llmMiddlewares.Count > 0;
+        var catalogBoundRequest = authorizationFence.Apply(request, forceCopy: hasRequestExtensionPoint);
+        var llmCtx = new AIGAgentExecutionHookContext { LLMRequest = catalogBoundRequest };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmCtx, ct);
         var llmStartedAt = Stopwatch.GetTimestamp();
 
         var llmCallContext = new LLMCallContext
         {
-            Request = request,
+            Request = authorizationFence.Apply(catalogBoundRequest),
             Provider = provider,
             CancellationToken = ct,
             IsStreaming = true,
         };
         AnnotateRequestIdentity(llmCallContext);
 
+        ToolManager? authorizedTools = null;
         await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
         {
             if (llmCallContext.Terminate) return;
-            llmCallContext.Response = await ChatStreamContentAggregator.AggregateResponseAsync(provider, llmCallContext.Request, ct);
+            var authorizedRequest = authorizationFence.Apply(llmCallContext.Request);
+            llmCallContext.Request = authorizedRequest;
+            authorizedTools = CreateRequestToolManager(authorizedRequest.Tools);
+            llmCallContext.Response = await ChatStreamContentAggregator.AggregateResponseAsync(
+                provider,
+                authorizedRequest,
+                ct);
         });
+        authorizedTools ??= CreateRequestToolManager(
+            authorizationFence.Apply(llmCallContext.Request).Tools);
 
         var response = llmCallContext.Response
             ?? new LLMResponse { Content = null, ToolCalls = null };
@@ -322,7 +340,7 @@ public sealed class ToolCallLoop
         // ─── Hook: LLM Request End ───
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmCtx, ct);
 
-        return (response, llmCallContext.Terminate);
+        return (response, llmCallContext.Terminate, authorizedTools);
     }
 
     internal static string? ComposeRoundCallId(string? baseRequestId, int round)
@@ -355,14 +373,19 @@ public sealed class ToolCallLoop
         }
     }
 
-    public static ChatMessage BuildToolResultMessage(string callId, string toolName, string toolResult)
+    public static ChatMessage BuildToolResultMessage(
+        string callId,
+        string toolName,
+        string toolResult,
+        AgentToolReceipt? receipt = null)
     {
         if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
         {
             return SkillRecoveryToolResultViews.Attach(
                 ChatMessage.Tool(callId, toolResult),
                 toolName,
-                toolResult);
+                toolResult,
+                receipt);
         }
 
         return SkillRecoveryToolResultViews.Attach(
@@ -374,7 +397,8 @@ public sealed class ToolCallLoop
                 ContentParts = parts,
             },
             toolName,
-            toolResult);
+            toolResult,
+            receipt);
     }
 
     private static bool TryExtractToolContentParts(
@@ -562,7 +586,16 @@ public sealed class ToolCallLoop
             Task.FromResult("{}");
     }
 
+    internal static ToolManager CreateRequestToolManager(IReadOnlyList<IAgentTool>? tools)
+    {
+        var manager = new ToolManager();
+        if (tools is { Count: > 0 })
+            manager.Register(tools);
+        return manager;
+    }
+
     private async Task ExecuteToolCallsCoreAsync(
+        ToolManager tools,
         IReadOnlyList<ToolCall> toolCalls,
         List<ChatMessage> messages,
         CancellationToken ct)
@@ -570,7 +603,7 @@ public sealed class ToolCallLoop
         // Refactor (iter35/cluster-040-streaming-tool-executor):
         //   Old pattern: StreamingToolExecutor owns process-local channel coordinator + TaskCompletionSource waiters + List<TrackedTool>/List<TaskCompletionSource> as object fields for tool execution ordering.
         //   New principle: Tool execution state kept in owning chat/actor turn,或 narrow runtime-neutral tool scheduling abstraction(no process-local progress storage)。Streaming tool progress advanced by owning execution flow;process-local channels 仅作 transport mechanics,不作 business progress 来源。
-        var executor = new StreamingToolExecutor(_tools, _hooks, _toolMiddlewares);
+        var executor = new StreamingToolExecutor(tools, _hooks, _toolMiddlewares);
         using var executionState = executor.CreateExecutionState();
 
         foreach (var call in toolCalls)
@@ -581,7 +614,8 @@ public sealed class ToolCallLoop
             messages.Add(BuildToolResultMessage(
                 result.CallId,
                 result.ToolName,
-                ToolExecutionResultHistory.ResolveSafeContent(result)));
+                ToolExecutionResultHistory.ResolveSafeContent(result),
+                result.Receipt));
         }
     }
 

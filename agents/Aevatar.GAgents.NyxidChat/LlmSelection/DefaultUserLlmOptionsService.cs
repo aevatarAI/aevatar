@@ -35,12 +35,12 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         var catalog = await _catalogClient.GetServicesAsync(query, accessToken, ct).ConfigureAwait(false);
         var available = catalog.Services.Select(NyxIdLlmServiceMapping.ToOption).ToArray();
         var currentConfig = await ResolveCurrentConfigAsync(query, ct).ConfigureAwait(false);
-        var current = ResolveCurrentOption(currentConfig?.PreferredLlmRoute, available);
+        var current = ResolveCurrentOption(currentConfig, available);
         var setupHint = available.Length == 0 ? catalog.SetupHint : null;
 
         return new UserLlmOptionsView(current, available, setupHint)
         {
-            CurrentRouteValue = UserConfigLlmRoute.Normalize(currentConfig?.PreferredLlmRoute),
+            CurrentRouteValue = ResolveCurrentRoute(currentConfig, current),
             CurrentModel = currentConfig?.DefaultModel,
         };
     }
@@ -71,7 +71,9 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
         StudioUserConfig config;
         try
         {
-            config = await queryPort.GetAsync(query.BindingId.Value.Trim(), ct).ConfigureAwait(false);
+            config = await queryPort
+                .GetAsync(UserConfigResourceKey.ForChannelBinding(query.BindingId.Value), ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -90,15 +92,55 @@ public sealed class DefaultUserLlmOptionsService : IUserLlmOptionsService
     }
 
     private static UserLlmOption? ResolveCurrentOption(
+        StudioUserConfig? config,
+        IReadOnlyList<UserLlmOption> available)
+    {
+        return config?.LlmSelection?.Kind switch
+        {
+            UserLlmSelectionKind.Gateway => FindRouteOption(
+                UserConfigLlmRouteDefaults.Gateway,
+                available),
+            UserLlmSelectionKind.NyxIdUserService => FindInventoryOption(
+                config.LlmSelection.NyxIdUserServiceId,
+                available),
+            null or UserLlmSelectionKind.Unspecified => null,
+            _ => null,
+        };
+    }
+
+    private static UserLlmOption? FindInventoryOption(
+        string? userServiceId,
+        IReadOnlyList<UserLlmOption> available)
+    {
+        var normalizedId = UserLlmPreferenceWriteCore.NormalizeOptional(userServiceId);
+        if (normalizedId is null)
+            return null;
+
+        return available.FirstOrDefault(option =>
+            option.Identity is
+            {
+                Authority: UserLlmIdentityAuthority.NyxIdUserServicesInventory,
+            } identity &&
+            string.Equals(identity.NyxIdUserServiceId, normalizedId, StringComparison.Ordinal));
+    }
+
+    private static UserLlmOption? FindRouteOption(
         string? routeValue,
         IReadOnlyList<UserLlmOption> available)
     {
         var route = UserConfigLlmRoute.Normalize(routeValue);
-        if (string.IsNullOrWhiteSpace(route))
-            return null;
 
         return available.FirstOrDefault(option =>
             string.Equals(option.RouteValue, route, StringComparison.OrdinalIgnoreCase));
     }
+
+    private static string ResolveCurrentRoute(StudioUserConfig? config, UserLlmOption? current) =>
+        config?.LlmSelection?.Kind switch
+        {
+            UserLlmSelectionKind.Gateway => UserConfigLlmRouteDefaults.Gateway,
+            UserLlmSelectionKind.NyxIdUserService => current?.RouteValue ??
+                                                     UserConfigLlmRoute.Normalize(config.LlmSelection.RouteValue),
+            _ => string.Empty,
+        };
 
 }
