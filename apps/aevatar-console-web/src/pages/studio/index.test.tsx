@@ -495,6 +495,18 @@ async function mockAuthorWorkflowSuccess(
   return "name: ai-generated\nsteps: []\n";
 }
 
+function createStudioApiStatusError(
+  message: string,
+  status: number,
+  code: string,
+): Error & { code: string; status: number } {
+  const error = new Error(message) as Error & { code: string; status: number };
+  error.name = "StudioApiError";
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
 function resetMockState(): void {
   mockParsedDocument = mockCloneValue(mockWorkflowDocument);
   mockWorkflowSummaries = mockCreateDefaultWorkflowSummaries();
@@ -1110,9 +1122,6 @@ jest.mock("@/shared/studio/api", () => ({
       return undefined;
     }),
     deleteMember: jest.fn(async (input: { scopeId: string; memberId: string }) => {
-      mockStudioMembers = mockStudioMembers.filter(
-        (member) => member.memberId !== input.memberId,
-      );
       return {
         status: "delete_accepted",
         scopeId: input.scopeId,
@@ -5194,14 +5203,11 @@ describe("StudioPage", () => {
       })
       .mockImplementationOnce(async () => {
         await removalObserved;
-        const error = new Error("Member not found") as Error & {
-          code: string;
-          status: number;
-        };
-        error.name = "StudioApiError";
-        error.code = "STUDIO_MEMBER_NOT_FOUND";
-        error.status = 404;
-        throw error;
+        throw createStudioApiStatusError(
+          "Member not found",
+          404,
+          "STUDIO_MEMBER_NOT_FOUND",
+        );
       });
     fireEvent.click(deleteButton);
 
@@ -5320,6 +5326,14 @@ describe("StudioPage", () => {
       "Other team member",
     );
 
+    (studioApi.getMember as jest.Mock).mockRejectedValueOnce(
+      createStudioApiStatusError(
+        "Member not found",
+        404,
+        "STUDIO_MEMBER_NOT_FOUND",
+      ),
+    );
+
     await act(async () => {
       await otherConfirmConfig.onOk();
     });
@@ -5336,6 +5350,33 @@ describe("StudioPage", () => {
         "Deleted member Other team member.",
       );
     });
+  });
+
+  it("surfaces an unrelated Studio member delete 404", async () => {
+    (studioApi.deleteMember as jest.Mock).mockRejectedValueOnce(
+      createStudioApiStatusError("Delete route not found", 404, "ROUTE_NOT_FOUND"),
+    );
+    renderStudioPage(
+      "/studio?scopeId=scope-1&teamId=t-alpha&member=member%3Aworkspace-demo&focus=workflow%3Aworkflow-1&tab=studio"
+    );
+
+    fireEvent.click(await screen.findByLabelText("Delete workspace-demo"));
+    await waitFor(() => {
+      expect(Modal.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Delete Studio member",
+        })
+      );
+    });
+
+    const confirmConfig = (Modal.confirm as jest.Mock).mock.calls[0]?.[0];
+    await act(async () => {
+      await confirmConfig.onOk();
+    });
+
+    expect(message.error).toHaveBeenCalledWith("Delete route not found");
+    expect(message.success).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Delete workspace-demo")).toBeTruthy();
   });
 
   it("treats a missing workflow draft as already deleted from the inventory rail", async () => {
