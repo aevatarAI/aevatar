@@ -331,6 +331,9 @@ public static class MainnetHostBuilderExtensions
             o.BypassSshExecApproval = true; // mainnet Lark bot internal-only
             o.EnableManagedCodexExecTool = builder.Configuration.GetValue<bool>(
                 $"{ManagedCodexOptions.SectionName}:Enabled");
+            o.MaxRequestDurationSeconds = builder.Configuration.GetValue(
+                "Aevatar:NyxId:MaxRequestDurationSeconds",
+                o.MaxRequestDurationSeconds);
             if (long.TryParse(builder.Configuration["Aevatar:NyxId:ProxyFileArtifactMaxBytes"], out var maxBytes))
                 o.ProxyFileArtifactMaxBytes = maxBytes;
         });

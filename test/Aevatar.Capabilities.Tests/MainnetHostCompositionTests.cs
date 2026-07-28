@@ -870,6 +870,26 @@ public sealed class MainnetHostCompositionTests
     }
 
     [Fact]
+    public void AddAevatarMainnetHost_ShouldBindNyxIdRequestDurationCeiling()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder(new Dictionary<string, string?>
+        {
+            ["Aevatar:NyxId:MaxRequestDurationSeconds"] = "420",
+        });
+
+        builder.AddAevatarMainnetHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        using var app = builder.Build();
+        app.Services.GetRequiredService<NyxIdToolOptions>()
+            .MaxRequestDurationSeconds.Should().Be(420);
+    }
+
+    [Fact]
     public void AddAevatarMainnetHost_ShouldNotBindMalformedLegacyWorkflowFileSubmitEndpointPolicy()
     {
         using var home = new TemporaryAevatarHomeScope();
