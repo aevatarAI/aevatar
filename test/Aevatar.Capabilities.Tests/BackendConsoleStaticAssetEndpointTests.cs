@@ -402,6 +402,52 @@ public sealed class BackendConsoleStaticAssetEndpointTests
     }
 
     [Fact]
+    public async Task AdminShell_ObservatoryGraph_ShouldPreserveEdgesAndDeriveNodeStatus()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function obsMapGraph(graph,steps,runStatus)");
+        html.Should().Contain("edges:validEdges");
+        html.Should().Contain("st:step?step.status:");
+        html.Should().Contain("return {rootNodeId:rootNodeId,nodes:mappedNodes,edges:validEdges}");
+        html.Should().NotContain(".join('<div class=\"dag-link\"></div>')");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryGraph_ShouldExposeInteractiveDagControlsAndNodeDetails()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function obsGraphView(r)");
+        html.Should().Contain("function obsBindGraph(root)");
+        html.Should().Contain("addEventListener('wheel'");
+        html.Should().Contain("addEventListener('pointerdown'");
+        html.Should().Contain("data-obs-graph-act=\"fit\"");
+        html.Should().Contain("data-obs-node=\"");
+        html.Should().Contain("function obsOpenGraphNode(nodeId)");
+    }
+
+    [Fact]
+    public async Task AdminShell_ObservatoryDetail_ShouldSurfaceExecutionEvidence()
+    {
+        await using var app = await CreateAppAsync();
+        var html = await app.GetTestClient().GetStringAsync("/admin");
+
+        html.Should().Contain("function obsNarrativeView(r)");
+        html.Should().Contain("function obsRenderToolCall(tc,forceOpen)");
+        html.Should().Contain("argumentsJson");
+        html.Should().Contain("resultJson");
+        html.Should().Contain("最终输出 · finalOutput");
+        html.Should().Contain("输入 · input");
+        html.Should().Contain("outputPreview 为 240 字预览");
+        html.Should().Contain("派生视图：由 diagnostics + committed timeline 组装");
+        html.Should().Contain("promptTokens:obsNum(ut.promptTokens)");
+        html.Should().Contain("completionTokens:obsNum(ut.completionTokens)");
+    }
+
+    [Fact]
     public async Task WorkflowSkillScheduleProducers_ShouldSendSelectedTeamId()
     {
         await using var app = await CreateAppAsync();
