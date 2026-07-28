@@ -781,8 +781,43 @@ const enUSMessages = {
   'teams.automations.actions.delete': 'Delete',
   'teams.automations.actions.edit': 'Edit',
   'teams.automations.actions.pause': 'Pause',
+  'teams.automations.actions.reauthorize': 'Review and reauthorize',
+  'teams.automations.actions.refresh': 'Refresh',
+  'teams.automations.actions.retryRevocation': 'Retry revocation',
   'teams.automations.actions.resume': 'Resume',
   'teams.automations.actions.runNow': 'Run now',
+  'teams.automations.actions.runHistory': 'View member run history',
+  'teams.automations.authorization.back': 'Back',
+  'teams.automations.authorization.confirm': 'Authorize and continue',
+  'teams.automations.authorization.description':
+    "Aevatar keeps this schedule's restricted key in its Vault. The browser never receives the key. Pausing preserves it; deleting revokes it.",
+  'teams.automations.authorization.diagnostics': 'Authorization diagnostics',
+  'teams.automations.authorization.disclosure.aevatar_secret_custody':
+    'Aevatar holds the secret',
+  'teams.automations.authorization.disclosure.browser_never_receives_secret':
+    'The browser never receives the secret',
+  'teams.automations.authorization.disclosure.dedicated_credential':
+    'Dedicated credential for this schedule',
+  'teams.automations.authorization.disclosure.delete_revokes_credential':
+    'Deleting revokes the credential',
+  'teams.automations.authorization.disclosure.node_ids_are_permission_set':
+    'Node IDs define the permission set',
+  'teams.automations.authorization.disclosure.pause_resume_preserves_credential':
+    'Pausing and resuming preserve the credential',
+  'teams.automations.authorization.error': 'Authorization could not continue',
+  'teams.automations.authorization.exactAccess': 'Exact access',
+  'teams.automations.authorization.expiry': 'Credential expiry',
+  'teams.automations.authorization.review': 'Review authorization',
+  'teams.automations.authorization.reviewAgain': 'Review again',
+  'teams.automations.authorization.serviceModel': 'Service and model',
+  'teams.automations.authorization.title': 'Dedicated Agent Key',
+  'teams.automations.authorizationStatus.active': 'Credential active',
+  'teams.automations.authorizationStatus.deleting': 'Deleting',
+  'teams.automations.authorizationStatus.failed': 'Authorization failed',
+  'teams.automations.authorizationStatus.needs_authorization': 'Authorization required',
+  'teams.automations.authorizationStatus.provisioning_pending': 'Preparing authorization',
+  'teams.automations.authorizationStatus.replacement_pending': 'Replacing authorization',
+  'teams.automations.authorizationStatus.revocation_pending': 'Revocation pending',
   'teams.automations.columns.actions': 'Actions',
   'teams.automations.columns.automation': 'Automation',
   'teams.automations.columns.member': 'Member',
@@ -808,9 +843,14 @@ const enUSMessages = {
   'teams.automations.empty.publishHint':
     'Publish a workflow member before scheduling recurring work.',
   'teams.automations.empty.title': 'No recurring work yet',
+  'teams.automations.empty.member': 'No automations for this member',
   'teams.automations.error.description':
     'Refresh the page or try again after the schedule service is available.',
   'teams.automations.error.title': 'Automations could not load',
+  'teams.automations.error.stateLoad': 'Automation state could not be loaded',
+  'teams.automations.expiry.soon': 'Credential expires within 14 days',
+  'teams.automations.firing.enabled': 'Firing enabled',
+  'teams.automations.firing.paused': 'Firing paused',
   'teams.automations.form.cadence': 'Cadence',
   'teams.automations.form.cadenceAria': 'Automation cadence',
   'teams.automations.form.create': 'Create automation',
@@ -826,6 +866,11 @@ const enUSMessages = {
     'Optional: leave it blank to save without a recurring prompt.',
   'teams.automations.form.editTitle': 'Edit automation',
   'teams.automations.form.enabled': 'Enabled',
+  'teams.automations.form.enableAfterAuthorization':
+    'Enable firing after authorization',
+  'teams.automations.form.firingEnabled': 'Firing enabled',
+  'teams.automations.form.description':
+    'Configure recurring work for {memberName}. Authorization is reviewed separately before creation or replacement.',
   'teams.automations.form.identityMissing':
     "Waiting for this member's published service identity.",
   'teams.automations.form.identityReady':
@@ -867,11 +912,23 @@ const enUSMessages = {
   'teams.automations.member.publishedServiceReady':
     'Published service ready',
   'teams.automations.member.unknown': 'Unknown member',
+  'teams.automations.memberDescription':
+    'Dedicated Agent Keys are authorized per schedule and held by Aevatar.',
+  'teams.automations.memberSelector.description':
+    'Automations are owned by one published member. Choose the member to open its canonical resource.',
+  'teams.automations.memberSelector.title': 'Choose a team member',
+  'teams.automations.memberTitle': '{memberName} automations',
+  'teams.automations.memberUnavailable.description':
+    'This member is not part of the current Team. Choose another member.',
+  'teams.automations.memberUnavailable.title': 'Member unavailable for automation',
   'teams.automations.member.workflowOnly':
     'Only workflow members can have recurring work.',
   'teams.automations.messages.createFailed':
     'Automation was not created: {message}',
   'teams.automations.messages.createSuccess': 'Automation created.',
+  'teams.automations.messages.authorizationAccepted':
+    'Authorization request accepted',
+  'teams.automations.messages.deleteAccepted': 'Delete request accepted',
   'teams.automations.messages.cronRequired': 'Enter a cron expression first.',
   'teams.automations.messages.deleteSuccess': 'Automation deleted.',
   'teams.automations.messages.disableSuccess': 'Automation paused.',
@@ -881,6 +938,12 @@ const enUSMessages = {
     'Recurring prompt must be {maxLength} characters or fewer.',
   'teams.automations.messages.runNowFailed': 'Run request failed: {message}',
   'teams.automations.messages.runNowSuccess': 'Run requested.',
+  'teams.automations.messages.pauseAccepted': 'Pause request accepted',
+  'teams.automations.messages.resumeAccepted': 'Resume request accepted',
+  'teams.automations.messages.revocationRetryAccepted':
+    'Revocation retry accepted',
+  'teams.automations.messages.runAccepted': 'Run request accepted',
+  'teams.automations.messages.updateAccepted': 'Update request accepted',
   'teams.automations.messages.serviceIdentityLoading':
     'Service identity is still loading.',
   'teams.automations.messages.serviceIdentityMissing':
@@ -891,6 +954,18 @@ const enUSMessages = {
   'teams.automations.noPublishedMember.description':
     'Automations need a member with a published service identity before they can run.',
   'teams.automations.noPublishedMember.title': 'Publish a member first',
+  'teams.automations.pending.description':
+    'Automatic refresh stopped. Use Refresh to check authoritative state.',
+  'teams.automations.pending.title': 'Still pending',
+  'teams.automations.planChanged.description':
+    'The previous digest and operation identity were discarded. Run preflight and consent again.',
+  'teams.automations.planChanged.title': 'Authorization plan changed',
+  'teams.automations.delete.description':
+    'The row remains visible until NyxID and Vault revocation are complete.',
+  'teams.automations.delete.title': 'Delete automation?',
+  'teams.automations.revocation.nyxId': 'NyxID: {status}',
+  'teams.automations.revocation.vault': 'Vault: {status}',
+  'teams.automations.row.noPrompt': 'No recurring prompt',
   'teams.automations.preview.daily.cadence': 'Every weekday · 09:00',
   'teams.automations.preview.daily.member': 'Support Analyst',
   'teams.automations.preview.daily.nextRun': 'Next run today',

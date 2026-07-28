@@ -43,6 +43,7 @@ export type NyxIDAuthCallbackErrorReason =
 export interface LoginRedirectOptions {
   readonly returnTo?: string;
   readonly flow?: AuthFlow;
+  readonly prompt?: "none" | "consent" | "login";
 }
 
 export interface AuthCallbackResult {
@@ -200,8 +201,9 @@ export class NyxIDAuthClient {
     url.searchParams.set('code_challenge', codeChallenge);
     url.searchParams.set('code_challenge_method', 'S256');
     url.searchParams.set('state', state);
-    if (flow === "serviceAccessReview") {
-      url.searchParams.set('prompt', 'consent');
+    const prompt = flow === "serviceAccessReview" ? "consent" : options.prompt;
+    if (prompt) {
+      url.searchParams.set('prompt', prompt);
     }
 
     window.location.assign(url.toString());
