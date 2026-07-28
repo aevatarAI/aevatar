@@ -304,7 +304,14 @@ public class WorkflowDefinitionCatalogTests
         role.SystemPrompt.Should().Contain("first look for a matching NyxID connected service");
         role.SystemPrompt.Should().Contain("prefer a workflow runtime call through `nyxid_proxy`");
         role.SystemPrompt.Should().Contain("Do not call a provider-specific chat tool first");
-        role.SystemPrompt.Should().Contain("exact static `service_id`, `slug`, `operation_id`, `method`, `path`, and `contract_digest`");
+        role.SystemPrompt.Should().Contain("`list_external_workflow_capabilities`");
+        role.SystemPrompt.Should().Contain("copy its exact `selector`");
+        role.SystemPrompt.Should().Contain("step-level `capability.nyxid_operation`");
+        role.SystemPrompt.Should().Contain("`path_params`, `query`");
+        role.SystemPrompt.Should().Contain("`headers`, `body`, and `response_mode`");
+        role.SystemPrompt.Should().NotContain("exact static `service_id`, `slug`, `operation_id`, `method`, `path`, and `contract_digest`");
+        role.SystemPrompt.Should().Contain("Do not generate or guess selector identities or server-owned proof fields");
+        role.SystemPrompt.Should().NotContain("contract_digest");
         role.SystemPrompt.Should().Contain("Specialized provider or skill-discovery tools are not the default path");
         role.SystemPrompt.Should().Contain("Do not create a provider-specific prompt rule or runtime-tool mapping for one named service");
         role.SystemPrompt.Should().Contain("service-specific behavior must come from discovered connected-service/catalog/host connector/runtime tool schemas");
@@ -321,6 +328,8 @@ public class WorkflowDefinitionCatalogTests
         allowed.Should().Contain("nyxid_services");
         allowed.Should().Contain("nyxid_proxy");
         allowed.Should().Contain("nyxid_require_service");
+        allowed.Should().Contain("list_external_workflow_capabilities");
+        allowed.Should().Contain("inspect_external_workflow_capability_readiness");
 
         allowed.Should().NotContain("nyxid_api_keys");
         allowed.Should().NotContain("nyxid_nodes");

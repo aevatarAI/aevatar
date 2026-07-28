@@ -231,6 +231,50 @@ public class ConnectedServiceToolSpecParserTests
     }
 
     [Fact]
+    public void Parse_MissingOperationId_ShouldNotCreateFallbackIdentity()
+    {
+        const string spec = """
+            {
+              "paths": {
+                "/items/{item_id}": {
+                  "get": { "x-aevatar-tool": true }
+                }
+              }
+            }
+            """;
+
+        var parsed = OpenApiToolSpecParser.Parse(spec);
+
+        parsed.Operations.Should().BeEmpty();
+        parsed.AdmittedOperations().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Parse_DuplicateOperationId_ShouldFailClosedForTheDocument()
+    {
+        const string spec = """
+            {
+              "paths": {
+                "/items": {
+                  "get": {
+                    "operationId": "read_item",
+                    "x-aevatar-tool": true
+                  }
+                },
+                "/items/{item_id}": {
+                  "get": {
+                    "operationId": "read_item",
+                    "x-aevatar-tool": true
+                  }
+                }
+              }
+            }
+            """;
+
+        OpenApiToolSpecParser.Parse(spec).AdmittedOperations().Should().BeEmpty();
+    }
+
+    [Fact]
     public void Parse_RequiredUnapprovedHeader_ShouldNotAdmitOperation()
     {
         const string spec = """

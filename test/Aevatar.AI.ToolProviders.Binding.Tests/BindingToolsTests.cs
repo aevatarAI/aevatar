@@ -101,8 +101,8 @@ public class BindingToolsTests
         const string organizationBearer = "organization-secret-that-must-not-be-serialized";
         var listPort = new StubExternalWorkflowCapabilityListPort(
         [
-            Descriptor(NyxIdCapability("us-home-alpha"), "Home alpha"),
-            Descriptor(NyxIdCapability("us-home-beta"), "Home beta"),
+            Descriptor(NyxIdSelector("us-home-alpha"), "Home alpha"),
+            Descriptor(NyxIdSelector("us-home-beta"), "Home beta"),
         ]);
         var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
 
@@ -127,10 +127,11 @@ public class BindingToolsTests
             using var document = JsonDocument.Parse(result);
             var capabilities = document.RootElement.GetProperty("capabilities");
             capabilities.GetArrayLength().Should().Be(2);
-            capabilities[0].GetProperty("capability").GetProperty("nyx_id_user_service")
+            capabilities[0].GetProperty("selector").GetProperty("nyx_id_operation")
                 .GetProperty("user_service_id").GetString().Should().Be("us-home-alpha");
-            capabilities[1].GetProperty("capability").GetProperty("nyx_id_user_service")
+            capabilities[1].GetProperty("selector").GetProperty("nyx_id_operation")
                 .GetProperty("user_service_id").GetString().Should().Be("us-home-beta");
+            result.Should().NotContain("contract_digest");
             result.Should().NotContain(callerBearer);
             result.Should().NotContain(organizationBearer);
         }
@@ -159,14 +160,10 @@ public class BindingToolsTests
             var result = await tool.ExecuteAsync(
                 """
                 {
-                  "capability": {
-                    "nyx_id_user_service": {
+                  "selector": {
+                    "nyx_id_operation": {
                       "user_service_id": "us-home-alpha",
-                      "service_slug_snapshot": "home-assistant",
-                      "operation_id": "read_states",
-                      "http_method": "GET",
-                      "path_template": "/api/states",
-                      "contract_digest": "contract-alpha"
+                      "operation_id": "read_states"
                     }
                   },
                   "execution_mode": "interactive"
@@ -177,9 +174,9 @@ public class BindingToolsTests
             readinessPort.Request!.Access.ScopeId.Should().Be("owner-scope-alpha");
             readinessPort.Request.Access.CallerId.Should().Be("caller-subject-alpha");
             readinessPort.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
-            readinessPort.Request.Capability.NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
-            readinessPort.Request.Capability.NyxIdUserService.ServiceSlugSnapshot.Should().Be("home-assistant");
-            readinessPort.Request.Capability.NyxIdUserService.OperationId.Should().Be("read_states");
+            readinessPort.Request.Selector.NyxIdOperation.UserServiceId.Should().Be("us-home-alpha");
+            readinessPort.Request.Selector.NyxIdOperation.OperationId.Should().Be("read_states");
+            tool.ParametersSchema.Should().NotContain("contract_digest");
 
             using var document = JsonDocument.Parse(result);
             document.RootElement.GetProperty("status").GetString().Should()
@@ -876,32 +873,40 @@ public class BindingToolsTests
             {
                 ExecutionMode = request.ExecutionMode,
                 Status = ExternalCapabilityReadinessStatus.Ready,
-                SelectedCapability = request.Capability.Clone(),
+                SelectedSelector = request.Selector.Clone(),
+                SelectedCapability = new ExternalWorkflowCapabilityRef
+                {
+                    NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                    {
+                        UserServiceId = request.Selector.NyxIdOperation.UserServiceId,
+                        ServiceSlugSnapshot = "home-assistant",
+                        OperationId = request.Selector.NyxIdOperation.OperationId,
+                        HttpMethod = "GET",
+                        PathTemplate = "/api/states",
+                        ContractDigest = "server-derived-contract-digest",
+                    },
+                },
             });
         }
     }
 
     private static ExternalWorkflowCapabilityDescriptor Descriptor(
-        ExternalWorkflowCapabilityRef capability,
+        ExternalWorkflowCapabilitySelector selector,
         string displayName) =>
         new()
         {
-            Capability = capability,
+            Selector = selector,
             DisplayName = displayName,
             ReadOnly = true,
         };
 
-    private static ExternalWorkflowCapabilityRef NyxIdCapability(string userServiceId) =>
+    private static ExternalWorkflowCapabilitySelector NyxIdSelector(string userServiceId) =>
         new()
         {
-            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            NyxIdOperation = new NyxIdOperationSelector
             {
                 UserServiceId = userServiceId,
-                ServiceSlugSnapshot = "home-assistant",
                 OperationId = "read_states",
-                HttpMethod = "GET",
-                PathTemplate = "/api/states",
-                ContractDigest = $"contract-{userServiceId}",
             },
         };
 

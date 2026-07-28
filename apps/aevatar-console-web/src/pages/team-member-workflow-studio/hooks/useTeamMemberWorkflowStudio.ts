@@ -33,11 +33,13 @@ import {
 } from "@/shared/studio/document";
 import {
   buildExecutionTrace,
+  buildWorkflowExecutionNodeSnapshots,
   createStudioExecutionFrame,
   decorateEdgesForExecution,
   decorateNodesForExecution,
   findExecutionLogIndexForStep,
   type ExecutionTrace,
+  type WorkflowExecutionNodeSnapshot,
 } from "@/shared/studio/execution";
 import {
   buildStudioGraphElements,
@@ -210,6 +212,7 @@ type TeamMemberWorkflowStudioState = {
   readonly currentDraftRunPlaceholderReason: string;
   readonly executionDetail: StudioExecutionDetail | null;
   readonly executionError: string;
+  readonly executionWorkflowNodes: readonly WorkflowExecutionNodeSnapshot[];
   readonly draftRunFiles: readonly File[];
   readonly executionRunMessage: string;
   readonly executionStatus: WorkflowExecutionStatus;
@@ -1091,6 +1094,9 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
   const [executionDetail, setExecutionDetail] =
     React.useState<StudioExecutionDetail | null>(null);
   const [executionError, setExecutionError] = React.useState("");
+  const [executionWorkflowNodes, setExecutionWorkflowNodes] = React.useState<
+    WorkflowExecutionNodeSnapshot[]
+  >([]);
   const [activeExecutionLogIndex, setActiveExecutionLogIndex] =
     React.useState<number | null>(null);
   const [executionRunMessage, setExecutionRunMessage] = React.useState("");
@@ -2340,8 +2346,11 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
           : "Failed to run workflow draft.",
       );
     },
-    onMutate: () => {
+    onMutate: ({ document }: RunCurrentDraftVariables) => {
+      setExecutionDetail(null);
       setExecutionError("");
+      setActiveExecutionLogIndex(null);
+      setExecutionWorkflowNodes(buildWorkflowExecutionNodeSnapshots(document));
     },
     onSuccess: (detail) => {
       setExecutionDetail(detail);
@@ -3209,6 +3218,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     currentDraftRunPlaceholderReason,
     executionDetail,
     executionError,
+    executionWorkflowNodes,
     draftRunFiles,
     executionRunMessage,
     executionStatus,
@@ -3216,6 +3226,7 @@ export function useTeamMemberWorkflowStudio(): TeamMemberWorkflowStudioState {
     clearExecutionLogs: () => {
       setExecutionDetail(null);
       setExecutionError("");
+      setExecutionWorkflowNodes([]);
       setActiveExecutionLogIndex(null);
     },
     addDraftRunFiles: (files: readonly File[]) => {

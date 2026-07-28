@@ -580,6 +580,7 @@ public sealed class MainnetHostCompositionTests
         workspace.IsSuccess.Should().BeTrue(workspace.Error?.Message);
         workspace.Sources.Should().Contain(source => source is InvokeGAgentToolSource);
         workspace.Sources.Should().Contain(source => source is InvokeTeamToolSource);
+        workspace.Sources.Should().Contain(source => source is InvokeMemberToolSource);
         workspace.Sources.Should().Contain(source => source is StartWorkflowToolSource);
         workspace.Sources.Should().Contain(source => source is ObserveRunToolSource);
         workspace.Sources.Should().Contain(source => source is ReadWorkflowRunArtifactToolSource);
@@ -615,9 +616,6 @@ public sealed class MainnetHostCompositionTests
         var channelInventorySource = app.Services
             .GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>();
         app.Services.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>()
-            .Should()
-            .BeSameAs(channelInventorySource);
-        app.Services.GetRequiredService<INyxIdConnectedServiceInventoryQuery>()
             .Should()
             .BeSameAs(channelInventorySource);
         var replyGenerator = app.Services.GetRequiredService<IConversationReplyGenerator>();

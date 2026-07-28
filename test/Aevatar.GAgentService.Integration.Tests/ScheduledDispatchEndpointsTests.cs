@@ -13,6 +13,7 @@ using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Schedules;
 using Aevatar.GAgentService.Hosting.Endpoints.Schedules;
+using Aevatar.Studio.Application.Provisioning;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
@@ -22,7 +23,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 
 namespace Aevatar.GAgentService.Integration.Tests;
@@ -31,7 +34,6 @@ public sealed class ScheduledDispatchEndpointsTests
 {
     [Theory]
     [InlineData("unexpectedField")]
-    [InlineData("owner")]
     [InlineData("teamAutomationOwner")]
     [InlineData("permissionDigest")]
     [InlineData("credentialProvisioningKind")]
@@ -98,6 +100,151 @@ public sealed class ScheduledDispatchEndpointsTests
             {
                 CredentialRequirementTargetKind = ScheduledDispatchCredentialRequirementTargetKind.Envelope,
             });
+    }
+
+    [Fact]
+    public async Task Create_ShouldForwardTypedStudioMemberAutomationOwner()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateEnvelopeRequest(scheduleId: "sch-alpha") with
+        {
+            Owner = StudioMemberAutomationOwnerRequest(),
+        };
+
+        var result = await CreateAsync(request, service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        var owner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+        service.Created.Should().ContainSingle().Which.TeamAutomationOwner.Should().Be(owner);
+        service.CreateContexts.Should().ContainSingle().Which!.TeamAutomationOwner.Should().Be(owner);
+    }
+
+    [Fact]
+    public async Task Create_ShouldRejectTypedOwnerWhenAuthenticatedScopeDiffers()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var request = CreateEnvelopeRequest(scheduleId: "sch-alpha") with
+        {
+            Owner = StudioMemberAutomationOwnerRequest(),
+        };
+
+        var result = await CreateAsync(
+            request,
+            service,
+            CreateHttpContext(scopeId: "scope-beta", authenticationEnabled: true));
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.Created.Should().BeEmpty();
+        service.CreateContexts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_HttpRoute_ShouldBindTypedOwnerAndReturnOwnerAwareLocation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+        host.CatalogReader.Service = CreateServiceCatalog(activeRevisionId: "rev-chat");
+        host.RevisionCatalog.UpsertRevision(
+            "tenant:app:default:workflow",
+            "rev-chat",
+            BuildPreparedArtifact(ChatRequestEvent.Descriptor));
+        var chat = new ChatRequestEvent { Prompt = "run workflow" };
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules", new
+        {
+            scheduleId = "sch-alpha",
+            displayName = "Daily",
+            cronExpression = "0 9 * * *",
+            timezone = "UTC",
+            enabled = true,
+            owner = new
+            {
+                kind = ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+                scopeId = "tenant",
+                teamId = "team-alpha",
+                memberId = "m-alpha",
+            },
+            serviceInvocation = new
+            {
+                identity = new
+                {
+                    tenantId = "tenant",
+                    appId = "app",
+                    @namespace = "default",
+                    serviceId = "workflow",
+                },
+                endpointId = "chat",
+                payloadTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                payloadBase64 = Convert.ToBase64String(chat.ToByteArray()),
+                revisionId = "rev-chat",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location!.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=tenant&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        var owner = new TeamMemberAutomationOwner("tenant", "m-alpha", "team-alpha");
+        host.Schedules.Created.Should().ContainSingle().Which.TeamAutomationOwner.Should().Be(owner);
+        host.Schedules.CreateContexts.Should().ContainSingle().Which!.TeamAutomationOwner.Should().Be(owner);
+    }
+
+    [Fact]
+    public async Task List_HttpRoute_ShouldBindTypedOwnerQuery()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync(
+            "/api/schedules?ownerKind=studio_member_automation&ownerScopeId=tenant&ownerTeamId=team-alpha&ownerMemberId=m-alpha&take=17&cursor=next&includeTotalCount=true");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.Schedules.LastListQuery.Should().NotBeNull();
+        host.Schedules.LastListQuery!.TeamAutomationOwner.Should().Be(
+            new TeamMemberAutomationOwner("tenant", "m-alpha", "team-alpha"));
+        host.Schedules.LastListQuery.Take.Should().Be(17);
+        host.Schedules.LastListQuery.Cursor.Should().Be("next");
+        host.Schedules.LastListQuery.IncludeTotalCount.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunNow_HttpRoute_ShouldBindTypedOwnerBodyAndReturnOwnerAwareLocation()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/schedules/sch-alpha:run-now", new
+        {
+            owner = new
+            {
+                kind = ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+                scopeId = "tenant",
+                teamId = "team-alpha",
+                memberId = "m-alpha",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        response.Headers.Location!.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=tenant&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        host.Schedules.TeamRunNow.Should().ContainSingle().Which.Should().Be(
+            ("sch-alpha", new TeamMemberAutomationOwner("tenant", "m-alpha", "team-alpha")));
+    }
+
+    [Fact]
+    public async Task List_HttpRoute_ShouldRejectLegacyOwnerQueryShape()
+    {
+        await using var host = await ScheduleEndpointTestHost.StartAsync();
+
+        var response = await host.Client.GetAsync(
+            "/api/schedules?scopeId=tenant&teamId=team-alpha&memberId=m-alpha");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        host.Schedules.LastListQuery.Should().BeNull();
     }
 
     [Fact]
@@ -648,6 +795,7 @@ public sealed class ScheduledDispatchEndpointsTests
         };
 
         var result = await ScheduledDispatchEndpoints.Enable(
+            CreateHttpContext(),
             "missing",
             new ScheduledDispatchStateChangeHttpRequest { Reason = "resume" },
             service);
@@ -667,7 +815,7 @@ public sealed class ScheduledDispatchEndpointsTests
             EnableException = new ArgumentException("invalid id"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Enable("invalid/id", null, service);
+        var result = await ScheduledDispatchEndpoints.Enable(CreateHttpContext(), "invalid/id", null, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -685,6 +833,7 @@ public sealed class ScheduledDispatchEndpointsTests
         };
 
         var result = await ScheduledDispatchEndpoints.Disable(
+            CreateHttpContext(),
             "schedule-1",
             new ScheduledDispatchStateChangeHttpRequest { Reason = "pause" },
             service);
@@ -701,7 +850,7 @@ public sealed class ScheduledDispatchEndpointsTests
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
-        var result = await ScheduledDispatchEndpoints.Disable("schedule-1", null, service);
+        var result = await ScheduledDispatchEndpoints.Disable(CreateHttpContext(), "schedule-1", null, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -720,14 +869,16 @@ public sealed class ScheduledDispatchEndpointsTests
         };
 
         var accepted = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(),
             "schedule-1",
             "cleanup",
             null,
             acceptedService);
         var notFound = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(),
             "missing",
             null,
-            new ScheduledDispatchStateChangeHttpRequest { Reason = "body" },
+            new ScheduledDispatchDeleteHttpRequest { Reason = "body" },
             notFoundService);
 
         var acceptedHttp = CreateHttpContext();
@@ -742,15 +893,583 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
-    public async Task List_ShouldForwardScopeAndPageQueryParameters()
+    public async Task Delete_WithStableLifecycleIdentity_ShouldUseStudioLifecyclePort()
+    {
+        var genericSchedules =
+            new RecordingScheduledDispatchApplicationService
+            {
+                DeleteException = new InvalidOperationException(
+                    "team_automation_delete_requires_revocation_context"),
+            };
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+        var requestHttp = CreateLifecycleDeleteHttpContext(
+            lifecycleSchedules,
+            bindingQuery);
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            requestHttp,
+            "sch-alpha",
+            null,
+            new ScheduledDispatchDeleteHttpRequest
+            {
+                Reason = "scheduled_agent_key_canary_cleanup",
+                OperationId = "delete-operation-alpha",
+                IdempotencyKey = "delete-idempotency-alpha",
+                Owner = StudioMemberAutomationOwnerRequest(),
+            },
+            genericSchedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status202Accepted);
+        json.GetProperty("status").GetString().Should().Be("pending");
+        json.GetProperty("operationId").GetString()
+            .Should().Be("delete-operation-alpha");
+        AssertNoCredentialMaterial(json);
+        genericSchedules.Deleted.Should().BeEmpty();
+        genericSchedules.TeamDeleted.Should().BeEmpty();
+        lifecycleSchedules.LastDelete!.Reason.Should().Be(
+            "scheduled_agent_key_canary_cleanup");
+        lifecycleSchedules.LastDelete.AuthenticatedOwner!
+            .Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
+        lifecycleSchedules.LastDelete.AuthenticatedOwner
+            .VerifiedBindingId.Should().Be("binding-alpha");
+        lifecycleSchedules.LastDelete.ProvisioningBearerToken.Should().Be(
+            "fresh-owner-bearer");
+    }
+
+    [Fact]
+    public async Task Delete_WithUnsupportedOwnerKind_ShouldReturnSanitizedBadRequest()
+    {
+        const string secretOwnerKind =
+            "raw-owner-secret api-key-alpha vault-ref-alpha";
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest() with
+            {
+                Owner = StudioMemberAutomationOwnerRequest() with
+                {
+                    Kind = secretOwnerKind,
+                },
+            },
+            schedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        json.GetProperty("code").GetString()
+            .Should().Be("INVALID_TEAM_AUTOMATION_REQUEST");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation owner is invalid.");
+        json.GetRawText().Should().NotContain(secretOwnerKind);
+        json.GetRawText().Should().NotContain("Parameter");
+        AssertNoCredentialMaterial(json);
+        schedules.Deleted.Should().BeEmpty();
+        schedules.TeamDeleted.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("delete-operation-alpha", null)]
+    [InlineData(null, "delete-idempotency-alpha")]
+    [InlineData("   ", "delete-idempotency-alpha")]
+    [InlineData("delete-operation-alpha", "   ")]
+    public async Task Delete_WithPartialLifecycleIdentity_ShouldRejectBeforeDispatch(
+        string? operationId,
+        string? idempotencyKey)
+    {
+        var genericSchedules =
+            new RecordingScheduledDispatchApplicationService();
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort();
+        var requestHttp = CreateLifecycleDeleteHttpContext(
+            lifecycleSchedules,
+            new FakeExternalIdentityBindingQueryPort());
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            requestHttp,
+            "sch-alpha",
+            null,
+            new ScheduledDispatchDeleteHttpRequest
+            {
+                Reason = "cleanup",
+                OperationId = operationId,
+                IdempotencyKey = idempotencyKey,
+                Owner = StudioMemberAutomationOwnerRequest(),
+            },
+            genericSchedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        json.GetProperty("code").GetString()
+            .Should().Be("INVALID_TEAM_AUTOMATION_REQUEST");
+        AssertNoCredentialMaterial(json);
+        genericSchedules.Deleted.Should().BeEmpty();
+        genericSchedules.TeamDeleted.Should().BeEmpty();
+        lifecycleSchedules.LastDelete.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Delete_WithLifecycleIdentityButNoOwner_ShouldRejectBeforeDispatch()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(null, null),
+            "sch-alpha",
+            null,
+            new ScheduledDispatchDeleteHttpRequest
+            {
+                Reason = "cleanup",
+                OperationId = "delete-operation-alpha",
+                IdempotencyKey = "delete-idempotency-alpha",
+            },
+            schedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        json.GetProperty("code").GetString()
+            .Should().Be("INVALID_TEAM_AUTOMATION_REQUEST");
+        AssertNoCredentialMaterial(json);
+        schedules.Deleted.Should().BeEmpty();
+        schedules.TeamDeleted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Delete_WithLifecycleIdentityAndMissingStudioCapability_ShouldReturnUnavailable()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService();
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(null, null),
+            "sch-alpha",
+            null,
+            new ScheduledDispatchDeleteHttpRequest
+            {
+                Reason = "cleanup",
+                OperationId = "delete-operation-alpha",
+                IdempotencyKey = "delete-idempotency-alpha",
+                Owner = StudioMemberAutomationOwnerRequest(),
+            },
+            schedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_LIFECYCLE_UNAVAILABLE");
+        AssertNoCredentialMaterial(json);
+        schedules.Deleted.Should().BeEmpty();
+        schedules.TeamDeleted.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Delete_WithMissingSubjectOrBinding_ShouldReturnSanitizedUnauthorized(
+        bool hasSubject,
+        bool hasBinding)
+    {
+        var genericSchedules =
+            new RecordingScheduledDispatchApplicationService();
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        if (hasBinding)
+        {
+            bindingQuery.Bindings[
+                SubjectKey(OwnerSubject("nyx-owner-alpha"))] =
+                "binding-alpha";
+        }
+
+        var requestHttp = CreateLifecycleDeleteHttpContext(
+            lifecycleSchedules,
+            bindingQuery,
+            ownerSubject: hasSubject ? "nyx-owner-alpha" : null);
+        var result = await ScheduledDispatchEndpoints.Delete(
+            requestHttp,
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            genericSchedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_UNAUTHORIZED");
+        json.GetProperty("message").GetString().Should().Be(
+            "Authenticated Team automation authority is required.");
+        AssertNoCredentialMaterial(json);
+        genericSchedules.Deleted.Should().BeEmpty();
+        genericSchedules.TeamDeleted.Should().BeEmpty();
+        lifecycleSchedules.LastDelete.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Delete_WithMalformedBearer_ShouldReturnSanitizedUnauthorized()
+    {
+        var genericSchedules =
+            new RecordingScheduledDispatchApplicationService();
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+        var requestHttp = CreateLifecycleDeleteHttpContext(
+            lifecycleSchedules,
+            bindingQuery,
+            authorizationHeader:
+                "Bearer raw-owner-secret, backup-owner-secret");
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            requestHttp,
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            genericSchedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status401Unauthorized);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_UNAUTHORIZED");
+        AssertNoCredentialMaterial(json);
+        json.GetRawText().Should().NotContain("raw-owner-secret");
+        json.GetRawText().Should().NotContain("backup-owner-secret");
+        genericSchedules.Deleted.Should().BeEmpty();
+        genericSchedules.TeamDeleted.Should().BeEmpty();
+        lifecycleSchedules.LastDelete.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Delete_WithExactOwnerScheduleMissing_ShouldReturnSanitizedNotFound()
+    {
+        var schedules = new RecordingScheduledDispatchApplicationService
+        {
+            DeleteException = new ScheduledDispatchNotFoundException(
+                "hidden-schedule backend-delete-secret api-key-alpha vault-ref-alpha"),
+        };
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(
+                scopeId: "scope-alpha",
+                authenticationEnabled: true),
+            "sch-alpha",
+            null,
+            new ScheduledDispatchDeleteHttpRequest
+            {
+                Reason = "cleanup",
+                Owner = StudioMemberAutomationOwnerRequest(),
+            },
+            schedules);
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status404NotFound);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_NOT_FOUND");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation resource was not found.");
+        AssertNoCredentialMaterial(json);
+        schedules.TeamDeleted.Should().ContainSingle();
+        schedules.Deleted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Delete_WithReasonOperationConflict_ShouldReturnSanitizedConflict()
+    {
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort
+            {
+                DeleteException = new ScheduledDispatchConflictException(
+                    "sch-alpha",
+                    "backend-delete-secret binding-alpha nyx-owner-alpha " +
+                    "api-key-alpha vault-ref-alpha"),
+            };
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(
+                lifecycleSchedules,
+                bindingQuery),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            new RecordingScheduledDispatchApplicationService());
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status409Conflict);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_CONFLICT");
+        json.GetProperty("message").GetString().Should().Be(
+            "The Team automation delete conflicts with its active operation.");
+        AssertNoCredentialMaterial(json);
+    }
+
+    [Theory]
+    [InlineData("team_member_is_not_workflow")]
+    [InlineData("team_automation_delete_requires_revocation_context")]
+    [InlineData("team_automation_owner_required")]
+    public async Task Delete_WithKnownInvalidLifecycleRequest_ShouldReturnSanitizedBadRequest(
+        string stableCode)
+    {
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort
+            {
+                DeleteException = new InvalidOperationException(
+                    stableCode),
+            };
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(
+                lifecycleSchedules,
+                bindingQuery),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            new RecordingScheduledDispatchApplicationService());
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status400BadRequest);
+        json.GetProperty("code").GetString()
+            .Should().Be("INVALID_TEAM_AUTOMATION_REQUEST");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation delete request is invalid.");
+        AssertNoCredentialMaterial(json);
+    }
+
+    [Theory]
+    [InlineData("team_automation_commit_observation_unavailable")]
+    [InlineData("team_automation_dispatch_rejected")]
+    [InlineData("team_automation_commit_observation_ended")]
+    public async Task Delete_WithLifecycleAvailabilityFailure_ShouldReturnSanitizedUnavailable(
+        string stableCode)
+    {
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort
+            {
+                DeleteException = new InvalidOperationException(
+                    stableCode),
+            };
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(
+                lifecycleSchedules,
+                bindingQuery),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            new RecordingScheduledDispatchApplicationService());
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_LIFECYCLE_UNAVAILABLE");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation lifecycle capability is unavailable.");
+        json.GetRawText().Should().NotContain(stableCode);
+        AssertNoCredentialMaterial(json);
+    }
+
+    [Theory]
+    [InlineData("team_automation_observation_status_invalid")]
+    [InlineData("team_automation_revocation_completion_not_committed")]
+    [InlineData(
+        "team_automation_backend_delete_secret api-key-alpha vault-ref-alpha")]
+    public async Task Delete_WithLifecycleInvariantOrUnknownFailure_ShouldReturnSanitizedInternalError(
+        string backendMessage)
+    {
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort
+            {
+                DeleteException = new InvalidOperationException(
+                    backendMessage),
+            };
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(
+                lifecycleSchedules,
+                bindingQuery),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            new RecordingScheduledDispatchApplicationService());
+
+        var (statusCode, json) = await ExecuteJsonResultAsync(result);
+
+        statusCode.Should().Be(
+            StatusCodes.Status500InternalServerError);
+        json.GetProperty("code").GetString()
+            .Should().Be("TEAM_AUTOMATION_DELETE_FAILED");
+        json.GetProperty("message").GetString().Should().Be(
+            "Team automation delete could not be completed.");
+        json.GetRawText().Should().NotContain(backendMessage);
+        AssertNoCredentialMaterial(json);
+    }
+
+    [Fact]
+    public async Task Delete_WithLifecycleIdentityAndScopeMismatch_ShouldRejectBeforeDispatch()
+    {
+        var genericSchedules =
+            new RecordingScheduledDispatchApplicationService();
+        var lifecycleSchedules =
+            new RecordingStudioMemberWorkflowSchedulePort();
+        var bindingQuery = new FakeExternalIdentityBindingQueryPort();
+        bindingQuery.Bindings[
+            SubjectKey(OwnerSubject("nyx-owner-alpha"))] = "binding-alpha";
+
+        var result = await ScheduledDispatchEndpoints.Delete(
+            CreateLifecycleDeleteHttpContext(
+                lifecycleSchedules,
+                bindingQuery,
+                claimedScopeId: "scope-beta"),
+            "sch-alpha",
+            null,
+            LifecycleDeleteRequest(),
+            genericSchedules);
+
+        var responseHttp = CreateHttpContext();
+        await result.ExecuteAsync(responseHttp);
+
+        responseHttp.Response.StatusCode.Should().Be(
+            StatusCodes.Status403Forbidden);
+        genericSchedules.Deleted.Should().BeEmpty();
+        genericSchedules.TeamDeleted.Should().BeEmpty();
+        lifecycleSchedules.LastDelete.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("authenticatedOwner")]
+    [InlineData("authority")]
+    [InlineData("provisioningBearerToken")]
+    [InlineData("bearerToken")]
+    [InlineData("verifiedBindingId")]
+    [InlineData("credentialId")]
+    [InlineData("apiKeyId")]
+    [InlineData("vaultReference")]
+    public void DeleteRequest_ShouldRejectAuthorityAndCredentialFields(
+        string propertyName)
+    {
+        var json = $$"""
+            {
+              "reason": "cleanup",
+              "{{propertyName}}": "forged"
+            }
+            """;
+
+        var act = () => JsonSerializer.Deserialize<ScheduledDispatchDeleteHttpRequest>(
+            json,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        act.Should().Throw<JsonException>();
+    }
+
+    [Fact]
+    public async Task OwnerActions_ShouldUseTypedOwnerSpecificApplicationPath()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+        var owner = StudioMemberAutomationOwnerRequest();
+        var expectedOwner = new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha");
+
+        var enable = await ScheduledDispatchEndpoints.Enable(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            "sch-alpha",
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "resume", Owner = owner },
+            service);
+        var disable = await ScheduledDispatchEndpoints.Disable(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            "sch-alpha",
+            new ScheduledDispatchStateChangeHttpRequest { Reason = "pause", Owner = owner },
+            service);
+        var delete = await ScheduledDispatchEndpoints.Delete(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            "sch-alpha",
+            null,
+            new ScheduledDispatchDeleteHttpRequest { Reason = "cleanup", Owner = owner },
+            service);
+        var runNow = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            "sch-alpha",
+            new ScheduledDispatchRunNowHttpRequest { Owner = owner },
+            service);
+
+        var enableHttp = CreateHttpContext();
+        await enable.ExecuteAsync(enableHttp);
+        var disableHttp = CreateHttpContext();
+        await disable.ExecuteAsync(disableHttp);
+        var deleteHttp = CreateHttpContext();
+        await delete.ExecuteAsync(deleteHttp);
+        var runNowHttp = CreateHttpContext();
+        await runNow.ExecuteAsync(runNowHttp);
+
+        enableHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        disableHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        deleteHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        runNowHttp.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        runNowHttp.Response.Headers.Location.ToString().Should().Be(
+            "/api/schedules/sch-alpha?ownerKind=studio_member_automation&ownerScopeId=scope-alpha&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
+        service.TeamEnabled.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner, "resume"));
+        service.TeamDisabled.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner, "pause"));
+        service.TeamDeleted.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner, "cleanup"));
+        service.TeamRunNow.Should().ContainSingle().Which.Should().Be(("sch-alpha", expectedOwner));
+        service.Enabled.Should().BeEmpty();
+        service.Disabled.Should().BeEmpty();
+        service.Deleted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OwnerAction_ShouldRejectTypedOwnerWhenAuthenticatedScopeDiffers()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var result = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(scopeId: "scope-beta", authenticationEnabled: true),
+            "sch-alpha",
+            new ScheduledDispatchRunNowHttpRequest { Owner = StudioMemberAutomationOwnerRequest() },
+            service);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        service.TeamRunNow.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task List_ShouldForwardTypedOwnerAndPageQueryParameters()
     {
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             service,
-            scopeId: "scope-alpha",
-            teamId: "team-alpha",
-            memberId: "member-alpha",
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha",
             take: 25,
             cursor: "cursor-1",
             includeTotalCount: true);
@@ -763,9 +1482,7 @@ public sealed class ScheduledDispatchEndpointsTests
             Take: 25,
             Cursor: "cursor-1",
             IncludeTotalCount: true,
-            TeamAutomationScopeId: "scope-alpha",
-            TeamAutomationTeamId: "team-alpha",
-            TeamAutomationMemberId: "member-alpha"));
+            TeamAutomationOwner: new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
     }
 
     [Fact]
@@ -774,6 +1491,7 @@ public sealed class ScheduledDispatchEndpointsTests
         var service = new RecordingScheduledDispatchApplicationService();
 
         var result = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(),
             service,
             scopeId: null,
             take: 25,
@@ -791,6 +1509,37 @@ public sealed class ScheduledDispatchEndpointsTests
     }
 
     [Fact]
+    public async Task ListAndGet_ShouldRejectLegacyOwnerQueryParameters()
+    {
+        var service = new RecordingScheduledDispatchApplicationService();
+
+        var list = await ScheduledDispatchEndpoints.List(
+            CreateHttpContext(),
+            service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "m-alpha");
+        var get = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(),
+            "sch-alpha",
+            service,
+            scopeId: "scope-alpha",
+            teamId: "team-alpha",
+            memberId: "m-alpha");
+
+        var listHttp = CreateHttpContext();
+        await list.ExecuteAsync(listHttp);
+        var getHttp = CreateHttpContext();
+        await get.ExecuteAsync(getHttp);
+
+        listHttp.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        getHttp.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        service.LastListQuery.Should().BeNull();
+        service.LastScheduleGet.Should().BeNull();
+        service.LastTeamAutomationGet.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Get_ShouldReturnOkAndNotFound()
     {
         var service = new RecordingScheduledDispatchApplicationService
@@ -800,15 +1549,21 @@ public sealed class ScheduledDispatchEndpointsTests
 
         var notFoundService = new RecordingScheduledDispatchApplicationService();
         var ok = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "schedule-1",
             service,
-            scopeId: "scope-alpha",
-            teamId: "team-alpha",
-            memberId: "member-alpha");
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha");
         var notFound = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
             "missing",
             notFoundService,
-            scopeId: "scope-alpha");
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha");
 
         var okHttp = CreateHttpContext();
         await ok.ExecuteAsync(okHttp);
@@ -817,11 +1572,12 @@ public sealed class ScheduledDispatchEndpointsTests
 
         okHttp.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         notFoundHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        service.LastTeamScheduleGet.Should().Be(("schedule-1", "scope-alpha", "team-alpha", "member-alpha"));
-        notFoundService.LastTeamScheduleGet.Should().NotBeNull();
-        notFoundService.LastTeamScheduleGet!.Value.ScheduleId.Should().Be("missing");
-        notFoundService.LastTeamScheduleGet.Value.ScopeId.Should().Be("scope-alpha");
-        notFoundService.LastTeamScheduleGet.Value.MemberId.Should().BeNull();
+        service.LastTeamAutomationGet.Should().Be((
+            "schedule-1",
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
+        notFoundService.LastTeamAutomationGet.Should().Be((
+            "missing",
+            new TeamMemberAutomationOwner("scope-alpha", "m-alpha", "team-alpha")));
     }
 
     [Fact]
@@ -832,7 +1588,7 @@ public sealed class ScheduledDispatchEndpointsTests
             Detail = CreateDetail("schedule-1"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Get("schedule-1", service, scopeId: null);
+        var result = await ScheduledDispatchEndpoints.Get(CreateHttpContext(), "schedule-1", service, scopeId: null);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -861,7 +1617,7 @@ public sealed class ScheduledDispatchEndpointsTests
             Detail = detail,
         };
 
-        var result = await ScheduledDispatchEndpoints.Get("schedule-owner-llm", service);
+        var result = await ScheduledDispatchEndpoints.Get(CreateHttpContext(), "schedule-owner-llm", service);
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
         http.Response.Body.Position = 0;
@@ -895,7 +1651,14 @@ public sealed class ScheduledDispatchEndpointsTests
             GetException = new ArgumentException("invalid id"),
         };
 
-        var result = await ScheduledDispatchEndpoints.Get("invalid/id", service, scopeId: "scope-alpha");
+        var result = await ScheduledDispatchEndpoints.Get(
+            CreateHttpContext(scopeId: "scope-alpha", authenticationEnabled: true),
+            "invalid/id",
+            service,
+            ownerKind: ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ownerScopeId: "scope-alpha",
+            ownerTeamId: "team-alpha",
+            ownerMemberId: "m-alpha");
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -955,10 +1718,14 @@ public sealed class ScheduledDispatchEndpointsTests
     public async Task RunNow_ShouldAcceptAndMapNotFound()
     {
         var accepted = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(),
             "schedule-1",
+            null,
             new RecordingScheduledDispatchApplicationService());
         var notFound = await ScheduledDispatchEndpoints.RunNow(
+            CreateHttpContext(),
             "missing",
+            null,
             new RecordingScheduledDispatchApplicationService
             {
                 RunNowException = new ScheduledDispatchNotFoundException("missing"),
@@ -981,7 +1748,7 @@ public sealed class ScheduledDispatchEndpointsTests
             RunNowException = new ScheduledDispatchConflictException("schedule-1", "Schedule is disabled."),
         };
 
-        var result = await ScheduledDispatchEndpoints.RunNow("schedule-1", service);
+        var result = await ScheduledDispatchEndpoints.RunNow(CreateHttpContext(), "schedule-1", null, service);
 
         var http = CreateHttpContext();
         await result.ExecuteAsync(http);
@@ -1676,6 +2443,96 @@ public sealed class ScheduledDispatchEndpointsTests
         },
     };
 
+    private static ScheduledDispatchOwnerHttpRequest StudioMemberAutomationOwnerRequest() =>
+        new()
+        {
+            Kind = ScheduledDispatchOwnerKinds.StudioMemberAutomation,
+            ScopeId = "scope-alpha",
+            TeamId = "team-alpha",
+            MemberId = "m-alpha",
+        };
+
+    private static ScheduledDispatchDeleteHttpRequest LifecycleDeleteRequest() =>
+        new()
+        {
+            Reason = "cleanup",
+            OperationId = "delete-operation-alpha",
+            IdempotencyKey = "delete-idempotency-alpha",
+            Owner = StudioMemberAutomationOwnerRequest(),
+        };
+
+    private static DefaultHttpContext CreateLifecycleDeleteHttpContext(
+        IStudioMemberWorkflowSchedulePort? lifecycleSchedules,
+        IExternalIdentityBindingQueryPort? bindingQuery,
+        string? ownerSubject = "nyx-owner-alpha",
+        string claimedScopeId = "scope-alpha",
+        string authorizationHeader = "Bearer fresh-owner-bearer")
+    {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddOptions();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:Authentication:Enabled"] = "true",
+            })
+            .Build());
+        services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+        if (lifecycleSchedules != null)
+            services.AddSingleton(lifecycleSchedules);
+        if (bindingQuery != null)
+            services.AddSingleton(bindingQuery);
+
+        var claims = new List<Claim>
+        {
+            new("scope_id", claimedScopeId),
+        };
+        if (!string.IsNullOrWhiteSpace(ownerSubject))
+        {
+            claims.Add(new Claim(
+                ClaimTypes.NameIdentifier,
+                ownerSubject));
+        }
+
+        var http = new DefaultHttpContext
+        {
+            RequestServices = services.BuildServiceProvider(),
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+                claims,
+                "test")),
+        };
+        http.Request.Headers.Authorization = authorizationHeader;
+        http.Response.Body = new MemoryStream();
+        return http;
+    }
+
+    private static async Task<(int StatusCode, JsonElement Body)>
+        ExecuteJsonResultAsync(IResult result)
+    {
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var json = await JsonDocument.ParseAsync(http.Response.Body);
+        return (http.Response.StatusCode, json.RootElement.Clone());
+    }
+
+    private static void AssertNoCredentialMaterial(JsonElement response)
+    {
+        var normalized = response.GetRawText().ToLowerInvariant();
+        normalized.Should().NotContain("fresh-owner-bearer");
+        normalized.Should().NotContain("raw-owner-secret");
+        normalized.Should().NotContain("backup-owner-secret");
+        normalized.Should().NotContain("binding-alpha");
+        normalized.Should().NotContain("nyx-owner-alpha");
+        normalized.Should().NotContain("api-key-alpha");
+        normalized.Should().NotContain("vault-ref-alpha");
+        normalized.Should().NotContain("backend-delete-secret");
+        normalized.Should().NotContain("provisioningbearertoken");
+        normalized.Should().NotContain("verifiedbindingid");
+        normalized.Should().NotContain("credentialid");
+        normalized.Should().NotContain("vaultreference");
+    }
+
     private static Task<IResult> CreateAsync(
         ScheduledDispatchConfigurationHttpRequest request,
         RecordingScheduledDispatchApplicationService service,
@@ -1799,14 +2656,23 @@ public sealed class ScheduledDispatchEndpointsTests
         string? uid = null,
         string? sub = null,
         string? nameIdentifier = null,
-        string? userId = null)
+        string? userId = null,
+        bool authenticationEnabled = false)
     {
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddOptions();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:Authentication:Enabled"] = authenticationEnabled ? "true" : "false",
+            })
+            .Build());
+        services.AddSingleton<IHostEnvironment>(new TestHostEnvironment());
+
         var http = new DefaultHttpContext
         {
-            RequestServices = new ServiceCollection()
-                .AddLogging()
-                .AddOptions()
-                .BuildServiceProvider(),
+            RequestServices = services.BuildServiceProvider(),
         };
         var claims = new List<Claim>();
         if (!string.IsNullOrWhiteSpace(scopeId))
@@ -1829,6 +2695,17 @@ public sealed class ScheduledDispatchEndpointsTests
 
         http.Response.Body = new MemoryStream();
         return http;
+    }
+
+    private sealed class TestHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+
+        public string ApplicationName { get; set; } = nameof(ScheduledDispatchEndpointsTests);
+
+        public string ContentRootPath { get; set; } = Directory.GetCurrentDirectory();
+
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
     }
 
     private sealed class ScheduleEndpointTestHost : IAsyncDisposable
@@ -1991,12 +2868,17 @@ public sealed class ScheduledDispatchEndpointsTests
         public List<(string ScheduleId, string Reason)> Enabled { get; } = [];
         public List<(string ScheduleId, string Reason)> Disabled { get; } = [];
         public List<(string ScheduleId, string Reason)> Deleted { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamEnabled { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamDisabled { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner, string Reason)> TeamDeleted { get; } = [];
+        public List<(string ScheduleId, TeamMemberAutomationOwner Owner)> TeamRunNow { get; } = [];
         public int? LastListTake { get; private set; }
         public string? LastListCursor { get; private set; }
         public bool? LastListIncludeTotalCount { get; private set; }
         public ScheduledDispatchListQuery? LastListQuery { get; private set; }
         public string? LastScheduleGet { get; private set; }
         public (string ScheduleId, string ScopeId, string? TeamId, string? MemberId)? LastTeamScheduleGet { get; private set; }
+        public (string ScheduleId, TeamMemberAutomationOwner Owner)? LastTeamAutomationGet { get; private set; }
         public int? LastPreviewCount { get; private set; }
         public DateTimeOffset? LastPreviewFromUtc { get; private set; }
         public ScheduledDispatchDetail? Detail { get; set; }
@@ -2127,6 +3009,66 @@ public sealed class ScheduledDispatchEndpointsTests
                 AckStage: "accepted"));
         }
 
+        public Task<ScheduledDispatchMutationReceipt> EnableTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string reason,
+            CancellationToken ct = default)
+        {
+            TeamEnabled.Add((scheduleId, owner, reason));
+            if (EnableException != null)
+                throw EnableException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> DisableTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string reason,
+            CancellationToken ct = default)
+        {
+            TeamDisabled.Add((scheduleId, owner, reason));
+            if (DisableException != null)
+                throw DisableException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
+        public Task<ScheduledDispatchMutationReceipt> DeleteTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string reason,
+            CancellationToken ct = default)
+        {
+            TeamDeleted.Add((scheduleId, owner, reason));
+            if (DeleteException != null)
+                throw DeleteException;
+
+            return Task.FromResult(new ScheduledDispatchMutationReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
         public Task<ScheduledDispatchDetail?> GetAsync(string scheduleId, CancellationToken ct = default)
         {
             LastScheduleGet = scheduleId;
@@ -2144,6 +3086,18 @@ public sealed class ScheduledDispatchEndpointsTests
             CancellationToken ct = default)
         {
             LastTeamScheduleGet = (scheduleId, scopeId, teamId, memberId);
+            if (GetException != null)
+                throw GetException;
+
+            return Task.FromResult(Detail?.Schedule.ScheduleId == scheduleId ? Detail : null);
+        }
+
+        public Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default)
+        {
+            LastTeamAutomationGet = (scheduleId, owner);
             if (GetException != null)
                 throw GetException;
 
@@ -2208,6 +3162,27 @@ public sealed class ScheduledDispatchEndpointsTests
                 AckStage: "accepted"));
         }
 
+        public Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default)
+        {
+            TeamRunNow.Add((scheduleId, owner));
+            if (RunNowException != null)
+                throw RunNowException;
+
+            return Task.FromResult(new ScheduledDispatchRunNowReceipt(
+                scheduleId,
+                $"actor:{scheduleId}",
+                DateTimeOffset.UtcNow,
+                "backend-owned-run-now",
+                Accepted: true,
+                CommandId: "cmd",
+                CorrelationId: "corr",
+                AckedAt: DateTimeOffset.UtcNow,
+                AckStage: "accepted"));
+        }
+
         private static void AdmitCredentialRequirement(
             ScheduledDispatchConfiguration configuration,
             ScheduledDispatchCredentialRequirementOperation operation)
@@ -2240,6 +3215,91 @@ public sealed class ScheduledDispatchEndpointsTests
                 ? new BindingId { Value = bindingId }
                 : null);
         }
+    }
+
+    private sealed class RecordingStudioMemberWorkflowSchedulePort :
+        IStudioMemberWorkflowSchedulePort
+    {
+        public StudioMemberAutomationActionCommand? LastDelete { get; private set; }
+
+        public Exception? DeleteException { get; init; }
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberWorkflowAuthorizationResult> PreflightForWriteAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberWorkflowScheduleResult> CreateAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberWorkflowScheduleResult> ReauthorizeAsync(
+            StudioMemberWorkflowScheduleRequest request,
+            string confirmedPermissionDigest,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> UpdateAsync(
+            StudioMemberAutomationUpdateCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> PauseAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> ResumeAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> RunNowAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationMutationReceipt> DeleteAsync(
+            StudioMemberAutomationActionCommand command,
+            CancellationToken ct = default)
+        {
+            LastDelete = command;
+            if (DeleteException != null)
+                throw DeleteException;
+
+            return Task.FromResult(
+                new StudioMemberAutomationMutationReceipt(
+                    true,
+                    "pending",
+                    command.ScheduleId,
+                    command.OperationId,
+                    "cmd-delete-alpha"));
+        }
+
+        public Task<StudioMemberAutomationListResponse> ListAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            int take = 50,
+            string? cursor = null,
+            bool includeTotalCount = false,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<StudioMemberAutomationView?> GetAsync(
+            string scopeId,
+            string teamId,
+            string memberId,
+            string scheduleId,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeScheduledServiceInvocationCredentialExchangePort : IScheduledServiceInvocationCredentialExchangePort

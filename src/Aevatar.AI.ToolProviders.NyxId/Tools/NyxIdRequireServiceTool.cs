@@ -8,11 +8,11 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
 {
-    private readonly IExternalWorkflowCapabilityReadinessPort _readinessPort;
+    private readonly NyxIdApiClient _client;
 
-    public NyxIdRequireServiceTool(IExternalWorkflowCapabilityReadinessPort readinessPort)
+    public NyxIdRequireServiceTool(NyxIdApiClient client)
     {
-        _readinessPort = readinessPort ?? throw new ArgumentNullException(nameof(readinessPort));
+        _client = client ?? throw new ArgumentNullException(nameof(client));
     }
 
     public string Name => "nyxid_require_service";
@@ -45,20 +45,8 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
         if (!TryResolveAccess(out var access, out var error))
             return JsonSerializer.Serialize(new { error });
 
-        var capability = new ExternalWorkflowCapabilityRef
-        {
-            NyxIdUserService = new NyxIdUserServiceCapabilityRef
-            {
-                ServiceSlugSnapshot = serviceSlug,
-            },
-        };
-        var readiness = await _readinessPort.InspectAsync(
-            new InspectExternalWorkflowCapabilityReadinessRequest(
-                access!,
-                capability,
-                ExternalCapabilityExecutionMode.Interactive),
-            ct);
-        var blocker = readiness.Blockers.FirstOrDefault();
+        var readiness = await InspectRegistrationAsync(access!, serviceSlug, ct);
+        var blocker = readiness.Blocker;
         var registrationRequired =
             readiness.Status == ExternalCapabilityReadinessStatus.ServiceRegistrationRequired &&
             blocker is not null &&
@@ -72,6 +60,93 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             reason_code = blocker?.Code ?? string.Empty,
             safe_message = blocker?.SafeMessage ?? string.Empty,
         });
+    }
+
+    private async Task<ServiceRegistrationReadiness> InspectRegistrationAsync(
+        ExternalWorkflowCapabilityAccessContext access,
+        string serviceSlug,
+        CancellationToken ct)
+    {
+        var tokens = new List<string>();
+        if (!string.IsNullOrWhiteSpace(access.NyxIdCallerBearerToken))
+            tokens.Add(access.NyxIdCallerBearerToken);
+        if (!string.IsNullOrWhiteSpace(access.NyxIdOrganizationBearerToken) &&
+            !tokens.Contains(access.NyxIdOrganizationBearerToken, StringComparer.Ordinal))
+        {
+            tokens.Add(access.NyxIdOrganizationBearerToken);
+        }
+
+        var sourceUnavailable = tokens.Count == 0;
+        foreach (var token in tokens)
+        {
+            var response = await _client.ListServicesAsync(token, ct);
+            if (!TryReadServiceSlugs(response, out var serviceSlugs))
+            {
+                sourceUnavailable = true;
+                continue;
+            }
+
+            if (serviceSlugs.Contains(serviceSlug))
+                return new ServiceRegistrationReadiness(ExternalCapabilityReadinessStatus.Ready, null);
+        }
+
+        if (sourceUnavailable)
+        {
+            return new ServiceRegistrationReadiness(
+                ExternalCapabilityReadinessStatus.SourceStale,
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.SourceStale,
+                    Code = "NYXID_SOURCE_UNAVAILABLE",
+                    SafeMessage = "NyxID service capability facts are currently unavailable.",
+                });
+        }
+
+        return new ServiceRegistrationReadiness(
+            ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
+            new ExternalCapabilityBlocker
+            {
+                Status = ExternalCapabilityReadinessStatus.ServiceRegistrationRequired,
+                Code = "USER_SERVICE_NOT_VISIBLE",
+                SafeMessage = "No caller-visible NyxID UserService matches the requested service.",
+            });
+    }
+
+    private static bool TryReadServiceSlugs(
+        string response,
+        out HashSet<string> serviceSlugs)
+    {
+        serviceSlugs = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            using var document = JsonDocument.Parse(response);
+            var root = document.RootElement;
+            if (NyxIdUserServiceListJson.IsErrorEnvelope(root, out _) ||
+                !NyxIdUserServiceListJson.HasServiceCollection(root))
+            {
+                return false;
+            }
+
+            foreach (var entry in NyxIdUserServiceListJson.EnumerateServiceEntries(root))
+            {
+                var slug = NormalizeSlug(NyxIdUserServiceListJson.ReadString(
+                    entry,
+                    "slug",
+                    "catalog_service_slug",
+                    "catalogServiceSlug",
+                    "service_slug",
+                    "serviceSlug"));
+                if (slug is null)
+                    return false;
+                serviceSlugs.Add(slug);
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     public AgentToolReceipt? CreateResultReceipt(
@@ -222,6 +297,10 @@ public sealed class NyxIdRequireServiceTool : INyxIdBuiltInTool
             ? normalized
             : null;
     }
+
+    private sealed record ServiceRegistrationReadiness(
+        ExternalCapabilityReadinessStatus Status,
+        ExternalCapabilityBlocker? Blocker);
 
     private static string? NormalizeResourceUri(string? value)
     {

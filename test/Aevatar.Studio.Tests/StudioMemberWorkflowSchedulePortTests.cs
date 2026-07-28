@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
@@ -1148,6 +1149,122 @@ public sealed class StudioMemberWorkflowSchedulePortTests
     }
 
     [Fact]
+    public async Task DeleteAsync_ShouldUseRichDeleteAndPropagateReasonAndFreshAuthority()
+    {
+        var scheduleService = new RecordingScheduleService();
+        scheduleService.DeleteAttempts.Enqueue(new DeleteAttempt(
+            OwnsEffectAttempt: true,
+            NyxIdPending: true,
+            VaultPending: true));
+        var materializer = new RecordingCredentialMaterializer();
+        var port = NewPort(scheduleService, materializer: materializer);
+        var owner = Request("scope-1", "member-1").AuthenticatedOwner;
+
+        var result = await port.DeleteAsync(
+            new StudioMemberAutomationActionCommand(
+                "scope-1",
+                "team-1",
+                "member-1",
+                "schedule-1",
+                "operation-delete",
+                "idempotency-delete")
+            {
+                Reason = " scheduled_agent_key_canary_cleanup ",
+                AuthenticatedOwner = owner,
+                ProvisioningBearerToken = "fresh-bearer-sensitive",
+            });
+
+        result.Accepted.Should().BeTrue();
+        result.Status.Should().Be("pending");
+        var call = scheduleService.RichDeleteCalls
+            .Should().ContainSingle().Subject;
+        call.Owner.Should().Be(new TeamMemberAutomationOwner(
+            "scope-1",
+            "member-1",
+            "team-1"));
+        call.Reason.Should().Be("scheduled_agent_key_canary_cleanup");
+        materializer.RevocationCalls.Should().ContainSingle().Which.Should().Be(
+            ("fresh-bearer-sensitive", true, true));
+        scheduleService.CompleteRevocationCallCount.Should().Be(1);
+
+        var serialized = JsonSerializer.Serialize(
+            result,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        foreach (var forbidden in new[]
+                 {
+                     "fresh-bearer-sensitive",
+                     "nyx-owner-alpha",
+                     "binding-alpha",
+                     "key-alpha",
+                     "secret-alpha",
+                     "ApiKeyId",
+                     "SecretReference",
+                     "VaultReference",
+                     "CallerAuthority",
+                     "VerifiedBindingId",
+                 })
+        {
+            serialized.Should().NotContain(forbidden);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ExactReplay_ShouldContinueOnlyPendingRevocationWithFreshBearer()
+    {
+        var scheduleService = new RecordingScheduleService();
+        scheduleService.DeleteAttempts.Enqueue(new DeleteAttempt(
+            OwnsEffectAttempt: true,
+            NyxIdPending: true,
+            VaultPending: true));
+        scheduleService.DeleteAttempts.Enqueue(new DeleteAttempt(
+            OwnsEffectAttempt: true,
+            NyxIdPending: false,
+            VaultPending: true));
+        var materializer = new RecordingCredentialMaterializer();
+        materializer.RevocationResults.Enqueue(
+            new StudioScheduledCredentialRevocationResult(
+                NyxIdRevoked: true,
+                VaultRevoked: false,
+                ErrorCode: "credential_revocation_transient"));
+        materializer.RevocationResults.Enqueue(
+            new StudioScheduledCredentialRevocationResult(
+                NyxIdRevoked: true,
+                VaultRevoked: true,
+                ErrorCode: string.Empty));
+        var port = NewPort(scheduleService, materializer: materializer);
+        var owner = Request("scope-1", "member-1").AuthenticatedOwner;
+        var first = new StudioMemberAutomationActionCommand(
+            "scope-1",
+            "team-1",
+            "member-1",
+            "schedule-1",
+            "operation-delete",
+            "idempotency-delete")
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            AuthenticatedOwner = owner,
+            ProvisioningBearerToken = "fresh-bearer-1",
+        };
+
+        await port.DeleteAsync(first);
+        await port.DeleteAsync(first with
+        {
+            ProvisioningBearerToken = "fresh-bearer-2",
+        });
+
+        scheduleService.RichDeleteCalls.Should().HaveCount(2);
+        scheduleService.RichDeleteCalls.Should().OnlyContain(call =>
+            call.ScheduleId == "schedule-1" &&
+            call.OperationId == "operation-delete" &&
+            call.IdempotencyKey == "idempotency-delete" &&
+            call.Reason == "scheduled_agent_key_canary_cleanup");
+        materializer.RevocationCalls.Should().Equal(
+            ("fresh-bearer-1", true, true),
+            ("fresh-bearer-2", false, true));
+        scheduleService.RetryRevocationCallCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task RetryRevocationAsync_ShouldUseIdentityOnlyCommandAndExecuteCommittedEffects()
     {
         var scheduleService = new RecordingScheduleService { ReturnPendingRevocationOnRetry = true };
@@ -2169,6 +2286,19 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         }
     }
 
+    private sealed record DeleteAttempt(
+        bool OwnsEffectAttempt,
+        bool NyxIdPending,
+        bool VaultPending);
+
+    private sealed record RichDeleteCall(
+        string ScheduleId,
+        TeamMemberAutomationOwner Owner,
+        string OperationId,
+        string IdempotencyKey,
+        string Reason,
+        ScheduledInvocationAuthorizationOwner AuthenticatedCredentialOwner);
+
     private sealed class RecordingCredentialMaterializer : IStudioScheduledCredentialMaterializer
     {
         public int MaterializeCallCount { get; private set; }
@@ -2181,6 +2311,10 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Exception? MaterializeException { get; init; }
         public bool NyxIdRevoked { get; init; } = true;
         public bool VaultRevoked { get; init; } = true;
+        public List<(string BearerToken, bool RevokeNyxId, bool RevokeVault)>
+            RevocationCalls { get; } = [];
+        public Queue<StudioScheduledCredentialRevocationResult>
+            RevocationResults { get; } = [];
 
         public ScheduledCredentialEffectLocator CreateEffectLocator(
             string scheduleId,
@@ -2224,6 +2358,9 @@ public sealed class StudioMemberWorkflowSchedulePortTests
             CancellationToken ct = default)
         {
             RevokeCallCount++;
+            RevocationCalls.Add((bearerToken, revokeNyxId, revokeVault));
+            if (RevocationResults.Count > 0)
+                return Task.FromResult(RevocationResults.Dequeue());
             return Task.FromResult(new StudioScheduledCredentialRevocationResult(
                 NyxIdRevoked,
                 VaultRevoked,
@@ -2271,6 +2408,8 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public int CompleteRevocationCallCount { get; private set; }
         public TeamAutomationCredentialOperation? BeginOperation { get; private set; }
         public List<string>? Calls { get; init; }
+        public List<RichDeleteCall> RichDeleteCalls { get; } = [];
+        public Queue<DeleteAttempt> DeleteAttempts { get; } = [];
         private ScheduledInvocationAgentKeyCredentialReference? _candidateCredential;
         private ScheduledInvocationAuthorizationOwner? _candidateOwner;
         private bool _candidateExceptionThrown;
@@ -2388,6 +2527,46 @@ public sealed class StudioMemberWorkflowSchedulePortTests
                 errorCode));
         }
 
+        public Task<TeamAutomationCommittedMutationReceipt> DeleteTeamAutomationAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            string operationId,
+            string idempotencyKey,
+            string reason,
+            ScheduledInvocationAuthorizationOwner authenticatedCredentialOwner,
+            CancellationToken ct = default)
+        {
+            RichDeleteCalls.Add(new RichDeleteCall(
+                scheduleId,
+                owner,
+                operationId,
+                idempotencyKey,
+                reason,
+                authenticatedCredentialOwner));
+            var attempt = DeleteAttempts.Dequeue();
+            var credential = CreateCredential(
+                TestNow.AddHours(20),
+                CredentialSecretPurposes.ScheduledInvocationAgentKey);
+            var hasPendingRevocation = attempt.NyxIdPending || attempt.VaultPending;
+            return Task.FromResult(Committed(
+                scheduleId,
+                operationId,
+                idempotencyKey,
+                TeamAutomationOperationObservationStages.Delete,
+                attempt.OwnsEffectAttempt,
+                "cmd-delete",
+                effectAttemptId: attempt.OwnsEffectAttempt ? "attempt-delete" : string.Empty,
+                pendingRevocationCredential: hasPendingRevocation
+                    ? new ScheduledInvocationAgentKeyCredentialReference(
+                        credential.SecretReference,
+                        credential.ApiKeyId,
+                        credential.ExpiresAtUtc.ToUnixTimeMilliseconds())
+                    : null,
+                pendingRevocationOwner: hasPendingRevocation ? credential.Owner : null,
+                nyxIdRevocationPending: attempt.NyxIdPending,
+                vaultRevocationPending: attempt.VaultPending));
+        }
+
         public Task<TeamAutomationCommittedMutationReceipt> RetryTeamAutomationRevocationAsync(
             string scheduleId,
             TeamMemberAutomationOwner owner,
@@ -2496,6 +2675,21 @@ public sealed class StudioMemberWorkflowSchedulePortTests
         public Task<ScheduledDispatchRunNowReceipt> RunNowAsync(
             string scheduleId, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Task<ScheduledDispatchRunNowReceipt> RunTeamAutomationNowAsync(
+            string scheduleId,
+            TeamMemberAutomationOwner owner,
+            CancellationToken ct = default) =>
+            Task.FromResult(new ScheduledDispatchRunNowReceipt(
+                scheduleId,
+                $"scheduled-dispatch:{scheduleId}",
+                TestNow,
+                "backend-run-now-idempotency",
+                Accepted: true,
+                CommandId: "cmd-run-now",
+                CorrelationId: "corr-run-now",
+                AckedAt: TestNow,
+                AckStage: "accepted"));
 
         public Task<ScheduledDispatchDetail?> GetTeamAutomationAsync(
             string scheduleId,

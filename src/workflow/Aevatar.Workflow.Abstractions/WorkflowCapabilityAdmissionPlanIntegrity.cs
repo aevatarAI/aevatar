@@ -7,14 +7,16 @@ namespace Aevatar.Workflow.Abstractions;
 
 public static class WorkflowCapabilityAdmissionPlanIntegrity
 {
-    public const string SchemaVersion = "external-capability-admission.v2";
+    public const string SchemaVersion = "external-capability-admission.v3";
+    public const string LegacySchemaVersion = "external-capability-admission.v2";
+    public const string RebindRequiredCode = "CAPABILITY_ADMISSION_REBIND_REQUIRED";
     public const string NyxIdAuthority = "nyxid";
 
     public static WorkflowCapabilityAdmissionPlan Create(
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         ExternalCapabilityExecutionMode executionMode,
-        IEnumerable<ExternalWorkflowCapabilityRef> capabilities,
+        IEnumerable<WorkflowCapabilityInvocationAdmission> invocationAdmissions,
         IEnumerable<ExternalCapabilitySourceStamp> sourceStamps,
         ExternalCapabilityAuthorizationOwner? durableAuthorizationOwner = null)
     {
@@ -25,10 +27,12 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             ExecutionMode = executionMode,
             DurableAuthorizationOwner = durableAuthorizationOwner?.Clone(),
         };
-        plan.ExternalCapabilities.Add(
-            capabilities
-                .Select(static capability => capability.Clone())
-                .OrderBy(CapabilityKey, StringComparer.Ordinal));
+        var admissions = invocationAdmissions
+            .Select(static admission => admission.Clone())
+            .OrderBy(static admission => admission.CallSiteId, StringComparer.Ordinal)
+            .ToArray();
+        ValidateInvocationAdmissions(admissions);
+        plan.InvocationAdmissions.Add(admissions);
         plan.SourceStamps.Add(
             sourceStamps
                 .Select(static source => source.Clone())
@@ -71,11 +75,15 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         string workflowYaml,
         IReadOnlyDictionary<string, string>? inlineWorkflowYamls,
         ExternalCapabilityExecutionMode executionMode,
-        IEnumerable<ExternalWorkflowCapabilityRef> expectedCapabilities)
+        IEnumerable<ExternalToolInvocationSpec> expectedInvocations)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        if (string.Equals(plan.SchemaVersion, LegacySchemaVersion, StringComparison.Ordinal))
+            throw new WorkflowCapabilityAdmissionRebindRequiredException();
         if (!string.Equals(plan.SchemaVersion, SchemaVersion, StringComparison.Ordinal))
             throw new InvalidOperationException("Workflow capability admission schema version is invalid.");
+        if (plan.ExternalCapabilities.Count != 0)
+            throw new InvalidOperationException("Workflow capability admission v3 cannot contain legacy external capabilities.");
 
         var expectedDefinitionDigest = ComputeDefinitionDigest(workflowYaml, inlineWorkflowYamls);
         if (!FixedTimeEquals(plan.DefinitionDigest, expectedDefinitionDigest))
@@ -87,17 +95,30 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             throw new InvalidOperationException("Workflow capability admission execution mode does not match the binding request.");
         }
 
-        var expectedCapabilityArray = expectedCapabilities.ToArray();
-        var expected = expectedCapabilityArray
-            .Select(CapabilityKey)
-            .OrderBy(static key => key, StringComparer.Ordinal)
+        var expected = expectedInvocations
+            .Select(static invocation => invocation.Clone())
+            .OrderBy(static invocation => invocation.CallSiteId, StringComparer.Ordinal)
             .ToArray();
-        var actual = plan.ExternalCapabilities
-            .Select(CapabilityKey)
-            .OrderBy(static key => key, StringComparer.Ordinal)
+        ValidateExternalInvocations(expected);
+        var actual = plan.InvocationAdmissions.ToArray();
+        ValidateInvocationAdmissions(actual);
+        if (!IsSortedByCallSite(actual))
+            throw new InvalidOperationException("Workflow capability invocation admissions are not canonically ordered.");
+        if (expected.Length != actual.Length)
+            throw new InvalidOperationException("Workflow capability invocation admissions do not match the bound definition.");
+        for (var index = 0; index < expected.Length; index++)
+        {
+            if (!string.Equals(expected[index].CallSiteId, actual[index].CallSiteId, StringComparison.Ordinal) ||
+                !SelectorMatchesCapability(expected[index].Selector, actual[index].Capability))
+            {
+                throw new InvalidOperationException(
+                    "Workflow capability invocation admissions do not match the bound definition.");
+            }
+        }
+
+        var expectedCapabilityArray = actual
+            .Select(static admission => admission.Capability)
             .ToArray();
-        if (!expected.SequenceEqual(actual, StringComparer.Ordinal))
-            throw new InvalidOperationException("Workflow capability admission capabilities do not match the bound definition.");
 
         if (actual.Length > 0 && plan.SourceStamps.Count == 0)
             throw new InvalidOperationException("Workflow capability admission source evidence is required.");
@@ -130,6 +151,71 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             throw new InvalidOperationException("Workflow capability admission digest is invalid.");
     }
 
+    public static IReadOnlyList<ExternalWorkflowCapabilityRef> DistinctCapabilities(
+        WorkflowCapabilityAdmissionPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        return plan.InvocationAdmissions
+            .Select(static admission => admission.Capability)
+            .Where(static capability => capability is not null)
+            .GroupBy(CapabilityKey, StringComparer.Ordinal)
+            .Select(static group => group.First().Clone())
+            .OrderBy(CapabilityKey, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public static string SelectorKey(ExternalWorkflowCapabilitySelector selector)
+    {
+        ArgumentNullException.ThrowIfNull(selector);
+        return selector.SelectorCase switch
+        {
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector => string.Join(
+                "\n",
+                "host",
+                selector.HostConnector.ConnectorCapabilityRef,
+                selector.HostConnector.OperationId,
+                selector.HostConnector.ContractDigest),
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation => string.Join(
+                "\n",
+                "nyxid",
+                selector.NyxIdOperation.UserServiceId,
+                selector.NyxIdOperation.OperationId),
+            _ => "none",
+        };
+    }
+
+    public static bool SelectorMatchesCapability(
+        ExternalWorkflowCapabilitySelector? selector,
+        ExternalWorkflowCapabilityRef? capability)
+    {
+        if (selector is null || capability is null)
+            return false;
+
+        return (selector.SelectorCase, capability.CapabilityCase) switch
+        {
+            (ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector,
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector) =>
+                string.Equals(
+                    CapabilityKey(new ExternalWorkflowCapabilityRef
+                    {
+                        HostConnector = selector.HostConnector.Clone(),
+                    }),
+                    CapabilityKey(capability),
+                    StringComparison.Ordinal),
+            (ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation,
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService) =>
+                string.Equals(
+                    selector.NyxIdOperation.UserServiceId,
+                    capability.NyxIdUserService.UserServiceId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    selector.NyxIdOperation.OperationId,
+                    capability.NyxIdUserService.OperationId,
+                    StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
     public static string CapabilityKey(ExternalWorkflowCapabilityRef capability)
     {
         ArgumentNullException.ThrowIfNull(capability);
@@ -153,6 +239,97 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             _ => "none",
         };
     }
+
+    private static void ValidateExternalInvocations(
+        IReadOnlyList<ExternalToolInvocationSpec> invocations)
+    {
+        foreach (var invocation in invocations)
+        {
+            ValidateCallSiteId(invocation.CallSiteId);
+            if (string.IsNullOrWhiteSpace(invocation.ToolName) ||
+                !string.Equals(invocation.ToolName, invocation.ToolName.Trim(), StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Workflow external invocation tool name is invalid.");
+            }
+            ValidateSelector(invocation.Selector);
+        }
+        EnsureUniqueCallSites(invocations.Select(static invocation => invocation.CallSiteId));
+    }
+
+    private static void ValidateInvocationAdmissions(
+        IReadOnlyList<WorkflowCapabilityInvocationAdmission> admissions)
+    {
+        foreach (var admission in admissions)
+        {
+            ValidateCallSiteId(admission.CallSiteId);
+            if (admission.Capability is null ||
+                admission.Capability.CapabilityCase ==
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.None)
+            {
+                throw new InvalidOperationException("Workflow capability invocation admission proof is required.");
+            }
+        }
+        EnsureUniqueCallSites(admissions.Select(static admission => admission.CallSiteId));
+    }
+
+    private static void ValidateSelector(ExternalWorkflowCapabilitySelector? selector)
+    {
+        if (selector is null || selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.None)
+            throw new InvalidOperationException("Workflow external invocation selector is required.");
+
+        var requiredValues = selector.SelectorCase switch
+        {
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector => new[]
+            {
+                selector.HostConnector.ConnectorCapabilityRef,
+                selector.HostConnector.OperationId,
+            },
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.NyxIdOperation => new[]
+            {
+                selector.NyxIdOperation.UserServiceId,
+                selector.NyxIdOperation.OperationId,
+            },
+            _ => [],
+        };
+        if (requiredValues.Any(static value =>
+                string.IsNullOrWhiteSpace(value) ||
+                !string.Equals(value, value.Trim(), StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException("Workflow external invocation selector identity is invalid.");
+        }
+
+        if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector &&
+            !string.Equals(
+                selector.HostConnector.ContractDigest,
+                selector.HostConnector.ContractDigest.Trim(),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow external invocation selector identity is invalid.");
+        }
+    }
+
+    private static void ValidateCallSiteId(string? callSiteId)
+    {
+        if (string.IsNullOrWhiteSpace(callSiteId) ||
+            !string.Equals(callSiteId, callSiteId.Trim(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workflow external invocation call site id is invalid.");
+        }
+    }
+
+    private static void EnsureUniqueCallSites(IEnumerable<string> callSiteIds)
+    {
+        if (callSiteIds.GroupBy(static id => id, StringComparer.Ordinal).Any(static group => group.Count() != 1))
+            throw new InvalidOperationException("Workflow external invocation call site ids must be unique.");
+    }
+
+    private static bool IsSortedByCallSite(
+        IReadOnlyList<WorkflowCapabilityInvocationAdmission> admissions) =>
+        admissions.Select(static admission => admission.CallSiteId)
+            .SequenceEqual(
+                admissions.Select(static admission => admission.CallSiteId)
+                    .OrderBy(static id => id, StringComparer.Ordinal),
+                StringComparer.Ordinal);
 
     public static bool RequiresDurableAuthorizationCatalog(
         ExternalCapabilityExecutionMode executionMode,
@@ -290,4 +467,14 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
         return leftBytes.Length == rightBytes.Length &&
                CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
+}
+
+public sealed class WorkflowCapabilityAdmissionRebindRequiredException : InvalidOperationException
+{
+    public WorkflowCapabilityAdmissionRebindRequiredException()
+        : base("CAPABILITY_ADMISSION_REBIND_REQUIRED: Rebind the workflow to create a call-site capability admission plan.")
+    {
+    }
+
+    public string Code => WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode;
 }

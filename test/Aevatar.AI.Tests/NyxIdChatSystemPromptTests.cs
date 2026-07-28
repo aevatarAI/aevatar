@@ -121,6 +121,28 @@ public class NyxIdChatSystemPromptTests
     }
 
     [Fact]
+    public void Value_ShouldLoadNyxIdSkillBeforeReadingSenderInventory()
+    {
+        var prompt = NyxIdChatSystemPrompt.Value.Content;
+        var skillCall = prompt.IndexOf(
+            "first call `use_skill(skill=\"nyxid\")`",
+            StringComparison.Ordinal);
+        var inventoryCall = prompt.IndexOf(
+            "then call `nyxid_service_inventory`",
+            StringComparison.Ordinal);
+
+        skillCall.Should().BeGreaterThanOrEqualTo(0);
+        inventoryCall.Should().BeGreaterThan(skillCall);
+        prompt.Should().Contain("current sender's live inventory");
+        prompt.Should().Contain("temporary read failure");
+        prompt.Should().Contain("binding is explicitly missing or revoked");
+        prompt.Should().Contain("Do not call `code_execute`");
+        prompt.Should().Contain("`nyxid service list`");
+        prompt.Should().NotContain("call `nyxid_service_inventory` directly");
+        prompt.Should().NotContain("Do not load a skill");
+    }
+
+    [Fact]
     public void ComposedPrompt_ShouldKeepGenericRuntimePromptProviderNeutral()
     {
         var prompt = ComposedAgentPrompt();

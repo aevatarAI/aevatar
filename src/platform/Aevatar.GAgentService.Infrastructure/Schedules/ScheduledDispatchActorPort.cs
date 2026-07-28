@@ -285,6 +285,17 @@ public sealed class ScheduledDispatchActorPort : IScheduledDispatchActorPort
     public Task<DispatchAdmission> DispatchDeleteTeamAutomationAsync(
         string actorId,
         TeamMemberAutomationOwner owner,
+        string reason,
+        CancellationToken ct = default) =>
+        DispatchAsync(actorId, new ScheduledDispatchDeleteCommand
+        {
+            Reason = reason ?? string.Empty,
+            TeamAutomationOwner = CreateTeamOwnerState(owner),
+        }, ct);
+
+    public Task<DispatchAdmission> DispatchDeleteTeamAutomationAsync(
+        string actorId,
+        TeamMemberAutomationOwner owner,
         string operationId,
         string idempotencyKey,
         string reason,

@@ -21,6 +21,7 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Abstractions.Slash;
+using Aevatar.GAgents.Channel.Identity.Abstractions;
 using Aevatar.GAgents.Channel.NyxIdRelay;
 using Aevatar.GAgents.Channel.Runtime;
 using Aevatar.GAgents.NyxidChat.LlmSelection;
@@ -151,6 +152,12 @@ public static class ServiceCollectionExtensions
         }
         services.TryAddSingleton<BuiltInPromptFloorProvider>();
         services.TryAddSingleton<IBuiltInPromptFloorProvider>(sp => sp.GetRequiredService<BuiltInPromptFloorProvider>());
+        services.TryAddSingleton<ChannelRemoteSkillAccessTokenResolver>(sp =>
+            new ChannelRemoteSkillAccessTokenResolver(
+                sp.GetService<INyxIdSkillCapabilityIssuer>(),
+                sp.GetService<ILogger<ChannelRemoteSkillAccessTokenResolver>>()));
+        services.TryAddSingleton<IRemoteSkillAccessTokenResolver>(sp =>
+            sp.GetRequiredService<ChannelRemoteSkillAccessTokenResolver>());
         services.TryAddSingleton<IConversationReplyGenerator>(sp =>
             new NyxIdConversationReplyGenerator(
                 sp.GetRequiredService<ILLMProviderFactory>(),
@@ -170,10 +177,9 @@ public static class ServiceCollectionExtensions
                 approvalHandler: null,
                 logger: sp.GetService<ILogger<NyxIdConversationReplyGenerator>>(),
                 overlayProvider: sp.GetService<ISystemSkillOverlayProvider>(),
-                larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>()));
+                larkOutboundClientFactory: sp.GetService<ILarkOutboundClientFactory>(),
+                remoteSkillAccessTokenResolver: sp.GetService<IRemoteSkillAccessTokenResolver>()));
         services.TryAddSingleton<ChannelNyxIdConnectedServiceInventoryToolSource>();
-        services.TryAddSingleton<INyxIdConnectedServiceInventoryQuery>(sp =>
-            sp.GetRequiredService<ChannelNyxIdConnectedServiceInventoryToolSource>());
         services.TryAddSingleton<IAgentRunReplyGenerationExecutorPort, AgentRunReplyGenerationExecutor>();
         services.TryAddSingleton<INyxIdActionPostconditionPort>(sp =>
             sp.GetService<INyxIdAuthorizationCatalogQueryPort>() is { } catalogQueryPort

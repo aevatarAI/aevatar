@@ -25,12 +25,20 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
         {
           "type": "object",
           "properties": {
-            "capability": {
+            "selector": {
               "type": "object",
-              "description": "Exact capability candidate returned by list_external_workflow_capabilities",
+              "description": "Exact selector copied from a list_external_workflow_capabilities descriptor",
               "properties": {
                 "host_connector": { "type": "object" },
-                "nyx_id_user_service": { "type": "object" }
+                "nyx_id_operation": {
+                  "type": "object",
+                  "properties": {
+                    "user_service_id": { "type": "string" },
+                    "operation_id": { "type": "string" }
+                  },
+                  "required": ["user_service_id", "operation_id"],
+                  "additionalProperties": false
+                }
               },
               "minProperties": 1,
               "maxProperties": 1
@@ -40,7 +48,7 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
               "enum": ["interactive", "durable"]
             }
           },
-          "required": ["capability", "execution_mode"],
+          "required": ["selector", "execution_mode"],
           "additionalProperties": false
         }
         """;
@@ -58,22 +66,22 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
             if (!TryParseExecutionMode(args.Str("execution_mode"), out var executionMode))
                 return JsonDefaults.Error("execution_mode must be interactive or durable");
 
-            var capabilityJson = args.RawOrStr("capability");
-            if (string.IsNullOrWhiteSpace(capabilityJson))
-                return JsonDefaults.Error("capability is required");
+            var selectorJson = args.RawOrStr("selector");
+            if (string.IsNullOrWhiteSpace(selectorJson))
+                return JsonDefaults.Error("selector is required");
 
-            ExternalWorkflowCapabilityRef capability;
+            ExternalWorkflowCapabilitySelector selector;
             try
             {
-                capability = JsonParser.Default.Parse<ExternalWorkflowCapabilityRef>(capabilityJson);
+                selector = JsonParser.Default.Parse<ExternalWorkflowCapabilitySelector>(selectorJson);
             }
             catch (InvalidProtocolBufferException)
             {
-                return JsonDefaults.Error("capability must be an exact typed capability candidate");
+                return JsonDefaults.Error("selector must be an exact typed capability selector");
             }
 
-            if (capability.CapabilityCase == ExternalWorkflowCapabilityRef.CapabilityOneofCase.None)
-                return JsonDefaults.Error("capability must select exactly one capability kind");
+            if (selector.SelectorCase == ExternalWorkflowCapabilitySelector.SelectorOneofCase.None)
+                return JsonDefaults.Error("selector must select exactly one capability kind");
 
             if (!ExternalWorkflowCapabilityToolSupport.TryResolveAccess(out var access, out var error))
                 return JsonDefaults.Error(error!);
@@ -81,7 +89,7 @@ public sealed class InspectExternalWorkflowCapabilityReadinessTool : IAgentTool
             var readiness = await _readinessPort.InspectAsync(
                 new InspectExternalWorkflowCapabilityReadinessRequest(
                     access!,
-                    capability,
+                    selector,
                     executionMode),
                 ct);
             return ExternalWorkflowCapabilityToolSupport.ProtoJsonFormatter.Format(readiness);

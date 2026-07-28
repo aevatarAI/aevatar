@@ -77,6 +77,12 @@ public sealed record AgentToolExecutionContext(
     public AgentToolNyxIdAuthorityContext NyxIdAuthority { get; init; } =
         AgentToolNyxIdAuthorityContext.Empty;
 
+    /// <summary>
+    /// Committed proof for the exact operation this call site was admitted to invoke. Null for
+    /// call sites that are not under external-capability admission (ordinary human sessions).
+    /// </summary>
+    public AgentToolOperationAdmission? OperationAdmission { get; init; }
+
     public static AgentToolExecutionContext Empty { get; } = new(
         AgentToolRequestIdentity.Empty,
         AgentToolCredentials.Empty,

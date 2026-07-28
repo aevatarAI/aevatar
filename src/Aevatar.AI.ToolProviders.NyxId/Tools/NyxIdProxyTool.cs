@@ -138,6 +138,10 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         // Refactor (iter25/cluster-025-nyxid-tool-discovery-actor-cache):
         //   Old pattern: NyxIdSpecCatalog + SpecFetchToken + IServiceDiscoveryCache 在仓库内建第二 catalog(NyxID 真实源的影子)
         //   New principle: NyxID 是唯一真实源;删除 in-process catalog 假权威面; routing 和 spec hints 请求时读取 live NyxID surface;保留 typed tools + live nyxid_proxy
+        var admission = AgentToolRequestContext.Current?.OperationAdmission;
+        if (admission is not null)
+            return await ExecuteAdmittedOperationAsync(admission, argumentsJson, ct);
+
         var args = ToolArgs.Parse(argumentsJson);
         if (args.HasParseError)
         {
@@ -239,6 +243,103 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         return result;
     }
 
+    /// <summary>
+    /// Strict proof-bound main chain. The committed operation proof owns service, method, template
+    /// and schemas, so this path never accepts caller route fields and never issues an HTTP request
+    /// before the whole request has been validated against the proof.
+    /// </summary>
+    private async Task<string> ExecuteAdmittedOperationAsync(
+        AgentToolOperationAdmission admission,
+        string argumentsJson,
+        CancellationToken ct)
+    {
+        var build = NyxIdOperationRequestBuilder.Build(admission, argumentsJson);
+        if (!build.Succeeded)
+        {
+            var failure = build.Failure!;
+            _logger.LogWarning(
+                "[nyxid_proxy] Admitted operation request rejected. operationId={OperationId} code={Code}",
+                admission.OperationId,
+                failure.Code);
+            return JsonSerializer.Serialize(new
+            {
+                error = true,
+                error_code = failure.Code,
+                message = failure.Message,
+            });
+        }
+
+        var request = build.Request!;
+        var token = AgentToolRequestContext.NyxIdAccessToken;
+        var orgToken = AgentToolRequestContext.NyxIdOrgToken;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return request.FileArtifact
+                ? FileArtifactError("missing_nyxid_access_token", "No NyxID access token available. User must be authenticated.")
+                : """{"error":"No NyxID access token available. User must be authenticated."}""";
+        }
+
+        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, request.ServiceId, ct);
+        _logger.LogInformation(
+            "[nyxid_proxy] admitted {Method} slug={Slug} operationId={OperationId} tokenSource={Source}",
+            request.Method,
+            request.Slug,
+            admission.OperationId,
+            effectiveToken == token ? "user" : "org");
+
+        if (request.FileArtifact)
+        {
+            return await ExecuteAdmittedFileArtifactAsync(
+                effectiveToken,
+                request,
+                ct);
+        }
+
+        return await _client.ProxyRequestAsync(
+            effectiveToken,
+            request.Slug,
+            request.ServiceId,
+            request.Path,
+            request.Method,
+            request.Body,
+            request.Headers,
+            ct);
+    }
+
+    private async Task<string> ExecuteAdmittedFileArtifactAsync(
+        string effectiveToken,
+        NyxIdOperationRequest request,
+        CancellationToken ct)
+    {
+        if (_fileArtifactIngress == null)
+            return FileArtifactError("file_artifact_ingress_unavailable", "Host has not registered workflow file artifact ingress.");
+
+        var context = AgentToolRequestContext.Current;
+        var workflowRuntime = context?.WorkflowRuntime ?? AgentWorkflowRuntimeContext.Empty;
+        var callerScopeId = Normalize(context?.Caller.ScopeId);
+        var ownerRunId = Normalize(workflowRuntime.ParentRunId);
+        if (!workflowRuntime.HasManagedParent || callerScopeId == null || ownerRunId == null)
+            return FileArtifactError("managed_workflow_context_required", "response_mode=file_artifact requires a managed workflow runtime context and caller scope.");
+
+        var response = await _client.ProxyGetBinaryResponseAsync(
+            effectiveToken,
+            request.Slug,
+            request.ServiceId,
+            request.Path,
+            request.Headers,
+            _fileArtifactMaxBytes,
+            ct);
+
+        return await CompleteFileArtifactAsync(
+            response,
+            request.Slug,
+            request.ServiceId,
+            request.Path,
+            callerScopeId,
+            ownerRunId,
+            ct);
+    }
+
     private async Task<string> ExecuteFileArtifactAsync(
         string token,
         string? orgToken,
@@ -283,6 +384,25 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
             _fileArtifactMaxBytes,
             ct);
 
+        return await CompleteFileArtifactAsync(
+            response,
+            slug,
+            serviceId,
+            path,
+            callerScopeId,
+            ownerRunId,
+            ct);
+    }
+
+    private async Task<string> CompleteFileArtifactAsync(
+        NyxIdProxyBinaryResponse response,
+        string slug,
+        string serviceId,
+        string path,
+        string callerScopeId,
+        string ownerRunId,
+        CancellationToken ct)
+    {
         if (!response.Succeeded)
         {
             var error = response.Detail switch
@@ -307,7 +427,7 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         FileArtifactIngressResult ingressResult;
         try
         {
-            ingressResult = await _fileArtifactIngress.IngestAsync(new FileArtifactIngressRequest(
+            ingressResult = await _fileArtifactIngress!.IngestAsync(new FileArtifactIngressRequest(
                 response.Content,
                 FileArtifactSourceKind.ConnectedServiceResource,
                 SourceMessageId: $"nyxid_proxy:{serviceId}",

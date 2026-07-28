@@ -673,7 +673,11 @@ public sealed class ScopeBindingStudioMemberPlatformBindingCommandServiceTests
                 workflowYaml,
                 new Dictionary<string, string>(),
                 ExternalCapabilityExecutionMode.Durable,
-                [capability],
+                [new WorkflowCapabilityInvocationAdmission
+                {
+                    CallSiteId = "workflow-main/invoke-gamma",
+                    Capability = capability,
+                }],
                 [
                     Source(
                         ExternalCapabilitySourceKind.NyxIdUserServices,

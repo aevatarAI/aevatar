@@ -1,4 +1,3 @@
-using System.Net;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.ToolProviders.NyxId;
@@ -16,7 +15,61 @@ namespace Aevatar.GAgents.ChannelRuntime.Tests;
 public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
 {
     [Fact]
-    public async Task DiscoverToolsAsync_WhenStrictSenderRouteTokenIsUnavailable_UsesBoundSenderInventoryCapability()
+    public async Task DiscoverToolsAsync_ExposesListOnlySchemaWithoutUnverifiedInstanceIdentity()
+    {
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource();
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-sender-1",
+                NyxUserId: null,
+                SenderTenant: "tenant-1"),
+        });
+
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        using var schema = JsonDocument.Parse(tool.ParametersSchema);
+        schema.RootElement.GetProperty("properties").EnumerateObject().Count().Should().Be(0);
+        schema.RootElement.GetProperty("additionalProperties").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCallerSuppliesUnverifiedInstanceIdentity_RejectsBeforeInventoryRead()
+    {
+        var handler = new InventoryHandler();
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var issuer = Substitute.For<INyxIdConnectedServiceInventoryCapabilityIssuer>();
+        var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
+            options,
+            new TestNyxIdApiClientFactory(new NyxIdApiClient(
+                options,
+                new HttpClient(handler))),
+            issuer,
+            NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
+        {
+            Credentials = new AgentToolCredentials(
+                "bot-owner-access-token",
+                "bot-owner-org-token",
+                "strict-sender-token"),
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-sender-1",
+                NyxUserId: null,
+                SenderTenant: "tenant-1"),
+        });
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        var result = await tool.ExecuteAsync("""{"user_service_id":"unverified-service"}""");
+
+        using var document = JsonDocument.Parse(result);
+        document.RootElement.GetProperty("error").GetString().Should().Be("invalid_arguments");
+        handler.RequestPath.Should().BeNull();
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenStrictSenderRouteTokenIsUnavailable_UsesBoundSenderInventoryCapability()
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -61,9 +114,17 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 "ou_sender_1"),
         });
 
-        var tools = await source.DiscoverToolsAsync();
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
 
-        tools.Should().ContainSingle().Which.Name.Should().Be("nyxid_service_inventory");
+        tool.Name.Should().Be("nyxid_service_inventory");
+        handler.Authorization.Should().BeNull("tool discovery must not query the sender's live inventory");
+        handler.RequestPath.Should().BeNull();
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer inventory-access-token");
         handler.RequestPath.Should().Be("/api/v1/keys");
         await issuer.Received(1).IssueByBindingIdAsync(
@@ -76,7 +137,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
-    public async Task DiscoverToolsAsync_WhenSenderRouteTokenExists_ReusesItWithoutIssuingAnotherCapability()
+    public async Task ExecuteAsync_WhenSenderRouteTokenExists_ReusesItWithoutIssuingAnotherCapability()
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -107,16 +168,25 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                 SenderTenant: "tenant-1"),
         });
 
-        var tools = await source.DiscoverToolsAsync();
+        var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
 
-        tools.Should().ContainSingle().Which.Name.Should().Be("nyxid_service_inventory");
+        tool.Name.Should().Be("nyxid_service_inventory");
+        handler.Authorization.Should().BeNull("tool discovery must not query the sender's live inventory");
+        handler.RequestPath.Should().BeNull();
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+
+        var result = await tool.ExecuteAsync("{}");
+
+        result.Should().Contain("GitHub");
         handler.Authorization.Should().Be("Bearer strict-sender-token");
+        handler.RequestPath.Should().Be("/api/v1/keys");
         await issuer.DidNotReceiveWithAnyArgs()
             .IssueByBindingIdAsync(default!, default!, default);
     }
 
     [Fact]
-    public async Task DiscoverToolsAsync_WhenInventoryCapabilityCannotBeIssued_KeepsHonestInventoryFailureTool()
+    public async Task ExecuteAsync_WhenInventoryCapabilityCannotBeIssued_ReturnsSanitizedFailure()
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -158,6 +228,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         });
 
         var tool = (await source.DiscoverToolsAsync()).Should().ContainSingle().Subject;
+
+        handler.Authorization.Should().BeNull("tool discovery must not query the sender's live inventory");
+        await issuer.DidNotReceiveWithAnyArgs()
+            .IssueByBindingIdAsync(default!, default!, default);
+
         var result = await tool.ExecuteAsync("{}");
 
         tool.Name.Should().Be("nyxid_service_inventory");
@@ -169,7 +244,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
-    public async Task DiscoverToolsAsync_WhenTypedNyxIdAuthorityIsMissing_FailsClosedWithoutGuessingChannelSubject()
+    public async Task ExecuteAsync_WhenTypedNyxIdAuthorityIsMissing_FailsClosedWithoutGuessingChannelSubject()
     {
         var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
@@ -221,32 +296,42 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     }
 
     [Fact]
-    public async Task QueryAsync_WhenNyxIdInventoryEndpointRejectsRequest_ReturnsFailureInsteadOfEmptyInventory()
+    public async Task ExecuteAsync_WhenCapabilityIssueIsCanceled_PropagatesCancellation()
     {
-        var handler = new InventoryHandler(HttpStatusCode.Unauthorized);
+        using var cts = new CancellationTokenSource();
+        var handler = new InventoryHandler();
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        var clientFactory = new TestNyxIdApiClientFactory(new NyxIdApiClient(
+            options,
+            new HttpClient(handler)));
+        var issuer = new CancelingInventoryCapabilityIssuer(cts);
         var source = new ChannelNyxIdConnectedServiceInventoryToolSource(
             options,
-            new TestNyxIdApiClientFactory(new NyxIdApiClient(
-                options,
-                new HttpClient(handler))),
-            logger: NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
-        var context = AgentToolExecutionContext.Empty with
+            clientFactory,
+            issuer,
+            NullLogger<ChannelNyxIdConnectedServiceInventoryToolSource>.Instance);
+        using var context = AgentToolContextScope.Push(AgentToolExecutionContext.Empty with
         {
-            Credentials = new AgentToolCredentials(
-                NyxIdAccessToken: null,
-                NyxIdOrgToken: null,
-                SenderNyxIdAccessToken: "strict-sender-token"),
-            SenderBinding = new AgentToolSenderBindingContext("bnd-sender-1"),
-        };
+            SenderBinding = new AgentToolSenderBindingContext(
+                "bnd-sender-1",
+                NyxUserId: null,
+                SenderTenant: "tenant-1"),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext(
+                "lark",
+                "tenant-1",
+                "ou_sender_1"),
+        });
 
-        var result = await ((INyxIdConnectedServiceInventoryQuery)source).QueryAsync(context);
+        var tool = (await source.DiscoverToolsAsync(cts.Token)).Should().ContainSingle().Subject;
 
-        result.Inventory.Should().BeNull();
-        result.Failure.Should().Be(NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable);
+        cts.IsCancellationRequested.Should().BeFalse("discovery must not issue a capability");
+        Func<Task> act = () => tool.ExecuteAsync("{}", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        handler.Authorization.Should().BeNull();
     }
 
-    private sealed class InventoryHandler(HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
+    private sealed class InventoryHandler : HttpMessageHandler
     {
         public string? Authorization { get; private set; }
         public string? RequestPath { get; private set; }
@@ -257,10 +342,9 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
         {
             Authorization = request.Headers.Authorization?.ToString();
             RequestPath = request.RequestUri?.AbsolutePath;
-            return Task.FromResult(new HttpResponseMessage(statusCode)
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                Content = new StringContent(statusCode == HttpStatusCode.OK
-                    ? """
+                Content = new StringContent("""
                     {
                       "keys": [
                         {
@@ -273,8 +357,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
                         }
                       ]
                     }
-                    """
-                    : """{"error":"unauthorized"}"""),
+                    """),
             });
         }
     }
@@ -282,5 +365,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSourceTests
     private sealed class TestNyxIdApiClientFactory(NyxIdApiClient client) : INyxIdApiClientFactory
     {
         public NyxIdApiClient CreateClient() => client;
+    }
+
+    private sealed class CancelingInventoryCapabilityIssuer(CancellationTokenSource callerCancellation)
+        : INyxIdConnectedServiceInventoryCapabilityIssuer
+    {
+        public Task<CapabilityHandle> IssueByBindingIdAsync(
+            ExternalSubjectRef externalSubject,
+            string bindingId,
+            CancellationToken ct = default)
+        {
+            callerCancellation.Cancel();
+            return Task.FromCanceled<CapabilityHandle>(callerCancellation.Token);
+        }
     }
 }

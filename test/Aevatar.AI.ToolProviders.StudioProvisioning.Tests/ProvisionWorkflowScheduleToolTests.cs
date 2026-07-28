@@ -656,7 +656,7 @@ public sealed class ProvisionWorkflowScheduleToolTests
         schedule.GetProperty("schedule_id").GetString().Should().Be("sched-alpha");
         schedule.GetProperty("authorization_status").GetString().Should().Be("active");
         schedule.GetProperty("schedule_url").GetString().Should().Be(
-            "/api/scopes/scope-current/teams/team-alpha/members/m-alpha/automations/sched-alpha");
+            "/api/schedules/sched-alpha?ownerKind=studio_member_automation&ownerScopeId=scope-current&ownerTeamId=team-alpha&ownerMemberId=m-alpha");
         schedule.TryGetProperty("team_automation_lifecycle_status", out var lifecycleStatus).Should().BeFalse();
         schedule.GetProperty("state_version").GetInt64().Should().Be(42);
         root.GetProperty("next_page_token").GetString().Should().Be("next-schedules");

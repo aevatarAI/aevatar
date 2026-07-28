@@ -4,7 +4,6 @@ using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.AI.ToolProviders.NyxId.ConnectedServices;
 using Aevatar.GAgents.Channel.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Abstractions;
-using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -16,9 +15,7 @@ namespace Aevatar.GAgents.NyxidChat;
 /// otherwise a narrow request-local inventory capability is re-issued from the
 /// sender's typed binding identity. Ambient bot-owner credentials are never used.
 /// </summary>
-public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
-    IAgentToolSource,
-    INyxIdConnectedServiceInventoryQuery
+public sealed class ChannelNyxIdConnectedServiceInventoryToolSource : IAgentToolSource
 {
     private readonly NyxIdToolOptions? _options;
     private readonly INyxIdApiClientFactory? _apiClientFactory;
@@ -40,19 +37,36 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
         _inventoryLogger = inventoryLogger;
     }
 
-    public async Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var context = AgentToolRequestContext.Current;
         var bindingId = Normalize(context?.SenderBinding.BindingId);
         if (context is null || bindingId is null)
-            return [];
+            return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
+
+        return Task.FromResult<IReadOnlyList<IAgentTool>>([new SenderInventoryTool(this)]);
+    }
+
+    private async Task<string> ExecuteInventoryAsync(
+        string argumentsJson,
+        CancellationToken ct)
+    {
+        if (!HasOnlyListArguments(argumentsJson))
+            return JsonSerializer.Serialize(new { error = "invalid_arguments" });
+
+        var context = AgentToolRequestContext.Current;
+        var bindingId = Normalize(context?.SenderBinding.BindingId);
+        if (context is null || bindingId is null)
+            return InventoryFailure("inventory_capability_unavailable");
 
         var strictSenderToken = Normalize(context.Credentials.SenderNyxIdAccessToken);
         if (strictSenderToken is not null)
-            return await DiscoverWithSenderTokenAsync(context, strictSenderToken, ct).ConfigureAwait(false);
+            return await ExecuteWithSenderTokenAsync(context, strictSenderToken, argumentsJson, ct)
+                .ConfigureAwait(false);
 
         if (_capabilityIssuer is null || !TryBuildSubject(context, out var subject))
-            return [new InventoryUnavailableTool("inventory_capability_unavailable")];
+            return InventoryFailure("inventory_capability_unavailable");
 
         try
         {
@@ -61,9 +75,10 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
                 .ConfigureAwait(false);
             var inventoryToken = Normalize(capability.AccessToken);
             if (inventoryToken is null)
-                return [new InventoryUnavailableTool("inventory_capability_unavailable")];
+                return InventoryFailure("inventory_capability_unavailable");
 
-            return await DiscoverWithSenderTokenAsync(context, inventoryToken, ct).ConfigureAwait(false);
+            return await ExecuteWithSenderTokenAsync(context, inventoryToken, argumentsJson, ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -77,7 +92,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            return [new InventoryUnavailableTool("inventory_binding_revoked")];
+            return InventoryFailure("inventory_binding_revoked");
         }
         catch (BindingScopeMismatchException ex)
         {
@@ -87,7 +102,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            return [new InventoryUnavailableTool("inventory_scope_unavailable")];
+            return InventoryFailure("inventory_scope_unavailable");
         }
         catch (Exception ex)
         {
@@ -97,83 +112,18 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
                 subject.Platform,
                 subject.Tenant,
                 subject.ExternalUserId);
-            return [new InventoryUnavailableTool("inventory_capability_unavailable")];
+            return InventoryFailure("inventory_capability_unavailable");
         }
     }
 
-    async Task<NyxIdConnectedServiceInventoryQueryResult> INyxIdConnectedServiceInventoryQuery.QueryAsync(
-        AgentToolExecutionContext context,
-        CancellationToken ct)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-
-        using var scope = AgentToolContextScope.Push(context);
-        var inventoryTool = (await DiscoverToolsAsync(ct).ConfigureAwait(false))
-            .SingleOrDefault(static tool =>
-                string.Equals(tool.Name, "nyxid_service_inventory", StringComparison.Ordinal));
-        if (inventoryTool is null)
-        {
-            return NyxIdConnectedServiceInventoryQueryResult.Failed(
-                NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable);
-        }
-
-        var resultJson = await inventoryTool.ExecuteAsync("{}", ct).ConfigureAwait(false);
-        if (TryReadFailure(resultJson, out var failure))
-            return NyxIdConnectedServiceInventoryQueryResult.Failed(failure);
-
-        try
-        {
-            return NyxIdConnectedServiceInventoryQueryResult.Succeeded(
-                JsonParser.Default.Parse<NyxIdServiceInventoryResult>(resultJson));
-        }
-        catch (InvalidProtocolBufferException)
-        {
-            return NyxIdConnectedServiceInventoryQueryResult.Failed(
-                NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable);
-        }
-    }
-
-    private static bool TryReadFailure(
-        string? resultJson,
-        out NyxIdConnectedServiceInventoryQueryFailure failure)
-    {
-        failure = NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable;
-        if (string.IsNullOrWhiteSpace(resultJson))
-            return true;
-
-        try
-        {
-            using var document = JsonDocument.Parse(resultJson);
-            if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                !document.RootElement.TryGetProperty("error", out var error) ||
-                error.ValueKind != JsonValueKind.String)
-            {
-                return false;
-            }
-
-            failure = error.GetString() switch
-            {
-                "inventory_binding_revoked" => NyxIdConnectedServiceInventoryQueryFailure.BindingRevoked,
-                "inventory_scope_unavailable" => NyxIdConnectedServiceInventoryQueryFailure.ScopeUnavailable,
-                "inventory_source_unavailable" => NyxIdConnectedServiceInventoryQueryFailure.SourceUnavailable,
-                "inventory_capability_unavailable" => NyxIdConnectedServiceInventoryQueryFailure.CapabilityUnavailable,
-                _ => NyxIdConnectedServiceInventoryQueryFailure.QueryUnavailable,
-            };
-            return true;
-        }
-        catch (JsonException)
-        {
-            return true;
-        }
-    }
-
-    private async Task<IReadOnlyList<IAgentTool>> DiscoverWithSenderTokenAsync(
+    private async Task<string> ExecuteWithSenderTokenAsync(
         AgentToolExecutionContext context,
         string token,
+        string argumentsJson,
         CancellationToken ct)
     {
         if (_options is null || _apiClientFactory is null)
-            return [new InventoryUnavailableTool("inventory_source_unavailable")];
+            return InventoryFailure("inventory_source_unavailable");
 
         try
         {
@@ -190,9 +140,11 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
             };
             using var scope = AgentToolContextScope.Push(senderContext);
             var tools = await inventorySource.DiscoverToolsAsync(ct).ConfigureAwait(false);
-            return tools.Count == 0
-                ? [new InventoryUnavailableTool("inventory_query_unavailable")]
-                : tools;
+            var inventoryTool = tools.SingleOrDefault(static tool =>
+                string.Equals(tool.Name, "nyxid_service_inventory", StringComparison.OrdinalIgnoreCase));
+            return inventoryTool is null
+                ? InventoryFailure("inventory_query_unavailable")
+                : await inventoryTool.ExecuteAsync(argumentsJson, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -201,7 +153,7 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "NyxID connected-service inventory source creation failed");
-            return [new InventoryUnavailableTool("inventory_source_unavailable")];
+            return InventoryFailure("inventory_source_unavailable");
         }
     }
 
@@ -232,23 +184,41 @@ public sealed class ChannelNyxIdConnectedServiceInventoryToolSource :
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private sealed class InventoryUnavailableTool(string errorCode) : IAgentTool
+    private static bool HasOnlyListArguments(string argumentsJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(argumentsJson) ? "{}" : argumentsJson);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                   !document.RootElement.EnumerateObject().Any();
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string InventoryFailure(string errorCode) =>
+        JsonSerializer.Serialize(new
+        {
+            error = errorCode,
+            message = "The connected-service inventory for the bound NyxID account is temporarily unavailable. Retry shortly.",
+        });
+
+    private sealed class SenderInventoryTool(ChannelNyxIdConnectedServiceInventoryToolSource source) : IAgentTool
     {
         private const string Schema =
             """{"type":"object","properties":{},"required":[],"additionalProperties":false}""";
 
         public string Name => "nyxid_service_inventory";
         public string Description =>
-            "Report that the bound caller's NyxID connected-service inventory is temporarily unavailable.";
+            "List the bound caller's exact NyxID connected-service instances.";
         public string ParametersSchema => Schema;
         public bool IsReadOnly => true;
         public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
         public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult(JsonSerializer.Serialize(new
-            {
-                error = errorCode,
-                message = "The connected-service inventory for the bound NyxID account is temporarily unavailable. Retry shortly.",
-            }));
+            source.ExecuteInventoryAsync(argumentsJson, ct);
     }
 }

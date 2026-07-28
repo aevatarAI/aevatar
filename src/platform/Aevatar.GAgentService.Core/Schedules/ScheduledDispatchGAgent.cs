@@ -50,6 +50,12 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
+        if (State.Deleted)
+        {
+            await PurgeDurableCallbacksAsync(ct);
+            return;
+        }
+
         await RecoverTeamCredentialExpiryAsync(ct);
         if (CanScheduleAutomaticFire())
         {
@@ -228,7 +234,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' already exists.");
         if (!isCreate && !IsConfigured())
             throw new InvalidOperationException($"Scheduled dispatch '{ResolveScheduleId()}' is not configured.");
-        EnsureTeamAutomationOwnerAccess(teamAutomationOwner, "configure");
+        EnsureTeamAutomationOwnerAccess(teamAutomationOwner, "configure", allowUnconfiguredOwner: isCreate);
         if (!isCreate &&
             State.TeamAutomationOwner != null &&
             State.TeamAutomationLifecycleStatus == TeamAutomationLifecycleStatusState.ReplacementPending)
@@ -299,7 +305,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
     {
         EnsureConfiguredForWrite("enable");
         EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "enable");
-        if (State.TeamAutomationOwner != null &&
+        if (HasTeamCredentialLifecycle() &&
             State.TeamAutomationLifecycleStatus != TeamAutomationLifecycleStatusState.Active)
         {
             throw new InvalidOperationException("team_automation_credential_not_active");
@@ -342,11 +348,51 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
 
     private async Task HandleDeleteCoreAsync(ScheduledDispatchDeleteCommand command)
     {
-        if (State.Deleted && IsSameCompletedDeleteOperation(command))
+        var normalizedReason = NormalizeOptional(command.Reason);
+        var exactDeleteReplayState =
+            State.TeamAutomationOperationKind ==
+                TeamAutomationOperationKindState.Delete;
+        if (exactDeleteReplayState)
         {
+            TeamMemberAutomationOwnerState normalizedTeamAutomationOwner;
+            try
+            {
+                normalizedTeamAutomationOwner =
+                    NormalizeTeamAutomationOwner(command.TeamAutomationOwner);
+            }
+            catch (InvalidOperationException)
+            {
+                throw TeamAutomationCommandRejectedException.Conflict(
+                    "team_automation_operation_conflict");
+            }
+            catch (ArgumentException)
+            {
+                throw TeamAutomationCommandRejectedException.Conflict(
+                    "team_automation_operation_conflict");
+            }
+
+            if (!IsSameDeleteOperation(
+                    command,
+                    normalizedTeamAutomationOwner,
+                    normalizedReason))
+            {
+                throw TeamAutomationCommandRejectedException.Conflict(
+                    "team_automation_operation_conflict");
+            }
+
             EnsureObservedCredentialAuthorizationOwnerAccess(
                 command.AuthenticatedCredentialOwner,
                 State.TeamCredentialEffectLocator?.CredentialOwner);
+            var healingPartialDelete = !State.Deleted;
+            if (healingPartialDelete)
+            {
+                await PersistDomainEventAsync(new ScheduledDispatchDeletedEvent
+                {
+                    Reason = normalizedReason,
+                    DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                });
+            }
+            await PurgeDurableCallbacksAsync(CancellationToken.None);
             await PersistTeamAutomationObservationAsync(
                 TeamAutomationOperationObservationStages.Delete,
                 State.PendingRevocationTeamCredential != null &&
@@ -369,43 +415,41 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             throw TeamAutomationCommandRejectedException.Conflict("team_automation_revocation_in_progress");
         }
 
-        if (State.TeamAutomationOwner == null)
-            EnsureConfiguredForWrite("delete");
-        EnsureObservedTeamAutomationOwnerAccess(command.TeamAutomationOwner);
-        var previousLease = ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.NextFireLease);
-        var previousCredentialExpiryLease =
-            ScheduledDispatchRuntimeCallbackLeaseStateCodec.ToRuntime(State.TeamCredentialExpiryLease);
-        if (State.TeamAutomationOwner != null)
+        EnsureConfiguredForWrite("delete");
+        EnsureTeamAutomationOwnerAccess(command.TeamAutomationOwner, "delete");
+        var deletionEvents = new List<IMessage>();
+        var deletedAt = DateTimeOffset.UtcNow;
+        if (HasTeamCredentialLifecycle())
         {
+            EnsureObservedTeamAutomationOwnerAccess(command.TeamAutomationOwner);
             var credentialOwner = State.ActiveTeamCredentialOwner ??
                 State.TeamCredentialEffectLocator?.CredentialOwner;
             EnsureObservedCredentialAuthorizationOwnerAccess(
                 command.AuthenticatedCredentialOwner,
                 credentialOwner);
-            await PersistDomainEventAsync(new TeamAutomationDeletionRequestedEvent
+            deletionEvents.Add(new TeamAutomationDeletionRequestedEvent
             {
                 Owner = State.TeamAutomationOwner.Clone(),
                 OperationId = NormalizeRequired(command.OperationId, nameof(command.OperationId)),
                 IdempotencyKey = NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey)),
                 PendingRevocationCredential = State.ActiveTeamCredential?.Clone(),
                 PendingRevocationCredentialOwner = State.ActiveTeamCredentialOwner?.Clone(),
-                OccurredAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                OccurredAt = Timestamp.FromDateTimeOffset(deletedAt),
+                Reason = normalizedReason,
             });
         }
-        await PersistDomainEventAsync(new ScheduledDispatchDeletedEvent
+        deletionEvents.Add(new ScheduledDispatchDeletedEvent
         {
-            Reason = NormalizeOptional(command.Reason),
-            DeletedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Reason = normalizedReason,
+            DeletedAt = Timestamp.FromDateTimeOffset(deletedAt),
         });
+        await PersistDomainEventsAsync(deletionEvents);
+        await PurgeDurableCallbacksAsync(CancellationToken.None);
         await PersistTeamAutomationObservationAsync(
             TeamAutomationOperationObservationStages.Delete,
             State.PendingRevocationTeamCredential != null,
             CancellationToken.None,
             observationRequestId: command.ObservationRequestId);
-        await CancelNextFireLeaseAsync(previousLease, CancellationToken.None);
-        await CancelTeamCredentialExpiryLeaseAsync(
-            previousCredentialExpiryLease,
-            CancellationToken.None);
     }
 
     [EventHandler]
@@ -950,7 +994,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
 
         var now = _timeProvider.GetUtcNow();
-        if (State.TeamAutomationOwner != null && !HasUsableActiveTeamCredential(now))
+        if (HasTeamCredentialLifecycle() && !HasUsableActiveTeamCredential(now))
         {
             if (State.ActiveTeamCredential != null &&
                 State.TeamCredentialExpiresAt?.ToDateTimeOffset() <= now &&
@@ -1049,7 +1093,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             Logger.LogInformation("Scheduled dispatch {ActorId} fire was canceled.", Id);
             throw;
         }
-        catch (ScheduledServiceInvocationAuthorizationException ex) when (State.TeamAutomationOwner != null)
+        catch (ScheduledServiceInvocationAuthorizationException ex) when (HasTeamCredentialLifecycle())
         {
             Logger.LogWarning(
                 ex,
@@ -1544,7 +1588,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         !State.Completed &&
         !State.Deleted &&
         IsConfigured() &&
-        (State.TeamAutomationOwner == null ||
+        (!HasTeamCredentialLifecycle() ||
          HasUsableActiveTeamCredential(_timeProvider.GetUtcNow()));
 
     private async Task RecoverTeamCredentialExpiryAsync(CancellationToken ct)
@@ -1960,11 +2004,14 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
                 $"Scheduled dispatch '{ResolveScheduleId()}' cannot {operation} because it is not configured.");
     }
 
-    private void EnsureTeamAutomationOwnerAccess(TeamMemberAutomationOwnerState? supplied, string operation)
+    private void EnsureTeamAutomationOwnerAccess(
+        TeamMemberAutomationOwnerState? supplied,
+        string operation,
+        bool allowUnconfiguredOwner = false)
     {
         if (State.TeamAutomationOwner == null)
         {
-            if (supplied != null)
+            if (supplied != null && !allowUnconfiguredOwner)
                 throw new InvalidOperationException("team_automation_begin_required");
             return;
         }
@@ -2109,12 +2156,30 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         }
     }
 
-    private bool IsSameCompletedDeleteOperation(ScheduledDispatchDeleteCommand command) =>
+    private bool HasTeamCredentialLifecycle() =>
+        State.ActiveTeamCredential != null ||
+        State.CandidateTeamCredential != null ||
+        State.PendingRevocationTeamCredential != null ||
+        State.ActiveTeamCredentialOwner != null ||
+        State.CandidateTeamCredentialOwner != null ||
+        State.TeamCredentialEffectLocator != null ||
+        State.TeamAutomationLifecycleStatus is not TeamAutomationLifecycleStatusState.Unspecified;
+
+    private bool IsSameDeleteOperation(
+        ScheduledDispatchDeleteCommand command,
+        TeamMemberAutomationOwnerState normalizedTeamAutomationOwner,
+        string normalizedReason) =>
         State.TeamAutomationOwner != null &&
-        command.TeamAutomationOwner != null &&
-        TeamAutomationOwnerEquals(State.TeamAutomationOwner, command.TeamAutomationOwner) &&
+        TeamAutomationOwnerEquals(
+            State.TeamAutomationOwner,
+            normalizedTeamAutomationOwner) &&
         string.Equals(State.TeamAutomationOperationId, command.OperationId?.Trim(), StringComparison.Ordinal) &&
-        string.Equals(State.TeamAutomationIdempotencyKey, command.IdempotencyKey?.Trim(), StringComparison.Ordinal);
+        string.Equals(State.TeamAutomationIdempotencyKey, command.IdempotencyKey?.Trim(), StringComparison.Ordinal) &&
+        State.HasTeamAutomationDeleteReason &&
+        string.Equals(
+            State.TeamAutomationDeleteReason,
+            normalizedReason,
+            StringComparison.Ordinal);
 
     private static TeamMemberAutomationOwnerState NormalizeTeamAutomationOwner(TeamMemberAutomationOwnerState? owner)
     {
@@ -2137,6 +2202,7 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
             return left == null && right == null;
 
         return string.Equals(left.ScopeId, right.ScopeId, StringComparison.Ordinal) &&
+               string.Equals(left.TeamId, right.TeamId, StringComparison.Ordinal) &&
                string.Equals(left.MemberId, right.MemberId, StringComparison.Ordinal);
     }
 
@@ -3199,6 +3265,13 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.PendingTeamCredentialExpiryAt = null;
         next.PendingTeamCredentialExpiryGeneration = 0;
         next.TeamAutomationActivationDecision = null;
+        if (next.TeamAutomationOperationKind ==
+                TeamAutomationOperationKindState.Delete &&
+            !next.HasTeamAutomationDeleteReason)
+        {
+            next.TeamAutomationDeleteReason =
+                NormalizeOptional(evt.Reason);
+        }
         next.UpdatedAt = deletedAt;
         if (next.PendingRevocationTeamCredential != null)
             next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.RevocationPending;
@@ -3314,6 +3387,10 @@ public sealed class ScheduledDispatchGAgent : GAgentBase<ScheduledDispatchState>
         next.TeamAutomationOperationKind = TeamAutomationOperationKindState.Delete;
         next.TeamAutomationOperationId = evt.OperationId ?? string.Empty;
         next.TeamAutomationIdempotencyKey = evt.IdempotencyKey ?? string.Empty;
+        if (evt.HasReason)
+            next.TeamAutomationDeleteReason = evt.Reason;
+        else
+            next.ClearTeamAutomationDeleteReason();
         next.TeamAutomationLifecycleStatus = TeamAutomationLifecycleStatusState.Deleting;
         next.CandidateTeamCredential = null;
         next.CandidateTeamCredentialOwner = null;

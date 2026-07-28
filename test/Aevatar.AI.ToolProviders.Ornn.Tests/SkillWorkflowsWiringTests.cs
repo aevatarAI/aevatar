@@ -263,6 +263,11 @@ public sealed class SkillWorkflowsWiringTests
 
         tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         tool.RequiresApproval("""{"skill":"translator","mount_workflows":true}""").Should().BeFalse();
+        ((IAgentTool)tool).GetCallSafety("""{"skill":"translator","mount_workflows":true}""").Should().Be(
+            new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: false,
+                IsDestructive: false));
     }
 
     [Fact]

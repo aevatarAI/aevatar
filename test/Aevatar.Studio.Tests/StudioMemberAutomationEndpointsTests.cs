@@ -1,6 +1,3 @@
-using System.Collections.Concurrent;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -11,16 +8,13 @@ using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Studio.Tests;
@@ -51,50 +45,16 @@ public sealed class StudioMemberAutomationEndpointsTests
 
         const string canonicalBase =
             "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
-        routes.Should().HaveCount(11);
-        routes.Should().OnlyContain(route => route != null && route.StartsWith(canonicalBase, StringComparison.Ordinal));
-        routes.Should().Contain(canonicalBase);
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/reauthorize");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/retry-revocation");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/pause");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/resume");
-        routes.Should().Contain($"{canonicalBase}/{{scheduleId}}/run-now");
+        routes.Should().ContainSingle()
+            .Which.Should().Be($"{canonicalBase}/preflight");
+        routes.Should().NotContain(canonicalBase);
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/reauthorize");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/retry-revocation");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/pause");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/resume");
+        routes.Should().NotContain($"{canonicalBase}/{{scheduleId}}/run-now");
         routes.Should().NotContain(route => route != null && route.StartsWith("/api/teams/", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Map_ShouldDeclareTypedAutomationReadResponsesForOpenApi()
-    {
-        var builder = WebApplication.CreateBuilder();
-        builder.Services.AddSingleton<IStudioMemberWorkflowSchedulePort, StubSchedules>();
-        builder.Services.AddSingleton<IExternalIdentityBindingQueryPort, StubBindingQuery>();
-        builder.Services.AddRouting();
-        var app = builder.Build();
-
-        StudioMemberAutomationEndpoints.Map(app);
-
-        const string canonicalBase =
-            "/api/scopes/{scopeId}/teams/{teamId}/members/{memberId}/automations";
-        var endpoints = ((IEndpointRouteBuilder)app).DataSources
-            .SelectMany(static source => source.Endpoints)
-            .OfType<RouteEndpoint>()
-            .ToArray();
-        var listEndpoint = endpoints.Single(endpoint =>
-            endpoint.RoutePattern.RawText == canonicalBase &&
-            endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods.Contains(HttpMethods.Get) == true);
-        var detailEndpoint = endpoints.Single(endpoint =>
-            endpoint.RoutePattern.RawText == $"{canonicalBase}/{{scheduleId}}" &&
-            endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods.Contains(HttpMethods.Get) == true);
-
-        listEndpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>()
-            .Should().Contain(metadata =>
-                metadata.StatusCode == StatusCodes.Status200OK &&
-                metadata.Type == typeof(StudioMemberAutomationListResponse));
-        detailEndpoint.Metadata.GetOrderedMetadata<IProducesResponseTypeMetadata>()
-            .Should().Contain(metadata =>
-                metadata.StatusCode == StatusCodes.Status200OK &&
-                metadata.Type == typeof(StudioMemberAutomationView));
     }
 
     [Fact]
@@ -171,6 +131,67 @@ public sealed class StudioMemberAutomationEndpointsTests
     }
 
     [Fact]
+    public async Task Preflight_WhenNyxIdBindingIsMissing_ShouldReturnUnauthorizedWithoutSecrets()
+    {
+        var schedules = new StubSchedules();
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            CreateContext(ScopeId),
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery { Binding = null },
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status401Unauthorized);
+        StringProperty(Value(result), "code").Should().Be(
+            "TEAM_AUTOMATION_UNAUTHORIZED");
+        schedules.LastPreflight.Should().BeNull();
+        var json = JsonSerializer.Serialize(Value(result));
+        json.Should().NotContain("binding-alpha");
+        json.Should().NotContain("nyx-owner-alpha");
+        json.Should().NotContain("fresh-owner-bearer");
+    }
+
+    [Fact]
+    public async Task Preflight_WhenBearerIsMalformed_ShouldReturnUnauthorizedWithoutEchoingHeader()
+    {
+        var schedules = new StubSchedules();
+        var context = CreateContext(ScopeId);
+        context.Request.Headers.Authorization =
+            "Bearer secret-one, secret-two";
+
+        var result = await StudioMemberAutomationEndpoints.HandlePreflightAsync(
+            context,
+            ScopeId,
+            TeamId,
+            MemberId,
+            new StudioMemberAutomationPreflightRequest(
+                "0 9 * * *",
+                "UTC",
+                "run daily digest",
+                "Daily digest",
+                true),
+            schedules,
+            new StubBindingQuery(),
+            CancellationToken.None);
+
+        StatusCode(result).Should().Be(StatusCodes.Status401Unauthorized);
+        StringProperty(Value(result), "code").Should().Be(
+            "TEAM_AUTOMATION_UNAUTHORIZED");
+        schedules.LastPreflight.Should().BeNull();
+        var json = JsonSerializer.Serialize(Value(result));
+        json.Should().NotContain("secret-one");
+        json.Should().NotContain("secret-two");
+    }
+
+    [Fact]
     public async Task Create_ShouldKeepCanonicalOwnerIdentityAndReturnPendingReceipt()
     {
         var schedules = new StubSchedules();
@@ -216,220 +237,6 @@ public sealed class StudioMemberAutomationEndpointsTests
         schedules.LastCreate.ProvisioningBearerToken.Should().Be("fresh-owner-bearer");
         schedules.LastCreate.AuthenticatedOwner.Owner.OwnerSubject.Should().Be("nyx-owner-alpha");
         schedules.LastConfirmedPermissionDigest.Should().Be("permission-digest-alpha");
-    }
-
-    [Fact]
-    public async Task Create_ShouldEmitStructuredVerifiedBindingAcceptanceEvidenceWithoutSecrets()
-    {
-        var schedules = new StubSchedules
-        {
-            CreateResult = new StudioMemberWorkflowScheduleResult(
-                true,
-                ScopeId,
-                MemberId,
-                "sch-accepted",
-                "svc-sensitive-alpha",
-                "vault://ciphertext-sensitive-alpha",
-                "pending")
-            {
-                OperationId = "op-accepted",
-                CommandId = "api-key-id-sensitive-alpha",
-                NewOperationCommitted = true,
-            },
-        };
-        var logs = new RecordingLoggerProvider();
-        await using var app = await CreateAutomationAppAsync(schedules, new StubBindingQuery(), logs);
-        using var client = app.GetTestClient();
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", "bearer-sensitive-alpha");
-
-        var response = await client.PostAsJsonAsync(
-            $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations",
-            AuditMutationRequest());
-
-        response.StatusCode.Should().Be(System.Net.HttpStatusCode.Accepted);
-        var entry = logs.Entries
-            .Where(static candidate => candidate.EventId.Name == "StudioMemberAutomationCreateAccepted")
-            .Should().ContainSingle().Subject;
-        entry.Category.Should().Be("Aevatar.Studio.MemberAutomation");
-        entry.LogLevel.Should().Be(LogLevel.Information);
-        entry.EventId.Id.Should().Be(6201);
-        entry.Exception.Should().BeNull();
-
-        var properties = entry.State
-            .Where(static item => item.Key != "{OriginalFormat}")
-            .ToDictionary(static item => item.Key, static item => item.Value);
-        properties.Should().HaveCount(6);
-        properties.Keys.Should().BeEquivalentTo(
-            ["ScopeId", "TeamId", "MemberId", "ScheduleId", "OperationId", "BindingId"]);
-        properties["ScopeId"].Should().Be(ScopeId);
-        properties["TeamId"].Should().Be(TeamId);
-        properties["MemberId"].Should().Be(MemberId);
-        properties["ScheduleId"].Should().Be("sch-accepted");
-        properties["OperationId"].Should().Be("op-accepted");
-        properties["BindingId"].Should().Be("binding-alpha");
-
-        var capturedContent = string.Join(
-            '\n',
-            entry.State.Select(static item => $"{item.Key}={item.Value}").Append(entry.Message));
-        foreach (var forbiddenName in new[]
-                 {
-                     "Authorization",
-                     "Bearer",
-                     "AgentKey",
-                     "ApiKey",
-                     "Credential",
-                     "RefreshToken",
-                     "SecretReference",
-                     "Vault",
-                     "Ciphertext",
-                     "PermissionDigest",
-                     "IdempotencyKey",
-                     "PublishedServiceId",
-                     "CommandId",
-                     "Prompt",
-                     "DisplayName",
-                 })
-        {
-            capturedContent.Contains(forbiddenName, StringComparison.OrdinalIgnoreCase).Should().BeFalse();
-        }
-
-        foreach (var forbiddenValue in new[]
-                 {
-                     "bearer-sensitive-alpha",
-                     "raw-agent-key-sensitive-alpha",
-                     "refresh-token-sensitive-alpha",
-                     "permission-digest-sensitive-alpha",
-                     "vault-policy-sensitive-alpha",
-                     "dedicated_scheduled_invocation_agent_key",
-                     "api-key-id-sensitive-alpha",
-                     "svc-sensitive-alpha",
-                     "vault://ciphertext-sensitive-alpha",
-                     "nyx-owner-alpha",
-                 })
-        {
-            capturedContent.Contains(forbiddenValue, StringComparison.Ordinal).Should().BeFalse();
-        }
-    }
-
-    [Fact]
-    public async Task Create_ExactReplay_ShouldReturnAcceptedTwiceAndEmitAcceptanceEvidenceOnce()
-    {
-        var schedules = new StubSchedules();
-        schedules.CreateResults.Enqueue(new StudioMemberWorkflowScheduleResult(
-            true,
-            ScopeId,
-            MemberId,
-            "sch-accepted",
-            "svc-alpha",
-            "/workflow/observatory",
-            "pending")
-        {
-            OperationId = "op-accepted",
-            CommandId = "cmd-first",
-            NewOperationCommitted = true,
-        });
-        schedules.CreateResults.Enqueue(new StudioMemberWorkflowScheduleResult(
-            true,
-            ScopeId,
-            MemberId,
-            "sch-accepted",
-            "svc-alpha",
-            "/workflow/observatory",
-            "pending")
-        {
-            OperationId = "op-accepted",
-            CommandId = "cmd-replay",
-            NewOperationCommitted = false,
-        });
-        var logs = new RecordingLoggerProvider();
-        await using var app = await CreateAutomationAppAsync(schedules, new StubBindingQuery(), logs);
-        using var client = app.GetTestClient();
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", "bearer-sensitive-alpha");
-
-        var first = await client.PostAsJsonAsync(
-            $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations",
-            AuditMutationRequest());
-        var replay = await client.PostAsJsonAsync(
-            $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations",
-            AuditMutationRequest());
-
-        first.StatusCode.Should().Be(System.Net.HttpStatusCode.Accepted);
-        replay.StatusCode.Should().Be(System.Net.HttpStatusCode.Accepted);
-        (await first.Content.ReadFromJsonAsync<StudioMemberAutomationMutationReceipt>())!
-            .Accepted.Should().BeTrue();
-        (await replay.Content.ReadFromJsonAsync<StudioMemberAutomationMutationReceipt>())!
-            .Accepted.Should().BeTrue();
-        var entry = logs.Entries
-            .Where(static candidate => candidate.EventId.Id == 6201)
-            .Should().ContainSingle().Subject;
-        var properties = entry.State
-            .Where(static item => item.Key != "{OriginalFormat}")
-            .ToDictionary(static item => item.Key, static item => item.Value);
-        properties.Should().HaveCount(6);
-        properties.Keys.Should().BeEquivalentTo(
-            ["ScopeId", "TeamId", "MemberId", "ScheduleId", "OperationId", "BindingId"]);
-        properties.Should().Contain(new KeyValuePair<string, object?>("ScopeId", ScopeId));
-        properties.Should().Contain(new KeyValuePair<string, object?>("TeamId", TeamId));
-        properties.Should().Contain(new KeyValuePair<string, object?>("MemberId", MemberId));
-        properties.Should().Contain(new KeyValuePair<string, object?>("ScheduleId", "sch-accepted"));
-        properties.Should().Contain(new KeyValuePair<string, object?>("OperationId", "op-accepted"));
-        properties.Should().Contain(new KeyValuePair<string, object?>("BindingId", "binding-alpha"));
-    }
-
-    [Theory]
-    [InlineData("unsuccessful", System.Net.HttpStatusCode.Accepted)]
-    [InlineData("failing", System.Net.HttpStatusCode.BadRequest)]
-    [InlineData("scope-rejected", System.Net.HttpStatusCode.Forbidden)]
-    [InlineData("authorization-rejected", System.Net.HttpStatusCode.BadRequest)]
-    public async Task Create_WhenNotSuccessfullyAccepted_ShouldNotEmitBindingAcceptanceEvidence(
-        string scenario,
-        System.Net.HttpStatusCode expectedStatus)
-    {
-        var schedules = new StubSchedules
-        {
-            Exception = scenario == "failing"
-                ? new InvalidOperationException("create-failed")
-                : null,
-            CreateResult = scenario == "unsuccessful"
-                ? new StudioMemberWorkflowScheduleResult(
-                    false,
-                    ScopeId,
-                    MemberId,
-                    "sch-rejected",
-                    "svc-sensitive-alpha",
-                    "vault://ciphertext-sensitive-alpha",
-                    "rejected")
-                {
-                    OperationId = "op-rejected",
-                    CommandId = "api-key-id-sensitive-alpha",
-                }
-                : null,
-        };
-        var bindingQuery = new StubBindingQuery
-        {
-            Binding = scenario == "authorization-rejected"
-                ? null
-                : new BindingId { Value = "binding-alpha" },
-        };
-        var logs = new RecordingLoggerProvider();
-        await using var app = await CreateAutomationAppAsync(
-            schedules,
-            bindingQuery,
-            logs,
-            scenario == "scope-rejected" ? "scope-other" : ScopeId);
-        using var client = app.GetTestClient();
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", "bearer-sensitive-alpha");
-
-        var response = await client.PostAsJsonAsync(
-            $"/api/scopes/{ScopeId}/teams/{TeamId}/members/{MemberId}/automations",
-            AuditMutationRequest());
-
-        response.StatusCode.Should().Be(expectedStatus);
-        logs.Entries.Should().NotContain(
-            static candidate => candidate.EventId.Name == "StudioMemberAutomationCreateAccepted");
     }
 
     [Fact]
@@ -899,51 +706,6 @@ public sealed class StudioMemberAutomationEndpointsTests
         return context;
     }
 
-    private static StudioMemberAutomationMutationRequest AuditMutationRequest() =>
-        new(
-            "0 9 * * *",
-            "UTC",
-            "raw-agent-key-sensitive-alpha",
-            "refresh-token-sensitive-alpha",
-            false,
-            "permission-digest-sensitive-alpha",
-            "vault-policy-sensitive-alpha",
-            "dedicated_scheduled_invocation_agent_key",
-            "op-request",
-            "api-key-id-sensitive-alpha");
-
-    private static async Task<WebApplication> CreateAutomationAppAsync(
-        StubSchedules schedules,
-        StubBindingQuery bindingQuery,
-        RecordingLoggerProvider logs,
-        string claimedScopeId = ScopeId)
-    {
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Aevatar:Authentication:Enabled"] = "true",
-        });
-        builder.Logging.ClearProviders();
-        builder.Logging.AddProvider(logs);
-        builder.Services.AddSingleton<IStudioMemberWorkflowSchedulePort>(schedules);
-        builder.Services.AddSingleton<IExternalIdentityBindingQueryPort>(bindingQuery);
-        builder.Services.AddRouting();
-        var app = builder.Build();
-        app.Use((context, next) =>
-        {
-            context.User = new ClaimsPrincipal(new ClaimsIdentity(
-            [
-                new Claim("scope_id", claimedScopeId),
-                new Claim(ClaimTypes.NameIdentifier, "nyx-owner-alpha"),
-            ], "test"));
-            return next(context);
-        });
-        StudioMemberAutomationEndpoints.Map(app);
-        await app.StartAsync();
-        return app;
-    }
-
     private static int? StatusCode(IResult result) =>
         (result as IStatusCodeHttpResult)?.StatusCode;
 
@@ -1183,53 +945,6 @@ public sealed class StudioMemberAutomationEndpointsTests
             string status = "accepted") =>
             new(true, status, ScheduleId, operationId, "cmd-alpha");
     }
-
-    private sealed class RecordingLoggerProvider : ILoggerProvider
-    {
-        private readonly ConcurrentQueue<RecordedLogEntry> _entries = new();
-
-        public IReadOnlyCollection<RecordedLogEntry> Entries => _entries.ToArray();
-
-        public ILogger CreateLogger(string categoryName) => new RecordingLogger(categoryName, _entries);
-
-        public void Dispose()
-        {
-        }
-
-        private sealed class RecordingLogger(
-            string category,
-            ConcurrentQueue<RecordedLogEntry> entries) : ILogger
-        {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-            public bool IsEnabled(LogLevel logLevel) => true;
-
-            public void Log<TState>(
-                LogLevel logLevel,
-                EventId eventId,
-                TState state,
-                Exception? exception,
-                Func<TState, Exception?, string> formatter)
-            {
-                var structuredState = state as IEnumerable<KeyValuePair<string, object?>>;
-                entries.Enqueue(new RecordedLogEntry(
-                    category,
-                    logLevel,
-                    eventId,
-                    structuredState?.ToArray() ?? [],
-                    formatter(state, exception),
-                    exception));
-            }
-        }
-    }
-
-    private sealed record RecordedLogEntry(
-        string Category,
-        LogLevel LogLevel,
-        EventId EventId,
-        IReadOnlyList<KeyValuePair<string, object?>> State,
-        string Message,
-        Exception? Exception);
 
     private sealed class TestHostEnvironment : IHostEnvironment
     {

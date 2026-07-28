@@ -4,12 +4,39 @@ using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Application.ExternalCapabilities;
 using FluentAssertions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Workflow.Application.Tests;
 
 public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 {
+    [Fact]
+    public void AdmissionPlanContract_ShouldUseV3CallSiteAdmissionsAsTheOnlyCurrentFactSource()
+    {
+        WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion.Should()
+            .Be("external-capability-admission.v3");
+
+        var create = typeof(WorkflowCapabilityAdmissionPlanIntegrity)
+            .GetMethods()
+            .Single(method => method.Name == nameof(WorkflowCapabilityAdmissionPlanIntegrity.Create));
+        create.GetParameters()[3].ParameterType.Should()
+            .Be(typeof(IEnumerable<WorkflowCapabilityInvocationAdmission>));
+    }
+
+    [Fact]
+    public void ReadinessContract_ShouldInspectAnAuthorSelectorAndReturnAServerProof()
+    {
+        var requestConstructor = typeof(InspectExternalWorkflowCapabilityReadinessRequest)
+            .GetConstructors()
+            .Should().ContainSingle().Subject;
+
+        requestConstructor.GetParameters()[1].ParameterType.Should()
+            .Be(typeof(ExternalWorkflowCapabilitySelector));
+        typeof(ExternalCapabilityReadiness).GetProperty(nameof(ExternalCapabilityReadiness.SelectedCapability))
+            .Should().NotBeNull();
+    }
+
     [Fact]
     public void AdmissionPlanContract_ShouldCarryTypedDurableAuthorizationOwner()
     {
@@ -18,6 +45,25 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 
         field.Should().NotBeNull();
         field!.MessageType.Name.Should().Be("ExternalCapabilityAuthorizationOwner");
+    }
+
+    [Fact]
+    public void AdmissionPlanContract_ShouldPreserveTheLegacyV2WireFixtureWhenV3FieldsAreEmpty()
+    {
+        const string legacyWireBase64 =
+            "CiBleHRlcm5hbC1jYXBhYmlsaXR5LWFkbWlzc2lvbi52MhIRZGVmaW5pdGlvbi1kaWdlc3QYATJAMzg5ODkwYzIzMmI5NGEzNzU0MDQ4MjE4NGZhMDVhYjhmYjJiZjg2NTcwOTNhNmM1ODgyYThkMDM3YjE1MGFhNg==";
+        var legacyWire = Convert.FromBase64String(legacyWireBase64);
+        var plan = WorkflowCapabilityAdmissionPlan.Parser.ParseFrom(legacyWire);
+
+        plan.InvocationAdmissions.Should().BeEmpty();
+        plan.ToByteArray().Should().Equal(legacyWire);
+        plan.AdmissionDigest.Should().Be(
+            WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan));
+
+        var v3 = plan.Clone();
+        v3.SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion;
+        WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(v3).Should()
+            .NotBe(plan.AdmissionDigest);
     }
 
     [Fact]
@@ -55,6 +101,54 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*execution mode is required*");
+    }
+
+    [Fact]
+    public void AdmissionPlanIntegrity_ShouldAcceptHostConnectorSelectorWithoutOptionalContractDigest()
+    {
+        const string yaml = "name: connector-workflow\nsteps: []\n";
+        var selector = new ExternalWorkflowCapabilitySelector
+        {
+            HostConnector = new HostConnectorCapabilityRef
+            {
+                ConnectorCapabilityRef = "connector-alpha",
+                OperationId = "send-summary",
+            },
+        };
+        var plan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [new WorkflowCapabilityInvocationAdmission
+            {
+                CallSiteId = "connector-workflow/send",
+                Capability = new ExternalWorkflowCapabilityRef
+                {
+                    HostConnector = selector.HostConnector.Clone(),
+                },
+            }],
+            [new ExternalCapabilitySourceStamp
+            {
+                SourceKind = ExternalCapabilitySourceKind.ConnectorCatalog,
+                SourceId = "connector-catalog-fixture",
+                ObservedAt = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now),
+                FreshUntil = Timestamp.FromDateTimeOffset(FixedTimeProvider.Now.AddMinutes(5)),
+                ContentDigest = "connector-catalog-digest",
+            }]);
+
+        var act = () => WorkflowCapabilityAdmissionPlanIntegrity.ValidateOrThrow(
+            plan,
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            [new ExternalToolInvocationSpec
+            {
+                CallSiteId = "connector-workflow/send",
+                ToolName = "connector_call",
+                Selector = selector,
+            }]);
+
+        act.Should().NotThrow();
     }
 
     [Fact]
@@ -104,6 +198,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         var plan = await service.AdmitAsync(Request("name: wf-alpha\nsteps: []\n"));
 
         plan.SchemaVersion.Should().Be(WorkflowCapabilityAdmissionPlanIntegrity.SchemaVersion);
+        plan.InvocationAdmissions.Should().BeEmpty();
         plan.ExternalCapabilities.Should().BeEmpty();
         plan.SourceStamps.Should().BeEmpty();
         plan.DefinitionDigest.Should().Be(
@@ -113,6 +208,53 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         plan.AdmissionDigest.Should().Be(
             WorkflowCapabilityAdmissionPlanIntegrity.ComputeAdmissionDigest(plan));
         readiness.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AdmitAsync_ShouldPreserveTypedAuthoringFailureFromParser()
+    {
+        var parserReadiness = new ExternalCapabilityReadiness
+        {
+            Status = ExternalCapabilityReadinessStatus.ContractDrift,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = "us-alpha",
+                    OperationId = "get-resource",
+                },
+            },
+            Blockers =
+            {
+                new ExternalCapabilityBlocker
+                {
+                    Status = ExternalCapabilityReadinessStatus.ContractDrift,
+                    Code = "NYXID_OPERATION_ARGUMENT_INVALID",
+                    SafeMessage = "The NyxID operation runtime arguments are invalid.",
+                },
+            },
+            Remediations =
+            {
+                new ExternalCapabilityRemediation
+                {
+                    ActionKind = ExternalCapabilityRemediationActionKind.RebindWorkflow,
+                    Label = "Update and rebind workflow",
+                },
+            },
+        };
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Invalid("internal parser detail", parserReadiness)),
+            new StubReadinessPort(),
+            new FixedTimeProvider());
+
+        Func<Task> act = async () => await service.AdmitAsync(Request("name: wf-alpha\nsteps: []\n"));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.ExecutionMode.Should()
+            .Be(ExternalCapabilityExecutionMode.Interactive);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be("NYXID_OPERATION_ARGUMENT_INVALID");
+        exception.Which.Message.Should().NotContain("internal parser detail");
     }
 
     [Fact]
@@ -126,8 +268,10 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 
         var plan = await service.AdmitAsync(Request("name: wf-alpha\nsteps: []\n"));
 
-        plan.ExternalCapabilities.Should().ContainSingle();
-        plan.ExternalCapabilities[0].NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
+        plan.ExternalCapabilities.Should().BeEmpty();
+        plan.InvocationAdmissions.Should().ContainSingle();
+        plan.InvocationAdmissions[0].CallSiteId.Should().Be(CallSiteId);
+        plan.InvocationAdmissions[0].Capability.NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
         plan.SourceStamps.Select(static source => source.SourceKind).Should().BeEquivalentTo([
             ExternalCapabilitySourceKind.NyxIdUserServices,
             ExternalCapabilitySourceKind.NyxIdOpenApi,
@@ -185,7 +329,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
-    public async Task AdmitAsync_ShouldRejectReadyProofForDifferentCapability()
+    public async Task AdmitAsync_ShouldRejectReadyProofForDifferentSelector()
     {
         var capability = NyxIdCapability();
         var different = NyxIdCapability();
@@ -204,7 +348,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
 
         var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
         exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
-            .Be("READINESS_CAPABILITY_MISMATCH");
+            .Be("READINESS_SELECTOR_PROOF_MISMATCH");
     }
 
     [Fact]
@@ -341,6 +485,64 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public async Task RevalidatePersistedAsync_ShouldReturnTypedRebindReadiness_ForLegacyPlan()
+    {
+        const string yaml = "name: wf-alpha\nsteps: []\n";
+        var legacyPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        };
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            new StubParser(WorkflowYamlParseResult.Success("wf-alpha")),
+            new StubReadinessPort(),
+            new FixedTimeProvider());
+
+        Func<Task> act = async () => await service.RevalidatePersistedAsync(
+            new PersistedWorkflowCapabilityAdmissionRequest(
+                legacyPlan,
+                yaml,
+                new Dictionary<string, string>(),
+                "service_revision_prepare",
+                ExternalCapabilityExecutionMode.Interactive));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Status.Should()
+            .Be(ExternalCapabilityReadinessStatus.AdmissionRebindRequired);
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be(WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+        exception.Which.Readiness.Remediations.Should().ContainSingle().Which.ActionKind.Should()
+            .Be(ExternalCapabilityRemediationActionKind.RebindWorkflow);
+    }
+
+    [Fact]
+    public async Task RevalidatePersistedAsync_ShouldClassifyLegacySchemaBeforeParsingLegacyAuthoring()
+    {
+        var legacyPlan = new WorkflowCapabilityAdmissionPlan
+        {
+            SchemaVersion = WorkflowCapabilityAdmissionPlanIntegrity.LegacySchemaVersion,
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+        };
+        var parser = new StubParser(WorkflowYamlParseResult.Invalid("legacy proof fields are invalid"));
+        var service = new WorkflowExternalCapabilityAdmissionService(
+            parser,
+            new StubReadinessPort(),
+            new FixedTimeProvider());
+
+        Func<Task> act = async () => await service.RevalidatePersistedAsync(
+            new PersistedWorkflowCapabilityAdmissionRequest(
+                legacyPlan,
+                "name: legacy\nsteps: []\n",
+                new Dictionary<string, string>(),
+                "service_revision_prepare",
+                ExternalCapabilityExecutionMode.Interactive));
+
+        var exception = await act.Should().ThrowAsync<WorkflowExternalCapabilityAdmissionException>();
+        exception.Which.Readiness.Blockers.Should().ContainSingle().Which.Code.Should()
+            .Be(WorkflowCapabilityAdmissionPlanIntegrity.RebindRequiredCode);
+    }
+
+    [Fact]
     public async Task RevalidatePersistedAsync_ShouldRejectPlanForDifferentExpectedExecutionMode()
     {
         const string yaml = "name: wf-alpha\nsteps: []\n";
@@ -403,7 +605,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
-            [capability],
+            Admissions(capability),
             Ready(capability).Sources,
             DurableOwner());
         var service = new WorkflowExternalCapabilityAdmissionService(
@@ -439,7 +641,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             yaml,
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
-            [capability],
+            Admissions(capability),
             readiness.Sources,
             DurableOwner());
         var service = new WorkflowExternalCapabilityAdmissionService(
@@ -580,12 +782,14 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
             "name: wf-alpha\nsteps: []\n",
             new Dictionary<string, string>(),
             ExternalCapabilityExecutionMode.Durable,
-            [capability],
+            Admissions(capability),
             Ready(
                 capability,
                 ExternalCapabilityExecutionMode.Durable,
                 includeDurableCatalog: true).Sources,
             owner);
+
+    private const string CallSiteId = "wf-alpha/read-state";
 
     private static WorkflowAuthorizationDependencies Dependencies(
         ExternalWorkflowCapabilityRef capability)
@@ -594,9 +798,33 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         {
             ServiceGrantPolicy = WorkflowServiceGrantPolicy.Required,
         };
-        dependencies.ExternalCapabilities.Add(capability);
+        dependencies.ExternalInvocations.Add(new ExternalToolInvocationSpec
+        {
+            CallSiteId = CallSiteId,
+            ToolName = "nyxid_proxy",
+            Selector = Selector(capability),
+        });
         return dependencies;
     }
+
+    private static ExternalWorkflowCapabilitySelector Selector(
+        ExternalWorkflowCapabilityRef capability) =>
+        new()
+        {
+            NyxIdOperation = new NyxIdOperationSelector
+            {
+                UserServiceId = capability.NyxIdUserService.UserServiceId,
+                OperationId = capability.NyxIdUserService.OperationId,
+            },
+        };
+
+    private static WorkflowCapabilityInvocationAdmission[] Admissions(
+        ExternalWorkflowCapabilityRef capability) =>
+        [new WorkflowCapabilityInvocationAdmission
+        {
+            CallSiteId = CallSiteId,
+            Capability = capability,
+        }];
 
     private static ExternalCapabilityReadiness Ready(
         ExternalWorkflowCapabilityRef capability,
@@ -607,6 +835,7 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
         {
             ExecutionMode = executionMode,
             Status = ExternalCapabilityReadinessStatus.Ready,
+            SelectedSelector = Selector(capability),
             SelectedCapability = capability,
             Sources =
             {

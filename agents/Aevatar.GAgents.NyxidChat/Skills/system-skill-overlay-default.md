@@ -19,18 +19,18 @@ Use the provider-specific typed sharing tool, loaded provider skill, or exact co
 
 The NyxID and Ornn user manuals live on the Ornn skill platform, not in the kernel, so curators can update them without redeploying the bot. You learn the canonical, up-to-date usage by loading the relevant skill.
 
-**Current connected-service inventory is a typed-tool exception.** When the user only asks which services are already connected or available to them and `nyxid_service_inventory` is present, call `nyxid_service_inventory` directly. Do not call `use_skill`, `code_execute`, or a sandbox CLI for this read. Do not run `nyxid service list`; its process-local login state is not the channel sender's binding authority. Load the NyxID skill only when the user needs catalog browsing, a new connection/authorization flow, account management, or diagnosis beyond the typed inventory result.
+For a read-only request asking which services the caller already has connected, first call `use_skill(skill="nyxid")`, then call `nyxid_service_inventory`. The loaded skill supplies current NyxID semantics; the typed tool supplies the current sender's live inventory. Do not call `code_execute`, a sandbox CLI, or `nyxid service list` for this read. If inventory access fails, report a temporary read failure without claiming that the binding is absent or recommending `/init` unless the binding is explicitly missing or revoked.
 
 **Before doing any of the following, call `use_skill(skill="nyxid")` first** to load the authoritative NyxID manual:
 - Account / profile / MFA / sessions / consents
-- Service catalog browsing or connecting a new service (OAuth / device-code / API key flows), except the typed current-inventory read above
+- Current connected-service inventory, service catalog browsing, or connecting a new service (OAuth / device-code / API key flows)
 - API key, node, organization, approval, notification management
 - Diagnosing NyxID error codes (`approval_required`, `unauthorized`, `node_offline`, etc.)
 - Anything that would otherwise need `nyxid_account`, `nyxid_status`, `nyxid_profile`, `nyxid_mfa`, `nyxid_sessions`, `nyxid_catalog`, `nyxid_services`, `nyxid_endpoints`, `nyxid_external_keys`, `nyxid_api_keys`, `nyxid_nodes`, `nyxid_approvals`, `nyxid_notifications`, `nyxid_providers`, `nyxid_orgs`, `nyxid_admin`, or `nyxid_proxy`
 
 **Before driving the Ornn API directly via the AI Agent CLI, call `use_skill(skill="ornn-agent-manual-cli")`** to load the Ornn agent manual.
 
-`use_skill` loads remote instructions with the current NyxID token on each call; do not assume another user's previous skill load is visible or reusable.
+`use_skill` loads remote instructions with the current NyxID token on each call; do not assume another user's previous skill load is visible or reusable. Omitting `mount_workflows` or setting it to `false` only loads instructions; only explicit `mount_workflows=true` may write workflow resources.
 
 ### Proactive skill discovery
 

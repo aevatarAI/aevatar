@@ -390,10 +390,12 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Theory]
-    [InlineData("{\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\"}", "service_id")]
-    [InlineData("{\"service_id\":\"us-home-alpha\",\"slug\":\"home-assistant\",\"operation_id\":\"list-items\",\"method\":\"GET\",\"path\":\"/api/items\",\"contract_digest\":\"sha256:home-v1\",\"headers\":{\"Authorization\":\"forbidden\"}}", "sensitive header")]
+    [InlineData("{\"query\":{}}", "", "", "exact connected service and operation")]
+    [InlineData("{\"headers\":{\"Authorization\":\"forbidden\"}}", "us-home-alpha", "list-items", "sensitive header")]
     public async Task ParseWorkflowYamlAsync_WhenNyxIdCapabilityIsNotExact_ShouldReturnInvalid(
         string arguments,
+        string userServiceId,
+        string operationId,
         string expectedError)
     {
         var port = CreatePort(new RecordingActorRuntime());
@@ -405,6 +407,10 @@ public sealed class WorkflowRunActorPortBranchTests
             steps:
               - id: proxy
                 type: tool_call
+                capability:
+                  nyxid_operation:
+                    user_service_id: '{{userServiceId}}'
+                    operation_id: '{{operationId}}'
                 parameters:
                   tool: nyxid_proxy
                   arguments: '{{arguments}}'

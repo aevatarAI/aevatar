@@ -4,7 +4,10 @@ using System.Text.Json;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Configuration;
@@ -443,6 +446,100 @@ public sealed class StudioMemberEndpointsTests
         // BadRequest<TAnonymousType> — the anonymous type is internal, so we
         // assert via the open generic shape rather than nailing the closed type.
         result.GetType().Name.Should().StartWith("BadRequest");
+    }
+
+    [Fact]
+    public async Task HandleBindAsync_ShouldReturnTypedSafeReadiness_WhenCapabilityAdmissionFails()
+    {
+        const string secret = "Bearer endpoint-secret-value";
+        var readiness = new ExternalCapabilityReadiness
+        {
+            ExecutionMode = ExternalCapabilityExecutionMode.Interactive,
+            Status = ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            SelectedSelector = new ExternalWorkflowCapabilitySelector
+            {
+                NyxIdOperation = new NyxIdOperationSelector
+                {
+                    UserServiceId = "us-alpha",
+                    OperationId = "get-resource",
+                },
+            },
+            SelectedCapability = new ExternalWorkflowCapabilityRef
+            {
+                NyxIdUserService = new NyxIdUserServiceCapabilityRef
+                {
+                    UserServiceId = "us-alpha",
+                    ServiceSlugSnapshot = secret,
+                    OperationId = "get-resource",
+                    HttpMethod = "GET",
+                    PathTemplate = "/internal/{id}",
+                    ContractDigest = secret,
+                },
+            },
+        };
+        readiness.Blockers.Add(new ExternalCapabilityBlocker
+        {
+            Status = ExternalCapabilityReadinessStatus.OperationSelectionRequired,
+            Code = "OPERATION_NOT_ALLOWLISTED",
+            SafeMessage = "Select an operation published through the allowlist.",
+        });
+        readiness.Remediations.Add(new ExternalCapabilityRemediation
+        {
+            ActionKind = ExternalCapabilityRemediationActionKind.SelectOperation,
+            Label = "Select operation",
+            TrustedLocator = "nyxid:services",
+        });
+        readiness.Sources.Add(new ExternalCapabilitySourceStamp
+        {
+            SourceKind = ExternalCapabilitySourceKind.NyxIdOpenApi,
+            SourceId = "us-alpha",
+            SourceVersion = 7,
+            ObservedAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 7, 28, 1, 0, 0, TimeSpan.Zero)),
+            FreshUntil = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 7, 28, 1, 5, 0, TimeSpan.Zero)),
+            ContentDigest = secret,
+        });
+        var service = new RecordingMemberService
+        {
+            BindException = new WorkflowExternalCapabilityAdmissionException(readiness),
+        };
+        var http = CreateAuthenticatedContext(ScopeId);
+        http.Response.Body = new MemoryStream();
+
+        var result = await InvokeHandle<IResult>(
+            "HandleBindAsync",
+            http,
+            ScopeId,
+            "m-1",
+            new UpdateStudioMemberBindingRequest(),
+            service,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        http.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(http.Response.Body);
+        var root = body.RootElement;
+        root.GetProperty("code").GetString().Should()
+            .Be("STUDIO_MEMBER_EXTERNAL_CAPABILITY_NOT_READY");
+        root.GetProperty("message").GetString().Should()
+            .Be("External workflow capability admission failed.");
+        var readinessJson = root.GetProperty("readiness");
+        readinessJson.GetProperty("status").GetString().Should()
+            .Be("operation_selection_required");
+        var selected = readinessJson.GetProperty("selectedCapability");
+        selected.GetProperty("userServiceId").GetString().Should().Be("us-alpha");
+        selected.GetProperty("operationId").GetString().Should().Be("get-resource");
+        readinessJson.GetProperty("blockers")[0].GetProperty("code").GetString().Should()
+            .Be("OPERATION_NOT_ALLOWLISTED");
+        readinessJson.GetProperty("remediations")[0].GetProperty("actionKind").GetString().Should()
+            .Be("select_operation");
+        readinessJson.GetProperty("sources")[0].GetProperty("sourceKind").GetString().Should()
+            .Be("nyx_id_open_api");
+
+        var responseJson = root.GetRawText();
+        responseJson.Should().NotContain(secret);
+        responseJson.Should().NotContain("contractDigest");
+        responseJson.Should().NotContain("pathTemplate");
+        responseJson.Should().NotContain("contentDigest");
     }
 
     [Fact]
@@ -886,6 +983,7 @@ public sealed class StudioMemberEndpointsTests
             [new Claim("scope_id", claimedScopeId)],
             "test");
         var services = new ServiceCollection()
+            .AddLogging()
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {

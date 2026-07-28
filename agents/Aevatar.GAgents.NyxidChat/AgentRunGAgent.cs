@@ -539,12 +539,18 @@ public sealed partial class AgentRunGAgent : GAgentBase<AgentRunGAgentState>
         {
             if (part.Kind == Aevatar.AI.Abstractions.ChatContentPartKind.Text)
             {
+                if (HasFileRefIdentity(part.FileRef))
+                    part.Text = string.Empty;
                 continue;
             }
 
             part.DataBase64 = string.Empty;
         }
     }
+
+    private static bool HasFileRefIdentity(Aevatar.AI.Abstractions.ChatFileRef? fileRef) =>
+        fileRef is not null &&
+        (!string.IsNullOrWhiteSpace(fileRef.FileId) || !string.IsNullOrWhiteSpace(fileRef.ArtifactId));
 
     private async Task DispatchLlmStepExecutorAsync(NeedsLlmReplyEvent request, AgentRunReplyStepState stepState)
     {

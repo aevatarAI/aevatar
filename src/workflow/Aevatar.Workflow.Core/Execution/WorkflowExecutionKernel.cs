@@ -1909,6 +1909,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ApplyAgentToolScope(request, roleScope: null, step.AgentToolScope);
         }
 
+        ApplyExternalInvocation(request, step);
         ApplyTransformOperation(request, step.TransformOperation, state);
         ApplyHumanApprovalOptions(request, step.HumanApprovalOptions);
         ApplyExternalApprovalOptions(request, step.ExternalApprovalOptions, state);
@@ -1916,6 +1917,27 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         ApplyInteractionPresentation(request, step.Presentation, state);
 
         return request;
+    }
+
+    // The call-site identity a step carries at runtime must be the one admission committed, so both
+    // sides derive it from the compiler. Looping primitives receive their synthesized sub-step
+    // call site here and copy it onto every item/iteration they dispatch.
+    private void ApplyExternalInvocation(StepRequestEvent request, StepDefinition step)
+    {
+        var workflowName = _workflow?.Name ?? string.Empty;
+        try
+        {
+            var invocation =
+                WorkflowAuthorizationDependencyEvaluator.TryCompileDirectInvocation(workflowName, step)
+                ?? WorkflowAuthorizationDependencyEvaluator.TryCompileSynthesizedSubStepInvocation(workflowName, step);
+            if (invocation is not null)
+                request.ExternalInvocation = invocation;
+        }
+        catch (WorkflowExternalCapabilityValidationException)
+        {
+            // A step that cannot be compiled into a call site stays unadmitted. Tools that require
+            // admission fail closed before dispatch instead of aborting the whole execution turn.
+        }
     }
 
     private void ApplyTransformOperation(

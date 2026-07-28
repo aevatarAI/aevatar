@@ -32,6 +32,19 @@ public sealed class InvokeTeamToolSource : IAgentToolSource
         Task.FromResult<IReadOnlyList<IAgentTool>>([new InvokeTeamTool(_dispatcher)]);
 }
 
+public sealed class InvokeMemberToolSource : IAgentToolSource
+{
+    private readonly AevatarInvocationDispatcher _dispatcher;
+
+    public InvokeMemberToolSource(AevatarInvocationDispatcher dispatcher)
+    {
+        _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+    }
+
+    public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<IAgentTool>>([new InvokeMemberTool(_dispatcher)]);
+}
+
 public sealed class StartWorkflowToolSource : IAgentToolSource
 {
     private readonly AevatarInvocationDispatcher _dispatcher;
@@ -113,6 +126,26 @@ internal sealed class InvokeTeamTool : IAevatarInvocationTool
 
     public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
         _dispatcher.InvokeTeamAsync(argumentsJson, ct);
+}
+
+internal sealed class InvokeMemberTool : IAevatarInvocationTool
+{
+    private readonly AevatarInvocationDispatcher _dispatcher;
+
+    public InvokeMemberTool(AevatarInvocationDispatcher dispatcher)
+    {
+        _dispatcher = dispatcher;
+    }
+
+    public string Name => "aevatar_invoke_member";
+
+    public string Description =>
+        "Invoke a Studio member by member_id with a typed chat payload. endpoint_id is optional and defaults to chat, which is the standard Studio workflow member endpoint; pass endpoint_id only when a different published endpoint is explicitly known.";
+
+    public string ParametersSchema => AevatarInvocationToolSchemas.InvokeMember;
+
+    public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+        _dispatcher.InvokeMemberAsync(argumentsJson, ct);
 }
 
 internal sealed class StartWorkflowTool : IAevatarInvocationTool

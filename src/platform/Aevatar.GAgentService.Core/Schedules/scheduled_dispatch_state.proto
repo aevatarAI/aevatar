@@ -80,6 +80,7 @@ message ScheduledDispatchState
   google.protobuf.Timestamp pending_team_credential_expiry_at = 62;
   int64 pending_team_credential_expiry_generation = 63;
   TeamAutomationActivationDecisionState team_automation_activation_decision = 64;
+  optional string team_automation_delete_reason = 65;
 }
 
 message TeamMemberAutomationOwnerState
@@ -584,6 +585,7 @@ message TeamAutomationDeletionRequestedEvent
   ScheduledInvocationAgentKeyCredentialReferenceState pending_revocation_credential = 4;
   google.protobuf.Timestamp occurred_at = 5;
   ScheduledInvocationAuthorizationOwnerState pending_revocation_credential_owner = 6;
+  optional string reason = 7;
 }
 
 message CompleteTeamAutomationRevocationCommand

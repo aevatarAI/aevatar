@@ -1551,6 +1551,8 @@ var OBS_RUNS=[];                 /* 已映射的 summary 行：{id,name,status,o
 var OBS_RUNS_LOADED=false, OBS_RUNS_ERR=null, OBS_RUNS_LOADING=false;
 var OBS_RUNS_REQUEST=0, OBS_POLL_TIMER=null;
 var OBS_DETAIL={};               /* runId -> {loading,err,detail}；detail 为 obsDetail 渲染所需结构 */
+var OBS_DETAIL_REQUESTS={};      /* runId -> monotonic detail request generation */
+var OBS_DETAIL_SCOPE_VERSION=0;  /* invalidates detail responses started under an older scope */
 var OBS_DIRECT_RUNS={};          /* explicit admin run-id lookups with unknown owner scope */
 var OBS_QUERY_KEYS=['scope','status','origin','definition','schedule','from','to','run','tab'];
 var OBS_STATUS_VALUES=['running','completed','failed','stopped'];
@@ -1719,7 +1721,7 @@ function obsOpenDirectRun(runId,rerenderList,rerenderDetail){
   runId=(runId||'').trim(); if(!runId) return;
   OBS_DIRECT_RUNS[runId]=true;
   OBS_STATE.selectedId=runId;
-  delete OBS_DETAIL[runId];
+  obsInvalidateDetail(runId);
   var next=buildHash(['observatory'],obsCanonicalQuery({run:runId}));
   if(location.hash!==next){ location.hash=next; return; }
   if(rerenderList) rerenderList();
@@ -1730,6 +1732,16 @@ function obsDetailsEqual(left,right){
   if(left===right) return true;
   if(!left||!right) return false;
   return JSON.stringify(left)===JSON.stringify(right);
+}
+function obsNextDetailRequest(runId){
+  var next=(OBS_DETAIL_REQUESTS[runId]||0)+1; OBS_DETAIL_REQUESTS[runId]=next; return next;
+}
+function obsInvalidateDetail(runId){
+  OBS_DETAIL_REQUESTS[runId]=(OBS_DETAIL_REQUESTS[runId]||0)+1;
+  delete OBS_DETAIL[runId];
+}
+function obsDetailRequestCurrent(runId,requestId,scopeVersion){
+  return OBS_DETAIL_REQUESTS[runId]===requestId&&OBS_DETAIL_SCOPE_VERSION===scopeVersion;
 }
 function obsDetailRequestBase(runId){
   if(OBS_STATE.scope==='all'||OBS_DIRECT_RUNS[runId])
@@ -1752,13 +1764,17 @@ function loadObsDetail(runId,rerender,refresh){
   if(cache&&cache.loading) return Promise.resolve(false);
   if(cache&&cache.detail&&!refresh) return Promise.resolve(false);
   var previousDetail=(cache&&cache.detail)||null;
+  var scopeVersion=OBS_DETAIL_SCOPE_VERSION;
+  var requestId=obsNextDetailRequest(runId);
   OBS_DETAIL[runId]={loading:true,err:null,detail:previousDetail};
   if(rerender&&!previousDetail) rerender();
   var base=obsDetailRequestBase(runId);
   return Promise.all([
     adminJson(base).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
     loadObsGraph(runId).catch(function(){ return null; })
-  ]).then(function(res){ var d=res[0], g=res[1], err=null;
+  ]).then(function(res){
+    if(!obsDetailRequestCurrent(runId,requestId,scopeVersion)) return false;
+    var d=res[0], g=res[1], err=null;
     if(d&&d.forbidden) err='无权查看该 run（403）';
     else if(!d) err='该 run 不存在或不在当前账号的可见范围';
     if(err){
@@ -1768,7 +1784,9 @@ function loadObsDetail(runId,rerender,refresh){
     var detail=mapObsDetail(d,g), changed=!obsDetailsEqual(previousDetail,detail);
     OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail);
     return changed;
-  }).catch(function(e){ var err=(e&&(e.body||e.message))||'详情加载失败';
+  }).catch(function(e){
+    if(!obsDetailRequestCurrent(runId,requestId,scopeVersion)) return false;
+    var err=(e&&(e.body||e.message))||'详情加载失败';
     if(previousDetail){ OBS_DETAIL[runId]={loading:false,err:null,refreshErr:err,detail:previousDetail}; return false; }
     OBS_DETAIL[runId]={loading:false,err:err,detail:null}; return true;
   }).then(function(changed){ if(rerender&&changed) rerender(); return changed; });
@@ -3106,7 +3124,7 @@ function obsSyncStateFromUrl(){
   Object.assign(OBS_STATE,{scope:scope,status:OBS_STATUS_VALUES.indexOf(q.status)>=0?q.status:'',
     origin:q.origin||'',definition:q.definition||'',schedule:q.schedule||'',from:q.from||'',to:q.to||'',
     selectedId:q.run||null,tab:OBS_TAB_VALUES.indexOf(q.tab)>=0?q.tab:'timeline'});
-  if(previousScope!==scope) OBS_DETAIL={};
+  if(previousScope!==scope){ OBS_DETAIL_SCOPE_VERSION++; OBS_DETAIL={}; }
 }
 function obsCanonicalQuery(overrides){
   var values={scope:OBS_STATE.scope,status:OBS_STATE.status,origin:OBS_STATE.origin,definition:OBS_STATE.definition,
@@ -3123,8 +3141,15 @@ function obsCanonicalQuery(overrides){
 }
 function obsNavigate(overrides){
   overrides=overrides||{};
-  if(overrides.run&&overrides.scope&&overrides.scope!=='all') delete OBS_DIRECT_RUNS[overrides.run];
-  navigate(['observatory'],obsCanonicalQuery(overrides));
+  /* 目标 scope 与 obsCanonicalQuery 保持一致：未显式覆盖时沿用当前 scope，全 scope 观测下的列表行不能证明 run 属于本账号 scope */
+  var targetScope=('scope' in overrides)?(overrides.scope||'mine'):OBS_STATE.scope;
+  var directIntentCleared=false;
+  if(overrides.run&&targetScope!=='all'&&OBS_DIRECT_RUNS[overrides.run]){
+    delete OBS_DIRECT_RUNS[overrides.run]; obsInvalidateDetail(overrides.run); directIntentCleared=true;
+  }
+  var next=buildHash(['observatory'],obsCanonicalQuery(overrides));
+  if(directIntentCleared&&location.hash===next){ render(); return; }
+  location.hash=next;
 }
 function obsSyntheticRun(id){
   var d=OBS_DETAIL[id]&&OBS_DETAIL[id].detail;
@@ -3359,7 +3384,10 @@ function bindObservatory(root){
     });
   },3000);
   root.addEventListener('click',function(ev){
-    var row=ev.target.closest('[data-obsrun]'); if(row){ selectRun(row.getAttribute('data-obsrun')); return; }
+    var row=ev.target.closest('[data-obsrun]'); if(row){
+      if(row.getAttribute('data-obs-pinned')==='true') return;
+      selectRun(row.getAttribute('data-obsrun')); return;
+    }
     var tab=ev.target.closest('[data-obstab]'); if(tab){ obsNavigate({tab:tab.getAttribute('data-obstab')}); return; }
     var act=ev.target.closest('[data-act]'); if(!act) return;
     var a=act.getAttribute('data-act');

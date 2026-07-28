@@ -42,9 +42,9 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
         var descriptors = await source.ListAsync(Access(), CancellationToken.None);
 
         descriptors.Should().HaveCount(3);
-        descriptors.Should().OnlyContain(static item => item.Capability.CapabilityCase ==
-            ExternalWorkflowCapabilityRef.CapabilityOneofCase.HostConnector);
-        descriptors.Select(static item => item.Capability.HostConnector.ConnectorCapabilityRef)
+        descriptors.Should().OnlyContain(static item => item.Selector.SelectorCase ==
+            ExternalWorkflowCapabilitySelector.SelectorOneofCase.HostConnector);
+        descriptors.Select(static item => item.Selector.HostConnector.ConnectorCapabilityRef)
             .Should().BeEquivalentTo(
                 "connector-public-alpha",
                 "connector-client-alpha",
@@ -57,7 +57,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
         {
             var readiness = await source.InspectAsync(
                 Access(),
-                descriptor.Capability,
+                descriptor.Selector,
                 ExternalCapabilityExecutionMode.Durable,
                 CancellationToken.None);
             readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
@@ -109,7 +109,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
                 Version: 8)),
             new FixedTimeProvider());
         var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
-        var forged = descriptor.Capability.Clone();
+        var forged = descriptor.Selector.Clone();
         forged.HostConnector.ContractDigest = "changed-contract-digest";
 
         var result = await source.InspectAsync(
@@ -125,7 +125,7 @@ public sealed class ConnectorExternalWorkflowCapabilitySourceTests
     private static ExternalWorkflowCapabilityAccessContext Access() =>
         new("scope-alpha", "caller-alpha");
 
-    private static ExternalWorkflowCapabilityRef HostRef(
+    private static ExternalWorkflowCapabilitySelector HostRef(
         string connectorRef,
         string operationId,
         string digest) =>

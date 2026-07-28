@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.GAgentService.Abstractions.Schedules;
 using Aevatar.Studio.Application.Provisioning;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
@@ -804,5 +805,9 @@ internal sealed record StudioScheduleResultJson(
             item.StateVersion,
             item.CredentialSourceKind,
             item.UpdatedAt,
-            $"/api/scopes/{Uri.EscapeDataString(item.ScopeId)}/teams/{Uri.EscapeDataString(item.TeamId)}/members/{Uri.EscapeDataString(item.MemberId)}/automations/{Uri.EscapeDataString(item.ScheduleId)}");
+            $"/api/schedules/{Uri.EscapeDataString(item.ScheduleId)}" +
+            $"?ownerKind={Uri.EscapeDataString(ScheduledDispatchOwnerKinds.StudioMemberAutomation)}" +
+            $"&ownerScopeId={Uri.EscapeDataString(item.ScopeId)}" +
+            $"&ownerTeamId={Uri.EscapeDataString(item.TeamId)}" +
+            $"&ownerMemberId={Uri.EscapeDataString(item.MemberId)}");
 }

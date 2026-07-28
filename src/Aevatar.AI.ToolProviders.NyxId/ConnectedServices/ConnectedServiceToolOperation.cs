@@ -34,7 +34,8 @@ public sealed record ConnectedServiceToolOperation(
     IReadOnlyList<ConnectedServiceToolParameter> Parameters,
     JsonNode? RequestBodySchema,
     bool RequestBodyRequired,
-    string? RequestBodyMediaType)
+    string? RequestBodyMediaType,
+    IReadOnlyList<string> ResponseMediaTypes)
 {
     public bool HasRequestBody => RequestBodySchema is not null;
 

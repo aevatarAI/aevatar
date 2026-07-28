@@ -331,6 +331,26 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task HandleConfigureAsync_WithTeamOwnerWithoutCredentialLifecycle_ShouldRegisterNextFireLease()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort(), scheduler);
+        await agent.ActivateAsync();
+        var command = CreateConfigureCommand(cronExpression: "* * * * *", enabled: true);
+        command.TeamAutomationOwner = CreateTeamOwner();
+
+        await agent.HandleConfigureAsync(command);
+
+        agent.State.TeamAutomationOwner.Should().NotBeNull();
+        agent.State.TeamAutomationLifecycleStatus.Should().Be(TeamAutomationLifecycleStatusState.Unspecified);
+        agent.State.NextFireAt.Should().NotBeNull();
+        agent.State.NextFireLease.Should().NotBeNull();
+        scheduler.TimeoutRequests.Should().ContainSingle()
+            .Which.CallbackId.Should().Be(NextFireCallbackId);
+    }
+
+    [Fact]
     public async Task HandleConfigureAsync_WhenSchedulerFails_ShouldKeepPendingNextFireIntent()
     {
         var eventStore = new TestEventStore();
@@ -620,7 +640,7 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
-    public async Task HandleDeleteAsync_WhenConfiguredEnabled_ShouldPersistDeletedStateAndCancelNextFireLease()
+    public async Task HandleDeleteAsync_WhenConfiguredEnabled_ShouldPersistDeletedStateAndPurgeCallbacks()
     {
         var eventStore = new TestEventStore();
         var dispatch = new RecordingActorDispatchPort();
@@ -628,7 +648,6 @@ public sealed class ScheduledDispatchGAgentTests
         var agent = CreateAgent(eventStore, dispatch, scheduler);
         await agent.ActivateAsync();
         await agent.HandleConfigureAsync(CreateConfigureCommand(cronExpression: "* * * * *", enabled: true));
-        var previousLease = agent.State.NextFireLease!.Clone();
 
         await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
         {
@@ -641,10 +660,9 @@ public sealed class ScheduledDispatchGAgentTests
         agent.State.NextFireAt.Should().BeNull();
         agent.State.NextFireLease.Should().BeNull();
         agent.State.PendingNextFireAt.Should().BeNull();
-        scheduler.Canceled.Should().ContainSingle();
-        scheduler.Canceled[0].ActorId.Should().Be(ScheduleActorId);
-        scheduler.Canceled[0].CallbackId.Should().Be(NextFireCallbackId);
-        scheduler.Canceled[0].Generation.Should().Be(previousLease.Generation);
+        scheduler.PurgedActors.Should().ContainSingle()
+            .Which.Should().Be(ScheduleActorId);
+        scheduler.Canceled.Should().BeEmpty();
         eventStore.GetEvents(ScheduleActorId)
             .Where(x => string.Equals(x.EventType, ScheduledDispatchDeletedEvent.Descriptor.FullName, StringComparison.Ordinal))
             .Should()
@@ -3795,6 +3813,599 @@ public sealed class ScheduledDispatchGAgentTests
     }
 
     [Fact]
+    public async Task TeamAutomationDelete_WhenTombstoneAppendFails_ShouldCommitNoDeleteFacts()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        eventStore.ThrowOnAppendEventType =
+            ScheduledDispatchDeletedEvent.Descriptor.FullName;
+
+        var delete = () => agent.HandleDeleteAsync(
+            new ScheduledDispatchDeleteCommand
+            {
+                Reason = "scheduled_agent_key_canary_cleanup",
+                TeamAutomationOwner = CreateTeamOwner(),
+                OperationId = "operation-delete",
+                IdempotencyKey = "idempotency-delete",
+                AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            });
+
+        await delete.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("append failed");
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x =>
+                x.EventType ==
+                    TeamAutomationDeletionRequestedEvent.Descriptor.FullName ||
+                x.EventType ==
+                    ScheduledDispatchDeletedEvent.Descriptor.FullName);
+        agent.State.Deleted.Should().BeFalse();
+        agent.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.Active);
+        agent.State.PendingRevocationTeamCredential.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_WhenCallbackPurgeFailsAfterCommit_ShouldRecoverOnActivationAndReplay()
+    {
+        var eventStore = new TestEventStore();
+        var failingScheduler = new RecordingRuntimeCallbackScheduler
+        {
+            PurgeException = new InvalidOperationException("purge failed"),
+        };
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            failingScheduler);
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: true);
+        agent.State.NextFireLease.Should().NotBeNull();
+        agent.State.TeamCredentialExpiryLease.Should().NotBeNull();
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+
+        var initial = () => agent.HandleDeleteAsync(delete);
+
+        await initial.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("purge failed");
+        agent.State.Deleted.Should().BeTrue();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x =>
+                x.EventType ==
+                    TeamAutomationOperationObservedEvent.Descriptor.FullName &&
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>()
+                    .ObservationRequestId == "delete-initial");
+        failingScheduler.PurgedActors.Should().ContainSingle()
+            .Which.Should().Be(ScheduleActorId);
+
+        var recoveryScheduler = new RecordingRuntimeCallbackScheduler();
+        var reactivated = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            recoveryScheduler);
+        await reactivated.ActivateAsync();
+        recoveryScheduler.PurgedActors.Should().ContainSingle()
+            .Which.Should().Be(ScheduleActorId);
+
+        var replay = delete.Clone();
+        replay.ObservationRequestId = "delete-replay";
+        await reactivated.HandleDeleteAsync(replay);
+
+        recoveryScheduler.PurgedActors.Should().HaveCount(2);
+        var observation = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId == "delete-replay");
+        observation.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.Committed);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_WhenObservationAppendFailsAfterCommit_ShouldPurgeAndReplay()
+    {
+        var eventStore = new TestEventStore();
+        var scheduler = new RecordingRuntimeCallbackScheduler();
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            scheduler);
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: true);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+        eventStore.ThrowOnAppendEventType =
+            TeamAutomationOperationObservedEvent.Descriptor.FullName;
+
+        var initial = () => agent.HandleDeleteAsync(delete);
+
+        await initial.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("append failed");
+        agent.State.Deleted.Should().BeTrue();
+        scheduler.PurgedActors.Should().ContainSingle()
+            .Which.Should().Be(ScheduleActorId);
+        eventStore.ThrowOnAppendEventType = null;
+
+        var replay = delete.Clone();
+        replay.ObservationRequestId = "delete-replay";
+        await agent.HandleDeleteAsync(replay);
+
+        scheduler.PurgedActors.Should().HaveCount(2);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        var observation = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId == "delete-replay");
+        observation.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.Committed);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_LegacyPartialStreamExactReplay_ShouldHealTombstone()
+    {
+        var eventStore = new TestEventStore();
+        var timeProvider = new FakeTimeProvider(
+            new DateTimeOffset(
+                2026,
+                7,
+                27,
+                10,
+                0,
+                0,
+                TimeSpan.Zero));
+        var credential = CreateTeamCredential("key-alpha");
+        SetCredentialExpiry(
+            credential,
+            timeProvider.GetUtcNow().AddMinutes(1));
+        var agent = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            timeProvider: timeProvider);
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            credential,
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+        await agent.HandleDeleteAsync(delete);
+        eventStore.TruncateAfterEventType(
+            ScheduleActorId,
+            TeamAutomationDeletionRequestedEvent.Descriptor.FullName);
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+
+        var reactivated = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort(),
+            timeProvider: timeProvider);
+        await reactivated.ActivateAsync();
+        reactivated.State.Deleted.Should().BeFalse();
+        reactivated.State.TeamAutomationLifecycleStatus.Should()
+            .Be(TeamAutomationLifecycleStatusState.NeedsAuthorization);
+
+        var replay = delete.Clone();
+        replay.ObservationRequestId = "delete-legacy-partial-replay";
+        await reactivated.HandleDeleteAsync(replay);
+
+        reactivated.State.Deleted.Should().BeTrue();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        var observation = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-legacy-partial-replay");
+        observation.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.Committed);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_CompactedDeletedStateWithoutReason_ShouldRejectReplay()
+    {
+        var seedStore = new TestEventStore();
+        var seed = CreateAgent(seedStore, new RecordingActorDispatchPort());
+        await seed.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            seed,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+        await seed.HandleDeleteAsync(delete);
+        var compactedState = seed.State.Clone();
+        compactedState.ClearTeamAutomationDeleteReason();
+        compactedState.HasTeamAutomationDeleteReason.Should().BeFalse();
+        var compactedStore = new TestEventStore();
+        var compacted = CreateAgent(
+            compactedStore,
+            new RecordingActorDispatchPort(),
+            snapshotStore: new TestSnapshotStore(compactedState, version: 0));
+        await compacted.ActivateAsync();
+
+        var replay = delete.Clone();
+        replay.ObservationRequestId = "delete-compacted-unknown-reason";
+        await compacted.HandleDeleteAsync(replay);
+
+        var rejection = compactedStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-compacted-unknown-reason");
+        rejection.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.RejectedConflict);
+        rejection.ErrorCode.Should().Be(
+            "team_automation_operation_conflict");
+        compactedStore.GetEvents(ScheduleActorId)
+            .Should().NotContain(x =>
+                x.EventType ==
+                    TeamAutomationDeletionRequestedEvent.Descriptor.FullName ||
+                x.EventType ==
+                    ScheduledDispatchDeletedEvent.Descriptor.FullName);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_ShouldPersistNormalizedReasonAsReplayIdentity()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+
+        await agent.HandleDeleteAsync(new ScheduledDispatchDeleteCommand
+        {
+            Reason = " scheduled_agent_key_canary_cleanup ",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+        });
+
+        agent.State.TeamAutomationDeleteReason.Should().Be(
+            "scheduled_agent_key_canary_cleanup");
+        agent.State.HasTeamAutomationDeleteReason.Should().BeTrue();
+        var requested = eventStore.GetEvents(ScheduleActorId)
+            .Single(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .EventData
+            .Unpack<TeamAutomationDeletionRequestedEvent>();
+        requested.Reason.Should().Be("scheduled_agent_key_canary_cleanup");
+        requested.HasReason.Should().BeTrue();
+
+        var reactivated = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort());
+        await reactivated.ActivateAsync();
+        reactivated.State.TeamAutomationDeleteReason.Should().Be(
+            "scheduled_agent_key_canary_cleanup");
+        reactivated.State.HasTeamAutomationDeleteReason.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_PaddedOwnerReplayAfterCanonicalDelete_ShouldRemainExact()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-canonical-owner",
+        };
+        await agent.HandleDeleteAsync(delete);
+
+        var replay = delete.Clone();
+        replay.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = " scope-alpha ",
+            MemberId = " member-alpha ",
+            TeamId = " ",
+        };
+        replay.ObservationRequestId = "delete-padded-owner-replay";
+        await agent.HandleDeleteAsync(replay);
+
+        var observation = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-padded-owner-replay");
+        observation.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.Committed);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_MalformedOwnerReplay_ShouldRejectConflict()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-canonical-owner",
+        };
+        await agent.HandleDeleteAsync(delete);
+
+        var replay = delete.Clone();
+        replay.TeamAutomationOwner = new TeamMemberAutomationOwnerState
+        {
+            ScopeId = " ",
+            MemberId = "member-alpha",
+        };
+        replay.ObservationRequestId = "delete-malformed-owner-replay";
+        await agent.HandleDeleteAsync(replay);
+
+        var rejection = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-malformed-owner-replay");
+        rejection.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.RejectedConflict);
+        rejection.ErrorCode.Should().Be(
+            "team_automation_operation_conflict");
+        rejection.OwnsEffectAttempt.Should().BeFalse();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_ReasonDriftWhileRevocationPending_ShouldRejectConflict()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+        await agent.HandleDeleteAsync(delete);
+
+        var drift = delete.Clone();
+        drift.Reason = "different_cleanup_reason";
+        drift.ObservationRequestId = "delete-reason-drift-pending";
+        await agent.HandleDeleteAsync(drift);
+
+        var rejection = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-reason-drift-pending");
+        rejection.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.RejectedConflict);
+        rejection.ErrorCode.Should().Be(
+            "team_automation_operation_conflict");
+        rejection.OwnsEffectAttempt.Should().BeFalse();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_ReasonDriftAfterRevocationCompletes_ShouldRejectConflict()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+        await agent.HandleDeleteAsync(delete);
+        await agent.HandleCompleteTeamAutomationRevocationAsync(
+            new CompleteTeamAutomationRevocationCommand
+            {
+                Owner = CreateTeamOwner(),
+                OperationId = "operation-delete",
+                IdempotencyKey = "idempotency-delete",
+                EffectAttemptId =
+                    agent.State.TeamAutomationEffectAttemptId,
+                NyxidRevoked = true,
+                VaultRevoked = true,
+            });
+
+        var drift = delete.Clone();
+        drift.Reason = "different_cleanup_reason";
+        drift.ObservationRequestId = "delete-reason-drift-terminal";
+        await agent.HandleDeleteAsync(drift);
+
+        var rejection = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-reason-drift-terminal");
+        rejection.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.RejectedConflict);
+        rejection.ErrorCode.Should().Be(
+            "team_automation_operation_conflict");
+        rejection.OwnsEffectAttempt.Should().BeFalse();
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName)
+            .Should().Be(1);
+        eventStore.GetEvents(ScheduleActorId)
+            .Count(x => x.EventType ==
+                ScheduledDispatchDeletedEvent.Descriptor.FullName)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task TeamAutomationDelete_LegacyFullReplay_ShouldRecoverReasonFromDeletedEvent()
+    {
+        var eventStore = new TestEventStore();
+        var agent = CreateAgent(eventStore, new RecordingActorDispatchPort());
+        await agent.ActivateAsync();
+        await ActivateTeamAutomationAsync(
+            agent,
+            CreateTeamCredential("key-alpha"),
+            enabled: false);
+        var delete = new ScheduledDispatchDeleteCommand
+        {
+            Reason = "scheduled_agent_key_canary_cleanup",
+            TeamAutomationOwner = CreateTeamOwner(),
+            OperationId = "operation-delete",
+            IdempotencyKey = "idempotency-delete",
+            AuthenticatedCredentialOwner = CreateCredentialOwner(),
+            ObservationRequestId = "delete-initial",
+        };
+        await agent.HandleDeleteAsync(delete);
+        eventStore.ClearTeamAutomationDeletionRequestedReason(
+            ScheduleActorId);
+
+        var reactivated = CreateAgent(
+            eventStore,
+            new RecordingActorDispatchPort());
+        await reactivated.ActivateAsync();
+
+        reactivated.State.HasTeamAutomationDeleteReason
+            .Should().BeTrue();
+        reactivated.State.TeamAutomationDeleteReason.Should()
+            .Be("scheduled_agent_key_canary_cleanup");
+        var replay = delete.Clone();
+        replay.ObservationRequestId = "delete-legacy-exact-replay";
+        await reactivated.HandleDeleteAsync(replay);
+
+        var observation = eventStore.GetEvents(ScheduleActorId)
+            .Where(x => x.EventType ==
+                TeamAutomationOperationObservedEvent.Descriptor.FullName)
+            .Select(x =>
+                x.EventData.Unpack<TeamAutomationOperationObservedEvent>())
+            .Single(x => x.ObservationRequestId ==
+                "delete-legacy-exact-replay");
+        observation.ObservationStatus.Should().Be(
+            TeamAutomationOperationObservationStatusState.Committed);
+    }
+
+    [Fact]
     public async Task TeamAutomationDelete_ExactReplayShouldNotOwnTheEffectTwice()
     {
         var eventStore = new TestEventStore();
@@ -4660,7 +5271,8 @@ public sealed class ScheduledDispatchGAgentTests
         RecordingActorDispatchPort dispatch,
         RecordingRuntimeCallbackScheduler? callbackScheduler = null,
         RecordingScheduledServiceInvocationDispatchPort? serviceInvocationDispatch = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IEventSourcingSnapshotStore<ScheduledDispatchState>? snapshotStore = null)
     {
         var agent = new ScheduledDispatchGAgent(
             dispatch,
@@ -4669,7 +5281,10 @@ public sealed class ScheduledDispatchGAgentTests
             timeProvider)
         {
             Services = new TestServiceProvider(callbackScheduler ?? new RecordingRuntimeCallbackScheduler()),
-            EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(eventStore),
+            EventSourcingBehaviorFactory =
+                new DefaultEventSourcingBehaviorFactory<ScheduledDispatchState>(
+                    eventStore,
+                    snapshotStore: snapshotStore),
         };
         SetAgentId(agent, ScheduleActorId);
         return agent;
@@ -5029,7 +5644,11 @@ public sealed class ScheduledDispatchGAgentTests
 
         public List<RuntimeCallbackLease> Canceled { get; } = [];
 
+        public List<string> PurgedActors { get; } = [];
+
         public Exception? ScheduleException { get; set; }
+
+        public Exception? PurgeException { get; set; }
 
         public Task<RuntimeCallbackLease> ScheduleTimeoutAsync(
             RuntimeCallbackTimeoutRequest request,
@@ -5074,6 +5693,9 @@ public sealed class ScheduledDispatchGAgentTests
         public Task PurgeActorAsync(string actorId, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            PurgedActors.Add(actorId);
+            if (PurgeException != null)
+                throw PurgeException;
             return Task.CompletedTask;
         }
     }
@@ -5088,6 +5710,35 @@ public sealed class ScheduledDispatchGAgentTests
                 return callbackScheduler;
 
             return null;
+        }
+    }
+
+    private sealed class TestSnapshotStore(
+        ScheduledDispatchState state,
+        long version) : IEventSourcingSnapshotStore<ScheduledDispatchState>
+    {
+        private EventSourcingSnapshot<ScheduledDispatchState> _snapshot =
+            new(state.Clone(), version);
+
+        public Task<EventSourcingSnapshot<ScheduledDispatchState>?> LoadAsync(
+            string agentId,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<EventSourcingSnapshot<ScheduledDispatchState>?>(
+                new(_snapshot.State.Clone(), _snapshot.Version));
+        }
+
+        public Task SaveAsync(
+            string agentId,
+            EventSourcingSnapshot<ScheduledDispatchState> snapshot,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _snapshot = new EventSourcingSnapshot<ScheduledDispatchState>(
+                snapshot.State.Clone(),
+                snapshot.Version);
+            return Task.CompletedTask;
         }
     }
 
@@ -5108,6 +5759,37 @@ public sealed class ScheduledDispatchGAgentTests
                 return;
 
             stream.RemoveAll(x => string.Equals(x.EventType, eventType, StringComparison.Ordinal));
+        }
+
+        public void TruncateAfterEventType(
+            string agentId,
+            string eventType)
+        {
+            if (!_streams.TryGetValue(agentId, out var stream))
+                return;
+
+            var eventIndex = stream.FindIndex(x =>
+                string.Equals(
+                    x.EventType,
+                    eventType,
+                    StringComparison.Ordinal));
+            eventIndex.Should().BeGreaterThanOrEqualTo(0);
+            stream.RemoveRange(
+                eventIndex + 1,
+                stream.Count - eventIndex - 1);
+        }
+
+        public void ClearTeamAutomationDeletionRequestedReason(
+            string agentId)
+        {
+            var stateEvent = _streams[agentId].Single(x =>
+                x.EventType ==
+                TeamAutomationDeletionRequestedEvent.Descriptor.FullName);
+            var requested =
+                stateEvent.EventData
+                    .Unpack<TeamAutomationDeletionRequestedEvent>();
+            requested.ClearReason();
+            stateEvent.EventData = Any.Pack(requested);
         }
 
         public Task<EventStoreCommitResult> AppendAsync(

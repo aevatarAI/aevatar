@@ -73,13 +73,43 @@ owner: eanzhao
 BindWorkflowDefinition(yaml)
   -> WorkflowParser.Parse (YAML -> WorkflowDefinition)
   -> WorkflowValidator.Validate (结构校验)
-  -> BindWorkflowRunDefinition(yaml/run binding)
+  -> BindWorkflowRunDefinition(yaml/run binding + capability admission plan)
   -> InstallCognitiveModules on WorkflowRunGAgent:
        IWorkflowModuleDependencyExpander[]: 推导模块名集合
        WorkflowModuleFactory: 按名称创建实例
        IWorkflowModuleConfigurator[]: 配置实例
        WorkflowExecutionBridgeModule: 接入 Foundation 事件管线
 ```
+
+### External operation admission proof handoff
+
+NyxID external operation 使用一条 actor-owned proof 主链。作者只持久化 step 级 `NyxIdOperationSelector { user_service_id, operation_id }`；definition admission 读取 NyxID exact UserService effective OpenAPI，应用 `x-aevatar-tool` 与 schema 安全策略，并生成 server-owned method、path template、parameter/body contract、response policy、source stamp 与 digest。Aevatar 不保存整份 OpenAPI。
+
+```mermaid
+%%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
+flowchart LR
+    A["Step selector"] --> B["Definition live admission"]
+    B --> C["WorkflowGAgent v3 invocation_admissions"]
+    C --> D["BindWorkflowRunDefinitionEvent.capability_admission_plan"]
+    D --> E["WorkflowRunState.capability_admission_plan"]
+    E --> F["StepRequestEvent.external_invocation"]
+    F --> G["WorkflowToolExecutionRequest.InvocationAdmission"]
+    G --> H["AgentToolExecutionContext.OperationAdmission"]
+    H --> I["NyxIdOperationRequestBuilder"]
+    I --> J["NyxID Proxy HTTP request"]
+```
+
+`WorkflowRunActorPort` 从权威 definition binding 复制 plan 到 `BindWorkflowRunDefinitionEvent`，`WorkflowRunGAgent` 把它提交到本 run 的 state。`WorkflowExecutionKernel` 与 admission 共用 compiler，为 ordinary、nested、`foreach`/`for_each`/`foreach_llm` 和 `while`/`loop` 派生同一稳定 call-site；`ToolCallModule` 只从 run actor state 解析该 call-site 的唯一 proof。missing plan、missing/duplicate call-site、selector mismatch 或 tool mismatch 都在 dispatch 前 fail closed。foreach backpressure、while state 与 tool approval suspend/resume 都复制同一个 typed invocation，不按动态 item id 猜 proof。
+
+AI adapter 把当前 proof 映射到 provider-neutral `AgentToolExecutionContext.OperationAdmission`；`NyxIdOperationRequestBuilder` 只接受 `path_params`、`query`、`headers`、`body`、`response_mode`，从 proof template 构造 concrete path 并校验 schema。NyxID Proxy wire 只接收服务 route、exact `user_service_id` 与 HTTP request；`operation_id` 和 digest 不进入 wire。
+
+Runtime 不读取 OpenAPI、definition actor、read model 或 event store，不 refresh/prime admission，也不维护 process-local proof registry。OpenAPI/source access 只发生在显式 live definition admission；persisted revalidation 只校验已提交 plan、definition、execution mode、source freshness 与 digest。
+
+### Admission v3 与 forward-only migration
+
+`external-capability-admission.v3` 只以 call-site scoped `invocation_admissions` 表达当前事实。proto field 4 `external_capabilities` 是 deprecated v2 deserialization slot；v3 creation 保持为空，v3 validation 对非空值 fail closed，禁止双事实源。
+
+升级采用 forward-only 语义：旧 serving definition/run 保持其既有实现，不热替换；持久化 v2 plan 一旦进入 reprepare、publish 或 rebind，就返回 typed `CAPABILITY_ADMISSION_REBIND_REQUIRED` 与 rebind remediation，要求重新执行在线 exact-contract admission。runtime 不把 v2 raw route 当 fallback，也不 query-time 迁移。向 protobuf 增加一个空 repeated field 不改变 v2 canonical bytes 或旧 `admission_digest`；明确的 `schema_version` 字符串是 v2/v3 唯一版本边界。
 
 ### Event Module
 

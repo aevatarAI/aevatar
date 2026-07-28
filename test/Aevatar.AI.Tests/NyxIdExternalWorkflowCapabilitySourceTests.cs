@@ -28,6 +28,22 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         }
         """;
 
+    private const string UnmarkedSpec = """
+        {
+          "openapi": "3.1.0",
+          "paths": {
+            "/states/{entity_id}": {
+              "get": {
+                "operationId": "get-state",
+                "parameters": [
+                  { "name": "entity_id", "in": "path", "required": true, "schema": { "type": "string" } }
+                ]
+              }
+            }
+          }
+        }
+        """;
+
     [Fact]
     public void AddNyxIdTools_ShouldRegisterNyxIdCapabilitySource()
     {
@@ -64,17 +80,118 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         var descriptors = await source.ListAsync(Access(), CancellationToken.None);
 
         descriptors.Should().HaveCount(2);
-        descriptors.Select(static item => item.Capability.NyxIdUserService.UserServiceId)
+        descriptors.Select(static item => item.Selector.NyxIdOperation.UserServiceId)
             .Should().BeEquivalentTo("us-home-alpha", "us-home-beta");
         descriptors.Should().OnlyContain(static item =>
-            item.Capability.NyxIdUserService.ServiceSlugSnapshot == "home-assistant" &&
-            item.Capability.NyxIdUserService.OperationId == "get-state");
+            item.Selector.NyxIdOperation.OperationId == "get-state");
+        descriptors.Select(static item => item.Capability).Should().OnlyContain(static capability => capability == null);
         descriptors.Select(static item => item.ToString()).Should()
             .OnlyContain(text => !text.Contains("runtime-caller-credential", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task InspectAsync_ShouldRequireExactSelection_WhenSlugIsAmbiguous()
+    public async Task Admission_ShouldFailClosed_ForOperationsWithoutAevatarToolMarker()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = UnmarkedSpec },
+        };
+        var source = CreateSource(handler);
+
+        (await source.ListAsync(Access(), CancellationToken.None)).Should().BeEmpty();
+
+        var readiness = await source.InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", "get-state"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        readiness.Status.Should().Be(ExternalCapabilityReadinessStatus.OperationSelectionRequired);
+        readiness.Blockers.Should().ContainSingle().Which.Code.Should().Be("OPERATION_NOT_ALLOWLISTED");
+        readiness.SelectedCapability.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Admission_ShouldFailClosed_WhenOperationIdIsMissingOrDuplicated()
+    {
+        const string missingOperationIdSpec = """
+            {
+              "openapi": "3.1.0",
+              "x-aevatar-tool": { "enabled": true },
+              "paths": { "/states": { "get": { } } }
+            }
+            """;
+        const string duplicateOperationIdSpec = """
+            {
+              "openapi": "3.1.0",
+              "x-aevatar-tool": { "enabled": true },
+              "paths": {
+                "/states": { "get": { "operationId": "get-state" } },
+                "/mirror/states": { "get": { "operationId": "get-state" } }
+              }
+            }
+            """;
+
+        var missing = await CreateSource(new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = missingOperationIdSpec },
+        }).InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", "get_/states"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        missing.Status.Should().Be(ExternalCapabilityReadinessStatus.OperationSelectionRequired);
+        missing.Blockers.Should().ContainSingle().Which.Code.Should().Be("OPENAPI_OPERATION_ID_REQUIRED");
+
+        var duplicate = await CreateSource(new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = duplicateOperationIdSpec },
+        }).InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", "get-state"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        duplicate.Status.Should().Be(ExternalCapabilityReadinessStatus.EndpointContractRequired);
+        duplicate.Blockers.Should().ContainSingle().Which.Code.Should().Be("OPENAPI_OPERATION_ID_DUPLICATE");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldDeriveServerOwnedProof_FromSelectorAlone()
+    {
+        var handler = new ReadinessHandler
+        {
+            KeysJson = ReadyKeys,
+            Specs = { ["us-home-alpha"] = AdmittedSpec },
+        };
+        var source = CreateSource(handler);
+
+        var result = await source.InspectAsync(
+            Access(),
+            NyxIdSelector("us-home-alpha", "get-state"),
+            ExternalCapabilityExecutionMode.Interactive,
+            CancellationToken.None);
+
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.Ready);
+        var proof = result.SelectedCapability.NyxIdUserService;
+        proof.UserServiceId.Should().Be("us-home-alpha");
+        proof.ServiceSlugSnapshot.Should().Be("home-assistant");
+        proof.HttpMethod.Should().Be("GET");
+        proof.PathTemplate.Should().Be("/states/{entity_id}");
+        proof.ContractDigest.Should().NotBeNullOrWhiteSpace();
+        proof.Parameters.Should().ContainSingle(parameter =>
+            parameter.Name == "entity_id" &&
+            parameter.Location == NyxIdOperationParameterLocation.Path &&
+            parameter.Required);
+        result.SelectedSelector.NyxIdOperation.OperationId.Should().Be("get-state");
+    }
+
+    [Fact]
+    public async Task InspectAsync_ShouldRequireExactSelection_WhenSelectorOmitsTheUserService()
     {
         var handler = new ReadinessHandler
         {
@@ -89,12 +206,12 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            NyxIdRef(string.Empty, "home-assistant", "get-state", "GET", "/states/{entity_id}", string.Empty),
+            NyxIdSelector(string.Empty, "get-state"),
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
-        result.Status.Should().Be(ExternalCapabilityReadinessStatus.SelectionRequired);
-        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("EXACT_USER_SERVICE_SELECTION_REQUIRED");
+        result.Status.Should().Be(ExternalCapabilityReadinessStatus.OperationSelectionRequired);
+        result.Blockers.Should().ContainSingle().Which.Code.Should().Be("NYXID_OPERATION_SELECTION_REQUIRED");
     }
 
     [Theory]
@@ -112,13 +229,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            NyxIdRef(
-                "us-home-alpha",
-                "home-assistant",
-                "get-state",
-                "GET",
-                "/states/{entity_id}",
-                "candidate-contract-digest"),
+            NyxIdSelector("us-home-alpha", "get-state"),
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -164,7 +275,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -186,7 +297,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -207,7 +318,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -224,13 +335,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            NyxIdRef(
-                "us-home-alpha",
-                "home-assistant",
-                "get-state",
-                "GET",
-                "/states/{entity_id}",
-                "candidate-contract-digest"),
+            NyxIdSelector("us-home-alpha", "get-state"),
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -264,7 +369,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -373,7 +478,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             AccessWithOrganization(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -395,13 +500,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             AccessWithOrganization(),
-            NyxIdRef(
-                "us-home-alpha",
-                "home-assistant",
-                "get-state",
-                "GET",
-                "/states/{entity_id}",
-                "candidate-contract-digest"),
+            NyxIdSelector("us-home-alpha", "get-state"),
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
 
@@ -422,7 +521,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
 
         var result = await source.InspectAsync(
             Access(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Durable,
             CancellationToken.None);
 
@@ -575,9 +674,9 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
             },
             {
                 ReadyKeys,
-                """{ "openapi": "3.1.0", "paths": { "/states/{entity_id}": { "get": { "operationId": "get-state" } } } }""",
+                """{ "openapi": "3.1.0", "x-aevatar-tool": { "enabled": true }, "paths": { "/states/{entity_id}": { "get": { "operationId": "other-state" } } } }""",
                 ExternalCapabilityReadinessStatus.OperationSelectionRequired,
-                "OPERATION_NOT_ALLOWLISTED"
+                "OPERATION_NOT_FOUND"
             },
             {
                 """{ "fresh_until": "2026-07-21T09:59:00Z", "keys": [{ "id": "us-home-alpha", "slug": "home-assistant", "status": "active", "is_active": true, "connected": true, "requires_connection": false, "has_node_binding": false, "credential_source": { "type": "personal" } }] }""",
@@ -712,7 +811,7 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
         return await source.InspectAsync(
             Access(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Durable,
             CancellationToken.None);
     }
@@ -734,28 +833,20 @@ public sealed class NyxIdExternalWorkflowCapabilitySourceTests
         var descriptor = (await source.ListAsync(Access(), CancellationToken.None)).Single();
         return await source.InspectAsync(
             Access(),
-            descriptor.Capability,
+            descriptor.Selector,
             ExternalCapabilityExecutionMode.Interactive,
             CancellationToken.None);
     }
 
-    private static ExternalWorkflowCapabilityRef NyxIdRef(
-        string serviceId,
-        string slug,
-        string operationId,
-        string method,
-        string path,
-        string digest) =>
+    private static ExternalWorkflowCapabilitySelector NyxIdSelector(
+        string userServiceId,
+        string operationId) =>
         new()
         {
-            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            NyxIdOperation = new NyxIdOperationSelector
             {
-                UserServiceId = serviceId,
-                ServiceSlugSnapshot = slug,
+                UserServiceId = userServiceId,
                 OperationId = operationId,
-                HttpMethod = method,
-                PathTemplate = path,
-                ContractDigest = digest,
             },
         };
 

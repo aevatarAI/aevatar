@@ -405,24 +405,22 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
         var resolved = await ResolveTeamMemberAsync(command.ScopeId, command.TeamId, command.MemberId, ct);
         var owner = new TeamMemberAutomationOwner(resolved.ScopeId, resolved.MemberId, resolved.TeamId);
         var scheduleId = NormalizeRequired(command.ScheduleId, nameof(command.ScheduleId));
-        var operationId = NormalizeRequired(command.OperationId, nameof(command.OperationId));
-        var idempotencyKey = NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey));
         if (action == TeamAutomationAction.RunNow)
         {
             var run = await _scheduleService.RunTeamAutomationNowAsync(
                 scheduleId,
                 owner,
-                operationId,
-                idempotencyKey,
                 ct);
             return new StudioMemberAutomationMutationReceipt(
                 run.Accepted,
                 "accepted",
                 run.ScheduleId,
-                operationId,
+                command.OperationId,
                 run.CommandId);
         }
 
+        var operationId = NormalizeRequired(command.OperationId, nameof(command.OperationId));
+        var idempotencyKey = NormalizeRequired(command.IdempotencyKey, nameof(command.IdempotencyKey));
         if (action == TeamAutomationAction.Delete)
         {
             var authenticatedOwner = command.AuthenticatedOwner ??
@@ -435,7 +433,8 @@ public sealed class StudioMemberWorkflowSchedulePort : IStudioMemberWorkflowSche
                 owner,
                 operationId,
                 idempotencyKey,
-                "studio_team_automation_delete",
+                NormalizeOptional(command.Reason) ??
+                    "studio_team_automation_delete",
                 ToAuthorizationOwner(authenticatedOwner),
                 ct);
             await ExecutePendingRevocationAsync(
