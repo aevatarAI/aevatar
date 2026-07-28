@@ -27,7 +27,8 @@ public static class WorkflowOperationAdmissionToolContextMapper
             proof.ContractDigest,
             proof.Parameters.Select(MapParameter).ToArray(),
             MapRequestBody(proof.RequestBody),
-            MapResponsePolicy(proof.ResponsePolicy));
+            MapResponsePolicy(proof.ResponsePolicy),
+            MapExecutionPolicy(proof.ExecutionPolicy));
     }
 
     private static AgentToolOperationParameter MapParameter(NyxIdOperationParameterContract parameter) =>
@@ -60,6 +61,37 @@ public static class WorkflowOperationAdmissionToolContextMapper
                 responsePolicy.TextAllowed,
                 responsePolicy.FileArtifactAllowed,
                 responsePolicy.MediaTypes.ToArray());
+
+    private static AgentToolOperationExecutionPolicy MapExecutionPolicy(
+        NyxIdOperationExecutionPolicy? policy) =>
+        policy is null
+            ? AgentToolOperationExecutionPolicy.Unspecified
+            : new AgentToolOperationExecutionPolicy(
+                policy.Risk switch
+                {
+                    NyxIdOperationRisk.ReadOnly => AgentToolOperationRisk.ReadOnly,
+                    NyxIdOperationRisk.Write => AgentToolOperationRisk.Write,
+                    NyxIdOperationRisk.Destructive => AgentToolOperationRisk.Destructive,
+                    _ => AgentToolOperationRisk.Unspecified,
+                },
+                policy.Approval switch
+                {
+                    NyxIdOperationApproval.None => AgentToolOperationApproval.None,
+                    NyxIdOperationApproval.Required => AgentToolOperationApproval.Required,
+                    _ => AgentToolOperationApproval.Unspecified,
+                },
+                policy.EnforcementOwner switch
+                {
+                    NyxIdOperationEnforcementOwner.Aevatar => AgentToolOperationEnforcementOwner.Aevatar,
+                    NyxIdOperationEnforcementOwner.NyxId => AgentToolOperationEnforcementOwner.NyxId,
+                    _ => AgentToolOperationEnforcementOwner.Unspecified,
+                },
+                policy.AllowedExecutionModes.Select(static mode => mode switch
+                {
+                    ExternalCapabilityExecutionMode.Interactive => AgentToolOperationExecutionMode.Interactive,
+                    ExternalCapabilityExecutionMode.Durable => AgentToolOperationExecutionMode.Durable,
+                    _ => AgentToolOperationExecutionMode.Unspecified,
+                }).ToArray());
 
     private static AgentToolOperationValueSchema MapSchema(NyxIdOperationSchema? schema)
     {

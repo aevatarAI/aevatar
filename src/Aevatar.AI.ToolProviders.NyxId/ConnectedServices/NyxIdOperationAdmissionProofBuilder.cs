@@ -22,6 +22,7 @@ internal static class NyxIdOperationAdmissionProofBuilder
             HttpMethod = operation.Method.ToUpperInvariant(),
             PathTemplate = operation.PathTemplate,
             ContractDigest = contractDigest,
+            ExecutionPolicy = operation.ExecutionPolicy,
             ResponsePolicy = new NyxIdOperationResponsePolicy
             {
                 TextAllowed = true,

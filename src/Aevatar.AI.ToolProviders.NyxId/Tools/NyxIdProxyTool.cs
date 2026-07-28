@@ -59,14 +59,18 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         "Use typed capability discovery to select an exact service instance, then provide " +
         "service_id + slug + path to send a proxied request.";
 
-    /// <summary>
-    /// No Aevatar-side approval needed. NyxID's proxy layer handles approval
-    /// enforcement server-side: when a service has approval enabled, NyxID
-    /// blocks the proxy request, sends a push notification (Telegram/FCM/APNs),
-    /// and waits for the user to approve before completing the request.
-    /// The proxy response may take 30+ seconds during approval wait.
-    /// </summary>
-    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    public AgentToolCallSafety GetCallSafety(string argumentsJson)
+    {
+        var policy = AgentToolRequestContext.Current?.OperationAdmission?.ExecutionPolicy;
+        return IsValidExecutionPolicy(policy)
+            ? new AgentToolCallSafety(
+                policy!.Approval == AgentToolOperationApproval.Required,
+                policy.Risk == AgentToolOperationRisk.ReadOnly,
+                policy.Risk == AgentToolOperationRisk.Destructive)
+            : new AgentToolCallSafety(null, false, false);
+    }
 
     public AgentToolReceipt? CreateResultReceipt(
         string callId,
@@ -161,17 +165,46 @@ public sealed class NyxIdProxyTool : INyxIdBuiltInTool
         var context = AgentToolRequestContext.Current;
         var managed = context?.WorkflowRuntime.HasManagedParent == true;
         var proofPresent = context?.OperationAdmission is not null;
-        var wouldBlock = managed && !proofPresent;
+        var policy = context?.OperationAdmission?.ExecutionPolicy;
+        var validPolicy = IsValidExecutionPolicy(policy);
+        var wouldBlock = managed && (!proofPresent || !validPolicy);
         NyxIdProxyAdmissionTelemetry.Record(
             _managedWorkflowAdmissionMode,
             managed,
             proofPresent,
             context?.InvocationSurface ?? AgentToolInvocationSurface.Unspecified,
+            validPolicy ? policy!.Risk : AgentToolOperationRisk.Unspecified,
+            validPolicy && policy!.Approval == AgentToolOperationApproval.Required,
             wouldBlock);
         if (wouldBlock && _managedWorkflowAdmissionMode == NyxIdManagedWorkflowAdmissionMode.Enforce)
             return OperationAdmissionRequiredResult;
 
         return await ExecuteCoreAsync(context, argumentsJson, ct);
+    }
+
+    private static bool IsValidExecutionPolicy(AgentToolOperationExecutionPolicy? policy)
+    {
+        if (policy is null ||
+            policy.EnforcementOwner != AgentToolOperationEnforcementOwner.Aevatar ||
+            policy.AllowedExecutionModes.Count == 0 ||
+            !policy.AllowedExecutionModes.Contains(AgentToolOperationExecutionMode.Interactive) ||
+            policy.AllowedExecutionModes.Any(static mode =>
+                mode is not (AgentToolOperationExecutionMode.Interactive or
+                    AgentToolOperationExecutionMode.Durable)) ||
+            policy.AllowedExecutionModes.Distinct().Count() != policy.AllowedExecutionModes.Count)
+        {
+            return false;
+        }
+
+        return policy.Risk switch
+        {
+            AgentToolOperationRisk.ReadOnly =>
+                policy.Approval == AgentToolOperationApproval.None,
+            AgentToolOperationRisk.Write or AgentToolOperationRisk.Destructive =>
+                policy.Approval == AgentToolOperationApproval.Required &&
+                !policy.AllowedExecutionModes.Contains(AgentToolOperationExecutionMode.Durable),
+            _ => false,
+        };
     }
 
     private async Task<string> ExecuteCoreAsync(

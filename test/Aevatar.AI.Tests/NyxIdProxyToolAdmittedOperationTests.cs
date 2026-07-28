@@ -301,6 +301,48 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             "/api/v1/proxy/s/api-lark-bot-2/open-apis/im/v1/messages/om_3/resources/f");
     }
 
+    [Fact]
+    public void GetCallSafety_ShouldUseTheTypedProofPolicy()
+    {
+        var tool = CreateTool(new RecordingHandler());
+
+        using (PushContext(MessageResourceAdmission()))
+        {
+            tool.ApprovalMode.Should().Be(ToolApprovalMode.Auto);
+            tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
+                RequiresApproval: false,
+                IsReadOnly: true,
+                IsDestructive: false));
+        }
+
+        using (PushContext(CreateApprovalAdmission()))
+        {
+            tool.GetCallSafety("{}").Should().Be(new AgentToolCallSafety(
+                RequiresApproval: true,
+                IsReadOnly: false,
+                IsDestructive: false));
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ShouldRejectManagedProofWithoutTypedPolicyInEnforceMode()
+    {
+        var handler = new RecordingHandler();
+        var tool = CreateTool(
+            handler,
+            managedWorkflowAdmissionMode: NyxIdManagedWorkflowAdmissionMode.Enforce);
+        using var scope = PushContext(MessageResourceAdmission() with
+        {
+            ExecutionPolicy = AgentToolOperationExecutionPolicy.Unspecified,
+        });
+
+        var result = await tool.ExecuteAsync(
+            """{"path_params":{"message_id":"om-alpha","file_key":"file-alpha"}}""");
+
+        result.Should().Contain("NYXID_OPERATION_ADMISSION_REQUIRED");
+        handler.RequestCount.Should().Be(0);
+    }
+
     private static AgentToolOperationAdmission MessageResourceAdmission() =>
         new(
             "us-lark-alpha",
@@ -314,7 +356,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 PathParameter("file_key"),
             ],
             null,
-            new AgentToolOperationResponsePolicy(false, true, ["application/octet-stream"]));
+            new AgentToolOperationResponsePolicy(false, true, ["application/octet-stream"]),
+            ReadOnlyPolicy());
 
     private static AgentToolOperationAdmission ListMessagesAdmission() =>
         new(
@@ -329,7 +372,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                 QueryParameter("page_size", required: false),
             ],
             null,
-            AgentToolOperationResponsePolicy.TextOnly);
+            AgentToolOperationResponsePolicy.TextOnly,
+            ReadOnlyPolicy());
 
     private static AgentToolOperationAdmission CreateApprovalAdmission() =>
         new(
@@ -353,7 +397,8 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
                     null,
                     [],
                     false)),
-            AgentToolOperationResponsePolicy.TextOnly);
+            AgentToolOperationResponsePolicy.TextOnly,
+            WritePolicy());
 
     private static AgentToolOperationAdmission GetApprovalInstanceAdmission() =>
         new(
@@ -365,7 +410,22 @@ public sealed class NyxIdProxyToolAdmittedOperationTests
             "sha256:get-approval-instance",
             [PathParameter("instance_code")],
             null,
-            AgentToolOperationResponsePolicy.TextOnly);
+            AgentToolOperationResponsePolicy.TextOnly,
+            ReadOnlyPolicy());
+
+    private static AgentToolOperationExecutionPolicy ReadOnlyPolicy() =>
+        new(
+            AgentToolOperationRisk.ReadOnly,
+            AgentToolOperationApproval.None,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive, AgentToolOperationExecutionMode.Durable]);
+
+    private static AgentToolOperationExecutionPolicy WritePolicy() =>
+        new(
+            AgentToolOperationRisk.Write,
+            AgentToolOperationApproval.Required,
+            AgentToolOperationEnforcementOwner.Aevatar,
+            [AgentToolOperationExecutionMode.Interactive]);
 
     private static AgentToolOperationParameter PathParameter(string name) =>
         new(name, AgentToolOperationParameterLocation.Path, true, AgentToolOperationValueSchema.Text);

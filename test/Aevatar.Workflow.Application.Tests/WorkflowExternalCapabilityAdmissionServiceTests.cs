@@ -48,6 +48,119 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
     }
 
     [Fact]
+    public void NyxIdProofPolicy_ShouldParticipateInTheExistingAdmissionDigest()
+    {
+        const string yaml = "name: wf-alpha\nsteps: []\n";
+        var readOnly = NyxIdCapability();
+        var write = readOnly.Clone();
+        write.NyxIdUserService.ExecutionPolicy = new NyxIdOperationExecutionPolicy
+        {
+            Risk = NyxIdOperationRisk.Write,
+            Approval = NyxIdOperationApproval.Required,
+            EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+            AllowedExecutionModes = { ExternalCapabilityExecutionMode.Interactive },
+        };
+
+        var readPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            Admissions(readOnly),
+            Ready(readOnly).Sources);
+        var writePlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            yaml,
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            Admissions(write),
+            Ready(write).Sources);
+
+        writePlan.AdmissionDigest.Should().NotBe(readPlan.AdmissionDigest);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("risk_unspecified")]
+    [InlineData("risk_unknown")]
+    [InlineData("approval_mismatch")]
+    [InlineData("owner_unspecified")]
+    [InlineData("modes_empty")]
+    [InlineData("modes_duplicate")]
+    [InlineData("modes_without_interactive")]
+    [InlineData("modes_unknown")]
+    [InlineData("durable_write")]
+    public void Create_ShouldRejectMalformedNyxIdExecutionPolicy(string malformedCase)
+    {
+        var capability = NyxIdCapability();
+        var policy = capability.NyxIdUserService.ExecutionPolicy;
+        switch (malformedCase)
+        {
+            case "missing":
+                capability.NyxIdUserService.ExecutionPolicy = null;
+                break;
+            case "risk_unspecified":
+                policy.Risk = NyxIdOperationRisk.Unspecified;
+                break;
+            case "risk_unknown":
+                policy.Risk = (NyxIdOperationRisk)99;
+                break;
+            case "approval_mismatch":
+                policy.Approval = NyxIdOperationApproval.Required;
+                break;
+            case "owner_unspecified":
+                policy.EnforcementOwner = NyxIdOperationEnforcementOwner.Unspecified;
+                break;
+            case "modes_empty":
+                policy.AllowedExecutionModes.Clear();
+                break;
+            case "modes_duplicate":
+                policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Interactive);
+                break;
+            case "modes_without_interactive":
+                policy.AllowedExecutionModes.Clear();
+                policy.AllowedExecutionModes.Add(ExternalCapabilityExecutionMode.Durable);
+                break;
+            case "modes_unknown":
+                policy.AllowedExecutionModes.Add((ExternalCapabilityExecutionMode)99);
+                break;
+            case "durable_write":
+                policy.Risk = NyxIdOperationRisk.Write;
+                policy.Approval = NyxIdOperationApproval.Required;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(malformedCase));
+        }
+
+        Action act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: wf-alpha\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Interactive,
+            Admissions(capability),
+            Ready(capability).Sources);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*execution policy*");
+    }
+
+    [Fact]
+    public void Create_ShouldRejectExecutionModeMissingFromNyxIdPolicy()
+    {
+        var capability = NyxIdCapability();
+        capability.NyxIdUserService.ExecutionPolicy.AllowedExecutionModes.Clear();
+        capability.NyxIdUserService.ExecutionPolicy.AllowedExecutionModes.Add(
+            ExternalCapabilityExecutionMode.Interactive);
+
+        Action act = () => WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "name: wf-alpha\nsteps: []\n",
+            new Dictionary<string, string>(),
+            ExternalCapabilityExecutionMode.Durable,
+            Admissions(capability),
+            Ready(capability).Sources);
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*execution mode*execution policy*");
+    }
+
+    [Fact]
     public void AdmissionPlanContract_ShouldPreserveTheLegacyV2WireFixtureWhenV3FieldsAreEmpty()
     {
         const string legacyWireBase64 =
@@ -891,6 +1004,17 @@ public sealed class WorkflowExternalCapabilityAdmissionServiceTests
                 HttpMethod = "GET",
                 PathTemplate = "/states/{entity_id}",
                 ContractDigest = "operation-digest",
+                ExecutionPolicy = new NyxIdOperationExecutionPolicy
+                {
+                    Risk = NyxIdOperationRisk.ReadOnly,
+                    Approval = NyxIdOperationApproval.None,
+                    EnforcementOwner = NyxIdOperationEnforcementOwner.Aevatar,
+                    AllowedExecutionModes =
+                    {
+                        ExternalCapabilityExecutionMode.Interactive,
+                        ExternalCapabilityExecutionMode.Durable,
+                    },
+                },
             },
         };
 

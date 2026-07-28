@@ -17,6 +17,8 @@ internal static class NyxIdProxyAdmissionTelemetry
         bool managed,
         bool proofPresent,
         AgentToolInvocationSurface invocationSurface,
+        AgentToolOperationRisk risk,
+        bool wouldApprove,
         bool wouldBlock)
     {
         TagList tags = default;
@@ -24,8 +26,8 @@ internal static class NyxIdProxyAdmissionTelemetry
         tags.Add("aevatar.nyxid.admission.managed", managed);
         tags.Add("aevatar.nyxid.admission.proof_present", proofPresent);
         tags.Add("aevatar.nyxid.admission.invocation_surface", InvocationSurfaceName(invocationSurface));
-        tags.Add("aevatar.nyxid.admission.risk", "unspecified");
-        tags.Add("aevatar.nyxid.admission.would_approve", false);
+        tags.Add("aevatar.nyxid.admission.risk", RiskName(risk));
+        tags.Add("aevatar.nyxid.admission.would_approve", wouldApprove);
         tags.Add("aevatar.nyxid.admission.would_block", wouldBlock);
         Decisions.Add(1, tags);
     }
@@ -36,6 +38,15 @@ internal static class NyxIdProxyAdmissionTelemetry
             AgentToolInvocationSurface.HumanSession => "human_session",
             AgentToolInvocationSurface.WorkflowToolCall => "workflow_tool_call",
             AgentToolInvocationSurface.WorkflowLlmToolLoop => "workflow_llm_tool_loop",
+            _ => "unspecified",
+        };
+
+    private static string RiskName(AgentToolOperationRisk risk) =>
+        risk switch
+        {
+            AgentToolOperationRisk.ReadOnly => "read_only",
+            AgentToolOperationRisk.Write => "write",
+            AgentToolOperationRisk.Destructive => "destructive",
             _ => "unspecified",
         };
 }

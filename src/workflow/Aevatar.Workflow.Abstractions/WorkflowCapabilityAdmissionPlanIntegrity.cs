@@ -31,7 +31,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .Select(static admission => admission.Clone())
             .OrderBy(static admission => admission.CallSiteId, StringComparer.Ordinal)
             .ToArray();
-        ValidateInvocationAdmissions(admissions);
+        ValidateInvocationAdmissions(admissions, executionMode);
         plan.InvocationAdmissions.Add(admissions);
         plan.SourceStamps.Add(
             sourceStamps
@@ -101,7 +101,7 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             .ToArray();
         ValidateExternalInvocations(expected);
         var actual = plan.InvocationAdmissions.ToArray();
-        ValidateInvocationAdmissions(actual);
+        ValidateInvocationAdmissions(actual, executionMode);
         if (!IsSortedByCallSite(actual))
             throw new InvalidOperationException("Workflow capability invocation admissions are not canonically ordered.");
         if (expected.Length != actual.Length)
@@ -257,7 +257,8 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
     }
 
     private static void ValidateInvocationAdmissions(
-        IReadOnlyList<WorkflowCapabilityInvocationAdmission> admissions)
+        IReadOnlyList<WorkflowCapabilityInvocationAdmission> admissions,
+        ExternalCapabilityExecutionMode executionMode)
     {
         foreach (var admission in admissions)
         {
@@ -268,8 +269,51 @@ public static class WorkflowCapabilityAdmissionPlanIntegrity
             {
                 throw new InvalidOperationException("Workflow capability invocation admission proof is required.");
             }
+
+            if (admission.Capability.CapabilityCase ==
+                ExternalWorkflowCapabilityRef.CapabilityOneofCase.NyxIdUserService)
+            {
+                var policy = admission.Capability.NyxIdUserService.ExecutionPolicy;
+                ValidateNyxIdExecutionPolicy(policy);
+                if (!policy.AllowedExecutionModes.Contains(executionMode))
+                {
+                    throw new InvalidOperationException(
+                        "Workflow capability admission execution mode is not allowed by the NyxID operation execution policy.");
+                }
+            }
         }
         EnsureUniqueCallSites(admissions.Select(static admission => admission.CallSiteId));
+    }
+
+    public static bool IsValidNyxIdExecutionPolicy(NyxIdOperationExecutionPolicy? policy)
+    {
+        if (policy is null ||
+            policy.Risk is not (NyxIdOperationRisk.ReadOnly or NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive) ||
+            policy.Approval is not (NyxIdOperationApproval.None or NyxIdOperationApproval.Required) ||
+            policy.EnforcementOwner != NyxIdOperationEnforcementOwner.Aevatar ||
+            policy.AllowedExecutionModes.Count == 0 ||
+            !policy.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Interactive) ||
+            policy.AllowedExecutionModes.Any(static mode =>
+                mode is not (ExternalCapabilityExecutionMode.Interactive or ExternalCapabilityExecutionMode.Durable)) ||
+            policy.AllowedExecutionModes.Distinct().Count() != policy.AllowedExecutionModes.Count)
+        {
+            return false;
+        }
+
+        return policy.Risk switch
+        {
+            NyxIdOperationRisk.ReadOnly => policy.Approval == NyxIdOperationApproval.None,
+            NyxIdOperationRisk.Write or NyxIdOperationRisk.Destructive =>
+                policy.Approval == NyxIdOperationApproval.Required &&
+                !policy.AllowedExecutionModes.Contains(ExternalCapabilityExecutionMode.Durable),
+            _ => false,
+        };
+    }
+
+    private static void ValidateNyxIdExecutionPolicy(NyxIdOperationExecutionPolicy? policy)
+    {
+        if (!IsValidNyxIdExecutionPolicy(policy))
+            throw new InvalidOperationException("Workflow NyxID operation execution policy is invalid.");
     }
 
     private static void ValidateSelector(ExternalWorkflowCapabilitySelector? selector)

@@ -100,6 +100,33 @@ message NyxIdUserServiceCapabilityRef {
   repeated NyxIdOperationParameterContract parameters = 7;
   NyxIdOperationRequestBodyContract request_body = 8;
   NyxIdOperationResponsePolicy response_policy = 9;
+  NyxIdOperationExecutionPolicy execution_policy = 10;
+}
+
+enum NyxIdOperationRisk {
+  NYX_ID_OPERATION_RISK_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_RISK_READ_ONLY = 1;
+  NYX_ID_OPERATION_RISK_WRITE = 2;
+  NYX_ID_OPERATION_RISK_DESTRUCTIVE = 3;
+}
+
+enum NyxIdOperationApproval {
+  NYX_ID_OPERATION_APPROVAL_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_APPROVAL_NONE = 1;
+  NYX_ID_OPERATION_APPROVAL_REQUIRED = 2;
+}
+
+enum NyxIdOperationEnforcementOwner {
+  NYX_ID_OPERATION_ENFORCEMENT_OWNER_UNSPECIFIED = 0;
+  NYX_ID_OPERATION_ENFORCEMENT_OWNER_AEVATAR = 1;
+  NYX_ID_OPERATION_ENFORCEMENT_OWNER_NYX_ID = 2;
+}
+
+message NyxIdOperationExecutionPolicy {
+  NyxIdOperationRisk risk = 1;
+  NyxIdOperationApproval approval = 2;
+  NyxIdOperationEnforcementOwner enforcement_owner = 3;
+  repeated ExternalCapabilityExecutionMode allowed_execution_modes = 4;
 }
 
 enum NyxIdOperationParameterLocation {
