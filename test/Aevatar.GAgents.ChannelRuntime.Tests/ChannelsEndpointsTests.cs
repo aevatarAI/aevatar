@@ -72,6 +72,40 @@ public sealed class ChannelsEndpointsTests
         html.Should().Contain("所有账户");
     }
 
+    [Fact]
+    public void EmbeddedPage_RequiresCompleteLarkCredentials_AndForwardsOptionalEncryptKey()
+    {
+        var html = ReadEmbeddedHtml();
+
+        html.Should().Contain(
+            "requiredOk:(c)=> !!(c.app_id.trim() && c.app_secret.trim() && c.verification_token.trim())");
+        html.Should().Contain("{ name:\"encrypt_key\"");
+        html.Should().Contain("encrypt_key:c.encrypt_key.trim()");
+    }
+
+    [Fact]
+    public void EmbeddedPage_ShowsDurableLarkRecoveryInstructions()
+    {
+        var html = ReadEmbeddedHtml();
+
+        html.Should().Contain("r.webhook_url");
+        html.Should().Contain("https://open.larksuite.com/app");
+        html.Should().Contain("Event Subscriptions");
+        html.Should().Contain("im.message.receive_v1");
+        html.Should().Contain("只有收到验证通过的入站消息并变为 active 才算完成");
+    }
+
+    [Fact]
+    public void EmbeddedPage_ReplacesRegistrationOnlyAfterAuthoritativeDelete()
+    {
+        var html = ReadEmbeddedHtml();
+
+        html.Should().Contain("async function replaceRegistration(registration)");
+        html.Should().Contain("if(!await doDelete(registration.id)) return;");
+        html.Should().Contain("enterWizard((registration.platform||\"lark\").toLowerCase())");
+        html.Should().NotContain("btn(\"重新接入\"");
+    }
+
     private static string ReadEmbeddedHtml()
     {
         var assembly = typeof(ChannelsEndpoints).Assembly;
