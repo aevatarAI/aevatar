@@ -106,7 +106,7 @@ Evidence checklist:
 
 ## Discover With `nyxid_proxy`
 
-In chat, call `nyxid_proxy` without slug/path first. This uses the existing discovery behavior and should list proxyable services for the current caller context.
+In chat, call `list_external_workflow_capabilities` and use an exact candidate returned for the current caller context. `nyxid_proxy` is invocation-only and requires the exact `service_id + slug + path` route.
 
 ```json
 {
@@ -216,7 +216,7 @@ Create follow-up issues only for observed future failures. Do not create them fr
 
 | Observed failure | Follow-up template |
 |---|---|
-| NyxID discovery omits the Aevatar service after registration | "NyxID discovery gap: registered Aevatar service `<slug>` is not returned by no-slug `nyxid_proxy` discovery. Evidence: `<redacted commands/results>`." |
+| NyxID capability listing omits the Aevatar service after registration | "NyxID discovery gap: registered Aevatar service `<slug>` is not returned by typed external capability listing. Evidence: `<redacted commands/results>`." |
 | NyxID proxy cannot invoke the discovered Aevatar path | "NyxID proxy invocation gap: discovered slug `<slug>` cannot reach Aevatar path `<path>`. Evidence: `<redacted status/body>`." |
 | Aevatar accepted run is not visible in run query after expected projection lag | "Aevatar run readmodel gap: accepted run `<runId>` for service `<serviceId>` is not query-visible. Evidence: `<accepted receipt>`, `<query response>`, `<timestamps>`." |
 | SSE stream misses terminal or suspension observation | "Scope service stream gap: stream for run `<runId>` did not emit expected terminal/suspended event. Evidence: `<event sequence>`." |

@@ -40,7 +40,7 @@ internal sealed class OrnnTestHttpMessageHandler : HttpMessageHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        Requests.Add(CapturedHttpRequest.From(request));
+        Requests.Add(await CapturedHttpRequest.FromAsync(request, cancellationToken));
 
         if (_hangUntilCanceled)
         {
@@ -74,14 +74,20 @@ internal sealed record CapturedHttpRequest(
     HttpMethod Method,
     Uri? RequestUri,
     AuthenticationHeaderValue? Authorization,
-    string? ContentType)
+    string? ContentType,
+    string? Body)
 {
-    public static CapturedHttpRequest From(HttpRequestMessage request)
+    public static async Task<CapturedHttpRequest> FromAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
     {
         return new CapturedHttpRequest(
             request.Method,
             request.RequestUri,
             request.Headers.Authorization,
-            request.Content?.Headers.ContentType?.MediaType);
+            request.Content?.Headers.ContentType?.MediaType,
+            request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken));
     }
 }

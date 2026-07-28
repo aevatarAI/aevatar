@@ -82,7 +82,10 @@ public sealed class WorkflowActorBindingProjector
             WorkflowName = NormalizeWorkflowName(evt.WorkflowName),
             WorkflowYaml = evt.WorkflowYaml ?? string.Empty,
             ScopeId = evt.ScopeId?.Trim() ?? string.Empty,
+            SourceKind = evt.SourceKind?.Trim() ?? string.Empty,
         };
+        if (evt.CapabilityAdmissionPlan is not null)
+            document.CapabilityAdmissionPlan = evt.CapabilityAdmissionPlan.Clone();
         ReplaceInlineWorkflowYamls(document.InlineWorkflowYamls, evt.InlineWorkflowYamls);
         return document;
     }

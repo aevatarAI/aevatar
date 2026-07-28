@@ -60,6 +60,12 @@ public sealed class ChannelsEndpointsTests
         // wired to the live facade (relative), not a mock host
         html.Should().Contain("/api/channels/registrations");
         html.Should().Contain("/api/user-config/llm");
+        html.Should().Contain("workflow-result-delivery/repair");
+        html.Should().Contain("Repair workflow replies");
+        html.Should().Contain("workflow_result_delivery_status");
+        html.Should().Contain("无需修改 Lark 后台配置");
+        html.Should().NotContain("workflow_result_delivery_credential");
+        html.Should().NotContain("secret_reference");
         // honest status (no perpetual "查询中" for un-queryable bots) + admin all-accounts view
         html.Should().Contain("非本账户");
         html.Should().Contain("/api/channels/me");

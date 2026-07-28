@@ -75,6 +75,7 @@ public enum ScopeResourceOperation
     Join = 5,
     ListParticipants = 6,
     DraftRunReuse = 7,
+    Control = 8,
 }
 
 public sealed record ScopeResourceAdmissionResult(

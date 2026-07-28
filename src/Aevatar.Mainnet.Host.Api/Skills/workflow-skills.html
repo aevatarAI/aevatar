@@ -373,7 +373,9 @@ async function completeLoginIfCallback(){
   const t=await r.json(); t.obtained_at=Date.now(); setToken(t); return true;
 }
 async function fetchUserInfo(){ const t=getToken(); if(!t)return null; try{ const r=await fetch(CFG.authority+"/oauth/userinfo",{headers:{Authorization:"Bearer "+t.access_token}}); return r.ok?await r.json():null; }catch(e){return null;} }
-function toAccount(info){ return info?{label:info.email||info.preferred_username||info.sub||"已登录"}:null; }
+function toAccount(info){ return info?{label:info.email||info.preferred_username||info.name||info.sub||"Signed in",scope:info.scopeId||info.scope_id||info["workflow.scope_id"]||info.tenant||""}:null; }
+function mergeAccount(info){ const next=toAccount(info); if(!next)return; ACCOUNT=Object.assign({},ACCOUNT||{},next,{label:next.label||((ACCOUNT&&ACCOUNT.label)||"Signed in"),scope:next.scope||((ACCOUNT&&ACCOUNT.scope)||"")}); }
+function accountScope(){ return (ACCOUNT&&ACCOUNT.scope)?String(ACCOUNT.scope).trim():""; }
 function apiError(status,message,body){ const e=new Error(message); e.status=status; e.body=body; return e; }
 async function api(path,opt){
   const t=getToken(); if(!t)throw apiError(401,"not-authenticated");
@@ -387,13 +389,14 @@ async function api(path,opt){
 function apiSend(path,method,payload){ return api(path,{method,headers:payload!=null?{"Content-Type":"application/json"}:{},body:payload!=null?JSON.stringify(payload):undefined}); }
 
 /* cache populated by async loaders; render*() read it synchronously */
-const cache = { skills:null, detail:{}, schedules:null, run:null, preview:null };
+const cache = { skills:null, detail:{}, schedules:null, run:null, preview:null, teams:null };
 const DataSource = {
   listSkills(){ return cache.skills || { items:[], total:0, page:1, pageSize:0 }; },
   getSkill(guid){ return cache.detail[guid] || { ...(DataSource.listSkills().items.find(s=>s.guid===guid)||{guid}), runKind:"unknown", inputs:[], whenToUse:"" }; },
   invoke(){ return cache.run || {}; },
   previewCron(){ return cache.preview || { nextFireTimes:[] }; },
-  listSchedules(){ return cache.schedules || { items:[] }; }
+  listSchedules(){ return cache.schedules || { items:[] }; },
+  listTeams(){ return cache.teams || { teams:[] }; }
 };
 async function loadSkills(){
   state.listState="loading"; render();
@@ -407,6 +410,26 @@ async function loadDetail(guid){
   try{ const d=await api("/api/workflow/skills/"+encodeURIComponent(guid)); if(d){ const li=DataSource.listSkills().items.find(s=>s.guid===guid)||{}; cache.detail[guid]={...li,...d}; render(); } }catch(e){}
 }
 async function loadSchedules(){ try{ cache.schedules=await api("/api/schedules"); render(); }catch(e){} }
+function teamItems(){ const roster=DataSource.listTeams(); return Array.isArray(roster.teams)?roster.teams:[]; }
+function selectedScheduleTeamId(){
+  if(state.scheduleTeamId)return state.scheduleTeamId;
+  const teams=teamItems();
+  return teams.length?teams[0].teamId:"";
+}
+async function loadSkillTeams(){
+  const scope=accountScope();
+  if(!state.authed||!scope||state.teamState==="loading")return;
+  state.teamState="loading"; render();
+  try{
+    cache.teams=await api("/api/scopes/"+encodeURIComponent(scope)+"/teams?pageSize=100");
+    state.teamState="ok";
+    if(!state.scheduleTeamId){
+      const teams=teamItems();
+      if(teams.length)state.scheduleTeamId=teams[0].teamId;
+    }
+  }catch(e){ state.teamState=e.status===401?"signedout":"error"; }
+  render();
+}
 async function loadPreview(){
   if(!state.cronValid){ cache.preview=null; const pv=$("#cronPv"); if(pv)pv.replaceWith(renderPreview()); return; }
   try{ cache.preview=await apiSend("/api/schedules/preview","POST",{cronExpression:state.cron,timezone:state.tz,count:5}); }catch(e){ cache.preview=null; }
@@ -460,6 +483,7 @@ const state = {
   drawerOpen:false,
   cron:"0 9 * * *", tz:browserTz(), cronValid:true, enabled:true,
   schedCreated:false, schedAuthErr:false, forceEmpty:false,
+  scheduleTeamId:"", teamState:"idle",
   scenario:"list-ok"
 };
 function curTheme(){ const r=document.documentElement.getAttribute("data-theme"); return r==="light"||r==="dark"?r:null; }
@@ -630,7 +654,7 @@ function renderInputPanel(skill){
   run.addEventListener("click",doInvoke);
   acts.appendChild(run);
   const sch=el("button",{class:"btn btn-ghost","aria-expanded":String(state.drawerOpen)},`${ICON.clock}<span>设为定时</span>`);
-  sch.addEventListener("click",()=>{ state.drawerOpen=!state.drawerOpen; render(); if(state.drawerOpen){ loadSchedules(); loadPreview(); } });
+  sch.addEventListener("click",()=>{ state.drawerOpen=!state.drawerOpen; render(); if(state.drawerOpen){ loadSchedules(); loadSkillTeams(); loadPreview(); } });
   acts.appendChild(sch);
   b.appendChild(acts);
   p.appendChild(b);
@@ -680,6 +704,28 @@ function bindCopy(b,v){ b.addEventListener("click",async(e)=>{ e.preventDefault(
    A3 — schedule drawer
    =========================================================================== */
 const PRESETS=[["每小时","0 * * * *"],["每天 9:00","0 9 * * *"],["每周一 9:00","0 9 * * 1"],["每 15 分钟","*/15 * * * *"]];
+function renderTeamOwnerField(){
+  const f=el("div",{class:"field"});
+  const scope=accountScope();
+  const teams=teamItems();
+  let body="";
+  if(!scope){
+    body=`<div class="help" data-team-owner-select>Current scope is unavailable. Sign in again before creating a schedule.</div>`;
+  } else if(state.teamState==="loading"){
+    body=`<div class="help" data-team-owner-select>Loading Teams for this scope...</div>`;
+  } else if(state.teamState==="error"){
+    body=`<div class="help" data-team-owner-select>Could not load Teams. Refresh before creating a schedule.</div>`;
+  } else if(!teams.length){
+    body=`<div class="help" data-team-owner-select>No Teams are available in this scope. Create a Team before scheduling this skill.</div>`;
+  } else {
+    const selected=selectedScheduleTeamId();
+    body=`<div class="sel"><select id="scheduleTeam" data-team-owner-select aria-label="Team owner">${teams.map(t=>`<option value="${esc(t.teamId)}"${t.teamId===selected?" selected":""}>${esc(t.displayName||t.teamId)}</option>`).join("")}</select><span class="chev">${ICON.chev}</span></div><div class="help">The scheduled workflow member will be created under this Team.</div>`;
+  }
+  f.innerHTML=`<label for="scheduleTeam">Team owner <span class="req">*</span></label>${body}`;
+  const select=f.querySelector("select");
+  if(select)select.addEventListener("change",e=>{ state.scheduleTeamId=e.target.value; });
+  return f;
+}
 function renderScheduleDrawer(skill){
   const d=el("section",{class:"drawer"});
   const head=el("div",{class:"drawer-head"});
@@ -694,6 +740,7 @@ function renderScheduleDrawer(skill){
 
   // displayName
   const nf=el("div",{class:"field"}); nf.innerHTML=`<label>displayName</label><input class="input" value="${esc(skill.name)}" aria-label="定时任务名称" style="font-family:var(--sans)">`; b.appendChild(nf);
+  b.appendChild(renderTeamOwnerField());
   // cron presets + input
   const cf=el("div",{class:"field"});
   cf.innerHTML=`<label>cronExpression <span class="req">*</span></label>`;
@@ -719,14 +766,16 @@ function renderScheduleDrawer(skill){
   b.appendChild(tg);
   // create
   const create=el("button",{class:"btn btn-primary",style:"margin-top:16px"},`${ICON.clock}<span>创建定时</span>`);
-  if(!state.cronValid) create.disabled=true;
+  if(!state.cronValid||!selectedScheduleTeamId()) create.disabled=true;
   create.addEventListener("click",async()=>{
     const guid=state.selectedGuid; if(!guid||!state.cronValid)return;
+    const teamId=selectedScheduleTeamId();
+    if(!teamId)return;
     const dn=(nf.querySelector("input").value||skill.name);
     const { prompt }=collectInputs();
     create.disabled=true; state.schedAuthErr=false;
     try{
-      const receipt=await apiSend("/api/workflow/skills/"+encodeURIComponent(guid)+"/schedule","POST",{ prompt, cronExpression:state.cron, timezone:state.tz, displayName:dn });
+      const receipt=await apiSend("/api/workflow/skills/"+encodeURIComponent(guid)+"/schedule","POST",{ prompt, cronExpression:state.cron, timezone:state.tz, displayName:dn, teamId:teamId });
       state.schedCreated=receipt||true; await loadSchedules();
     }catch(e){ if(e.status===401||e.status===403){ state.schedAuthErr=true; } else { state.schedCreated=false; alert("创建定时失败："+(e.message||e.status)); } }
     create.disabled=false; render();
@@ -825,9 +874,11 @@ async function boot(){
   setAuthedFromToken();
   render();
   if(state.authed){
-    try{ ACCOUNT=toAccount(await fetchUserInfo()); render(); }catch(e){}
+    try{ mergeAccount(await fetchUserInfo()); render(); }catch(e){}
+    try{ mergeAccount(await api("/api/workflow/observatory/me")); render(); }catch(e){}
     loadSkills();
     loadSchedules();
+    loadSkillTeams();
   }
 }
 boot();

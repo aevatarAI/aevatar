@@ -15,7 +15,13 @@ public sealed class WorkflowChatRunModelsTests
         WorkflowChatConversationIntent.Continue("conversation-a").Should().BeEquivalentTo(
             new WorkflowChatConversationIntent(
                 WorkflowChatConversationIntentKind.Continue,
-                "conversation-a"));
+                "conversation-a",
+                null));
+        WorkflowChatConversationIntent.Continue("conversation-a", minimumStateVersion: 7).Should().BeEquivalentTo(
+            new WorkflowChatConversationIntent(
+                WorkflowChatConversationIntentKind.Continue,
+                "conversation-a",
+                7));
     }
 
     [Fact]

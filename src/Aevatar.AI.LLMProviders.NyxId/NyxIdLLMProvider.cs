@@ -16,7 +16,10 @@ namespace Aevatar.AI.LLMProviders.NyxId;
 /// </summary>
 public sealed class NyxIdLLMProvider : ILLMProvider
 {
+    private const string GatewayRoute = "/api/v1/llm/gateway/v1";
     private const string GatewaySuffix = "/api/v1/llm/gateway/v1/";
+    private const string ServiceProxyRoutePrefix = "/api/v1/proxy/s/";
+    private const int MaximumServiceSlugLength = 80;
     private static readonly LLMProviderCapabilities ProviderCapabilities = new()
     {
         SupportedInputModalities = new HashSet<ContentPartKind>
@@ -266,8 +269,13 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         _ = ct;
         var normalizedRequest = NormalizeRequest(request);
         var (accessToken, tokenSource) = ResolveAccessTokenWithSource(normalizedRequest);
-        var routePreference = NormalizeRoutePreference(ResolveRoutePreference(normalizedRequest));
-        var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
+        var requestedRoutePreference = ResolveRoutePreference(normalizedRequest);
+        var routePreference = NormalizeRoutePreference(requestedRoutePreference);
+        var route = ResolvePreferredRoute(
+            normalizedRequest,
+            accessToken,
+            routePreference,
+            requestedRoutePreference is not null);
 
         // Credential-source probe for the 2026-06-12 empty-reply incident: source + length only.
         _logger.LogInformation(
@@ -284,21 +292,37 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private NyxIdResolvedRoute ResolvePreferredRoute(
         LLMRequest request,
         string accessToken,
-        string routePreference)
+        string routePreference,
+        bool hasRequestRoutePreference)
     {
         if (string.IsNullOrWhiteSpace(routePreference))
         {
-            if (!string.IsNullOrWhiteSpace(_defaultRoutePreference))
+            if (!hasRequestRoutePreference && !string.IsNullOrWhiteSpace(_defaultRoutePreference))
             {
-                var defaultEndpoint = new Uri(_authorityBase, _defaultRoutePreference.TrimStart('/'));
-                return new NyxIdResolvedRoute(_defaultRoutePreference, defaultEndpoint, request, accessToken);
+                return new NyxIdResolvedRoute(
+                    _defaultRoutePreference,
+                    ResolveEndpointWithinAuthority(_defaultRoutePreference),
+                    request,
+                    accessToken);
             }
 
             return new NyxIdResolvedRoute(Name, _defaultNyxEndpoint, request, accessToken);
         }
 
-        var endpoint = new Uri(_authorityBase, routePreference.TrimStart('/'));
+        var endpoint = ResolveEndpointWithinAuthority(routePreference);
         return new NyxIdResolvedRoute(routePreference, endpoint, request, accessToken);
+    }
+
+    private Uri ResolveEndpointWithinAuthority(string routePreference)
+    {
+        var endpoint = new Uri(_authorityBase, routePreference.TrimStart('/'));
+        if (!string.Equals(endpoint.Scheme, _authorityBase.Scheme, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(endpoint.Authority, _authorityBase.Authority, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("NyxID route must remain within the configured authority.");
+        }
+
+        return endpoint;
     }
 
     private ILLMProvider CreateDelegateProvider(
@@ -422,22 +446,60 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     {
         var normalized = value?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(normalized) ||
-            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase))
+            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
         }
-
-        if (normalized.StartsWith("/", StringComparison.Ordinal))
-            return normalized;
 
         if (normalized.StartsWith("//", StringComparison.Ordinal) ||
-            normalized.Contains("://", StringComparison.Ordinal))
+            (!normalized.StartsWith("/", StringComparison.Ordinal) &&
+             Uri.TryCreate(normalized, UriKind.Absolute, out _)))
         {
             return string.Empty;
         }
 
-        return $"/api/v1/proxy/s/{normalized.Trim('/')}";
+        if (string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, GatewayRoute, StringComparison.Ordinal))
+        {
+            return GatewayRoute;
+        }
+
+        string serviceSlug;
+        if (normalized.StartsWith(ServiceProxyRoutePrefix, StringComparison.Ordinal))
+        {
+            serviceSlug = normalized[ServiceProxyRoutePrefix.Length..];
+        }
+        else if (normalized.StartsWith("/", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+        else
+        {
+            serviceSlug = normalized;
+        }
+
+        return IsCanonicalServiceSlug(serviceSlug)
+            ? ServiceProxyRoutePrefix + serviceSlug
+            : string.Empty;
+    }
+
+    private static bool IsCanonicalServiceSlug(string value)
+    {
+        if (value.Length is < 1 or > MaximumServiceSlugLength ||
+            value[0] == '-' ||
+            value[^1] == '-' ||
+            value.Contains("--", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (character is not (>= 'a' and <= 'z') and not (>= '0' and <= '9') and not '-')
+                return false;
+        }
+
+        return true;
     }
 
     private static Uri NormalizeNyxEndpoint(string nyxEndpoint)

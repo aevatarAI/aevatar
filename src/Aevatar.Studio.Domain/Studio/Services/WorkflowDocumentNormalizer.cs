@@ -37,6 +37,7 @@ public sealed class WorkflowDocumentNormalizer
             Model = NormalizeText(role.Model),
             EventModules = NormalizeText(role.EventModules),
             EventRoutes = NormalizeText(role.EventRoutes),
+            AllowedTools = NormalizeAllowedTools(role.AllowedTools),
             Connectors = role.Connectors
                 .SelectMany(SplitConnectorValue)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -79,6 +80,7 @@ public sealed class WorkflowDocumentNormalizer
             OriginalType = canonicalType,
             TargetRole = NormalizeText(step.TargetRole),
             UsedRoleAlias = false,
+            AllowedTools = NormalizeAllowedTools(step.AllowedTools),
             Parameters = normalizedParameters,
             Next = NormalizeText(step.Next),
             Branches = step.Branches
@@ -158,6 +160,15 @@ public sealed class WorkflowDocumentNormalizer
 
     private static string? NormalizeText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static List<string>? NormalizeAllowedTools(IReadOnlyList<string>? allowedTools) =>
+        allowedTools is null
+            ? null
+            : allowedTools
+                .Select(NormalizeText)
+                .Where(value => value is not null)
+                .Select(value => value!)
+                .ToList();
 
     private static IEnumerable<string> SplitConnectorValue(string? value)
     {

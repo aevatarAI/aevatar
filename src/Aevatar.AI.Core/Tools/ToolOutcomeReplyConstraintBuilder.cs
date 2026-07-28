@@ -28,10 +28,11 @@ internal static class ToolOutcomeReplyConstraintBuilder
     internal static bool IsMutatingTool(IAgentTool tool, string? argumentsJson)
     {
         ArgumentNullException.ThrowIfNull(tool);
-        return !tool.IsReadOnly ||
-               tool.IsDestructive ||
+        var callSafety = tool.GetCallSafety(argumentsJson ?? string.Empty);
+        return !callSafety.IsReadOnly ||
+               callSafety.IsDestructive ||
                !string.IsNullOrWhiteSpace(tool.SideEffectKind) ||
-               tool.RequiresApproval(argumentsJson ?? string.Empty) == true;
+               callSafety.RequiresApproval == true;
     }
 
     private static bool HasSuccessfulMutatingToolOutcome(IReadOnlyList<ToolOutcomeReplyFact>? toolOutcomes)

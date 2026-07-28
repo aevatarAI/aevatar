@@ -52,13 +52,18 @@ public sealed class TeamAutomationOperationObservationInfrastructureTests
                 "schedule:schedule-1",
                 new ScheduledInvocationAuthorizationOwner("nyxid", "personal", "user-1")),
             MutationDigest: "mutation-digest-1",
-            ObservationRequestId: "observation-request-1");
+            ObservationRequestId: "observation-request-1",
+            NewOperationCommitted: true);
 
         var eventType = codec.GetEventType(outcome);
-        var decoded = codec.Deserialize(eventType, codec.Serialize(outcome));
+        var payload = codec.Serialize(outcome);
+        var serialized = TeamAutomationOperationObservedEvent.Parser.ParseFrom(payload);
+        var decoded = codec.Deserialize(eventType, payload);
 
         codec.Channel.Should().Be("team-automation-operation-observation");
         eventType.Should().Be(TeamAutomationOperationObservedEvent.Descriptor.FullName);
+        serialized.NewOperationCommitted.Should().BeTrue();
+        decoded!.NewOperationCommitted.Should().BeTrue();
         decoded.Should().BeEquivalentTo(outcome);
         codec.Deserialize("different-event", codec.Serialize(outcome)).Should().BeNull();
         codec.Deserialize(eventType, ByteString.CopyFrom(new byte[] { 0x0A, 0x05 })).Should().BeNull();

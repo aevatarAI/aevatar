@@ -30,6 +30,16 @@ internal static class AevatarInvocationToolSchemas
         },
         stringEnums: WaitValues);
 
+    public static readonly string InvokeMember = ProtoToolSchema.Build(
+        InvokeMemberToolRequest.Descriptor,
+        requiredFields: new HashSet<string>(StringComparer.Ordinal)
+        {
+            "member_id",
+            "endpoint_id",
+            "payload",
+        },
+        stringEnums: WaitValues);
+
     public static readonly string StartWorkflow = ProtoToolSchema.Build(
         StartWorkflowToolRequest.Descriptor,
         requiredFields: new HashSet<string>(StringComparer.Ordinal)

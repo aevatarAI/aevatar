@@ -6,6 +6,8 @@ using Aevatar.AI.ToolProviders.Binding.Ports;
 using Aevatar.AI.ToolProviders.Binding.Tools;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.ExternalCapabilities;
 using FluentAssertions;
 using Xunit;
 
@@ -90,6 +92,127 @@ public class BindingToolsTests
 
     #endregion
 
+    #region External workflow capability tools
+
+    [Fact]
+    public async Task ListExternalWorkflowCapabilitiesTool_UsesCurrentAuthorityAndPreservesExactInstances()
+    {
+        const string callerBearer = "caller-secret-that-must-not-be-serialized";
+        const string organizationBearer = "organization-secret-that-must-not-be-serialized";
+        var listPort = new StubExternalWorkflowCapabilityListPort(
+        [
+            Descriptor(NyxIdCapability("us-home-alpha"), "Home alpha"),
+            Descriptor(NyxIdCapability("us-home-beta"), "Home beta"),
+        ]);
+        var tool = new ListExternalWorkflowCapabilitiesTool(listPort);
+
+        tool.Name.Should().Be("list_external_workflow_capabilities");
+        tool.IsReadOnly.Should().BeTrue();
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            callerBearer,
+            organizationBearer);
+
+        try
+        {
+            var result = await tool.ExecuteAsync("{}");
+
+            listPort.Request.Should().NotBeNull();
+            listPort.Request!.Access.ScopeId.Should().Be("owner-scope-alpha");
+            listPort.Request.Access.CallerId.Should().Be("caller-subject-alpha");
+            listPort.Request.Access.NyxIdCallerBearerToken.Should().Be(callerBearer);
+            listPort.Request.Access.NyxIdOrganizationBearerToken.Should().Be(organizationBearer);
+
+            using var document = JsonDocument.Parse(result);
+            var capabilities = document.RootElement.GetProperty("capabilities");
+            capabilities.GetArrayLength().Should().Be(2);
+            capabilities[0].GetProperty("capability").GetProperty("nyx_id_user_service")
+                .GetProperty("user_service_id").GetString().Should().Be("us-home-alpha");
+            capabilities[1].GetProperty("capability").GetProperty("nyx_id_user_service")
+                .GetProperty("user_service_id").GetString().Should().Be("us-home-beta");
+            result.Should().NotContain(callerBearer);
+            result.Should().NotContain(organizationBearer);
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task InspectExternalWorkflowCapabilityReadinessTool_UsesExactTypedCandidate()
+    {
+        var readinessPort = new StubExternalWorkflowCapabilityReadinessPort();
+        var tool = new InspectExternalWorkflowCapabilityReadinessTool(readinessPort);
+
+        tool.Name.Should().Be("inspect_external_workflow_capability_readiness");
+        tool.IsReadOnly.Should().BeTrue();
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-alpha",
+            "caller-subject-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
+
+        try
+        {
+            var result = await tool.ExecuteAsync(
+                """
+                {
+                  "capability": {
+                    "nyx_id_user_service": {
+                      "user_service_id": "us-home-alpha",
+                      "service_slug_snapshot": "home-assistant",
+                      "operation_id": "read_states",
+                      "http_method": "GET",
+                      "path_template": "/api/states",
+                      "contract_digest": "contract-alpha"
+                    }
+                  },
+                  "execution_mode": "interactive"
+                }
+                """);
+
+            readinessPort.Request.Should().NotBeNull();
+            readinessPort.Request!.Access.ScopeId.Should().Be("owner-scope-alpha");
+            readinessPort.Request.Access.CallerId.Should().Be("caller-subject-alpha");
+            readinessPort.Request.ExecutionMode.Should().Be(ExternalCapabilityExecutionMode.Interactive);
+            readinessPort.Request.Capability.NyxIdUserService.UserServiceId.Should().Be("us-home-alpha");
+            readinessPort.Request.Capability.NyxIdUserService.ServiceSlugSnapshot.Should().Be("home-assistant");
+            readinessPort.Request.Capability.NyxIdUserService.OperationId.Should().Be("read_states");
+
+            using var document = JsonDocument.Parse(result);
+            document.RootElement.GetProperty("status").GetString().Should()
+                .Be("EXTERNAL_CAPABILITY_READINESS_STATUS_READY");
+            document.RootElement.GetProperty("selected_capability")
+                .GetProperty("nyx_id_user_service")
+                .GetProperty("user_service_id").GetString().Should().Be("us-home-alpha");
+            result.Should().NotContain("caller-bearer-alpha");
+            result.Should().NotContain("organization-bearer-alpha");
+        }
+        finally
+        {
+            AgentToolRequestContext.Current = null;
+        }
+    }
+
+    [Fact]
+    public async Task BindingAgentToolSource_RegistersExternalCapabilityToolsConditionally()
+    {
+        var source = new BindingAgentToolSource(
+            new BindingToolOptions(),
+            externalCapabilityListPort: new StubExternalWorkflowCapabilityListPort([]),
+            externalCapabilityReadinessPort: new StubExternalWorkflowCapabilityReadinessPort());
+
+        var tools = await source.DiscoverToolsAsync();
+
+        tools.Should().HaveCount(2);
+        tools.Should().ContainSingle(tool => tool is ListExternalWorkflowCapabilitiesTool);
+        tools.Should().ContainSingle(tool => tool is InspectExternalWorkflowCapabilityReadinessTool);
+    }
+
+    #endregion
+
     #region BindingStatusTool
 
     [Fact]
@@ -127,7 +250,11 @@ public class BindingToolsTests
         var commandPort = new StubCommandPort(captureRequest: r => captured = r);
         var tool = new BindingBindTool(commandPort);
 
-        AgentToolRequestContext.Current = OwnerContext("owner-scope-1", scopeId: "caller-scope-1");
+        AgentToolRequestContext.Current = CapabilityContext(
+            "owner-scope-1",
+            "caller-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
 
         try
         {
@@ -243,7 +370,11 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
             captureRequest: r => captured = r));
 
-        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-workflows",
+            "caller-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
 
         try
         {
@@ -316,7 +447,11 @@ public class BindingToolsTests
         var tool = new ScopeWorkflowsUpsertTool(new StubScopeWorkflowCommandPort(
             exception: new InvalidOperationException("bad request")));
 
-        AgentToolRequestContext.Current = OwnerContext("scope-workflows");
+        AgentToolRequestContext.Current = CapabilityContext(
+            "scope-workflows",
+            "caller-alpha",
+            "caller-bearer-alpha",
+            "organization-bearer-alpha");
 
         try
         {
@@ -714,6 +849,62 @@ public class BindingToolsTests
             Task.FromResult<ScopeWorkflowSummary?>(null);
     }
 
+    private sealed class StubExternalWorkflowCapabilityListPort(
+        IReadOnlyList<ExternalWorkflowCapabilityDescriptor> descriptors) : IExternalWorkflowCapabilityListPort
+    {
+        public ListExternalWorkflowCapabilitiesRequest? Request { get; private set; }
+
+        public Task<IReadOnlyList<ExternalWorkflowCapabilityDescriptor>> ListAsync(
+            ListExternalWorkflowCapabilitiesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(descriptors);
+        }
+    }
+
+    private sealed class StubExternalWorkflowCapabilityReadinessPort : IExternalWorkflowCapabilityReadinessPort
+    {
+        public InspectExternalWorkflowCapabilityReadinessRequest? Request { get; private set; }
+
+        public Task<ExternalCapabilityReadiness> InspectAsync(
+            InspectExternalWorkflowCapabilityReadinessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(new ExternalCapabilityReadiness
+            {
+                ExecutionMode = request.ExecutionMode,
+                Status = ExternalCapabilityReadinessStatus.Ready,
+                SelectedCapability = request.Capability.Clone(),
+            });
+        }
+    }
+
+    private static ExternalWorkflowCapabilityDescriptor Descriptor(
+        ExternalWorkflowCapabilityRef capability,
+        string displayName) =>
+        new()
+        {
+            Capability = capability,
+            DisplayName = displayName,
+            ReadOnly = true,
+        };
+
+    private static ExternalWorkflowCapabilityRef NyxIdCapability(string userServiceId) =>
+        new()
+        {
+            NyxIdUserService = new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = userServiceId,
+                ServiceSlugSnapshot = "home-assistant",
+                OperationId = "read_states",
+                HttpMethod = "GET",
+                PathTemplate = "/api/states",
+                ContractDigest = $"contract-{userServiceId}",
+            },
+        };
+
     private static ScopeWorkflowSummary BuildWorkflowSummary(
         string scopeId,
         string workflowId) =>
@@ -735,6 +926,22 @@ public class BindingToolsTests
             ["scope_id"] = scopeId ?? ownerScopeId,
             [LLMRequestMetadataKeys.OwnerScopeId] = ownerScopeId,
         });
+
+    private static AgentToolExecutionContext CapabilityContext(
+        string ownerScopeId,
+        string callerSubject,
+        string callerBearer,
+        string organizationBearer) =>
+        OwnerContext(ownerScopeId) with
+        {
+            Caller = new AgentToolCallerContext(
+                ownerScopeId,
+                callerSubject,
+                ResponseId: "response-alpha",
+                OwnerScopeId: ownerScopeId),
+            Credentials = new AgentToolCredentials(callerBearer, organizationBearer, null),
+            NyxIdAuthority = new AgentToolNyxIdAuthorityContext("nyxid", "tenant-alpha", callerSubject),
+        };
 
     private static string? ReadError(string json)
     {

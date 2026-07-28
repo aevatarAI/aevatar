@@ -5,6 +5,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Credentials;
 using Aevatar.GAgentService.Abstractions.Schedules.Authorization;
 using Aevatar.GAgents.Scheduled;
+using Aevatar.Workflow.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.AgentCatalog;
 
@@ -94,7 +95,11 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             },
             "nyx_provider_slug": {
               "type": "string",
-              "description": "Outbound provider service slug for this target"
+              "description": "Outbound provider route snapshot for this target"
+            },
+            "nyx_user_service_id": {
+              "type": "string",
+              "description": "Exact NyxID UserService identity for the outbound provider"
             },
             "confirm": {
               "type": "boolean",
@@ -220,6 +225,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
             registrationScopeId,
             input.DeliveryTargetId,
             input.ConversationId,
+            input.UserServiceId,
             input.ProviderSlug,
             ownerEvidence.OwnerSubject,
             ownerEvidence.SubjectPlatform,
@@ -297,12 +303,24 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         var conversationId = GetRequired(args, "'conversation_id' is required for create", "conversation_id", "conversationId");
         if (conversationId.error is not null)
             return new(null, conversationId.error);
+        var userServiceId = GetRequired(
+            args,
+            "'nyx_user_service_id' is required for create",
+            "nyx_user_service_id",
+            "nyxUserServiceId");
+        if (userServiceId.error is not null)
+            return new(null, userServiceId.error);
         var providerSlug = GetRequired(args, "'nyx_provider_slug' is required for create", "nyx_provider_slug", "nyxProviderSlug");
         if (providerSlug.error is not null)
             return new(null, providerSlug.error);
         var platform = GetRequired(args, "'platform' is required for create", "platform");
         return platform.error is null
-            ? new(new CreateArguments(deliveryTargetId.value!, conversationId.value!, providerSlug.value!, platform.value!), null)
+            ? new(new CreateArguments(
+                deliveryTargetId.value!,
+                conversationId.value!,
+                userServiceId.value!,
+                providerSlug.value!,
+                platform.value!), null)
             : new(null, platform.error);
     }
 
@@ -321,6 +339,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
     private sealed record CreateArguments(
         string DeliveryTargetId,
         string ConversationId,
+        string UserServiceId,
         string ProviderSlug,
         string TargetPlatform);
 
@@ -336,6 +355,7 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
         string scopeId,
         string deliveryTargetId,
         string conversationId,
+        string userServiceId,
         string providerSlug,
         string ownerSubject,
         string subjectPlatform,
@@ -365,8 +385,11 @@ public sealed class AgentDeliveryTargetTool : IAgentTool
                 scopeId,
                 subjectExternalUserId,
                 bindingId),
-            [],
-            [providerSlug],
+            [new NyxIdUserServiceCapabilityRef
+            {
+                UserServiceId = userServiceId,
+                ServiceSlugSnapshot = providerSlug,
+            }],
             AuthorizationGrantRequirement.Required,
             now.AddDays(apiKeyLifetimeDays > 0
                 ? apiKeyLifetimeDays

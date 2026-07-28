@@ -3,6 +3,7 @@ using Aevatar.GAgents.StudioMember;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Projection.CommandServices;
+using Aevatar.Workflow.Abstractions;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -300,6 +301,15 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         var bootstrap = new RecordingBootstrap();
         var dispatch = new RecordingDispatchPort();
         var service = new ActorDispatchStudioMemberCommandService(bootstrap, CreateCommandDispatch(dispatch));
+        var admissionPlan = WorkflowCapabilityAdmissionPlanIntegrity.Create(
+            "workflow:\n  name: alpha_runtime",
+            new Dictionary<string, string>
+            {
+                ["beta"] = "workflow:\n  name: beta",
+            },
+            ExternalCapabilityExecutionMode.Interactive,
+            [],
+            []);
 
         await service.StartBindingRunAsync(
             new StudioMemberBindingRunStartRequest(
@@ -314,7 +324,10 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
                         [
                             "workflow:\n  name: alpha_runtime",
                             "workflow:\n  name: beta",
-                        ]))),
+                        ])
+                    {
+                        CapabilityAdmissionPlan = admissionPlan,
+                    })),
             CancellationToken.None);
 
         var evt = dispatch.Dispatches.Should().ContainSingle().Which
@@ -324,6 +337,8 @@ public sealed class ActorDispatchStudioMemberCommandServiceTests
         evt.Request.Workflow.WorkflowYamls.Should().Equal(
             "workflow:\n  name: alpha_runtime",
             "workflow:\n  name: beta");
+        evt.Request.Workflow.CapabilityAdmissionPlan.AdmissionDigest.Should()
+            .Be(admissionPlan.AdmissionDigest);
     }
 
     [Fact]

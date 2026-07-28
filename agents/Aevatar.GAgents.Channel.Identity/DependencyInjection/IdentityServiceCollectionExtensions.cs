@@ -5,6 +5,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.GAgents.Channel.Identity.Audit;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Core.Streaming;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Configuration.BackendConsole;
@@ -93,6 +94,54 @@ public static class IdentityServiceCollectionExtensions
             sp.GetRequiredService<ExternalIdentityBindingProjectionQueryPort>());
         services.TryAddSingleton<IOwnerScopeResolver>(sp =>
             sp.GetRequiredService<ExternalIdentityBindingProjectionQueryPort>());
+
+        // ─── Per-NyxID-user managed Codex credential projection ───
+        services.AddProjectionMaterializationRuntimeCore<
+            ManagedCodexCredentialMaterializationContext,
+            ManagedCodexCredentialMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ManagedCodexCredentialMaterializationContext>>(
+            static scopeKey => new ManagedCodexCredentialMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ManagedCodexCredentialMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            ManagedCodexCredentialMaterializationContext,
+            ManagedCodexCredentialProjector>();
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ManagedCodexCredentialDocument>,
+            ManagedCodexCredentialDocumentMetadataProvider>();
+        services.TryAddSingleton<
+            IManagedCodexCredentialQueryPort,
+            ManagedCodexCredentialProjectionQueryPort>();
+        services.TryAddSingleton<
+            IManagedCodexCredentialCommandPort,
+            ManagedCodexCredentialCommandPort>();
+        services.AddEventSinkProjectionRuntimeCore<
+            ManagedCodexCredentialReadinessProjectionContext,
+            ManagedCodexCredentialReadinessRuntimeLease,
+            ManagedCodexCredentialSnapshot,
+            ProjectionSessionScopeGAgent<ManagedCodexCredentialReadinessProjectionContext>>(
+            static scopeKey => new ManagedCodexCredentialReadinessProjectionContext
+            {
+                SessionId = scopeKey.SessionId,
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ManagedCodexCredentialReadinessRuntimeLease(context));
+        services.TryAddSingleton<
+            IProjectionSessionEventCodec<ManagedCodexCredentialSnapshot>,
+            ManagedCodexCredentialSnapshotCodec>();
+        services.TryAddSingleton<
+            IProjectionSessionEventHub<ManagedCodexCredentialSnapshot>,
+            ProjectionSessionEventHub<ManagedCodexCredentialSnapshot>>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<ManagedCodexCredentialReadinessProjectionContext>,
+            ManagedCodexCredentialReadinessProjector>());
+        services.TryAddSingleton<
+            IManagedCodexCredentialReadinessObservationPort,
+            ManagedCodexCredentialReadinessObservationPort>();
 
         // ─── Committed-fact audit for external-identity bindings ───
         // Subject-bearing: the actor id embeds the raw external subject, so the
@@ -215,6 +264,10 @@ public static class IdentityServiceCollectionExtensions
         services.AddHttpClient(NyxIdRemoteCapabilityBroker.HttpClientName);
         services.TryAddSingleton<NyxIdRemoteCapabilityBroker>();
         services.TryAddSingleton<INyxIdCapabilityBroker>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<INyxIdConnectedServiceInventoryCapabilityIssuer>(sp =>
+            sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
+        services.TryAddSingleton<INyxIdSkillCapabilityIssuer>(sp =>
+            sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBrokerCallbackClient>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
         services.TryAddSingleton<INyxIdBindingRetirementPort>(sp => sp.GetRequiredService<NyxIdRemoteCapabilityBroker>());
 

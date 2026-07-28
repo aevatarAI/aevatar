@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
+using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Projection.ReadModels;
 
@@ -10,8 +11,6 @@ namespace Aevatar.Studio.Projection.QueryPorts;
 /// </summary>
 public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
 {
-    private const string WriteActorIdPrefix = "user-config-";
-
     private readonly IProjectionDocumentReader<UserConfigCurrentStateDocument, string> _documentReader;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly string _defaultLocalRuntimeBaseUrl;
@@ -34,21 +33,24 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
     }
 
     public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
-        GetAsync(_scopeResolver.Resolve()?.ScopeId ?? "default", ct);
+        GetAsync(
+            UserConfigResourceKey.ForOwnerScope(_scopeResolver.ResolveScopeIdOrDefault()),
+            ct);
 
-    public async Task<UserConfig> GetAsync(string scopeId, CancellationToken ct = default)
+    public async Task<UserConfig> GetAsync(
+        UserConfigResourceKey resource,
+        CancellationToken ct = default)
     {
-        var actorId = WriteActorIdPrefix + NormalizeScopeId(scopeId);
+        var actorId = UserConfigActorIdMapper.Build(resource);
         var document = await _documentReader.GetAsync(actorId, ct);
 
         if (document is null)
             return CreateDefaultConfig();
 
+        var llmSelection = MapSelection(document.LlmSelection);
         return new UserConfig(
             DefaultModel: document.DefaultModel,
-            PreferredLlmRoute: string.IsNullOrEmpty(document.PreferredLlmRoute)
-                ? UserConfigLlmRouteDefaults.Gateway
-                : document.PreferredLlmRoute,
+            PreferredLlmRoute: UserLlmSelectionRoute.Resolve(llmSelection) ?? string.Empty,
             RuntimeMode: string.IsNullOrEmpty(document.RuntimeMode)
                 ? UserConfigRuntimeDefaults.LocalMode
                 : document.RuntimeMode,
@@ -59,20 +61,39 @@ public sealed class ProjectionUserConfigQueryPort : IUserConfigQueryPort
                 ? _defaultRemoteRuntimeBaseUrl
                 : document.RemoteRuntimeBaseUrl,
             GithubUsername: NormalizeOptional(document.GithubUsername),
-            MaxToolRounds: document.MaxToolRounds);
+            MaxToolRounds: document.MaxToolRounds,
+            LlmSelection: llmSelection);
     }
 
     private UserConfig CreateDefaultConfig() =>
         new(
             DefaultModel: string.Empty,
-            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
+            PreferredLlmRoute: string.Empty,
             RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
             LocalRuntimeBaseUrl: _defaultLocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl,
-            GithubUsername: null);
+            GithubUsername: null,
+            LlmSelection: null);
 
-    private static string NormalizeScopeId(string? scopeId) =>
-        string.IsNullOrWhiteSpace(scopeId) ? "default" : scopeId.Trim();
+    private static UserLlmSelectionValue? MapSelection(UserLlmSelection? selection)
+    {
+        if (selection is null)
+            return null;
+
+        var kind = selection.RouteKind switch
+        {
+            UserLlmRouteKind.Unspecified => UserLlmSelectionKind.Unspecified,
+            UserLlmRouteKind.Gateway => UserLlmSelectionKind.Gateway,
+            UserLlmRouteKind.NyxIdUserService => UserLlmSelectionKind.NyxIdUserService,
+            _ => throw new ArgumentOutOfRangeException(nameof(selection)),
+        };
+
+        return new UserLlmSelectionValue(
+            kind,
+            selection.RouteValue,
+            selection.NyxIdUserServiceId,
+            selection.ServiceSlugSnapshot);
+    }
 
     private static string? NormalizeOptional(string? value)
     {

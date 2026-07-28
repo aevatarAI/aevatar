@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
 /// <summary>Tool to browse the NyxID service catalog.</summary>
-public sealed class NyxIdCatalogTool : IAgentTool
+public sealed class NyxIdCatalogTool : INyxIdBuiltInTool
 {
     private readonly NyxIdApiClient _client;
 

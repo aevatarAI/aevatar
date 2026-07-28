@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
@@ -8,40 +9,59 @@ using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Projection.ReadModels;
 using FluentAssertions;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.Studio.Tests;
 
 public sealed class ActorBackedChatHistoryStoreTests
 {
     [Fact]
+    public void ConversationActorId_ShouldEncodeTupleWithoutDelimiterCollision()
+    {
+        var first = ChatHistoryActorIds.Conversation("tenant", "admin-c1");
+        var second = ChatHistoryActorIds.Conversation("tenant-admin", "c1");
+
+        first.Should().NotBe(second);
+        first.Should().StartWith("chat-conversation:");
+        second.Should().StartWith("chat-conversation:");
+    }
+
+    [Fact]
     public async Task BlockedTurn_ShouldRoundTripTypedTurnIdentityAndStatus()
     {
-        var actor = new StubActor("chat-history-conversation-scope-a-conversation-a");
+        var actorId = ChatHistoryActorIds.Conversation("scope-a", "conversation-a");
+        var actor = new StubActor(actorId);
         var dispatch = new RecordingDispatchService();
         var reader = new RecordingDocumentReader
         {
-            Document = new ChatConversationCurrentStateDocument
+            Documents =
             {
-                ActorId = actor.Id,
-                ScopeId = "scope-a",
-                ConversationId = "conversation-a",
-                Turns =
+                [actorId] = new ChatConversationCurrentStateDocument
                 {
-                    new ChatConversationTurnDocument
+                    Id = actorId,
+                    ActorId = actor.Id,
+                    ScopeId = "scope-a",
+                    ConversationId = "conversation-a",
+                    StateVersion = 7,
+                    Turns =
                     {
-                        TurnId = "turn-blocked",
-                        Sequence = 1,
-                        UserText = "read private resource",
-                        TerminalStatus = "blocked",
-                        SanitizedError = "Connect api-github to continue.",
+                        new ChatConversationTurnDocument
+                        {
+                            TurnId = "turn-blocked",
+                            Sequence = 1,
+                            UserText = "read private resource",
+                            TerminalStatus = "blocked",
+                            SanitizedError = "Connect api-github to continue.",
+                        },
                     },
-                },
-            },
+                }
+            }
         };
         var store = new ActorBackedChatHistoryStore(
             new RecordingBootstrap(actor),
             new StudioActorCommandDispatch(dispatch),
-            reader);
+            reader,
+            new RecordingDeliveryDocumentReader());
         var now = DateTimeOffset.Parse("2026-07-20T08:00:00Z");
         var meta = new ConversationMeta(
             "conversation-a",
@@ -80,13 +100,166 @@ public sealed class ActorBackedChatHistoryStoreTests
         append.Turn.TerminalStatus.Should().Be(ChatTurnTerminalStatus.Blocked);
         append.Turn.SanitizedError.Should().Be("Connect api-github to continue.");
 
-        var messages = await store.GetMessagesAsync("scope-a", "conversation-a");
+        var messagesResult = await store.GetMessagesAsync("scope-a", "conversation-a");
+        messagesResult.Status.Should().Be(ChatHistoryConversationResultStatus.Found);
+        messagesResult.StateVersion.Should().Be(7);
+        var messages = messagesResult.Messages;
         messages.Should().HaveCount(2);
         messages.Should().OnlyContain(message => message.TurnId == "turn-blocked");
         messages.Select(static message => message.Id).Should()
             .Equal("turn-blocked:user", "turn-blocked:assistant");
         messages[1].Status.Should().Be("blocked");
         messages[1].Error.Should().Be("Connect api-github to continue.");
+    }
+
+    [Fact]
+    public async Task GetMessagesAsync_ShouldRejectLegacyCollisionDocument_WhenStoredTupleDoesNotMatchRequest()
+    {
+        var legacyActorId = ChatHistoryActorIds.LegacyConversation("tenant", "admin-c1");
+        var reader = new RecordingDocumentReader();
+        reader.Documents[legacyActorId] = new ChatConversationCurrentStateDocument
+        {
+            Id = legacyActorId,
+            ActorId = legacyActorId,
+            ScopeId = "tenant",
+            ConversationId = "admin-c1",
+            Turns =
+            {
+                new ChatConversationTurnDocument
+                {
+                    TurnId = "turn-owned",
+                    Sequence = 1,
+                    UserText = "owned",
+                    AssistantText = "secret",
+                    TerminalStatus = "complete",
+                },
+            },
+        };
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor("unused")),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            reader,
+            new RecordingDeliveryDocumentReader());
+
+        var result = await store.GetMessagesAsync("tenant-admin", "c1");
+
+        result.Status.Should().Be(ChatHistoryConversationResultStatus.NotFound);
+        result.Messages.Should().BeEmpty();
+        reader.GetKeys.Should().Equal(
+            ChatHistoryActorIds.Conversation("tenant-admin", "c1"),
+            ChatHistoryActorIds.LegacyConversation("tenant-admin", "c1"));
+    }
+
+    [Fact]
+    public async Task DeleteConversationAsync_ShouldNotDispatch_WhenProjectedTupleDoesNotMatchRequest()
+    {
+        var legacyActorId = ChatHistoryActorIds.LegacyConversation("tenant", "admin-c1");
+        var reader = new RecordingDocumentReader();
+        reader.Documents[legacyActorId] = new ChatConversationCurrentStateDocument
+        {
+            Id = legacyActorId,
+            ActorId = legacyActorId,
+            ScopeId = "tenant",
+            ConversationId = "admin-c1",
+            Deleted = false,
+        };
+        var dispatch = new RecordingDispatchService();
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor(legacyActorId)),
+            new StudioActorCommandDispatch(dispatch),
+            reader,
+            new RecordingDeliveryDocumentReader());
+
+        var result = await store.DeleteConversationAsync("tenant-admin", "c1");
+
+        result.Status.Should().Be(ChatHistoryDeleteResultStatus.NotFound);
+        dispatch.Payloads.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetIndexAsync_ShouldPagePastTwoHundredFiftyConversationsWithStableOrdering()
+    {
+        var reader = new InMemoryProjectionDocumentStore<ChatConversationCurrentStateDocument, string>(
+            document => document.ActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 300);
+        for (var index = 0; index < 251; index++)
+        {
+            var conversationId = $"conversation-{index:000}";
+            var actorId = ChatHistoryActorIds.Conversation("scope-a", conversationId);
+            await reader.UpsertAsync(new ChatConversationCurrentStateDocument
+            {
+                Id = actorId,
+                ActorId = actorId,
+                ScopeId = "scope-a",
+                ConversationId = conversationId,
+                Title = conversationId,
+                UpdatedAtMs = 251 - index,
+                CreatedAtMs = 251 - index,
+                Deleted = false,
+            });
+        }
+
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor("unused")),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            reader,
+            new RecordingDeliveryDocumentReader());
+
+        var firstPage = await store.GetIndexAsync(new ChatHistoryIndexPageRequest("scope-a", PageSize: 200));
+        var secondPage = await store.GetIndexAsync(new ChatHistoryIndexPageRequest(
+            "scope-a",
+            PageSize: 200,
+            Cursor: firstPage.NextCursor));
+
+        firstPage.Conversations.Should().HaveCount(200);
+        firstPage.NextCursor.Should().NotBeNullOrWhiteSpace();
+        secondPage.Conversations.Should().HaveCount(51);
+        secondPage.NextCursor.Should().BeNull();
+        firstPage.Conversations.Select(static item => item.Id)
+            .Concat(secondPage.Conversations.Select(static item => item.Id))
+            .Should()
+            .OnlyHaveUniqueItems()
+            .And
+            .HaveCount(251);
+        secondPage.Conversations.Last().Id.Should().Be("conversation-250");
+    }
+
+    [Fact]
+    public async Task GetCreateRecoveryAsync_ShouldResolveScopeBoundDeliveryReadModel()
+    {
+        var recoveryId = ChatHistoryCreateRecoveryIds.FromScopeAndCommandId("scope-a", "create-command-1");
+        var deliveryReader = new RecordingDeliveryDocumentReader();
+        deliveryReader.Documents[recoveryId] = new ChatHistoryCreateRecoveryCurrentStateDocument
+        {
+            Id = recoveryId,
+            ActorId = "chat-history-delivery:actor",
+            StateVersion = 3,
+            ScopeId = "scope-a",
+            ConversationId = "conversation-stable",
+            TurnId = "turn-stable",
+            WorkflowActorId = "run-1",
+            WorkflowCommandId = "create-command-1",
+            WorkflowCorrelationId = "corr-1",
+            RequestFingerprint = "fingerprint-1",
+            Status = "append_committed",
+            UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-07-21T01:00:00Z")),
+        };
+        var store = new ActorBackedChatHistoryStore(
+            new RecordingBootstrap(new StubActor("unused")),
+            new StudioActorCommandDispatch(new RecordingDispatchService()),
+            new RecordingDocumentReader(),
+            deliveryReader);
+
+        var result = await store.GetCreateRecoveryAsync("scope-a", "create-command-1");
+
+        result.Status.Should().Be(ChatHistoryCreateRecoveryStatus.AppendCommitted);
+        result.ScopeId.Should().Be("scope-a");
+        result.CommandId.Should().Be("create-command-1");
+        result.ConversationId.Should().Be("conversation-stable");
+        result.TurnId.Should().Be("turn-stable");
+        result.StateVersion.Should().Be(3);
     }
 
     private sealed class RecordingDispatchService
@@ -108,17 +281,41 @@ public sealed class ActorBackedChatHistoryStoreTests
     private sealed class RecordingDocumentReader
         : IProjectionDocumentReader<ChatConversationCurrentStateDocument, string>
     {
-        public ChatConversationCurrentStateDocument? Document { get; init; }
+        public Dictionary<string, ChatConversationCurrentStateDocument> Documents { get; } = new(StringComparer.Ordinal);
+        public List<string> GetKeys { get; } = [];
 
         public Task<ChatConversationCurrentStateDocument?> GetAsync(
             string key,
-            CancellationToken ct = default) =>
-            Task.FromResult(Document);
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            GetKeys.Add(key);
+            return Task.FromResult(Documents.GetValueOrDefault(key));
+        }
 
         public Task<ProjectionDocumentQueryResult<ChatConversationCurrentStateDocument>> QueryAsync(
             ProjectionDocumentQuery query,
             CancellationToken ct = default) =>
             Task.FromResult(ProjectionDocumentQueryResult<ChatConversationCurrentStateDocument>.Empty);
+    }
+
+    private sealed class RecordingDeliveryDocumentReader
+        : IProjectionDocumentReader<ChatHistoryCreateRecoveryCurrentStateDocument, string>
+    {
+        public Dictionary<string, ChatHistoryCreateRecoveryCurrentStateDocument> Documents { get; } = new(StringComparer.Ordinal);
+
+        public Task<ChatHistoryCreateRecoveryCurrentStateDocument?> GetAsync(
+            string key,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Documents.GetValueOrDefault(key));
+        }
+
+        public Task<ProjectionDocumentQueryResult<ChatHistoryCreateRecoveryCurrentStateDocument>> QueryAsync(
+            ProjectionDocumentQuery query,
+            CancellationToken ct = default) =>
+            Task.FromResult(ProjectionDocumentQueryResult<ChatHistoryCreateRecoveryCurrentStateDocument>.Empty);
     }
 
     private sealed class RecordingBootstrap(IActor actor) : IStudioActorBootstrap
@@ -146,7 +343,7 @@ public sealed class ActorBackedChatHistoryStoreTests
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
         public Task<string> GetDescriptionAsync() => Task.FromResult("stub-agent");
-        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() =>
-            Task.FromResult<IReadOnlyList<Type>>([]);
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
     }
 }

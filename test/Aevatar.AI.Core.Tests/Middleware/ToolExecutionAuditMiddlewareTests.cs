@@ -317,7 +317,7 @@ public sealed class ToolExecutionAuditMiddlewareTests
     [Fact]
     public async Task InvokeAsync_WhenReceiptErrorFieldsContainCompactSecrets_ShouldUseOwnedFailureCode()
     {
-        const string compactSecret = "compactSecretToken123";
+        const string compactSecret = "NYXID_PROXY_HTTP_502_compactSecretToken123";
         var appender = new RecordingAuditTrailAppender();
         var middleware = NewMiddleware(appender);
         var context = NewContext(
@@ -346,6 +346,45 @@ public sealed class ToolExecutionAuditMiddlewareTests
         record.Failure.Code.Should().Be("tool_error");
         record.Failure.SanitizedMessage.Should().Be("tool_error");
         AuditText(record).Should().NotContain(compactSecret);
+    }
+
+    [Theory]
+    [InlineData("NYXID_PROXY_HTTP_502")]
+    [InlineData("NYXID_PROXY_UNAUTHORIZED")]
+    [InlineData("NYXID_PROXY_FORBIDDEN")]
+    public async Task InvokeAsync_WhenReceiptUsesOwnedNyxIdProxyFailureCode_ShouldPreserveIt(
+        string failureCode)
+    {
+        var appender = new RecordingAuditTrailAppender();
+        var middleware = NewMiddleware(appender);
+        var context = NewContext(
+            new FakeAgentTool("nyxid_proxy"),
+            AgentToolExecutionContext.Empty with
+            {
+                Caller = new AgentToolCallerContext("scope-nyxid", "owner-nyxid", null),
+            });
+
+        await middleware.InvokeAsync(context, () =>
+        {
+            context.Receipt = new AgentToolReceipt
+            {
+                CallId = "call-nyxid",
+                ToolName = "nyxid_proxy",
+                Status = AgentToolReceiptStatus.Error,
+                SubjectKind = "nyxid.user-service",
+                SubjectId = "us-home-alpha",
+                ErrorCode = failureCode,
+                ErrorMessage = "provider-secret-must-not-appear",
+            };
+            return Task.CompletedTask;
+        });
+
+        var record = appender.Records.Should().ContainSingle().Subject;
+        record.ErrorCode.Should().Be(failureCode);
+        record.Failure.Code.Should().Be(failureCode);
+        record.Target.Kind.Should().Be("nyxid.user-service");
+        record.Target.Id.Should().Be("us-home-alpha");
+        AuditText(record).Should().NotContain("provider-secret-must-not-appear");
     }
 
     [Fact]

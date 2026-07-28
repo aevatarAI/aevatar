@@ -80,6 +80,9 @@ public sealed class DefaultAppScopeResolver : IAppScopeResolver
         return null;
     }
 
+    public bool HasHttpRequestContext(HttpContext? httpContext = null) =>
+        httpContext is not null || _httpContextAccessor.HttpContext is not null;
+
     public bool HasAuthenticatedRequestWithoutScope(HttpContext? httpContext = null)
     {
         var context = httpContext ?? _httpContextAccessor.HttpContext;

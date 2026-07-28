@@ -692,58 +692,110 @@ button{font-family:inherit;cursor:pointer;}
 }
 
 /* ---------------- ③ Observatory ---------------- */
-.obs-region{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;}
-.obs-adminbar{display:flex;align-items:center;gap:10px;padding:11px 20px;background:var(--failed-bg);border-bottom:1px solid var(--failed-bd);flex-wrap:wrap;}
-.obs-adminbar .ab-label{font-size:12.5px;color:var(--failed);font-weight:550;}
-.ab-input{height:30px;padding:0 10px;border:1px solid var(--border);border-radius:6px;font:13px var(--sans);background:var(--surface);min-width:200px;}
-.obs-adminbar .ab-input{flex:0 1 420px;min-width:280px;}
-.ab-input:focus{outline:0;border-color:var(--primary);}
-.ab-hint{font-size:12px;color:var(--muted);}
-.obs-filterbar{border-bottom:1px solid var(--border);background:var(--surface);}
-.filter-toggle{display:flex;align-items:center;gap:8px;padding:10px 20px;border:0;background:none;font-size:13px;color:var(--muted);width:100%;}
-.filter-toggle:hover{color:var(--heading);}
-.filter-badge{background:var(--primary);color:#fff;border-radius:999px;font-size:10px;padding:1px 6px;}
-.ft-caret{margin-left:auto;color:var(--faint);}
-.filter-body{display:none;padding:4px 20px 14px;flex-direction:column;gap:9px;}
-.obs-filterbar.open .filter-body{display:flex;}
-.filter-row{display:flex;align-items:center;gap:10px;}
-.fr-l{font-size:12px;color:var(--faint);width:72px;flex:0 0 auto;}
-.obs-split{flex:1 1 auto;min-height:0;display:flex;}
-.obs-list{width:320px;flex:0 0 320px;border-right:1px solid var(--border);overflow:auto;background:var(--surface);padding:8px;}
-.obs-row{width:100%;display:flex;align-items:center;gap:8px;padding:9px 10px;border:0;background:none;border-radius:7px;text-align:left;margin-bottom:2px;}
-.obs-row:hover{background:var(--surface-3);}
-.obs-row.on{background:var(--primary-weak);}
+.obs-region{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;background:var(--surface);}
+.obs-contextbar,.obs-immersive-bar{flex:0 0 auto;display:flex;align-items:center;gap:12px;min-height:54px;padding:8px 16px;border-bottom:1px solid var(--border);background:var(--surface);}
+.obs-context-main{display:flex;align-items:center;gap:10px;min-width:0;}
+.obs-context-title{display:flex;flex-direction:column;line-height:1.2;min-width:0;}
+.obs-context-title b{font-size:14px;color:var(--heading);font-weight:650;}
+.obs-context-title span{font-size:10.5px;color:var(--faint);white-space:nowrap;}
+.obs-live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--success);white-space:nowrap;}
+.obs-scope-switch{display:inline-flex;align-items:center;padding:2px;border:1px solid var(--border);border-radius:6px;background:var(--surface-3);}
+.obs-scope-switch button{height:27px;padding:0 10px;border:0;border-radius:4px;background:transparent;color:var(--muted);font-size:12px;white-space:nowrap;}
+.obs-scope-switch button.on{background:var(--surface);color:var(--heading);font-weight:600;box-shadow:var(--shadow-card);}
+.obs-scope-current{display:inline-flex;align-items:center;gap:5px;min-width:0;height:28px;padding:0 9px;border:1px solid var(--waiting-bd);border-radius:5px;background:var(--waiting-bg);color:#8a5107;font:11.5px var(--mono);}
+.obs-scope-current span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px;}
+.obs-context-actions{display:flex;align-items:center;gap:7px;margin-left:auto;}
+.obs-context-actions .ibtn{height:30px;}
+.obs-scope-notice{display:flex;align-items:center;gap:8px;min-width:0;padding:5px 9px;border:1px solid var(--waiting-bd);border-radius:5px;background:var(--waiting-bg);color:#8a5107;font-size:11.5px;}
+.obs-scope-notice span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.obs-scope-notice button{min-height:24px;border:0;background:none;color:var(--primary-strong);font-size:11.5px;font-weight:600;white-space:nowrap;}
+.obs-admin-tools{position:relative;}
+.obs-admin-tools summary{list-style:none;}
+.obs-admin-tools summary::-webkit-details-marker{display:none;}
+.obs-admin-tools[open] summary{background:var(--surface-3);color:var(--heading);}
+.obs-admin-popover{position:absolute;right:0;top:36px;z-index:65;width:min(430px,calc(100vw - 28px));padding:14px;border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);box-shadow:var(--shadow-hover);}
+.obs-admin-popover h3{font-size:12.5px;color:var(--heading);font-weight:650;margin-bottom:10px;}
+.obs-admin-field{display:grid;grid-template-columns:1fr auto;gap:7px;margin-top:8px;}
+.obs-admin-field label{grid-column:1/-1;font-size:11px;color:var(--faint);}
+.ab-input{height:31px;width:100%;min-width:0;padding:0 9px;border:1px solid var(--border);border-radius:5px;font:12.5px var(--sans);color:var(--fg);background:var(--surface);}
+.ab-input:focus{outline:0;border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
+.ab-hint{display:block;min-height:18px;margin-top:8px;font-size:11.5px;color:var(--muted);}
+.obs-filterbar{position:relative;z-index:40;flex:0 0 auto;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--surface-2);}
+.obs-filter-main{display:flex;align-items:center;gap:8px;min-width:0;}
+.obs-filter-search{display:flex;align-items:center;gap:7px;width:clamp(220px,28vw,380px);height:32px;padding:0 9px;border:1px solid var(--border);border-radius:5px;background:var(--surface);}
+.obs-filter-search:focus-within{border-color:var(--primary);box-shadow:0 0 0 2px var(--primary-weak);}
+.obs-filter-search svg{width:14px;height:14px;color:var(--faint);flex:0 0 auto;}
+.obs-filter-search input{height:100%;min-width:0;width:100%;border:0;outline:0;background:none;color:var(--fg);font:12.5px var(--sans);}
+.obs-status-select{width:116px;flex:0 0 116px;}
+.filter-toggle{height:32px;display:inline-flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--border);border-radius:5px;background:var(--surface);font-size:12px;color:var(--muted);white-space:nowrap;}
+.filter-toggle:hover,.filter-toggle.on{border-color:var(--border-strong);color:var(--heading);background:var(--surface-3);}
+.filter-toggle svg{width:14px;height:14px;}
+.filter-badge{display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;background:var(--heading);color:#fff;border-radius:999px;font:10px var(--mono);}
+.ft-caret{color:var(--faint);font-size:10px;}
+.obs-filter-count{margin-left:auto;color:var(--faint);font-size:11.5px;white-space:nowrap;}
+.filter-body{display:none;grid-template-columns:repeat(4,minmax(150px,1fr));gap:9px;padding-top:10px;margin-top:8px;border-top:1px solid var(--border);}
+.obs-filterbar.open .filter-body{display:grid;}
+.filter-row{display:flex;flex-direction:column;align-items:stretch;gap:4px;min-width:0;}
+.filter-row.time-range{grid-column:span 2;display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+.filter-row.time-range .fr-l{grid-column:1/-1;}
+.filter-row.filter-actions{grid-column:1/-1;flex-direction:row;align-items:center;gap:8px;}
+.fr-l{font-size:10.5px;color:var(--faint);width:auto;}
+.obs-filter-chips{display:flex;align-items:center;gap:6px;min-width:0;overflow-x:auto;padding-top:7px;scrollbar-width:thin;}
+.obs-filter-chip{height:24px;max-width:260px;display:inline-flex;align-items:center;gap:5px;padding:0 7px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--muted);font-size:10.5px;white-space:nowrap;}
+.obs-filter-chip span{overflow:hidden;text-overflow:ellipsis;}
+.obs-filter-chip b{font-weight:600;color:var(--heading);}
+.obs-filter-chip:hover{border-color:var(--border-strong);color:var(--failed);}
+.obs-clear-all{height:24px;border:0;background:none;color:var(--primary-strong);font-size:11px;white-space:nowrap;}
+.obs-split{flex:1 1 auto;min-height:0;display:flex;background:var(--surface);}
+.obs-run-rail{width:350px;flex:0 0 350px;min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--border);background:var(--surface-2);}
+.obs-run-rail.is-collapsed{display:none;}
+.obs-run-rail-head{height:35px;flex:0 0 35px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--faint);}
+.obs-run-rail-head b{color:var(--heading);font-size:11.5px;font-weight:600;}
+.obs-list{flex:1 1 auto;min-height:0;overflow:auto;padding:7px;}
+.obs-row{width:100%;min-height:92px;display:flex;flex-direction:column;align-items:stretch;gap:5px;padding:9px 10px;border:1px solid transparent;background:transparent;border-radius:6px;text-align:left;margin-bottom:3px;}
+.obs-row:hover{background:var(--surface);border-color:var(--border);}
+.obs-row.on{background:var(--surface);border-color:var(--running-bd);box-shadow:inset 3px 0 0 var(--primary);}
+.obs-row-top{display:flex;align-items:center;gap:7px;min-width:0;height:22px;}
 .obs-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
-.obs-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;}
-.obs-row-name{font-size:13px;color:var(--heading);font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.obs-row-id{font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block;}
+.obs-row-name{flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--heading);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.obs-row-id{font-size:10.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block;}
+.obs-row-meta{height:19px;display:flex;align-items:center;gap:6px;min-width:0;color:var(--faint);font-size:10.5px;}
+.obs-row-meta .obs-row-def{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.obs-row-meta time{white-space:nowrap;}
+.obs-pinned{padding-bottom:7px;margin-bottom:7px;border-bottom:1px solid var(--border-strong);}
+.obs-row-pin{display:inline-flex;align-items:center;height:18px;color:#8a5107;font-size:10.5px;}
 .origin-pill{font-size:10.5px;color:var(--subtle);background:var(--surface-3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;flex:0 0 auto;white-space:nowrap;}
-.obs-detail{flex:1 1 auto;min-width:0;overflow:auto;padding:20px;}
-.obs-detail-head .odh-top{display:flex;align-items:center;gap:10px;margin-bottom:11px;}
+.obs-detail{flex:1 1 auto;min-width:0;overflow:auto;padding:22px clamp(18px,2.4vw,34px) 40px;scrollbar-gutter:stable;}
+.obs-detail-inner{width:min(1180px,100%);margin:0 auto;}
+.obs-detail-head{display:flex;flex-direction:column;gap:9px;}
+.obs-detail-head .odh-top{display:flex;align-items:center;gap:10px;min-width:0;}
+.obs-detail-head .odh-top .sub-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.obs-stale{display:flex;align-items:center;gap:7px;margin-top:10px;padding:7px 9px;border:1px solid var(--waiting-bd);border-radius:5px;background:var(--waiting-bg);color:#8a5107;font-size:11.5px;}
 .run-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
 .run-chip{font-family:var(--mono);font-size:11.5px;padding:3px 9px;border-radius:5px;}
 .run-chip.c-scope{background:var(--primary-weak);color:var(--primary-strong);}
 .run-chip.c-def{background:#f3eefe;color:#7a4fcf;}
-.run-chip.c-run{background:var(--surface-3);color:var(--muted);}
+.run-chip.c-run{max-width:min(620px,100%);background:var(--surface-3);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .usage-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0;}
-.usage-cell{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-card);padding:12px 14px;}
+.usage-cell{min-height:70px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-card);padding:11px 13px;}
 .uc-l{font-size:11.5px;color:var(--faint);display:block;margin-bottom:4px;}
 .uc-v{font-size:20px;font-weight:600;color:var(--heading);}
-.obs-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px;}
-.obs-tab{border:0;background:none;padding:9px 14px;font-size:13px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;}
+.obs-tabs{display:flex;gap:2px;min-height:39px;overflow-x:auto;border-bottom:1px solid var(--border);margin-bottom:16px;scrollbar-width:thin;}
+.obs-tab{height:39px;flex:0 0 auto;border:0;background:none;padding:0 13px;font-size:12.5px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;}
 .obs-tab.on{color:var(--primary-strong);border-bottom-color:var(--primary);font-weight:550;}
 .obs-tab:hover{color:var(--heading);}
+.obs-tab-body{min-width:0;}
 .timeline{display:flex;flex-direction:column;}
 .tl-item{display:flex;align-items:flex-start;gap:12px;padding:10px 0;position:relative;}
 .tl-time{font-size:11.5px;color:var(--faint);width:64px;flex:0 0 auto;padding-top:2px;}
 .tl-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;margin-top:4px;background:var(--idle);}
 .tl-success .tl-dot{background:var(--success);}.tl-running .tl-dot{background:var(--running);}.tl-failed .tl-dot{background:var(--failed);}
-.tl-body{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.tl-body{min-width:0;flex:1 1 auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
 .tl-step{font-size:13px;color:var(--heading);font-weight:550;}
 .tl-dur{font-size:11.5px;color:var(--faint);}
-.tl-msg{font-size:12px;color:var(--muted);width:100%;line-height:1.5;}
-.tl-err{font-family:var(--mono);font-size:11.5px;color:var(--failed);background:var(--failed-bg);padding:2px 7px;border-radius:4px;width:100%;}
-.logs{font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:var(--r-panel);padding:14px 16px;white-space:pre-wrap;}
+.tl-msg{font-size:12px;color:var(--muted);width:100%;line-height:1.5;overflow-wrap:anywhere;}
+.tl-err{font-family:var(--mono);font-size:11.5px;color:var(--failed);background:var(--failed-bg);padding:3px 7px;border-radius:4px;width:100%;overflow-wrap:anywhere;}
+.logs{max-width:100%;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.7;color:var(--fg);background:var(--surface-3);border:1px solid var(--border);border-radius:var(--r-panel);padding:14px 16px;white-space:pre-wrap;overflow-wrap:anywhere;}
 .step-list,.diag-list{display:flex;flex-direction:column;gap:10px;}
 .step-card,.diag-card{border:1px solid var(--border);border-radius:7px;background:var(--surface);padding:12px 14px;}
 .step-card.failed,.diag-card.error{border-color:var(--failed-bd);background:var(--failed-bg);}
@@ -772,6 +824,16 @@ button{font-family:inherit;cursor:pointer;}
 .dag-name{font-size:13px;color:var(--heading);font-weight:550;flex:1 1 auto;}
 .dag-io{font-size:11px;color:var(--faint);}
 .dag-link{width:2px;height:14px;background:var(--border);margin-left:18px;}
+.obs-immersive-bar{display:none;}
+body.obs-immersive .rail{display:none!important;}
+body.obs-immersive .app-header{display:none!important;}
+body.obs-immersive #acctw{display:none!important;}
+body.obs-immersive .console{height:100vh;}
+body.obs-immersive .main,body.obs-immersive .view{height:100vh;}
+body.obs-immersive .obs-contextbar,body.obs-immersive .obs-filterbar,body.obs-immersive .obs-run-rail{display:none!important;}
+body.obs-immersive .obs-immersive-bar{display:flex;}
+body.obs-immersive .obs-detail{padding-top:18px;}
+body.obs-immersive .obs-detail-inner{width:min(1380px,100%);}
 
 /* ---------------- ④ CQRS ---------------- */
 .cqrs-pipe{width:100%;height:150px;}
@@ -1141,11 +1203,28 @@ button{font-family:inherit;cursor:pointer;}
   .rail-item{justify-content:flex-start;padding:8px 9px;}
   .account-chip{justify-content:flex-start;padding:7px 8px;}
   .obs-split,.two-pane{flex-direction:column;}
-  .obs-list,.tp-list{width:auto;flex:0 0 auto;max-height:240px;border-right:0;border-bottom:1px solid var(--border);}
+  .obs-contextbar,.obs-immersive-bar{align-items:flex-start;flex-wrap:wrap;padding:8px 10px;gap:8px;}
+  .obs-context-main{flex:1 1 auto;}
+  .obs-scope-switch{order:3;}
+  .obs-scope-notice{order:4;flex:1 1 100%;}
+  .obs-context-actions{margin-left:0;}
+  .obs-context-actions .ibtn span{display:none;}
+  .obs-filterbar{padding:8px 10px;}
+  .obs-filter-main{flex-wrap:wrap;}
+  .obs-filter-search{width:auto;flex:1 1 calc(100% - 124px);}
+  .obs-filter-count{margin-left:0;}
+  .filter-body{position:absolute;top:100%;left:8px;right:8px;max-height:min(56vh,430px);overflow:auto;grid-template-columns:1fr;margin-top:0;padding:12px;border:1px solid var(--border-strong);border-radius:0 0 7px 7px;background:var(--surface);box-shadow:var(--shadow-hover);overscroll-behavior:contain;}
+  .filter-row.time-range{grid-column:1;}
+  .filter-row.filter-actions{grid-column:1;}
+  .obs-run-rail{width:100%;flex:0 0 auto;min-height:180px;max-height:38vh;border-right:0;border-bottom:1px solid var(--border);}
+  .obs-list,.tp-list{width:auto;}
+  .obs-row{min-height:82px;}
+  .obs-detail{padding:15px 12px 32px;}
+  .run-chip.c-run{max-width:calc(100vw - 66px);}
   .studio-region{flex-direction:column;}
   .studio-aside{width:auto;flex:0 0 auto;border-left:0;border-top:1px solid var(--border);}
   .usage-strip{grid-template-columns:repeat(2,1fr);}
-  .obs-adminbar{gap:8px;}
+  body.obs-immersive .obs-detail{padding-top:12px;}
 }
 
 </style>
@@ -1216,7 +1295,7 @@ function sparkSVG(data,color,w,h){
 }
 
 var STATUS_CN={busy:'忙',idle:'闲',stuck:'卡',failed:'失败'};
-var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stuck:'卡住'};
+var RUN_CN={running:'运行中',success:'完成',failed:'失败',waiting:'等待',stopped:'已停止',stuck:'卡住'};
 
 /* =====================================================================
    ① 全景看板 Fleet —— 真实跨组织（nyxid 账号）数据
@@ -1472,10 +1551,16 @@ var OBS_RUNS=[];                 /* 已映射的 summary 行：{id,name,status,o
 var OBS_RUNS_LOADED=false, OBS_RUNS_ERR=null, OBS_RUNS_LOADING=false;
 var OBS_RUNS_REQUEST=0, OBS_POLL_TIMER=null;
 var OBS_DETAIL={};               /* runId -> {loading,err,detail}；detail 为 obsDetail 渲染所需结构 */
+var OBS_DETAIL_REQUESTS={};      /* runId -> monotonic detail request generation */
+var OBS_DETAIL_SCOPE_VERSION=0;  /* invalidates detail responses started under an older scope */
+var OBS_DIRECT_RUNS={};          /* explicit admin run-id lookups with unknown owner scope */
+var OBS_QUERY_KEYS=['scope','status','origin','definition','schedule','from','to','run','tab'];
+var OBS_STATUS_VALUES=['running','completed','failed','stopped'];
+var OBS_TAB_VALUES=['timeline','steps','diagnostics','logs','artifacts','graph'];
 /* 真实 status 枚举 -> 渲染内部枚举 running|success|failed|stuck */
 function obsMapStatus(s){
   return ({ running:'running', completed:'success', failed:'failed', timed_out:'failed',
-    stopped:'stuck', disabled:'stuck', unknown:'stuck', not_found:'stuck' })[s]||'stuck';
+    stopped:'stopped', disabled:'stopped', unknown:'stuck', not_found:'stuck' })[s]||'stuck';
 }
 /* 步骤级 success/失败 -> timeline/dag 内部 st 枚举 */
 function obsStepStatus(st){
@@ -1496,6 +1581,7 @@ function mapObsRuns(list){
   return (list||[]).map(function(r){
     return { id:r.runId, name:r.workflowName||r.runId, status:obsMapStatus(r.status),
       origin:r.runOrigin||'—', scope:r.scopeId||'—', definition:r.definitionId||r.workflowName||'—',
+      schedule:r.scheduleId||'',
       success:r.success, stateVersion:r.stateVersion, startedAtUtc:r.startedAtUtc, updatedAtUtc:r.updatedAtUtc,
       rawStatus:r.status }; });
 }
@@ -1563,6 +1649,7 @@ function mapObsDetail(d,graph){
   var mapped={ id:sum.runId, name:sum.workflowName||sum.runId, status:obsMapStatus(sum.status),
     rawStatus:sum.status||'', origin:sum.runOrigin||'—', stateVersion:sum.stateVersion,
     scope:sum.scopeId||'—', definition:sum.definitionId||sum.workflowName||'—',
+    schedule:sum.scheduleId||'', startedAtUtc:sum.startedAtUtc||'', updatedAtUtc:sum.updatedAtUtc||'',
     input:d.input||'', finalOutput:d.finalOutput||'', finalError:d.finalError||'',
     usage:usage, steps:steps, timeline:timeline, events:events, diagnostics:diagnostics, logs:logs, graph:gnodes, artifacts:artifacts };
   mapped.issue=obsIssuePayload(mapped);
@@ -1604,37 +1691,71 @@ function obsNodeIo(n,graph){
   return 'in '+inc+' / out '+out;
 }
 function obsBytes(s){ var n=(s==null?'':String(s)).length; if(n<1024) return n+' B'; return (Math.round(n/102.4)/10)+' KB'; }
-/* 加载 summary 列表（admin 跨 scope 用 OBS_SCOPE：'__all__' 或具体 id） */
+function obsValidTimestamp(value){ return !value||!isNaN(new Date(value).getTime()); }
+function obsListRequestUrl(){
+  var p=new URLSearchParams();
+  if(OBS_STATE.scope==='all') p.set('scope','__all__');
+  else if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope);
+  ['status','origin','definition','schedule','from','to'].forEach(function(key){
+    var value=OBS_STATE[key];
+    if((key==='from'||key==='to')&&value&&!obsValidTimestamp(value)) return;
+    if(value) p.set(key,value);
+  });
+  p.set('take','100');
+  return '/api/workflow/observatory/runs?'+p.toString();
+}
+/* 加载 summary 列表；mine 省略 scope，all 映射到后端 __all__ sentinel。 */
 function loadObsRuns(rerender){
   var requestId=++OBS_RUNS_REQUEST;
   OBS_RUNS_LOADING=true; if(rerender) rerender();
-  var scope=(ACCOUNT&&ACCOUNT.admin)?((OBS_STATE&&OBS_STATE.scope)||'__all__'):'__self__';
-  var q=scope&&scope!=='__self__'?('?scope='+encodeURIComponent(scope)):'';
-  return adminJson('/api/workflow/observatory/runs'+q).then(function(j){
+  return adminJson(obsListRequestUrl()).then(function(j){
     if(requestId!==OBS_RUNS_REQUEST) return;
     if(j&&j.forbidden){ OBS_RUNS=[]; OBS_RUNS_ERR='需要平台管理员权限才能跨 scope 观测'; }
     else { OBS_RUNS=mapObsRuns(Array.isArray(j)?j:(j&&j.items)||[]); OBS_RUNS_ERR=null;
-      if(OBS_STATE.selectedId && !OBS_RUNS.filter(function(r){return r.id===OBS_STATE.selectedId;})[0]){
-        obsUpsertRunFromDetail(OBS_STATE.selectedId,(OBS_DETAIL[OBS_STATE.selectedId]&&OBS_DETAIL[OBS_STATE.selectedId].detail)||null);
-      }
       if(OBS_RUNS.length && !OBS_STATE.selectedId){
         OBS_STATE.selectedId=OBS_RUNS[0].id; } }
-  }).catch(function(e){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; } })
+  }).catch(function(e){ if(requestId===OBS_RUNS_REQUEST){ if(!OBS_RUNS_LOADED) OBS_RUNS=[]; OBS_RUNS_ERR=(e&&(e.body||e.message))||'运行列表加载失败'; } })
   .then(function(){ if(requestId===OBS_RUNS_REQUEST){ OBS_RUNS_LOADED=true; OBS_RUNS_LOADING=false; if(rerender) rerender(); } });
 }
 function obsOpenDirectRun(runId,rerenderList,rerenderDetail){
   runId=(runId||'').trim(); if(!runId) return;
+  OBS_DIRECT_RUNS[runId]=true;
   OBS_STATE.selectedId=runId;
-  obsUpsertRunFromDetail(runId,null);
+  obsInvalidateDetail(runId);
+  var next=buildHash(['observatory'],obsCanonicalQuery({run:runId}));
+  if(location.hash!==next){ location.hash=next; return; }
   if(rerenderList) rerenderList();
   if(rerenderDetail) rerenderDetail();
-  delete OBS_DETAIL[runId];
   loadObsDetail(runId,function(){ if(rerenderList) rerenderList(); if(rerenderDetail) rerenderDetail(); });
 }
 function obsDetailsEqual(left,right){
   if(left===right) return true;
   if(!left||!right) return false;
   return JSON.stringify(left)===JSON.stringify(right);
+}
+function obsNextDetailRequest(runId){
+  var next=(OBS_DETAIL_REQUESTS[runId]||0)+1; OBS_DETAIL_REQUESTS[runId]=next; return next;
+}
+function obsInvalidateDetail(runId){
+  OBS_DETAIL_REQUESTS[runId]=(OBS_DETAIL_REQUESTS[runId]||0)+1;
+  delete OBS_DETAIL[runId];
+}
+function obsDetailRequestCurrent(runId,requestId,scopeVersion){
+  return OBS_DETAIL_REQUESTS[runId]===requestId&&OBS_DETAIL_SCOPE_VERSION===scopeVersion;
+}
+function obsDetailRequestBase(runId){
+  if(OBS_STATE.scope==='all'||OBS_DIRECT_RUNS[runId])
+    return '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId);
+  var base='/api/workflow/observatory/runs/'+encodeURIComponent(runId),p=new URLSearchParams();
+  if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope);
+  return base+(p.toString()?'?'+p.toString():'');
+}
+function obsGraphRequestUrl(runId){
+  if(OBS_STATE.scope==='all'||OBS_DIRECT_RUNS[runId])
+    return '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)+'/graph';
+  var base='/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph',p=new URLSearchParams();
+  if(OBS_STATE.scope&&OBS_STATE.scope!=='mine') p.set('scope',OBS_STATE.scope);
+  return base+(p.toString()?'?'+p.toString():'');
 }
 /* 选中 run 时懒加载详情 + DAG，缓存到 OBS_DETAIL[runId]；轮询刷新保留已渲染详情。 */
 function loadObsDetail(runId,rerender,refresh){
@@ -1643,15 +1764,17 @@ function loadObsDetail(runId,rerender,refresh){
   if(cache&&cache.loading) return Promise.resolve(false);
   if(cache&&cache.detail&&!refresh) return Promise.resolve(false);
   var previousDetail=(cache&&cache.detail)||null;
+  var scopeVersion=OBS_DETAIL_SCOPE_VERSION;
+  var requestId=obsNextDetailRequest(runId);
   OBS_DETAIL[runId]={loading:true,err:null,detail:previousDetail};
   if(rerender&&!previousDetail) rerender();
-  var base=(ACCOUNT&&ACCOUNT.admin)
-    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)
-    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId);
+  var base=obsDetailRequestBase(runId);
   return Promise.all([
     adminJson(base).catch(function(e){ if(e&&e.status===404) return null; throw e; }),
     loadObsGraph(runId).catch(function(){ return null; })
-  ]).then(function(res){ var d=res[0], g=res[1], err=null;
+  ]).then(function(res){
+    if(!obsDetailRequestCurrent(runId,requestId,scopeVersion)) return false;
+    var d=res[0], g=res[1], err=null;
     if(d&&d.forbidden) err='无权查看该 run（403）';
     else if(!d) err='该 run 不存在或不在当前账号的可见范围';
     if(err){
@@ -1661,15 +1784,15 @@ function loadObsDetail(runId,rerender,refresh){
     var detail=mapObsDetail(d,g), changed=!obsDetailsEqual(previousDetail,detail);
     OBS_DETAIL[runId]={loading:false,err:null,detail:detail}; obsUpsertRunFromDetail(runId,detail);
     return changed;
-  }).catch(function(e){ var err=(e&&(e.body||e.message))||'详情加载失败';
+  }).catch(function(e){
+    if(!obsDetailRequestCurrent(runId,requestId,scopeVersion)) return false;
+    var err=(e&&(e.body||e.message))||'详情加载失败';
     if(previousDetail){ OBS_DETAIL[runId]={loading:false,err:null,refreshErr:err,detail:previousDetail}; return false; }
     OBS_DETAIL[runId]={loading:false,err:err,detail:null}; return true;
   }).then(function(changed){ if(rerender&&changed) rerender(); return changed; });
 }
 function loadObsGraph(runId){
-  var path=(ACCOUNT&&ACCOUNT.admin)
-    ? '/api/workflow/observatory/admin/runs/'+encodeURIComponent(runId)+'/graph'
-    : '/api/workflow/observatory/runs/'+encodeURIComponent(runId)+'/graph';
+  var path=obsGraphRequestUrl(runId);
   return adminJson(path).then(function(g){
     return (g&&g.forbidden)?null:g; });
 }
@@ -2250,6 +2373,12 @@ function renderMiniFlow(container, runs){
 var ICON={
   search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
   refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>',
+  filter:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M7 12h10M10 19h4"/></svg>',
+  panel:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>',
+  maximize:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>',
+  minimize:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>',
+  copy:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+  more:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/></svg>',
   warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>',
   clock:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   calendar:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>',
@@ -2296,7 +2425,7 @@ function srcLegendRows(){
 /* run 语义：完成=绿 / 运行中=蓝 / 等待=琥珀 / 失败=红；颜色之外配形状 icon + 文字 */
 function statusTag(s){
   var map={running:['tag-running','运行中','▶'],success:['tag-success','完成','✓'],failed:['tag-failed','失败','✕'],
-    waiting:['tag-waiting','等待','◷'],stuck:['tag-failed','卡住','▌'],idle:['tag-idle','空闲','○']};
+    waiting:['tag-waiting','等待','◷'],stopped:['tag-idle','已停止','■'],stuck:['tag-failed','卡住','▌'],idle:['tag-idle','空闲','○']};
   var m=map[s]||map.idle;
   var ic=s==='running'?'<i class="tdot" aria-hidden="true"></i>':'<span class="tg" aria-hidden="true">'+m[2]+'</span>';
   return '<span class="tag '+m[0]+'">'+ic+m[1]+'</span>';
@@ -2483,8 +2612,9 @@ function l1Roster(detail,coId){
     '</tr></thead><tbody>'+wfRows+'</tbody></table></div></div>';
   /* 真实运行列表（点击行 -> foundation data-run 深链进 observatory，选中该 run） */
   var runRows=detail.runs.slice(0,80).map(function(r){
-    var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stuck',disabled:'stuck'}[r.status]||'stuck';
-    return '<tr data-run="'+esc(r.id)+'">'+
+    var rstatus={running:'running',completed:'success',failed:'failed',timed_out:'failed',stopped:'stopped',disabled:'stopped'}[r.status]||'stuck';
+    var scopeId=r.scope||coId;
+    return '<tr data-run="'+esc(r.id)+'" data-scope="'+esc(scopeId)+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.name)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+esc(r.id)+'</div></td>'+
       '<td>'+statusTag(rstatus)+'</td>'+
       '<td>'+originPill(r.origin)+'</td>'+
@@ -2583,7 +2713,7 @@ function viewL2(coId,empId){
 function l2Employee(e,coId){
   var runs=runsForEmployee(e.id), st=statsForEmployee(e.id);
   var rows=runs.map(function(r){
-    return '<tr data-run="'+r.id+'" data-co="'+coId+'" data-emp="'+e.id+'">'+
+    return '<tr data-run="'+r.id+'" data-scope="'+esc(coId)+'" data-co="'+coId+'" data-emp="'+e.id+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.wf)+'</b><div style="font-size:11px;color:var(--faint)" class="tnum">'+r.id+'</div></td>'+
       '<td>'+statusTag(r.status)+'</td>'+
       '<td class="tnum">'+r.dur+'</td>'+
@@ -2624,7 +2754,7 @@ function l2Employee(e,coId){
 function l2Task(coId,empId){
   var t=TASK_DEMO, pct=Math.round(t.done/t.total*100);
   var rows=t.runs.map(function(r){
-    return '<tr class="'+(r.stuck?'run-stuck':'')+'" data-run="'+r.id+'" data-co="'+coId+'" data-emp="'+empId+'">'+
+    return '<tr class="'+(r.stuck?'run-stuck':'')+'" data-run="'+r.id+'" data-scope="'+esc(coId)+'" data-co="'+coId+'" data-emp="'+empId+'">'+
       '<td><b style="color:var(--heading);font-weight:550">'+esc(r.wf)+'</b>'+(r.stuck?'<span class="stuck-tag">卡在这里</span>':'')+'<div style="font-size:11px;color:var(--faint)" class="tnum">'+r.id+'</div></td>'+
       '<td>'+statusTag(r.status)+'</td><td class="tnum">'+r.dur+'</td><td class="tnum">'+fmtMoney(r.cost)+'</td></tr>';
   }).join('');
@@ -2661,7 +2791,7 @@ function viewL3(coId,empId,runId){
       '<span class="sub-title" style="font-size:16px">Run '+esc(runId)+'</span></div>'+
     '<div class="task-note" style="margin-bottom:18px">'+ICON.ext.replace('width="2"','width="1.8" style="width:15px;height:15px"')+
       '<span>Run 详情由<b>运行观测台</b>承载（逐步 trace / DAG / usage / 最终产出，真实接口 /api/workflow/observatory/runs/'+esc(runId)+'）。点击下方进入观测台并选中该 run。</span></div>'+
-    '<div style="margin-top:6px;display:flex;gap:10px"><button class="btn btn-primary" data-run="'+esc(runId)+'">'+ICON.ext+'打开运行观测台</button>'+
+    '<div style="margin-top:6px;display:flex;gap:10px"><button class="btn btn-primary" data-run="'+esc(runId)+'" data-scope="'+esc(coId)+'">'+ICON.ext+'打开运行观测台</button>'+
       '<button class="btn" data-co="'+esc(coId)+'">返回组织运行列表</button></div>'+
   '</div></div>', mount:bindFleet};
 }
@@ -2720,7 +2850,7 @@ function emptyBlock(kind){
     'company-filter':['没有符合条件的公司','当前筛选下无公司，调整快筛或排序。',null],
     roster:['这家公司还没有员工','部门下尚未配置 AI 员工（member），先去添加一个 workflow / script / gagent。','添加员工'],
     graph:['暂无数据流','该公司近 24h 没有产生 Run 交接，跑一次 workflow 后这里会出现活的流水线。',null],
-    run:['暂无 Run','该员工还没有执行记录。',null]
+    run:['暂无 Run','当前没有可展示的运行记录。',null]
   };
   var m=map[kind]||map.run;
   return '<div class="empty">'+ICON.empty+'<div class="et">'+m[0]+'</div><div class="es">'+m[1]+'</div>'+
@@ -2962,11 +3092,69 @@ function viewStatus(){
 }
 
 /* ================= ③ 运行观测台 Run Observatory ================= */
-var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,statusFilter:[],scope:'__all__'};
+var OBS_STATE={selectedId:null,tab:'timeline',filterOpen:false,localSearch:'',railCollapsed:false,immersive:false,
+  scope:'mine',status:'',origin:'',definition:'',schedule:'',from:'',to:''};
+var OBS_SESSION_IMMERSIVE='aevatar:admin:observatory:immersive';
+var OBS_SESSION_RAIL='aevatar:admin:observatory:rail-collapsed';
+var OBS_SESSION_READY=false;
+function obsReadSessionState(){
+  if(OBS_SESSION_READY) return;
+  try{
+    OBS_STATE.immersive=sessionStorage.getItem(OBS_SESSION_IMMERSIVE)==='1';
+    OBS_STATE.railCollapsed=sessionStorage.getItem(OBS_SESSION_RAIL)==='1';
+  }catch(e){}
+  OBS_SESSION_READY=true;
+}
+function obsSetImmersive(enabled){
+  OBS_STATE.immersive=!!enabled;
+  try{ sessionStorage.setItem(OBS_SESSION_IMMERSIVE,enabled?'1':'0'); }catch(e){}
+  document.body.classList.toggle('obs-immersive',OBS_STATE.immersive);
+}
+function obsSetRailCollapsed(enabled){
+  OBS_STATE.railCollapsed=!!enabled;
+  try{ sessionStorage.setItem(OBS_SESSION_RAIL,enabled?'1':'0'); }catch(e){}
+}
+function obsSyncStateFromUrl(){
+  obsReadSessionState();
+  var q=parseHash().q||{};
+  var previousScope=OBS_STATE.scope;
+  var scope=q.scope||'mine';
+  if(scope==='__all__') scope='all';
+  if((scope==='all'||scope!=='mine')&&!(ACCOUNT&&ACCOUNT.admin)) scope='mine';
+  Object.assign(OBS_STATE,{scope:scope,status:OBS_STATUS_VALUES.indexOf(q.status)>=0?q.status:'',
+    origin:q.origin||'',definition:q.definition||'',schedule:q.schedule||'',from:q.from||'',to:q.to||'',
+    selectedId:q.run||null,tab:OBS_TAB_VALUES.indexOf(q.tab)>=0?q.tab:'timeline'});
+  if(previousScope!==scope){ OBS_DETAIL_SCOPE_VERSION++; OBS_DETAIL={}; }
+}
+function obsCanonicalQuery(overrides){
+  var values={scope:OBS_STATE.scope,status:OBS_STATE.status,origin:OBS_STATE.origin,definition:OBS_STATE.definition,
+    schedule:OBS_STATE.schedule,from:OBS_STATE.from,to:OBS_STATE.to,run:OBS_STATE.selectedId,tab:OBS_STATE.tab};
+  Object.keys(overrides||{}).forEach(function(key){ values[key]=overrides[key]; });
+  var q={};
+  OBS_QUERY_KEYS.forEach(function(key){
+    var value=values[key];
+    if(key==='scope'&&(!value||value==='mine')) return;
+    if(key==='tab'&&(!value||value==='timeline')) return;
+    if(value!=null&&value!=='') q[key]=value;
+  });
+  return q;
+}
+function obsNavigate(overrides){
+  overrides=overrides||{};
+  /* 目标 scope 与 obsCanonicalQuery 保持一致：未显式覆盖时沿用当前 scope，全 scope 观测下的列表行不能证明 run 属于本账号 scope */
+  var targetScope=('scope' in overrides)?(overrides.scope||'mine'):OBS_STATE.scope;
+  var directIntentCleared=false;
+  if(overrides.run&&targetScope!=='all'&&OBS_DIRECT_RUNS[overrides.run]){
+    delete OBS_DIRECT_RUNS[overrides.run]; obsInvalidateDetail(overrides.run); directIntentCleared=true;
+  }
+  var next=buildHash(['observatory'],obsCanonicalQuery(overrides));
+  if(directIntentCleared&&location.hash===next){ render(); return; }
+  location.hash=next;
+}
 function obsSyntheticRun(id){
   var d=OBS_DETAIL[id]&&OBS_DETAIL[id].detail;
-  return d?{id:d.id||id,name:d.name||id,status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion}
-    :{id:id,name:'Run '+obsShortRunId(id),status:'stuck',origin:'direct',scope:'—',definition:'—',rawStatus:'unknown'};
+  return d?{id:d.id||id,name:d.name||id,status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',schedule:d.schedule||'',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion,updatedAtUtc:d.updatedAtUtc||''}
+    :{id:id,name:'Run '+obsShortRunId(id),status:'stuck',origin:'direct',scope:'—',definition:'—',schedule:'',rawStatus:'unknown',updatedAtUtc:''};
 }
 function obsSelected(){
   if(OBS_STATE.selectedId){
@@ -2978,25 +3166,44 @@ function obsShortRunId(id){ id=String(id||''); return id.length>30?'…'+id.slic
 function obsUpsertRunFromDetail(runId,d){
   d=d||obsSyntheticRun(runId); var found=false;
   OBS_RUNS=OBS_RUNS.map(function(r){ if(r.id!==runId) return r; found=true;
-    return Object.assign({},r,{name:d.name||r.name,status:d.status||r.status,origin:d.origin||r.origin,scope:d.scope||r.scope,definition:d.definition||r.definition,rawStatus:d.rawStatus||r.rawStatus,stateVersion:d.stateVersion!=null?d.stateVersion:r.stateVersion}); });
-  if(!found) OBS_RUNS.unshift({id:runId,name:d.name||('Run '+obsShortRunId(runId)),status:d.status||'stuck',origin:d.origin||'direct',scope:d.scope||'—',definition:d.definition||'—',rawStatus:d.rawStatus||'unknown',stateVersion:d.stateVersion});
+    return Object.assign({},r,{name:d.name||r.name,status:d.status||r.status,origin:d.origin||r.origin,scope:d.scope||r.scope,definition:d.definition||r.definition,schedule:d.schedule||r.schedule,rawStatus:d.rawStatus||r.rawStatus,stateVersion:d.stateVersion!=null?d.stateVersion:r.stateVersion,updatedAtUtc:d.updatedAtUtc||r.updatedAtUtc}); });
 }
 function originPill(o){ var lbl={schedule:'排班',manual:'手动',api:'API',channel:'通道'}[o]||o; return '<span class="origin-pill">'+esc(lbl)+'</span>'; }
 function obsRunsFiltered(){
-  if(!OBS_STATE.statusFilter.length) return OBS_RUNS;
-  return OBS_RUNS.filter(function(r){return OBS_STATE.statusFilter.indexOf(r.status)>=0;});
+  var q=(OBS_STATE.localSearch||'').trim().toLowerCase();
+  if(!q) return OBS_RUNS;
+  return OBS_RUNS.filter(function(r){ return String(r.name||'').toLowerCase().indexOf(q)>=0||String(r.id||'').toLowerCase().indexOf(q)>=0; });
+}
+function obsPinnedRun(){
+  if(!OBS_STATE.selectedId) return null;
+  return obsRunsFiltered().some(function(r){return r.id===OBS_STATE.selectedId;})?null:obsSyntheticRun(OBS_STATE.selectedId);
+}
+function obsRunRow(r,pinned){
+  var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',stuck:'var(--waiting)'}[r.status]||'var(--idle)';
+  return '<button class="obs-row'+(r.id===OBS_STATE.selectedId?' on':'')+(pinned?' pinned':'')+'" data-obsrun="'+esc(r.id)+'"'+(pinned?' data-obs-pinned="true"':'')+' aria-current="'+(r.id===OBS_STATE.selectedId)+'">'+
+    '<span class="obs-row-top"><span class="obs-dot" style="background:'+sd+'"></span><span class="obs-row-name">'+esc(r.name)+'</span>'+statusTag(r.status)+'</span>'+
+    '<span class="obs-row-id tnum" title="'+esc(r.id)+'">'+esc(obsShortRunId(r.id))+'</span>'+
+    '<span class="obs-row-meta"><span class="obs-row-def" title="'+esc(r.definition||'—')+'">'+esc(r.definition||'—')+'</span><time>'+esc(fleetAgo(r.updatedAtUtc))+'</time>'+originPill(r.origin)+'</span>'+
+    (pinned?'<span class="obs-row-pin">不在当前筛选结果中</span>':'')+'</button>';
+}
+function obsEmptyList(){
+  var serverFiltered=['status','origin','definition','schedule','from','to'].some(function(key){return !!OBS_STATE[key];});
+  if((OBS_STATE.localSearch||'').trim()) return '<div class="empty"><div class="et">当前加载结果中没有匹配运行</div><div class="es">本地搜索仅覆盖已加载的 '+OBS_RUNS.length+' 条运行摘要。</div><button class="btn" data-act="obsLocalSearchClear">清除搜索</button></div>';
+  if(serverFiltered) return '<div class="empty"><div class="et">当前服务端筛选下没有运行</div><div class="es">调整状态、来源、定义、排班或更新时间范围。</div><button class="btn" data-act="obsFilterReset">清除筛选</button></div>';
+  return '<div class="empty"><div class="et">当前 scope 暂无运行记录</div><div class="es">新的运行提交后会自动出现在这里。</div></div>';
 }
 function obsList(){
   if(OBS_RUNS_LOADING&&!OBS_RUNS_LOADED) return '<div class="obs-loading">正在加载运行记录…</div>';
-  if(OBS_RUNS_ERR) return '<div class="alert"><span class="grow">'+esc(OBS_RUNS_ERR)+'</span><button class="btn" data-act="obsReload">重试</button></div>';
-  var rows=obsRunsFiltered().map(function(r){
-    var sd={running:'var(--running)',success:'var(--success)',failed:'var(--failed)',stuck:'var(--waiting)'}[r.status]||'var(--idle)';
-    return '<button class="obs-row'+(r.id===OBS_STATE.selectedId?' on':'')+'" data-obsrun="'+esc(r.id)+'">'+
-      '<span class="obs-dot" style="background:'+sd+'"></span>'+
-      '<span class="obs-row-main"><span class="obs-row-name">'+esc(r.name)+'</span><span class="obs-row-id tnum">'+esc(obsShortRunId(r.id))+'</span></span>'+
-      statusTag(r.status)+originPill(r.origin)+'</button>';
-  }).join('');
-  return rows||emptyBlock('run');
+  var pinned=obsPinnedRun(),rows=obsRunsFiltered().map(function(r){return obsRunRow(r,false);}).join('');
+  var pinnedHtml=pinned?'<div class="obs-pinned">'+obsRunRow(pinned,true)+'</div>':'';
+  var error=OBS_RUNS_ERR?'<div class="alert" style="margin-bottom:7px"><span class="grow">'+esc(OBS_RUNS_ERR)+'</span><button class="btn" data-act="obsReload">重试</button></div>':'';
+  return error+pinnedHtml+(rows||(!OBS_RUNS_ERR?obsEmptyList():''));
+}
+function obsRunRail(){
+  var visible=obsRunsFiltered().length,loaded=OBS_RUNS.length;
+  return '<aside class="obs-run-rail'+(OBS_STATE.railCollapsed?' is-collapsed':'')+'" id="obs-run-rail" aria-label="运行列表">'+
+    '<div class="obs-run-rail-head"><b>运行</b><span>显示 '+visible+' / 已加载 '+loaded+'</span>'+(OBS_RUNS_LOADING?'<span class="spinner" aria-label="刷新中"></span>':'')+'</div>'+
+    '<div class="obs-list" id="obs-list" aria-live="polite">'+obsList()+'</div></aside>';
 }
 function obsTabs(d){
   var tabs=[['timeline','Timeline',''],['steps','Steps',d.steps&&d.steps.length],['diagnostics','Diagnostics',d.diagnostics&&d.diagnostics.length],['logs','Logs',''],['artifacts','Artifacts',''],['graph','Graph','']];
@@ -3053,13 +3260,19 @@ function obsDetail(r){
   if(!r) return emptyBlock('run');
   /* summary 行只有 id/name/status；usage/timeline/logs/graph/artifacts 来自懒加载缓存 */
   var cache=OBS_DETAIL[r.id]; var d=(cache&&cache.detail)||null;
-  var chips='<span class="run-chip c-scope">scope '+esc(r.scope)+'</span><span class="run-chip c-def">def '+esc(r.definition)+'</span><span class="run-chip c-run">'+esc(r.id)+'</span><button class="ibtn" data-act="obsCopy" data-copy="'+esc(r.id)+'" style="height:24px">复制</button>';
+  var facts=d||r;
+  var chips='<span class="run-chip c-scope">scope '+esc(facts.scope||'—')+'</span><span class="run-chip c-def">definition '+esc(facts.definition||'—')+'</span>'+
+    '<span class="run-chip">origin '+esc(facts.origin||'—')+'</span>'+(facts.schedule?'<span class="run-chip">schedule '+esc(facts.schedule)+'</span>':'')+
+    '<span class="run-chip">version '+esc(facts.stateVersion==null?'—':facts.stateVersion)+'</span><span class="run-chip">updated '+esc(facts.updatedAtUtc||r.updatedAtUtc||'—')+'</span>'+
+    '<span class="run-chip c-run" title="'+esc(r.id)+'">'+esc(r.id)+'</span><button class="ibtn" data-act="obsCopy" data-copy="'+esc(r.id)+'" title="复制完整 run ID" aria-label="复制完整 run ID" style="height:24px">'+ICON.copy+'</button>';
   var head='<div class="obs-detail-head"><div class="odh-top"><span class="sub-title" style="font-size:16px">'+esc(r.name)+'</span>'+statusTag(r.status)+'</div>'+
     '<div class="run-chips">'+chips+'</div></div>';
   if(cache&&cache.loading&&!d) return head+'<div class="obs-loading">正在加载运行详情…</div>';
   if(cache&&cache.err&&!d) return head+'<div class="alert"><span class="grow">'+esc(cache.err)+'</span><button class="btn" data-act="obsReloadDetail" data-run="'+esc(r.id)+'">重试</button></div>';
   if(!d) return head+'<div class="obs-loading">准备加载运行详情…</div>';
   r=d; /* 渲染映射后的详情，沿用既有结构 */
+  head='<div class="obs-detail-head"><div class="odh-top"><span class="sub-title" style="font-size:16px">'+esc(r.name)+'</span>'+statusTag(r.status)+'</div><div class="run-chips">'+chips+'</div></div>'+
+    (cache.refreshErr?'<div class="obs-stale">'+ICON.warn+'<span>刷新失败，当前展示缓存数据：'+esc(cache.refreshErr)+'</span></div>':'');
   var usage='<div class="usage-strip">'+
     usageCell('tokens',r.usage.tokens)+usageCell('steps',r.usage.steps)+usageCell('time',r.usage.time)+usageCell('cost',r.usage.cost)+'</div>';
   var tabs=obsTabs(r);
@@ -3089,41 +3302,73 @@ function usageCell(k,v){
   var lbl={tokens:'Tokens',steps:'Steps',time:'耗时',cost:'成本'}[k];
   return '<div class="usage-cell"><span class="uc-l">'+lbl+'</span><span class="uc-v num">'+esc(v)+'</span></div>';
 }
-function obsFilterBar(){
-  var statuses=['running','success','failed','stuck'];
-  var active=OBS_STATE.statusFilter.length;
-  var chips=statuses.map(function(s){
-    return '<button class="chip'+(OBS_STATE.statusFilter.indexOf(s)>=0?' on':'')+'" data-obsfilter="'+s+'">'+RUN_CN[s]+'</button>';
+function obsFilterChips(){
+  var labels={status:'状态',origin:'origin',definition:'definition',schedule:'schedule',from:'from',to:'to'};
+  return ['status','origin','definition','schedule','from','to'].filter(function(key){return !!OBS_STATE[key];}).map(function(key){
+    var value=OBS_STATE[key],shown=(key==='status'?{running:'运行中',completed:'已完成',failed:'失败',stopped:'已停止'}[value]:value)||value;
+    return '<button class="obs-filter-chip" data-act="obsFilterRemove" data-filter-key="'+key+'" title="移除 '+esc(labels[key])+' 筛选"><b>'+labels[key]+'</b><span>'+esc(shown)+'</span> ×</button>';
   }).join('');
+}
+function obsFilterBar(){
+  var active=['status','origin','definition','schedule','from','to'].filter(function(key){return !!OBS_STATE[key];}).length;
+  var statusOptions=[['','全部状态'],['running','运行中'],['completed','已完成'],['failed','失败'],['stopped','已停止']].map(function(x){
+    return '<option value="'+x[0]+'"'+(OBS_STATE.status===x[0]?' selected':'')+'>'+x[1]+'</option>';
+  }).join('');
+  var fromInvalid=OBS_STATE.from&&!obsValidTimestamp(OBS_STATE.from),toInvalid=OBS_STATE.to&&!obsValidTimestamp(OBS_STATE.to);
   return '<div class="obs-filterbar'+(OBS_STATE.filterOpen?' open':'')+'">'+
-    '<button class="filter-toggle" data-act="obsFilterToggle"><span>过滤</span>'+(active?'<span class="filter-badge num">'+active+'</span>':'')+'<span class="ft-caret">'+(OBS_STATE.filterOpen?'▾':'▸')+'</span></button>'+
+    '<div class="obs-filter-main"><label class="obs-filter-search">'+ICON.search+'<input type="search" data-act="obsLocalSearch" aria-label="搜索已加载运行" placeholder="搜索 workflow / 完整 run ID" value="'+esc(OBS_STATE.localSearch)+'"></label>'+
+      '<select class="ab-input obs-status-select" data-obs-field="status" aria-label="运行状态">'+statusOptions+'</select>'+
+      '<button class="filter-toggle'+(OBS_STATE.filterOpen?' on':'')+'" data-act="obsFilterToggle" aria-expanded="'+OBS_STATE.filterOpen+'">'+ICON.filter+'<span>更多筛选</span>'+(active?'<span class="filter-badge num">'+active+'</span>':'')+'<span class="ft-caret">'+(OBS_STATE.filterOpen?'▴':'▾')+'</span></button>'+
+      '<span class="obs-filter-count">显示 '+obsRunsFiltered().length+' / 已加载 '+OBS_RUNS.length+'</span></div>'+
+    (active?'<div class="obs-filter-chips">'+obsFilterChips()+'<button class="obs-clear-all" data-act="obsFilterReset">清除全部</button></div>':'')+
     '<div class="filter-body">'+
-      '<div class="filter-row"><span class="fr-l">状态</span><div class="chip-row" data-act="obsStatusFilter">'+chips+'</div></div>'+
-      '<div class="filter-row"><span class="fr-l">origin</span><input class="ab-input" placeholder="schedule,manual,api,channel"></div>'+
-      '<div class="filter-row"><span class="fr-l">definition</span><input class="ab-input" placeholder="CSV"></div>'+
-      '<div class="filter-row"><span class="fr-l">时间</span><input class="ab-input" type="text" placeholder="from"> <input class="ab-input" type="text" placeholder="to"></div>'+
-      '<div class="filter-row"><button class="btn" data-act="obsFilterReset">重置</button></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-origin">origin</label><input class="ab-input" id="obs-origin" data-obs-field="origin" placeholder="schedule,manual,api,channel" value="'+esc(OBS_STATE.origin)+'"></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-definition">definition</label><input class="ab-input" id="obs-definition" data-obs-field="definition" placeholder="definition-a,definition-b" value="'+esc(OBS_STATE.definition)+'"></div>'+
+      '<div class="filter-row"><label class="fr-l" for="obs-schedule">schedule</label><input class="ab-input" id="obs-schedule" data-obs-field="schedule" placeholder="schedule-a,schedule-b" value="'+esc(OBS_STATE.schedule)+'"></div>'+
+      '<div class="filter-row time-range"><label class="fr-l" for="obs-from">更新时间范围 · ISO-8601</label><input class="ab-input" id="obs-from" data-obs-field="from" type="text" aria-invalid="'+!!fromInvalid+'" placeholder="from" value="'+esc(OBS_STATE.from)+'"><input class="ab-input" data-obs-field="to" type="text" aria-invalid="'+!!toInvalid+'" placeholder="to" value="'+esc(OBS_STATE.to)+'"></div>'+
+      '<div class="filter-row filter-actions">'+((fromInvalid||toInvalid)?'<span class="ab-hint" style="color:var(--failed);margin:0">时间格式无效，未发送到 API</span>':'<span class="ab-hint" style="margin:0">CSV 字段支持多个值，最多加载 100 条运行摘要。</span>')+'<button class="btn" data-act="obsFilterReset" style="margin-left:auto">重置</button></div>'+
     '</div></div>';
 }
+function obsScopeControls(){
+  if(!(ACCOUNT&&ACCOUNT.admin)) return '<span class="obs-scope-current"><span>我的 scope</span></span>';
+  var mine=OBS_STATE.scope==='mine',all=OBS_STATE.scope==='all';
+  var switcher='<div class="obs-scope-switch" role="group" aria-label="观测 scope"><button data-act="obsScopeMine" aria-pressed="'+(OBS_STATE.scope==='mine')+'" class="'+(mine?'on':'')+'">我的 scope</button><button data-act="obsScopeAll" aria-pressed="'+(OBS_STATE.scope==='all')+'" class="'+(all?'on':'')+'">所有 scope</button></div>';
+  if(mine) return switcher;
+  var label=all?'管理员全局观测':('指定 scope · '+OBS_STATE.scope);
+  return switcher+'<div class="obs-scope-notice"><span>'+esc(label)+'</span><button data-act="obsScopeMine">返回我的 scope</button></div>';
+}
+function obsAdminTools(){
+  if(!(ACCOUNT&&ACCOUNT.admin)) return '';
+  return '<details class="obs-admin-tools"><summary class="ibtn" title="管理员观测工具" aria-label="管理员观测工具">'+ICON.more+'</summary><div class="obs-admin-popover">'+
+    '<h3>管理员观测工具</h3><div class="obs-admin-field"><label for="obs-scope-in">按 email 或 scope ID 定位</label><input class="ab-input" id="obs-scope-in" placeholder="email@example.com / scope ID"><button class="btn" data-act="obsResolve">前往</button></div>'+
+    '<div class="obs-admin-field"><label for="obs-run-in">按完整 Run ID 跨 scope 查找</label><input class="ab-input" id="obs-run-in" placeholder="完整 run ID"><button class="btn" data-act="obsOpenRun">打开</button></div><span class="ab-hint" id="obs-resolve-hint"></span></div></details>';
+}
+function obsHeader(){
+  return '<div class="obs-contextbar"><div class="obs-context-main"><span class="rail-ico">'+NAV_ICON.obs+'</span><div class="obs-context-title"><b>运行观测台</b><span>readmodel · 最终一致</span></div><span class="obs-live"><i class="live-dot"></i>3s</span></div>'+obsScopeControls()+
+    '<div class="obs-context-actions"><button class="ibtn" data-act="obsReload" title="刷新运行与详情" aria-label="刷新运行与详情">'+ICON.refresh+'</button><button class="ibtn" data-act="obsRailToggle" title="'+(OBS_STATE.railCollapsed?'展开运行列表':'折叠运行列表')+'" aria-label="'+(OBS_STATE.railCollapsed?'展开运行列表':'折叠运行列表')+'">'+ICON.panel+'</button>'+obsAdminTools()+'<button class="ibtn" data-act="obsImmersive" title="进入沉浸观测">'+ICON.maximize+'<span>沉浸观测</span></button></div></div>';
+}
+function obsImmersiveBar(){
+  var selected=obsSelected(),scope=OBS_STATE.scope==='mine'?'我的 scope':(OBS_STATE.scope==='all'?'所有 scope':OBS_STATE.scope);
+  return '<div class="obs-immersive-bar"><span class="rail-ico">'+NAV_ICON.obs+'</span><b style="font-size:12.5px;color:var(--heading)">运行观测台</b><span class="obs-scope-current"><span>'+esc(scope)+'</span></span>'+
+    (selected?'<span class="tnum" style="min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:11px">'+esc(selected.id)+'</span>':'')+'<span class="obs-live" style="margin-left:auto"><i class="live-dot"></i>3s</span><button class="ibtn" data-act="obsReload" title="刷新" aria-label="刷新">'+ICON.refresh+'</button><button class="ibtn" data-act="obsImmersiveExit">'+ICON.minimize+'<span>退出沉浸</span></button></div>';
+}
 function viewObservatory(){
-  var adminBar=(ACCOUNT&&ACCOUNT.admin)?('<div class="obs-adminbar"><span class="auth-badge admin">ADMIN</span><span class="ab-label">跨 scope 观测</span>'+
-    '<input class="ab-input" id="obs-scope-in" placeholder="email 或 scope id"><button class="btn" data-act="obsResolve">前往</button>'+
-    '<input class="ab-input" id="obs-run-in" placeholder="完整 run id"><button class="btn" data-act="obsOpenRun">打开运行</button>'+
-    '<span class="ab-hint" id="obs-resolve-hint">'+(OBS_STATE.scope&&OBS_STATE.scope!=='__all__'?'当前观测 scope：'+esc(OBS_STATE.scope)+'　<button class="ibtn" data-act="obsScopeAll" style="height:22px">全部</button>':'当前观测全部 scope（__all__）')+'</span></div>'):'';
-  return {html:moduleSubHeader('observatory','<span class="inline-refresh"><i class="live-dot" style="background:var(--success)"></i> 轮询 ~3s '+srcBadge('ready')+'</span>')+
-    '<div class="obs-region">'+adminBar+obsFilterBar()+
-      '<div class="obs-split"><div class="obs-list" id="obs-list">'+obsList()+'</div>'+
-      '<div class="obs-detail" id="obs-detail">'+obsDetail(obsSelected())+'</div></div></div>',
+  return {html:'<div class="obs-region">'+obsHeader()+obsImmersiveBar()+obsFilterBar()+'<div class="obs-split">'+obsRunRail()+'<main class="obs-detail" id="obs-detail"><div class="obs-detail-inner">'+obsDetail(obsSelected())+'</div></main></div></div>',
     mount:bindObservatory};
 }
 function bindObservatory(root){
   /* root = 本次渲染的 .view（每次渲染都是新元素），事件委托不会跨访问累积 */
-  function reList(){ var l=root.querySelector('#obs-list'); if(l) l.innerHTML=obsList(); }
-  function reDetail(resetScroll){ var d=root.querySelector('#obs-detail'); if(d){ var scrollTop=resetScroll?0:d.scrollTop;
-    d.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; } }
+  obsSetImmersive(OBS_STATE.immersive);
+  function reCounts(){
+    var visible=obsRunsFiltered().length,loaded=OBS_RUNS.length;
+    var railCount=root.querySelector('.obs-run-rail-head span'); if(railCount) railCount.textContent='显示 '+visible+' / 已加载 '+loaded;
+    var filterCount=root.querySelector('.obs-filter-count'); if(filterCount) filterCount.textContent='显示 '+visible+' / 已加载 '+loaded;
+  }
+  function reList(){ var l=root.querySelector('#obs-list'); if(l) l.innerHTML=obsList(); reCounts(); }
+  function reDetail(resetScroll){ var d=root.querySelector('#obs-detail'),inner=d&&d.querySelector('.obs-detail-inner'); if(d&&inner){ var scrollTop=resetScroll?0:d.scrollTop;
+    inner.innerHTML=obsDetail(obsSelected()); d.scrollTop=scrollTop; } }
   function reBar(){ var b=root.querySelector('.obs-filterbar'); if(b) b.outerHTML=obsFilterBar(); }
-  function reAdminBar(){ var b=root.querySelector('.obs-adminbar'); if(b){ var v=viewObservatory(); /* 仅用其 adminBar 片段刷新提示 */ } }
-  function selectRun(id){ OBS_STATE.selectedId=id; reList(); reDetail(true); loadObsDetail(id,function(){ if(OBS_STATE.selectedId===id) reDetail(true); }); }
+  function selectRun(id){ obsNavigate({run:id}); }
   /* 首屏拉取真实运行列表，到达后选中首行并预取其详情 */
   loadObsRuns(function(){ reList(); reDetail(); var sel=obsSelected(); if(sel) loadObsDetail(sel.id,reDetail); });
   if(OBS_POLL_TIMER) clearInterval(OBS_POLL_TIMER);
@@ -3139,16 +3384,22 @@ function bindObservatory(root){
     });
   },3000);
   root.addEventListener('click',function(ev){
-    var row=ev.target.closest('[data-obsrun]'); if(row){ selectRun(row.getAttribute('data-obsrun')); return; }
-    var tab=ev.target.closest('[data-obstab]'); if(tab){ OBS_STATE.tab=tab.getAttribute('data-obstab'); reDetail(); return; }
-    var fl=ev.target.closest('[data-obsfilter]'); if(fl){ var s=fl.getAttribute('data-obsfilter'),i=OBS_STATE.statusFilter.indexOf(s);
-      if(i>=0)OBS_STATE.statusFilter.splice(i,1); else OBS_STATE.statusFilter.push(s); reBar(); reList(); return; }
+    var row=ev.target.closest('[data-obsrun]'); if(row){
+      if(row.getAttribute('data-obs-pinned')==='true') return;
+      selectRun(row.getAttribute('data-obsrun')); return;
+    }
+    var tab=ev.target.closest('[data-obstab]'); if(tab){ obsNavigate({tab:tab.getAttribute('data-obstab')}); return; }
     var act=ev.target.closest('[data-act]'); if(!act) return;
     var a=act.getAttribute('data-act');
     if(a==='obsFilterToggle'){ OBS_STATE.filterOpen=!OBS_STATE.filterOpen; reBar(); }
-    else if(a==='obsFilterReset'){ OBS_STATE.statusFilter=[]; reBar(); reList(); }
-    else if(a==='obsReload'){ loadObsRuns(function(){ reList(); reDetail(); }); }
+    else if(a==='obsFilterReset'){ obsNavigate({status:null,origin:null,definition:null,schedule:null,from:null,to:null}); }
+    else if(a==='obsLocalSearchClear'){ OBS_STATE.localSearch=''; reBar(); reList(); }
+    else if(a==='obsFilterRemove'){ var filterPatch={}; filterPatch[act.getAttribute('data-filter-key')]=null; obsNavigate(filterPatch); }
+    else if(a==='obsReload'){ loadObsRuns(function(){ reList(); reDetail(); }).then(function(){ var current=obsSelected(); if(current) loadObsDetail(current.id,function(){ reList(); reDetail(); },true); }); }
     else if(a==='obsReloadDetail'){ var rid=act.getAttribute('data-run'); if(rid){ delete OBS_DETAIL[rid]; loadObsDetail(rid,reDetail); } }
+    else if(a==='obsRailToggle'){ obsSetRailCollapsed(!OBS_STATE.railCollapsed); render(); }
+    else if(a==='obsImmersive'){ obsSetImmersive(true); }
+    else if(a==='obsImmersiveExit'){ obsSetImmersive(false); render(); }
     else if(a==='obsCopy'){ var cv=act.getAttribute('data-copy');
       copyWithToast(cv, '已复制 run id：'+cv, '复制失败，请手动选择：'+cv); }
     else if(a==='obsCopyIssue'){ var si=obsSelected(), cd=si&&OBS_DETAIL[si.id], iv=(cd&&cd.detail&&cd.detail.issue)||'{}';
@@ -3159,25 +3410,19 @@ function bindObservatory(root){
           var a2=document.createElement('a'); a2.href=u; a2.download=art.name||'output.txt'; document.body.appendChild(a2); a2.click(); document.body.removeChild(a2); setTimeout(function(){ URL.revokeObjectURL(u); },0); toast('已下载 '+art.name); }
         catch(e){ toast('下载失败'); } }
       else { toast('本次 Run 无产出可下载'); } }
-    else if(a==='obsScopeAll'){ OBS_STATE.scope='__all__'; OBS_DETAIL={}; OBS_STATE.selectedId=null; reBar();
-      var nb=root.querySelector('.obs-adminbar'); if(nb){ nb.outerHTML=viewObsAdminBar(); }
-      loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); }); }
+    else if(a==='obsScopeMine'){ obsNavigate({scope:'mine',run:null}); }
+    else if(a==='obsScopeAll'){ obsNavigate({scope:'all',run:null}); }
     else if(a==='obsResolve'){
       var v=(root.querySelector('#obs-scope-in')||{}).value||'', hint=root.querySelector('#obs-resolve-hint');
       v=v.trim();
       if(!v){ hint.textContent='请输入 email 或 scope id'; hint.style.color='var(--waiting)'; return; }
-      if(v.indexOf('@')<0){ /* 直接当作 scope id 切换 */ OBS_STATE.scope=v; OBS_DETAIL={}; OBS_STATE.selectedId=null;
-        hint.innerHTML='已切换观测 scope：<b class="tnum">'+esc(v)+'</b>'; hint.style.color='var(--success)';
-        loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); }); return; }
+      if(v.indexOf('@')<0){ obsNavigate({scope:v,run:null}); return; }
       hint.textContent='正在解析…'; hint.style.color='var(--idle)';
       loadObsResolveScope(v).then(function(j){
         if(j&&j.forbidden){ hint.innerHTML='⚠ 需要平台管理员权限（403），不展示数据'; hint.style.color='var(--failed)'; return; }
         var cands=(j&&j.candidates)||[];
         if(!cands.length){ hint.innerHTML='未找到该 email 对应的 scope'; hint.style.color='var(--waiting)'; return; }
-        var c=cands[0]; OBS_STATE.scope=c.scopeId; OBS_DETAIL={}; OBS_STATE.selectedId=null;
-        hint.innerHTML='✓ 已解析到 <b class="tnum">'+esc(c.scopeId)+'</b>'+(c.role?'（'+esc(c.role)+'）':'')+'，已切换观测范围';
-        hint.style.color='var(--success)';
-        loadObsRuns(function(){ reList(); reDetail(); var s=obsSelected(); if(s) loadObsDetail(s.id,reDetail); });
+        var c=cands[0]; obsNavigate({scope:c.scopeId,run:null});
       }).catch(function(e){ hint.innerHTML='解析失败：'+esc((e&&(e.body||e.message))||'未知错误'); hint.style.color='var(--failed)'; });
     } else if(a==='obsOpenRun'){
       var runId=(root.querySelector('#obs-run-in')||{}).value||'', runHint=root.querySelector('#obs-resolve-hint');
@@ -3187,13 +3432,16 @@ function bindObservatory(root){
       obsOpenDirectRun(runId,reList,reDetail);
     }
   });
-}
-/* 复用 viewObservatory 的 adminBar 片段（用于 scope 切换后局部刷新） */
-function viewObsAdminBar(){
-  return (ACCOUNT&&ACCOUNT.admin)?('<div class="obs-adminbar"><span class="auth-badge admin">ADMIN</span><span class="ab-label">跨 scope 观测</span>'+
-    '<input class="ab-input" id="obs-scope-in" placeholder="email 或 scope id"><button class="btn" data-act="obsResolve">前往</button>'+
-    '<input class="ab-input" id="obs-run-in" placeholder="完整 run id"><button class="btn" data-act="obsOpenRun">打开运行</button>'+
-    '<span class="ab-hint" id="obs-resolve-hint">'+(OBS_STATE.scope&&OBS_STATE.scope!=='__all__'?'当前观测 scope：'+esc(OBS_STATE.scope)+'　<button class="ibtn" data-act="obsScopeAll" style="height:22px">全部</button>':'当前观测全部 scope（__all__）')+'</span></div>'):'';
+  root.addEventListener('change',function(ev){
+    var field=ev.target&&ev.target.getAttribute&&ev.target.getAttribute('data-obs-field');
+    if(!field) return;
+    var patch={}; patch[field]=(ev.target.value||'').trim()||null; obsNavigate(patch);
+  });
+  root.addEventListener('input',function(ev){
+    if(ev.target&&ev.target.getAttribute&&ev.target.getAttribute('data-act')==='obsLocalSearch'){
+      OBS_STATE.localSearch=ev.target.value||''; reList();
+    }
+  });
 }
 
 /* ================= ④ 投影管道 CQRS ================= */
@@ -3327,7 +3575,7 @@ function bindStudio(root){
   }
   root.addEventListener('click',function(ev){
     if(ev.target.closest('[data-act="studioSend"]')) send();
-    var or=ev.target.closest('[data-act="studioOpenRun"]'); if(or){ navigate(['observatory'],{}); }
+    var or=ev.target.closest('[data-act="studioOpenRun"]'); if(or){ obsNavigate({run:or.getAttribute('data-run'),scope:'mine'}); }
   });
   ta&&ta.addEventListener('keydown',function(e){ if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); send(); } });
 }
@@ -3343,7 +3591,41 @@ var SKILL_STATE={ selected:null, search:'', loaded:false, loading:false,
   sched:{displayName:'',cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false},
   mobileDetail:false };
 var SKILL_CONFIRM=null;
+var SKILL_TEAM_STATE={loaded:false,loading:false,err:null,scope:'',items:[]};
 function skillSelected(){ return SKILLS_DATA.filter(function(s){return s.guid===SKILL_STATE.selected;})[0]||SKILLS_DATA[0]||null; }
+function skillTeamScope(){ return String((ACCOUNT&&ACCOUNT.scope)||'').trim(); }
+function skillTeamItems(){ return SKILL_TEAM_STATE.scope===skillTeamScope()?(SKILL_TEAM_STATE.items||[]):[]; }
+function skillSelectedTeamId(){
+  var teamId=String((SKILL_STATE.sched&&SKILL_STATE.sched.teamId)||'').trim();
+  if(teamId)return teamId;
+  var teams=skillTeamItems();
+  return teams.length?teams[0].teamId:'';
+}
+function loadSkillTeams(done){
+  var scope=skillTeamScope();
+  if(!scope||SKILL_TEAM_STATE.loading){ if(done)done(); return; }
+  if(SKILL_TEAM_STATE.scope!==scope){
+    SKILL_TEAM_STATE.loaded=false; SKILL_TEAM_STATE.err=null; SKILL_TEAM_STATE.items=[]; SKILL_TEAM_STATE.scope=scope;
+  }
+  if(SKILL_TEAM_STATE.loaded){ if(done)done(); return; }
+  SKILL_TEAM_STATE.loading=true; SKILL_TEAM_STATE.err=null;
+  adminJson('/api/scopes/'+encodeURIComponent(scope)+'/teams?pageSize=100')
+    .then(function(j){
+      SKILL_TEAM_STATE.loading=false;
+      if(j&&j.forbidden){ SKILL_TEAM_STATE.err='forbidden'; SKILL_TEAM_STATE.items=[]; if(done)done(); return; }
+      SKILL_TEAM_STATE.loaded=true;
+      SKILL_TEAM_STATE.items=(j&&Array.isArray(j.teams))?j.teams:[];
+      if(!SKILL_STATE.sched.teamId&&SKILL_TEAM_STATE.items.length)SKILL_STATE.sched.teamId=SKILL_TEAM_STATE.items[0].teamId;
+      if(done)done();
+    })
+    .catch(function(err){
+      SKILL_TEAM_STATE.loading=false;
+      if(err&&err.unauthorized){ if(done)done(); return; }
+      SKILL_TEAM_STATE.err=(err&&(err.body||err.message))||'Team load failed';
+      SKILL_TEAM_STATE.items=[];
+      if(done)done();
+    });
+}
 
 function skillListSkeleton(){ var r='<div class="skill-row skel"><span class="sk-line w70"></span><span class="sk-line w90"></span><span class="sk-line w40"></span></div>'; return r+r+r+r+r; }
 function skillList(){
@@ -3405,15 +3687,22 @@ function skillSchedulePanel(s){
   var tzs=['Asia/Shanghai','UTC','America/Los_Angeles','浏览器默认'];
   var auth=sc.authErr?'<div class="auth-banner">⚠ 需要重新登录 / NyxID owner 未绑定（401 / 403）<button class="btn" data-act="skSchedRetry" style="height:28px;margin-left:auto">重试</button></div>':'';
   var ok=sc.result?'<div class="invoke-result ok" style="margin-top:10px">✓ 已创建排班 · scheduleId <b class="tnum">'+esc(sc.result)+'</b></div>':'';
+  var teams=skillTeamItems(), selectedTeam=skillSelectedTeamId();
+  var teamField;
+  if(SKILL_TEAM_STATE.loading) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-help" data-team-owner-select>Loading Teams for this scope...</span></div>';
+  else if(SKILL_TEAM_STATE.err) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-err" data-team-owner-select>Could not load Teams for this scope.</span></div>';
+  else if(!teams.length) teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><span class="field-help" data-team-owner-select>No Teams are available in this scope. Create a Team before scheduling this skill.</span></div>';
+  else teamField='<div class="wz-field"><label>Team owner <span class="req">*</span></label><select id="sk-team-owner" data-team-owner-select>'+teams.map(function(t){return '<option value="'+esc(t.teamId)+'"'+(t.teamId===selectedTeam?' selected':'')+'>'+esc(t.displayName||t.teamId)+'</option>';}).join('')+'</select><span class="field-help">The scheduled workflow member will be created under this Team.</span></div>';
   return '<div class="panel" style="margin-top:14px"><div class="panel-title">配排班 Schedule <span class="src src-ready">202 异步</span></div>'+
     '<div class="wz-field"><label>displayName</label><input id="sk-dispname" value="'+esc(sc.displayName||s.name)+'"></div>'+
+    teamField+
     '<div class="cron-editor sk-cron"><div class="cron-fields">'+cronInputs+'</div>'+
       '<div class="cron-presets">'+presetBtns+'</div>'+
       '<div class="cron-meta"><span>表达式 <code class="cron-expr-show">'+esc(sc.cron)+'</code> <span class="cron-err">非法 cron（5 段）</span></span>'+
         '<span>时区 <select class="cron-tz" id="sk-tz">'+tzs.map(function(t){return '<option'+(sc.tz===t?' selected':'')+'>'+t+'</option>';}).join('')+'</select></span></div>'+
       '<div class="cron-preview"><div class="cron-preview-h">未来 5 次触发 · <b>'+esc(sc.tz)+'</b></div><ol class="cron-preview-list"></ol></div></div>'+
     '<label class="auto-toggle" style="margin-top:12px"><input type="checkbox" id="sk-enablenow"'+(sc.enableNow?' checked':'')+'> 创建后立即启用</label>'+
-    '<div class="reg-actions" style="margin-top:10px"><button class="btn btn-primary" id="sk-sched-create" data-act="skSchedCreate">创建排班</button>'+
+    '<div class="reg-actions" style="margin-top:10px"><button class="btn btn-primary" id="sk-sched-create" data-act="skSchedCreate"'+(selectedTeam?'':' disabled')+'>创建排班</button>'+
       '<button class="link-btn" data-act="skSchedAuth">模拟 owner 未绑定(403)</button></div>'+auth+ok+
     skillMySchedules(s)+'</div>';
 }
@@ -3472,13 +3761,14 @@ function bindSchedEditor(root){
     var show=ed.querySelector('.cron-expr-show'); if(show) show.textContent=expr;
     var errEl=ed.querySelector('.cron-err'), prev=ed.querySelector('.cron-preview'), list=ed.querySelector('.cron-preview-list'),
         createBtn=root.querySelector('#sk-sched-create');
-    if(!allValid){ if(errEl)errEl.style.display='inline'; if(prev)prev.style.display='none'; if(createBtn)createBtn.setAttribute('disabled','disabled'); return; }
+    if(!allValid||!skillSelectedTeamId()){ if(errEl)errEl.style.display=allValid?'none':'inline'; if(prev)prev.style.display=allValid?'':'none'; if(createBtn)createBtn.setAttribute('disabled','disabled'); return; }
     if(errEl)errEl.style.display='none'; if(prev)prev.style.display=''; if(createBtn)createBtn.removeAttribute('disabled');
     var times=cronPreview(expr,5);
     if(list) list.innerHTML=(times&&times.length)?times.map(function(d){return '<li>'+fmtDateTime(d)+' · <span class="rel">'+relTime(d)+'</span></li>';}).join(''):'<li class="cron-bad">未来一年内无触发</li>';
   }
   Array.prototype.forEach.call(ed.querySelectorAll('[data-sc]'),function(i){ i.addEventListener('input',recompute); });
   var tz=root.querySelector('#sk-tz'); if(tz) tz.addEventListener('change',function(){ SKILL_STATE.sched.tz=tz.value; var h=ed.querySelector('.cron-preview-h b'); if(h)h.textContent=tz.value; });
+  var team=root.querySelector('#sk-team-owner'); if(team) team.addEventListener('change',function(){ SKILL_STATE.sched.teamId=team.value; recompute(); });
   recompute();
 }
 function bindSkills(root){
@@ -3490,6 +3780,7 @@ function bindSkills(root){
     Array.prototype.forEach.call(root.querySelectorAll('[data-si]'),function(i){ SKILL_STATE.invoke.inputs[i.getAttribute('data-si')]=i.value; });
     var ex=root.querySelector('#sk-extra'); if(ex) SKILL_STATE.invoke.extra=ex.value;
     var dn=root.querySelector('#sk-dispname'); if(dn) SKILL_STATE.sched.displayName=dn.value;
+    var team=root.querySelector('#sk-team-owner'); if(team) SKILL_STATE.sched.teamId=team.value;
     var tz=root.querySelector('#sk-tz'); if(tz) SKILL_STATE.sched.tz=tz.value;
     var en=root.querySelector('#sk-enablenow'); if(en) SKILL_STATE.sched.enableNow=en.checked;
     var sg=root.querySelectorAll('[data-sc]'); if(sg.length===5) SKILL_STATE.sched.cron=Array.prototype.map.call(sg,function(i){return i.value.trim()||'*';}).join(' ');
@@ -3498,7 +3789,7 @@ function bindSkills(root){
     var s=SKILLS_DATA.filter(function(x){return x.guid===guid;})[0]||SKILLS_DATA[0]||null;
     SKILL_STATE.selected=guid; SKILL_STATE.mobileDetail=true; SKILL_CONFIRM=null;
     SKILL_STATE.invoke={state:'idle',prompt:'',inputs:{},extra:'',result:null,promptErr:false};
-    SKILL_STATE.sched={displayName:(s?s.name:''),cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false};
+    SKILL_STATE.sched={displayName:(s?s.name:''),cron:'0 9 * * *',tz:'Asia/Shanghai',enableNow:true,result:null,authErr:false,teamId:skillSelectedTeamId()};
   }
   function runInvoke(){
     var iv=SKILL_STATE.invoke, s=skillSelected(); if(!s) return;
@@ -3516,7 +3807,8 @@ function bindSkills(root){
     var sc=SKILL_STATE.sched, segs=String(sc.cron).split(/\s+/);
     if(!(segs.length===5 && segs.every(cronSegValid))) return;
     var s=skillSelected(); if(!s) return; sc.authErr=false; sc.result=null;
-    var body={ prompt:String(SKILL_STATE.invoke.prompt||'').trim()||undefined, cronExpression:sc.cron, timezone:sc.tz, displayName:(sc.displayName||s.name) };
+    var teamId=skillSelectedTeamId(); if(!teamId) return;
+    var body={ prompt:String(SKILL_STATE.invoke.prompt||'').trim()||undefined, cronExpression:sc.cron, timezone:sc.tz, displayName:(sc.displayName||s.name), teamId:teamId };
     adminApi('/api/workflow/skills/'+encodeURIComponent(s.guid)+'/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(res){
         if(res&&res.forbidden){ sc.authErr=true; reDetail(); return; }
@@ -3529,6 +3821,9 @@ function bindSkills(root){
       if(SKILL_STATE.selected){ SKILL_STATE.sched.displayName=SKILL_STATE.sched.displayName||((skillSelected()||{}).name||''); loadSkillDetail(SKILL_STATE.selected, reDetail); }
       loadMySchedules(reDetail); });
   }
+  var currentTeamScope=skillTeamScope();
+  if(currentTeamScope&&SKILL_TEAM_STATE.scope!==currentTeamScope&&!SKILL_TEAM_STATE.loading) loadSkillTeams(reDetail);
+  else if(!SKILL_TEAM_STATE.loaded&&!SKILL_TEAM_STATE.loading&&!SKILL_TEAM_STATE.err) loadSkillTeams(reDetail);
   bindSchedEditor(root);
   var se=root.querySelector('#skill-search'); se&&se.addEventListener('input',function(){ SKILL_STATE.search=se.value; reList(); });
   root.addEventListener('click',function(ev){
@@ -3537,7 +3832,7 @@ function bindSkills(root){
     if(a==='skBack'){ SKILL_STATE.mobileDetail=false; reDetail(); }
     else if(a==='skInvoke'){ capture(); runInvoke(); }
     else if(a==='skCopy'){ copyWithToast(act.getAttribute('data-copy')); }
-    else if(a==='skOpenRun'){ var u=act.getAttribute('data-url'); if(u){ location.assign(u); } else { navigate(['observatory'],{}); } }
+    else if(a==='skOpenRun'){ obsNavigate({run:act.getAttribute('data-run'),scope:'mine'}); }
     else if(a==='skReload'){ SKILL_STATE.loaded=false; SKILLS_LOADED=false; SKILL_STATE.loading=true; reList(); loadSkills(function(){ SKILL_STATE.loaded=true; SKILL_STATE.loading=false; reList(); }); }
     else if(a==='skPreset'){ capture(); SKILL_STATE.sched.cron=act.getAttribute('data-cron'); reDetail(); }
     else if(a==='skSchedCreate'){ capture(); createSched(); }
@@ -3545,7 +3840,7 @@ function bindSkills(root){
     else if(a==='skSchedRetry'){ SKILL_STATE.sched.authErr=false; reDetail(); }
     else if(a==='skSchedToggle'){ var tid=act.getAttribute('data-id'); var tx=SKILL_SCHED.filter(function(s){return s.id===tid;})[0]; var op=(tx&&tx.enabled)?':disable':':enable'; adminApi('/api/schedules/'+encodeURIComponent(tid)+op,{method:'POST'}).then(function(res){ if(res&&res.forbidden){ toast('无权操作该排班（403）'); return; } if(res.ok) loadMySchedules(reDetail); else toast('操作失败 HTTP '+res.status); }).catch(function(){ toast('操作失败'); }); }
     else if(a==='skSchedRun'){ var rid=act.getAttribute('data-id'); adminApi('/api/schedules/'+encodeURIComponent(rid)+':run-now',{method:'POST'}).then(function(res){ if(res&&res.forbidden){ toast('无权运行该排班（403）'); return; } toast(res.ok?'已触发立即运行 · '+rid:'触发失败 HTTP '+res.status); }).catch(function(){ toast('触发失败'); }); }
-    else if(a==='skSchedObs'){ navigate(['observatory'],{schedule:act.getAttribute('data-id')}); }
+    else if(a==='skSchedObs'){ obsNavigate({schedule:act.getAttribute('data-id'),run:null}); }
     else if(a==='skSchedRetry'){ SKILL_STATE.sched.authErr=false; SKILL_STATE.sched.result=null; reDetail(); }
     else if(a==='skSchedDel'){ SKILL_CONFIRM=act.getAttribute('data-id'); reDetail(); }
     else if(a==='skDelCancel'){ SKILL_CONFIRM=null; reDetail(); }
@@ -3613,7 +3908,7 @@ function viewSchedules(){
         if(a==='schRefresh'){ SCHED_LOADED=false; re(); loadSchedules(re); }
         else if(a==='schFilter'){ schedSetFilter(act.getAttribute('data-f'), re); }
         else if(a==='schToggleDetail'){ var did=act.getAttribute('data-id'); if(did){ SCHED_OPEN[did]=!SCHED_OPEN[did]; re(); } }
-        else if(a==='schObs'){ var oid=act.getAttribute('data-id'); if(oid) navigate(['observatory'],{schedule:_schObs(oid)}); }
+        else if(a==='schObs'){ var oid=act.getAttribute('data-id'); if(oid) obsNavigate({schedule:_schObs(oid),run:null}); }
         else if(a==='schAction'){ var id=act.getAttribute('data-id'), op=act.getAttribute('data-op'); if(id&&op) schedAction(id, op, re); }
       });
     }};
@@ -4408,6 +4703,7 @@ function render(){
 
   var module=parts[0]||defaultModule(), rest=parts.slice(1);
   if(!canAccessModule(MODULE_META[module])){ module=defaultModule(); rest=[]; }
+  if(module!=='observatory') document.body.classList.remove('obs-immersive');
   var v;
   if(module==='fleet'){
     if(rest.length===0) v=viewL0();
@@ -4416,6 +4712,7 @@ function render(){
     else if(rest[0]==='c') v=viewL1(rest[1]);
     else v=viewL0();
   } else {
+    if(module==='observatory') obsSyncStateFromUrl();
     v=opsView(module);
     if(!v){ module='fleet'; rest=[]; v=viewL0(); }
   }
@@ -4569,14 +4866,10 @@ function bindEvents(){
     if(stchip && stchip.closest('[data-act="l1status"]')){ /* handled above */ }
 
     /* navigation: run > emp > company（顺序很重要） */
-    var runEl=t.closest&&t.closest('[data-run]');
-    if(runEl){ var rid=runEl.getAttribute('data-run');
-      /* 深链进观测台并选中该 run：rid 即权威 run id（Fleet 与 observatory 同口径 mapXxxRuns 的 r.runId）。
-         不再依赖 OBS_RUNS 是否已含该 run（看板数据在 FLEET_RUNS_BY_SCOPE，与 OBS_RUNS 是两套加载）。
-         Fleet 为跨 scope __all__，强制 observatory 同口径，确保 loadObsRuns 后该 run 在列表内被选中、
-         详情按其自身 scope 拉取，而非因 selectedId 未命中回落到首行。 */
-      if(rid){ OBS_STATE.selectedId=rid; OBS_STATE.scope='__all__'; obsUpsertRunFromDetail(rid,null); }
-      navigate(['observatory'],{}); return; }
+    var runEl=t.closest&&t.closest('[data-run][data-scope]');
+    if(runEl){ var rid=runEl.getAttribute('data-run'); var runScope=runEl.getAttribute('data-scope');
+      if(rid) obsNavigate({run:rid,scope:runScope||'mine'});
+      return; }
     var empEl=t.closest&&t.closest('[data-emp][data-co]');
     if(empEl){ navigate(['fleet','c',empEl.getAttribute('data-co'),'e',empEl.getAttribute('data-emp')],{}); return; }
     var coEl=t.closest&&t.closest('[data-co]');
@@ -4589,8 +4882,15 @@ function bindEvents(){
     if(t.getAttribute&&t.getAttribute('data-act')==='l1search'){ STATE.search=t.value; _focusSearch=true; render(); }
   });
 
-  /* Esc closes drawer / popover */
-  document.addEventListener('keydown',function(ev){ if(ev.key==='Escape'){ if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); } });
+  /* Esc closes the active overlay before it exits observatory immersive mode. */
+  document.addEventListener('keydown',function(ev){
+    if(ev.key!=='Escape') return;
+    if(_drawerCtx){ closeDrawer(); return; }
+    if(_srcPopEl){ closeSrcPop(); return; }
+    var adminTools=document.querySelector('.obs-admin-tools[open]');
+    if(adminTools){ adminTools.removeAttribute('open'); return; }
+    if(OBS_STATE.immersive){ obsSetImmersive(false); render(); }
+  });
 
   window.addEventListener('hashchange',function(){ if(_drawerCtx) closeDrawer(); if(_srcPopEl) closeSrcPop(); render(); });
 }
