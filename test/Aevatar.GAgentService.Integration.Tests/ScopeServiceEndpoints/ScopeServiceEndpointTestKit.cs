@@ -259,6 +259,7 @@ public abstract class ScopeServiceEndpointTestKit
             FakeMemberPublishedServiceResolver memberPublishedServiceResolver,
             FakeTeamEntryMemberResolver teamEntryMemberResolver,
             FakeCommandInteractionService interactionService,
+            FakeWorkflowDefinitionParser workflowDefinitionParser,
             FakeStaticGAgentStreamInvocationPort staticGAgentStreamInvocationPort,
             FakeWorkflowExecutionQueryApplicationService workflowQueryService,
             FakeWorkflowRunBindingReader runBindingReader,
@@ -287,6 +288,7 @@ public abstract class ScopeServiceEndpointTestKit
             MemberPublishedServiceResolver = memberPublishedServiceResolver;
             TeamEntryMemberResolver = teamEntryMemberResolver;
             InteractionService = interactionService;
+            WorkflowDefinitionParser = workflowDefinitionParser;
             StaticGAgentStreamInvocationPort = staticGAgentStreamInvocationPort;
             WorkflowQueryService = workflowQueryService;
             RunBindingReader = runBindingReader;
@@ -338,6 +340,8 @@ public abstract class ScopeServiceEndpointTestKit
 
         public FakeCommandInteractionService InteractionService { get; }
 
+        public FakeWorkflowDefinitionParser WorkflowDefinitionParser { get; }
+
         public FakeStaticGAgentStreamInvocationPort StaticGAgentStreamInvocationPort { get; }
 
         public FakeWorkflowExecutionQueryApplicationService WorkflowQueryService { get; }
@@ -385,6 +389,7 @@ public abstract class ScopeServiceEndpointTestKit
             var memberPublishedServiceResolver = new FakeMemberPublishedServiceResolver();
             var teamEntryMemberResolver = new FakeTeamEntryMemberResolver();
             var interactionService = new FakeCommandInteractionService();
+            var workflowDefinitionParser = new FakeWorkflowDefinitionParser();
             var gagentDraftRunInteractionService = new FakeGAgentDraftRunInteractionService();
             var scriptServiceRunInteractionService = new FakeScriptServiceRunInteractionService();
             var staticGAgentStreamInvocationPort = new FakeStaticGAgentStreamInvocationPort(
@@ -429,6 +434,7 @@ public abstract class ScopeServiceEndpointTestKit
             builder.Services.AddSingleton<ServiceInvocationResolutionService>();
             builder.Services.AddSingleton<ServiceInvokeReadinessErrorMapper>();
             builder.Services.AddSingleton<IInvokeAdmissionAuthorizer, AllowAllInvokeAdmissionAuthorizer>();
+            builder.Services.AddSingleton<IWorkflowDefinitionParser>(workflowDefinitionParser);
             builder.Services.AddSingleton<IWorkflowChatRunInteractionPort>(interactionService);
             builder.Services.AddSingleton<IGAgentDraftRunInteractionPort>(gagentDraftRunInteractionService);
             builder.Services.AddSingleton<ICommandInteractionService<ScriptServiceRunCommand, ScriptServiceRunAcceptedReceipt, ScriptServiceRunStartError, AGUIEvent, ScriptServiceRunCompletionStatus>>(scriptServiceRunInteractionService);
@@ -559,6 +565,7 @@ public abstract class ScopeServiceEndpointTestKit
                 memberPublishedServiceResolver,
                 teamEntryMemberResolver,
                 interactionService,
+                workflowDefinitionParser,
                 staticGAgentStreamInvocationPort,
                 workflowQueryService,
                 runBindingReader,
@@ -1357,6 +1364,28 @@ public abstract class ScopeServiceEndpointTestKit
 
         public Task<WorkflowRunGraphExportSubgraph> GetWorkflowRunGraphExportSubgraphAsync(string actorId, int depth = 2, int take = 200, WorkflowRunGraphExportQueryOptions? options = null, CancellationToken ct = default) =>
             Task.FromResult(new WorkflowRunGraphExportSubgraph());
+    }
+
+    protected sealed class FakeWorkflowDefinitionParser : IWorkflowDefinitionParser
+    {
+        public Dictionary<string, WorkflowYamlParseResult> ParseResults { get; } = new(StringComparer.Ordinal);
+
+        public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(
+            string workflowYaml,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (ParseResults.TryGetValue(workflowYaml, out var result))
+                return Task.FromResult(result);
+
+            var workflowName = workflowYaml
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(static line => line.StartsWith("name:", StringComparison.OrdinalIgnoreCase))
+                ?.Split(':', 2)[1]
+                .Trim();
+            return Task.FromResult(WorkflowYamlParseResult.Success(
+                string.IsNullOrWhiteSpace(workflowName) ? "main" : workflowName));
+        }
     }
 
     protected sealed class FakeCommandInteractionService : IWorkflowChatRunInteractionPort

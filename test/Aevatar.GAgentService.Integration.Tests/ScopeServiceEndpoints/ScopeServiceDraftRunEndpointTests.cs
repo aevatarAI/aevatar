@@ -229,6 +229,31 @@ public sealed class ScopeServiceDraftRunEndpointTests : ScopeServiceEndpointTest
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldReturnWorkflowYamlValidationMessage_WhenInlineYamlIsInvalid()
+    {
+        const string invalidWorkflowYaml = "name: main\nsteps:\n- id: call\n  type: tool_call";
+        const string validationMessage = "Workflow step 'call' external capability is invalid: nyxid_proxy derived field 'service_id' cannot be authored; select a connected-service operation and rebind.";
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.WorkflowDefinitionParser.ParseResults[invalidWorkflowYaml] = WorkflowYamlParseResult.Invalid(validationMessage);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                invalidWorkflowYaml,
+            },
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_WORKFLOW_YAML");
+        body["message"].Should().Be(validationMessage);
+        host.InteractionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldReturnInvalidCallerCredential_WhenBearerIsMalformed()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

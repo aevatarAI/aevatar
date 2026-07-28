@@ -153,6 +153,7 @@ public static class ScopeServiceEndpoints
         [FromServices] IWorkflowChatRunInteractionPort chatRunService,
         [FromServices] WorkflowMultipartFileInputParser multipartFileInputParser,
         [FromServices] IFileArtifactIngressPort workflowFileIngressPort,
+        [FromServices] IWorkflowDefinitionParser workflowDefinitionParser,
         CancellationToken ct)
     {
         try
@@ -180,6 +181,21 @@ public static class ScopeServiceEndpoints
             var request = requestInput.Request!;
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
+
+            var workflowYamlValidation = await ValidateDraftWorkflowYamlsAsync(
+                request.WorkflowYamls,
+                workflowDefinitionParser,
+                ct);
+            if (!workflowYamlValidation.Succeeded)
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    StatusCodes.Status400BadRequest,
+                    "INVALID_WORKFLOW_YAML",
+                    workflowYamlValidation.Message,
+                    ct);
+                return;
+            }
 
             var scopedHeaders = BuildScopedHeaders(request.Headers);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
@@ -250,6 +266,25 @@ public static class ScopeServiceEndpoints
                 ex.Message,
                 ct);
         }
+    }
+
+    private static async Task<DraftWorkflowYamlValidationResult> ValidateDraftWorkflowYamlsAsync(
+        IReadOnlyList<string> workflowYamls,
+        IWorkflowDefinitionParser workflowDefinitionParser,
+        CancellationToken ct)
+    {
+        for (var i = 0; i < workflowYamls.Count; i++)
+        {
+            var workflowYaml = workflowYamls[i];
+            if (string.IsNullOrWhiteSpace(workflowYaml))
+                return DraftWorkflowYamlValidationResult.Invalid($"workflowYamls[{i}] is required.");
+
+            var parseResult = await workflowDefinitionParser.ParseWorkflowYamlAsync(workflowYaml, ct);
+            if (!parseResult.Succeeded)
+                return DraftWorkflowYamlValidationResult.Invalid(parseResult.Error);
+        }
+
+        return DraftWorkflowYamlValidationResult.Success;
     }
 
     private static async ValueTask<ScopeDraftRunRequestInput> ParseScopeDraftRunRequestAsync(
@@ -4413,6 +4448,16 @@ const response = await fetch("{{invokePath}}", {
 
         public static ScopeDraftRunRequestInput Failed(ScopeDraftRunRequestParseError error) =>
             new(null, null, error);
+    }
+
+    private readonly record struct DraftWorkflowYamlValidationResult(
+        bool Succeeded,
+        string Message)
+    {
+        public static DraftWorkflowYamlValidationResult Success { get; } = new(true, string.Empty);
+
+        public static DraftWorkflowYamlValidationResult Invalid(string message) =>
+            new(false, string.IsNullOrWhiteSpace(message) ? "Workflow YAML is invalid." : message);
     }
 
     private readonly record struct ScopeDraftRunRequestParseError(
