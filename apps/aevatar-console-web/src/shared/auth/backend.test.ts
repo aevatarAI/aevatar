@@ -116,7 +116,7 @@ describe("NyxID backend auth API", () => {
 
   it.each([
     [409, "required_service_access_missing", "Keep required services selected."],
-    [502, "issued_binding_invalid", "The issued binding was unavailable."],
+    [503, "issued_binding_invalid", "The issued binding was unavailable."],
     [503, "issued_binding_probe_failed", "The issued binding could not be verified."],
     [503, "binding_probe_failed", "The current binding could not be verified."],
   ])(

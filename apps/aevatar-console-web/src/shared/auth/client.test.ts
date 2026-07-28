@@ -271,7 +271,7 @@ describe("NyxIDAuthClient", () => {
 
   it.each<[number, string, NyxIDAuthCallbackErrorReason]>([
     [409, "required_service_access_missing", "requiredServiceAccessMissing"],
-    [502, "issued_binding_invalid", "issuedBindingInvalid"],
+    [503, "issued_binding_invalid", "issuedBindingInvalid"],
     [503, "issued_binding_probe_failed", "issuedBindingProbeFailed"],
     [503, "binding_probe_failed", "bindingProbeFailed"],
   ])("preserves review retry state for backend error %s %s", async (status, code, reason) => {
